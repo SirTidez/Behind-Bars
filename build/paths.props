@@ -1,0 +1,9 @@
+﻿<Project>
+    <PropertyGroup>
+        <!-- Paths and conditions -->
+        <S1MonoDir>D:\Schedule 1 Modding\Schedule I_alternate-beta</S1MonoDir>
+        <S1CPPDir>D:\Schedule 1 Modding\Schedule I_beta</S1CPPDir>
+        <CommonDir>D:\Schedule 1 Modding</CommonDir>
+        <RunPostBuildEvent>OnBuildSuccess</RunPostBuildEvent>
+    </PropertyGroup>
+</Project>
