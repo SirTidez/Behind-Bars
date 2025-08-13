@@ -2,7 +2,7 @@
 **An expansion to the police system in Schedule 1**
 
 ## Overview
-**Behind Bars** is a gameplay expansion mod designed to enhance the law enforcement mechanics in *Schedule 1*. The goal is to make arrests, jail time, bail, court proceedings, and post-incarceration systems more immersive and interactive.  
+**Behind Bars** is a gameplay expansion mod designed to enhance the law enforcement mechanics in *Schedule 1*. The goal is to make arrests more interesting by adding jail time, bail, court proceedings, and post-incarceration systems more immersive and interactive.  
 
 This mod introduces:
 - Arrest consequences beyond a simple fine.
