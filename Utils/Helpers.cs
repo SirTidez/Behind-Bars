@@ -85,12 +85,8 @@ namespace Behind_Bars.Helpers
     /// <summary>
     /// Common utility functions for the mod.
     /// </summary>
-    public static class Utils
+    public static class Helpers
     {
-        private static readonly MelonLogger.Instance Logger = new MelonLogger.Instance(
-            $"{BuildInfo.Name}-Utils"
-        );
-
         /// <summary>
         /// Searches all loaded objects of type <typeparamref name="T"/> and returns the first one matching the given name.
         /// </summary>
@@ -112,7 +108,7 @@ namespace Behind_Bars.Helpers
                 {
                     if (obj.name != objectName)
                         continue;
-                    Logger.Debug($"Found {typeof(T).Name} '{objectName}' directly in loaded objects");
+                    ModLogger.Debug($"Found {typeof(T).Name} '{objectName}' directly in loaded objects");
                     return obj;
                 }
 
@@ -120,7 +116,7 @@ namespace Behind_Bars.Helpers
             }
             catch (Exception ex)
             {
-                Logger.Error($"Error finding {typeof(T).Name} '{objectName}': {ex.Message}");
+                ModLogger.Error($"Error finding {typeof(T).Name} '{objectName}': {ex.Message}");
                 return null;
             }
         }
@@ -224,13 +220,13 @@ namespace Behind_Bars.Helpers
 
             foreach (var item in itemRegistry)
             {
-                if (Utils.Is<StorableItemDefinition>(item.Definition, out var definition))
+                if (Helpers.Is<StorableItemDefinition>(item.Definition, out var definition))
                 {
                     itemDefinitions.Add(definition);
                 }
                 else
                 {
-                    Logger.Warning(
+                    ModLogger.Warn(
                         $"Definition {item.Definition?.GetType().FullName} is not a StorableItemDefinition"
                     );
                 }
@@ -246,9 +242,10 @@ namespace Behind_Bars.Helpers
         /// <returns>An enumerator that waits for the player to be ready.</returns>
         public static IEnumerator WaitForPlayer(IEnumerator routine)
         {
+            ModLogger.Debug("Waiting for player to continue");
             while (Player.Local == null || Player.Local.gameObject == null)
                 yield return null;
-
+            ModLogger.Debug("Player found, running routine");
             // player is ready, start the coroutine
             MelonCoroutines.Start(routine);
         }

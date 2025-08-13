@@ -1,10 +1,10 @@
-<Project Sdk="Microsoft.NET.Sdk">
-    <Import Project="build/paths.props"/>
+﻿<Project Sdk="Microsoft.NET.Sdk">
+    <Import Project="build/paths.props" />
 
     <PropertyGroup>
         <!-- Testing props -->
         <!--<DefineConstants>$(DefineConstants);TestMultiplayer</DefineConstants>-->
-        <!--<DefineConstants>$(DefineConstants);UnityExplorer</DefineConstants>-->
+        <DefineConstants>$(DefineConstants);UnityExplorer</DefineConstants>
 
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>disable</Nullable>
@@ -18,10 +18,6 @@
     </PropertyGroup>
 
     <!-- Paths to other mods that script should add (no guard for mono/il2cpp incompat) -->
-    <ItemGroup>
-        <!--<ModList Include="$(CommonDir)\Mods\DisclaimerSkipMono.dll" />-->
-        <!--<ModList Include="$(CommonDir)\Mods\DisclaimerSkipIL2CPP.dll" />-->
-    </ItemGroup>
 
     <PropertyGroup Condition="'$(Configuration)' == 'Debug Mono'">
         <DefineConstants>$(DefineConstants);MONO</DefineConstants>
@@ -40,7 +36,7 @@
     </PropertyGroup>
     
 
-    <Import Project="build/conditions.props"/>
+    <Import Project="build/conditions.props" />
 
     <ItemGroup Label="Publicizer" Condition="'$(IsMono)' == 'true'">
         <PackageReference Include="BepInEx.AssemblyPublicizer.MSBuild" Version="0.5.0-beta.1">
@@ -50,11 +46,11 @@
     </ItemGroup>
 
     <!-- MelonLoader References -->
-    <Import Project="build\references\MelonMono.targets"/>
-    <Import Project="build\references\MelonIL2CPP.targets"/>
+    <Import Project="build\references\MelonMono.targets" />
+    <Import Project="build\references\MelonIL2CPP.targets" />
 
     <!-- Events -->
-    <Import Project="build\events\preBuild.targets"/>
-    <Import Project="build\events\postBuild.targets"/>
+    <Import Project="build\events\preBuild.targets" />
+    <Import Project="build\events\postBuild.targets" />
 
 </Project>

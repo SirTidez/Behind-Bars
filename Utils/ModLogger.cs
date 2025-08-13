@@ -1,9 +1,9 @@
 using MelonLoader;
 using System;
 
-namespace Behind_Bars.Utils
+namespace Behind_Bars.Helpers
 {
-    public static class Logger 
+    public static class ModLogger 
     {
         public static void Info(string message)
         {
@@ -20,10 +20,14 @@ namespace Behind_Bars.Utils
             MelonLogger.Msg($"[ERROR] {message}");
         }
 
-        public static void Error(string messaage, Exception exception)
+        public static void Error(string message, Exception exception)
         {
             MelonLogger.Error($"{message}: {exception.Message}");
             MelonLogger.Error($"Stack trace: {exception.StackTrace}");
+        }
+        public static void Warn(string message)
+        {
+            MelonLogger.Warning(message);
         }
     }
 }
