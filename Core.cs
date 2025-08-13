@@ -10,23 +10,15 @@ using Il2CppFishNet;
 
 [assembly: MelonInfo(
     typeof(Behind_Bars.Behind_Bars),
-    Behind_Bars.BuildInfo.Name,
-    Behind_Bars.BuildInfo.Version,
-    Behind_Bars.BuildInfo.Author
+    Constants.MOD_NAME,
+    Constants.MOD_VERSION,
+    Constants.MOD_AUTHOR
 )]
 [assembly: MelonColor(1, 255, 0, 0)]
 [assembly: MelonGame("TVGS", "Schedule I")]
 
 namespace Behind_Bars
 {
-    public static class BuildInfo
-    {
-        public const string Name = "Behind Bars";
-        public const string Description = "Behind Bars is a gameplay expansion mod designed to enhance the law enforcement mechanics in Schedule 1.";
-        public const string Author = "SirTidez";
-        public const string Version = "1.0.0";
-    }
-
     public class Behind_Bars : MelonMod
     {
         private static MelonLogger.Instance Logger;
@@ -34,7 +26,7 @@ namespace Behind_Bars
         public override void OnInitializeMelon()
         {
             Logger = LoggerInstance;
-            Logger.Msg("Behind_Bars initialized");
+            Logger.Msg("Behind Bars initialized");
             Logger.Debug("This will only show in debug mode");
         }
 
