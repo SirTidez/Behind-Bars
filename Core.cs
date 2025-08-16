@@ -4,9 +4,15 @@ using HarmonyLib;
 using System;
 using Behind_Bars.Helpers;
 using UnityEngine;
+#if !MONO
 using Il2CppScheduleOne.PlayerScripts;
+#else
+using ScheduleOne.PlayerScripts;
+#endif
 using Behind_Bars.Players;
 using Behind_Bars.Systems;
+using Behind_Bars.Harmony;
+
 
 #if MONO
 using FishNet;
@@ -28,7 +34,7 @@ namespace Behind_Bars
     public class Core : MelonMod
     {
         public static Core? Instance { get; private set; }
-        
+
         // Core systems
         private JailSystem? _jailSystem;
         private BailSystem? _bailSystem;
@@ -38,11 +44,17 @@ namespace Behind_Bars
         // Player management
         private Dictionary<Player, PlayerHandler> _playerHandlers = new();
 
+        public JailSystem? JailSystem => _jailSystem;
+        public BailSystem? BailSystem => _bailSystem;
+        public CourtSystem? CourtSystem => _courtSystem;
+        public ProbationSystem? ProbationSystem => _probationSystem;
+
         public override void OnInitializeMelon()
         {
             Instance = this;
             
             // Initialize core systems
+            HarmonyPatches.Initialize(this);
             _jailSystem = new JailSystem();
             _bailSystem = new BailSystem();
             _courtSystem = new CourtSystem();
@@ -71,10 +83,14 @@ namespace Behind_Bars
             {
                 var playerHandler = new PlayerHandler(Player.Local);
                 _playerHandlers[Player.Local] = playerHandler;
-                
+
                 // Subscribe to arrest events
+#if !MONO
                 Player.Local.onArrested.AddListener(new Action(OnPlayerArrested));
-                
+#else
+                Player.Local.onArrested.AddListener(OnPlayerArrested);
+#endif
+
                 ModLogger.Info("Player systems initialized successfully");
             }
             else
@@ -92,7 +108,7 @@ namespace Behind_Bars
             if (Player.Local != null)
             {
                 // Start the arrest sequence
-                MelonCoroutines.Start(_jailSystem!.HandlePlayerArrest(Player.Local));
+                // MelonCoroutines.Start(_jailSystem!.HandlePlayerArrest(Player.Local));
             }
         }
 

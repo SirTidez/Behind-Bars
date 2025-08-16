@@ -250,34 +250,19 @@ namespace Behind_Bars.Systems
 
         private void SpawnProbationOfficer()
         {
-            ModLogger.Info("Spawning Probation Officer NPC");
+            ModLogger.Info("Probation Officer NPC spawning removed - feature not implemented");
             
-            // TODO: Implement actual NPC spawning
-            // This should:
-            // 1. Load probation officer prefab
-            // 2. Position NPC in appropriate location
-            // 3. Set up patrol routes
-            // 4. Configure search behavior
-            
-            // Placeholder implementation
-            _probationOfficerInstance = new GameObject("ProbationOfficer").transform;
-            _probationOfficerInstance.position = Vector3.zero; // Should be positioned appropriately
-            
-            ModLogger.Info("Probation Officer NPC spawned");
+            // NOTE: NPC spawning functionality has been removed from this mod
+            // The probation system will continue to work without the physical NPC
+            // Players will still be subject to probation rules and violations
         }
 
         private void DespawnProbationOfficer()
         {
-            ModLogger.Info("Despawning Probation Officer NPC");
+            ModLogger.Info("Probation Officer NPC despawning removed - feature not implemented");
             
-            if (_probationOfficerInstance != null)
-            {
-                // TODO: Implement proper cleanup
-                UnityEngine.Object.Destroy(_probationOfficerInstance.gameObject);
-                _probationOfficerInstance = null;
-            }
-            
-            ModLogger.Info("Probation Officer NPC despawned");
+            // NOTE: NPC despawning functionality has been removed from this mod
+            // No cleanup needed as no NPCs are spawned
         }
 
         public ProbationRecord? GetProbationRecord(Player player)

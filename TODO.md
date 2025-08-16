@@ -73,7 +73,7 @@ This document outlines all development tasks for the Behind Bars mod, organized 
 ### Court Mechanics
 - [ ] **HIGH PRIORITY**: Implement actual courtroom scene
   - [ ] Design courtroom prefab/environment
-  - [ ] Add judge NPC with dialogue system
+  - [ ] Add judge dialogue system
   - [ ] Implement prosecution/defense system
   - [ ] Create evidence presentation mechanics
   - [ ] Add witness testimony system
@@ -100,24 +100,20 @@ This document outlines all development tasks for the Behind Bars mod, organized 
 - [x] Create ProbationSystem class structure
 - [x] Implement probation status tracking
 - [x] Add probation duration system (10 minutes default)
-- [x] Create probation officer NPC concept
 - [x] Add violation tracking system
 
 ### Probation Mechanics
 - [ ] **HIGH PRIORITY**: Implement actual probation system
-  - [ ] Design probation officer NPC
-  - [ ] Add probation officer spawning system
   - [ ] Implement random body search mechanics
   - [ ] Create probation violation consequences
   - [ ] Add probation completion rewards
 
-### Probation Officer
-- [ ] **MEDIUM PRIORITY**: Create probation officer NPC
-  - [ ] Design probation officer appearance
-  - [ ] Add probation officer AI behavior
-  - [ ] Implement random encounter system
-  - [ ] Create probation officer dialogue
-  - [ ] Add probation officer scheduling
+### Probation Monitoring
+- [ ] **MEDIUM PRIORITY**: Enhance probation system
+  - [ ] Add probation violation detection
+  - [ ] Implement probation completion tracking
+  - [ ] Create probation extension system
+  - [ ] Add probation violation consequences
 
 ### Probation Activities
 - [ ] **LOW PRIORITY**: Add probation requirements
@@ -126,53 +122,6 @@ This document outlines all development tasks for the Behind Bars mod, organized 
   - [ ] Create curfew system
   - [ ] Implement employment requirements
   - [ ] Add counseling sessions
-
-## 🎮 NPC Creation System
-
-### Core Implementation
-- [x] Create NPCCreationSystem class structure
-- [x] Implement F7 key detection system
-- [x] Add spawn position calculation (3 units in front of player)
-- [x] Create NPCData structure with comprehensive properties
-- [x] Implement CharacterClass enum system
-
-### Character Creator Integration
-- [x] Create CharacterCreatorWrapper class
-- [x] Implement reflection-based game system access
-- [x] Add method and field caching for performance
-- [x] Create NPC instance creation system
-- [x] Implement property setting through reflection
-
-### User Interface
-- [x] Create NPCCreationUI class
-- [x] Implement comprehensive UI system with Canvas
-- [x] Add input fields for name and class selection
-- [x] Create sliders for stats (health, speed, damage)
-- [x] Add appearance customization controls
-- [x] Implement create/cancel button system
-
-### NPC Spawning
-- [x] Implement NPC GameObject creation
-- [x] Add required components (Transform, Animator, Rigidbody, Collider)
-- [x] Create NPC component integration
-- [x] Implement spawn position and rotation
-- [x] Add error handling and cleanup
-
-### Advanced Features
-- [ ] **MEDIUM PRIORITY**: Enhance NPC customization
-  - [ ] Add more appearance options (clothing, accessories)
-  - [ ] Implement custom animation support
-  - [ ] Create voice customization system
-  - [ ] Add personality traits and behaviors
-  - [ ] Implement custom dialogue options
-
-### NPC Management
-- [ ] **LOW PRIORITY**: Add NPC persistence and management
-  - [ ] Implement NPC save/load system
-  - [ ] Add NPC tracking and management
-  - [ ] Create NPC removal/editing system
-  - [ ] Implement NPC limit controls
-  - [ ] Add NPC performance optimization
 
 ## 🔧 Technical Infrastructure
 
@@ -212,23 +161,18 @@ This document outlines all development tasks for the Behind Bars mod, organized 
   - [ ] Test bail system logic
   - [ ] Test court system flow
   - [ ] Test probation system mechanics
-  - [ ] Test NPC creation system
 
 ### Integration Testing
 - [ ] **MEDIUM PRIORITY**: Test system interactions
   - [ ] Test arrest → jail → bail → court flow
   - [ ] Test probation violation → jail flow
-  - [ ] Test NPC creation → spawning flow
   - [ ] Test multiplayer synchronization
   - [ ] Test save/load system
 
 ### Performance Testing
 - [ ] **LOW PRIORITY**: Optimize system performance
   - [ ] Test memory usage under load
-  - [ ] Optimize reflection calls
-  - [ ] Test UI responsiveness
-  - [ ] Optimize NPC spawning
-  - [ ] Test multiplayer performance
+  - [ ] Optimize system calls
 
 ## 📚 Documentation
 
@@ -245,13 +189,6 @@ This document outlines all development tasks for the Behind Bars mod, organized 
 - [x] Add code comments and XML documentation
 - [x] Create API reference
 - [x] Document build and deployment process
-
-### NPC Creation Documentation
-- [x] Create NPC_CREATION_README.md
-- [x] Document NPC creation system features
-- [x] Add technical implementation details
-- [x] Create troubleshooting guide
-- [x] Document future enhancement plans
 
 ## 🚀 Deployment and Distribution
 
@@ -278,14 +215,13 @@ This document outlines all development tasks for the Behind Bars mod, organized 
 - ✅ **Bail System**: Core implementation (5/6 tasks)
 - ✅ **Court System**: Core implementation (5/8 tasks)
 - ✅ **Probation System**: Core implementation (5/8 tasks)
-- ✅ **NPC Creation System**: Full implementation (15/15 tasks)
 - ✅ **Technical Infrastructure**: Complete (15/15 tasks)
 - ✅ **Documentation**: Complete (15/15 tasks)
 
 ### Overall Progress
-- **Total Tasks**: 89
-- **Completed**: 70 (79%)
-- **Remaining**: 19 (21%)
+- **Total Tasks**: 74
+- **Completed**: 55 (74%)
+- **Remaining**: 19 (26%)
 
 ### Priority Breakdown
 - **HIGH PRIORITY**: 8 tasks remaining
@@ -304,13 +240,12 @@ This document outlines all development tasks for the Behind Bars mod, organized 
 1. **Complete Jail System**: Finish all jail mechanics and activities
 2. **Complete Bail System**: Finish payment and multiplayer support
 3. **Complete Court System**: Finish all court proceedings and mechanics
-4. **Complete Probation System**: Finish officer NPC and violation handling
+4. **Complete Probation System**: Finish probation monitoring and violation handling
 
 ### Long Term Vision (Next 6-12 months)
-1. **Advanced NPC Features**: Enhanced customization and AI behavior
-2. **Performance Optimization**: Optimize all systems for large-scale use
-3. **Community Features**: Add mod sharing and collaboration tools
-4. **Expansion Packs**: Add new crime types and justice system features
+1. **Performance Optimization**: Optimize all systems for large-scale use
+2. **Community Features**: Add mod sharing and collaboration tools
+3. **Expansion Packs**: Add new crime types and justice system features
 
 ---
 

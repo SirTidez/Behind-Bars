@@ -2,6 +2,12 @@ using System.Collections;
 using Behind_Bars.Helpers;
 using UnityEngine;
 using MelonLoader;
+using ScheduleOne.DevUtilities;
+using ScheduleOne.Levelling;
+using ScheduleOne.Money;
+
+
+
 
 #if MONO
 using FishNet;
@@ -58,9 +64,23 @@ namespace Behind_Bars.Systems
             // - Reputation with law enforcement
             // - Previous criminal record
             // - Wealth status
-            
-            // Placeholder implementation
-            return 1.0f;
+            float playerLevel = LevelManager.Instance.Rank switch
+            {
+                ERank.Street_Rat => 1.0f,
+                ERank.Hoodlum => 1.2f,
+                ERank.Peddler => 1.5f,
+                ERank.Hustler => 1.8f,
+                ERank.Bagman => 2.0f,
+                ERank.Enforcer => 2.5f,
+                ERank.Shot_Caller => 3.0f,
+                ERank.Block_Boss => 3.5f,
+                ERank.Underlord => 4.0f,
+                ERank.Baron => 4.5f,
+                ERank.Kingpin => 5.0f,
+                _ => 1.0f
+            };
+
+            return playerLevel;
         }
 
         private bool DetermineNegotiability(Player player, float fineAmount)
@@ -92,9 +112,18 @@ namespace Behind_Bars.Systems
         {
             // TODO: Implement actual money checking
             // This should check the player's actual money/currency
+            bool canAfford = false;
+            if (MoneyManager.Instance == null)
+            {
+                ModLogger.Error("MoneyManager is not initialized. Cannot check bail affordability.");
+            }
+
+            if (MoneyManager.Instance.onlineBalance > bailAmount || MoneyManager.Instance.cashBalance > bailAmount || MoneyManager.Instance.cashBalance + MoneyManager.Instance.onlineBalance > bailAmount)
+            {
+                canAfford = true;
+            }
             
-            // Placeholder implementation
-            return true;
+            return canAfford;
         }
 
         public bool CanFriendsPayBail(Player player, float bailAmount)
@@ -148,7 +177,30 @@ namespace Behind_Bars.Systems
                 // 1. Deduct money from player's account
                 // 2. Show confirmation
                 // 3. Release the player
-                
+                if (MoneyManager.Instance == null)
+                {
+                    ModLogger.Error("MoneyManager is not initialized. Cannot process bail payment.");
+                    yield break;
+                }
+                if (MoneyManager.Instance.onlineBalance >= bailAmount)
+                {
+                    MoneyManager.Instance.onlineBalance -= bailAmount;
+                }
+                else if (MoneyManager.Instance.cashBalance >= bailAmount)
+                {
+                    MoneyManager.Instance.ChangeCashBalance(bailAmount);
+                }
+                else if (MoneyManager.Instance.cashBalance + MoneyManager.Instance.onlineBalance >= bailAmount)
+                {
+                    float remaining = bailAmount - MoneyManager.Instance.onlineBalance;
+                    MoneyManager.Instance.onlineBalance = 0;
+                    MoneyManager.Instance.ChangeCashBalance(remaining);
+                }
+                else
+                {
+                    ModLogger.Error($"Player {player.name} cannot afford bail of ${bailAmount:F0}");
+                    yield break;
+                }
                 yield return new WaitForSeconds(1f);
                 ModLogger.Info($"Bail paid by {player.name}");
             }
@@ -167,7 +219,6 @@ namespace Behind_Bars.Systems
             // 2. Teleporting player to courthouse/police station
             // 3. Setting bail conditions
             // 4. Starting probation period if applicable
-            
             yield return new WaitForSeconds(1f);
             ModLogger.Info($"{player.name} has been released on bail");
         }

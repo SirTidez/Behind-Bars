@@ -2,11 +2,19 @@ using System.Collections;
 using Behind_Bars.Helpers;
 using UnityEngine;
 using MelonLoader;
-using Il2CppScheduleOne.AvatarFramework;
+
+
+
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
+using Il2CppScheduleOne.AvatarFramework;
+using Il2CppScheduleOne.DevUtilities;
+using Il2CppScheduleOne.UI;
 #else
+using ScheduleOne.AvatarFramework;
+using ScheduleOne.DevUtilities;
+using ScheduleOne.UI;
 using ScheduleOne.PlayerScripts;
 #endif
 
@@ -45,6 +53,11 @@ namespace Behind_Bars.Systems
             int i = 0;
             foreach (Accessory accessory in player.Avatar.appliedAccessories)
             {
+                if (accessory == null)
+                {
+                    i++;
+                    continue;
+                }
                 ModLogger.Info($"Player accessory {i}: {accessory.name}");
                 i++;
             }
@@ -164,15 +177,17 @@ namespace Behind_Bars.Systems
 
         private IEnumerator SendPlayerToJail(Player player, JailSentence sentence)
         {
-            ModLogger.Info($"Sending player {player.name} to jail for {sentence.JailTime}s");
-            
             // TODO: Implement actual jail mechanics
             // This could involve:
             // 1. Teleporting player to jail cell
             // 2. Locking player movement
             // 3. Showing jail UI
             // 4. Starting jail timer
-            
+            ModLogger.Info($"Sending player {player.name} to jail for {sentence.JailTime}s");
+            PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(false); // Disable inventory
+            PlayerSingleton<PlayerMovement>.Instance.canMove = false;// Lock player movement
+            Singleton<BlackOverlay>.Instance.Open(2f);// Hide HUD
+            ModLogger.Info($"Player {player.name} movement locked for jail time. Player inventory is {PlayerSingleton<PlayerInventory>.Instance.enabled} and player movement is {PlayerSingleton<PlayerMovement>.Instance.canMove} and HUD is {Singleton<HUD>.Instance.canvas.enabled}");
             // Placeholder implementation
             yield return new WaitForSeconds(sentence.JailTime);
             
@@ -190,6 +205,10 @@ namespace Behind_Bars.Systems
             // 2. Teleporting player back to safe location
             // 3. Clearing jail status
             // 4. Starting probation if applicable
+            PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true); // Enable inventory
+            PlayerSingleton<PlayerMovement>.Instance.canMove = true; // Unlock player movement
+            Singleton<BlackOverlay>.Instance.Close(2f); // Show HUD
+            ModLogger.Info($"Player {player.name} movement unlocked, released from jail");
         }
     }
 }
