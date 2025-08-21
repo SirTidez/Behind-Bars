@@ -25,7 +25,7 @@ Behind Bars is a comprehensive mod for Schedule I that significantly expands the
 - **Deal-Based Mechanics**: Similar to pawn shop negotiations but in a legal context
 
 ### 👮 Probation System
-- **Probation Monitoring**: Automatic probation periods after multiple arrests
+- **Probation Officer NPC**: New NPC that patrols and conducts random searches
 - **Random Body Searches**: Unpredictable search intervals (30-120 seconds)
 - **Violation Tracking**: Multiple violations can extend probation or lead to revocation
 - **Progressive Consequences**: Violations increase probation duration and severity
@@ -42,7 +42,7 @@ Behind Bars is a comprehensive mod for Schedule I that significantly expands the
 1. **JailSystem**: Handles arrest processing, severity assessment, and jail mechanics
 2. **BailSystem**: Manages bail calculations, payments, and multiplayer support
 3. **CourtSystem**: Controls court sessions, negotiations, and sentencing
-4. **ProbationSystem**: Manages probation periods and violation tracking
+4. **ProbationSystem**: Manages probation periods, NPC spawning, and violation tracking
 
 ### Player Management
 - **PlayerHandler**: Tracks individual player criminal records and status
@@ -92,7 +92,7 @@ The mod includes extensive configuration options through MelonPreferences:
 
 ### Probation
 1. Automatic after multiple arrests
-2. System monitors for violations automatically
+2. Probation Officer will patrol and search you
 3. Avoid violations to complete probation successfully
 4. Violations extend probation or lead to revocation
 
@@ -145,9 +145,10 @@ using Il2CppFishNet;
 - [ ] UI implementation for all systems
 - [ ] Integration with game's money system
 - [ ] Advanced crime severity detection
-- [ ] Enhanced probation monitoring
+- [ ] Probation Officer AI improvements
 
 ### Phase 3 (Future)
+- [ ] Additional NPC types (Lawyers, Judges)
 - [ ] Evidence system for court cases
 - [ ] Reputation system with law enforcement
 - [ ] Community content support

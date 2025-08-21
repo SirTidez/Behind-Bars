@@ -2,19 +2,19 @@ using System.Collections;
 using Behind_Bars.Helpers;
 using UnityEngine;
 using MelonLoader;
-using ScheduleOne.DevUtilities;
-using ScheduleOne.Levelling;
-using ScheduleOne.Money;
-
-
-
 
 #if MONO
 using FishNet;
 using ScheduleOne.PlayerScripts;
+using ScheduleOne.DevUtilities;
+using ScheduleOne.Levelling;
+using ScheduleOne.Money;
 #else
 using Il2CppFishNet;
 using Il2CppScheduleOne.PlayerScripts;
+using Il2CppScheduleOne.DevUtilities;
+using Il2CppScheduleOne.Leveling;
+using Il2CppScheduleOne.Money;
 #endif
 
 namespace Behind_Bars.Systems
