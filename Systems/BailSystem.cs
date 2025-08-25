@@ -13,8 +13,8 @@ using ScheduleOne.Money;
 using Il2CppFishNet;
 using Il2CppScheduleOne.PlayerScripts;
 using Il2CppScheduleOne.DevUtilities;
-using Il2CppScheduleOne.Leveling;
 using Il2CppScheduleOne.Money;
+using Il2CppScheduleOne.Levelling;
 #endif
 
 namespace Behind_Bars.Systems
