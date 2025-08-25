@@ -271,6 +271,9 @@
         <Reference Include="UnityEngine.XRModule">
             <HintPath>$(S1Dir)\MelonLoader\Il2CppAssemblies\UnityEngine.XRModule.dll</HintPath>
         </Reference>
+		<Reference Include="UnityEngine.Il2CppAssetBundleManager.dll">
+			<HintPath>D:\Schedule 1 Modding\Behind Bars\build\UnityEngine.Il2CppAssetBundleManager.dll</HintPath>
+		</Reference>
     </ItemGroup>
     <ItemGroup Label="ThirdPartyIL2CPP" Condition="'$(IsMono)' != 'true'">
         <Reference Include="MelonLoader">
