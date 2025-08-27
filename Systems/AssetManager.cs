@@ -284,7 +284,6 @@ namespace Behind_Bars.Systems
                     
                     // Set source properties
                     if (material.HasProperty("_Surface")) material.SetFloat("_Surface", 0.0f); // 0 = Opaque, 1 = Transparent
-                    if (material.HasProperty("_Cull")) material.SetFloat("_Cull", 2.0f); // 2 = Back face culling
                     if (material.HasProperty("_AlphaClip")) material.SetFloat("_AlphaClip", 0.0f);
                     
                     ModLogger.Debug($"Created material with texture: {texture?.name ?? "None"} and color: {color}");
@@ -299,6 +298,90 @@ namespace Behind_Bars.Systems
             catch (Exception e)
             {
                 ModLogger.Error($"Error creating material: {e.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Creates a metal material with the specified color and metallic properties using Universal Render Pipeline shader
+        /// </summary>
+        /// <param name="color">The base color for the material</param>
+        /// <param name="metallic">The metallic value (0.0 to 1.0)</param>
+        /// <returns>A new metal material with the specified properties</returns>
+        public static Material CreateMetalMaterial(Color color, float metallic)
+        {
+            try
+            {
+                // Create material using Universal Render Pipeline shader
+                Material material = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+                
+                if (material != null)
+                {
+                    // Set base color
+                    if (material.HasProperty("_BaseColor")) material.SetColor("_BaseColor", color);
+                    
+                    // Set metallic properties
+                    if (material.HasProperty("_Metallic")) material.SetFloat("_Metallic", Mathf.Clamp01(metallic));
+                    if (material.HasProperty("_Smoothness")) material.SetFloat("_Smoothness", 0.8f); // Higher smoothness for metal
+                    
+                    // Set source properties
+                    if (material.HasProperty("_Surface")) material.SetFloat("_Surface", 0.0f); // 0 = Opaque, 1 = Transparent
+                    if (material.HasProperty("_AlphaClip")) material.SetFloat("_AlphaClip", 0.0f);
+                    
+                    ModLogger.Debug($"Created metal material with color: {color} and metallic: {metallic}");
+                    return material;
+                }
+                else
+                {
+                    ModLogger.Error("Failed to create metal material - shader not found");
+                    return null;
+                }
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error creating metal material: {e.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Creates a cloth material with the specified color using Universal Render Pipeline shader
+        /// This method is identical to CreateMaterial(Color color) for now, but can be customized later
+        /// </summary>
+        /// <param name="color">The base color for the material</param>
+        /// <returns>A new cloth material with the specified color</returns>
+        public static Material CreateClothMaterial(Color color)
+        {
+            try
+            {
+                // Create material using Universal Render Pipeline shader
+                Material material = new Material(Shader.Find("Universal Render Pipeline/Lit"));
+                
+                if (material != null)
+                {
+                    // Set base color
+                    if (material.HasProperty("_BaseColor")) material.SetColor("_BaseColor", color);
+                    
+                    // Set default values for other properties
+                    if (material.HasProperty("_Metallic")) material.SetFloat("_Metallic", 0.0f);
+                    if (material.HasProperty("_Smoothness")) material.SetFloat("_Smoothness", 0.1f);
+                    
+                    // Set source properties
+                    if (material.HasProperty("_Surface")) material.SetFloat("_Surface", 0.0f); // 0 = Opaque, 1 = Transparent
+                    if (material.HasProperty("_AlphaClip")) material.SetFloat("_AlphaClip", 0.0f);
+                    
+                    ModLogger.Debug($"Created cloth material with color: {color}");
+                    return material;
+                }
+                else
+                {
+                    ModLogger.Error("Failed to create cloth material - shader not found");
+                    return null;
+                }
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error creating cloth material: {e.Message}");
                 return null;
             }
         }
@@ -368,7 +451,7 @@ namespace Behind_Bars.Systems
                     "Assets/Jail/ToiletSink.prefab",
                     "Toilet_Sink",
                     new Vector3(1f, 1f, 1f),
-                    new Color(0.5f, 0.5f, 0.5f, 1.0f)
+                    new Color(0.75f, 0.75f, 0.75f, 0.9f)
                 )
             },
             {
@@ -378,7 +461,7 @@ namespace Behind_Bars.Systems
                     "Assets/Jail/CommonRoomTable.prefab",
                     "Common_Room_Table",
                     new Vector3(3f, 1f, 2f),
-                    new Color(0.6f, 0.4f, 0.2f, 1.0f)
+                    new Color(0.75f, 0.75f, 0.75f, 0.9f)
                 )
             },
             {
@@ -388,7 +471,7 @@ namespace Behind_Bars.Systems
                     "Assets/Jail/CellTable.prefab",
                     "Cell_Table",
                     new Vector3(2f, 1f, 1.5f),
-                    new Color(0.4f, 0.3f, 0.2f, 1.0f)
+                    new Color(0.75f, 0.75f, 0.75f, 0.9f)
                 )
             }
         };
@@ -591,8 +674,8 @@ namespace Behind_Bars.Systems
                 }
 
                 // Create material using the new CreateMaterial method with the configured color
-                var material = AssetManager.CreateMaterial(new Color(0.02f, 0.2f, 0f, 1f));
-                var material1 = AssetManager.CreateMaterial(materialColor);
+                var material = AssetManager.CreateClothMaterial(new Color(0.02f, 0.2f, 0f, 1f));
+                var material1 = AssetManager.CreateMetalMaterial(materialColor, 0.9f);
                 if (material == null)
                 {
                     ModLogger.Error("Failed to create material for BunkBed");
@@ -1006,8 +1089,8 @@ namespace Behind_Bars.Systems
                 }
 
                 // Create material using the new CreateMaterial method with the configured color
-                var material = AssetManager.CreateMaterial(materialColor);
-                var material1 = AssetManager.CreateMaterial(new Color(0f, 0f, 0f, 1f));
+                var material = AssetManager.CreateMetalMaterial(materialColor, 0.75f);
+                var material1 = AssetManager.CreateMetalMaterial(new Color(0f, 0f, 0f, 1f), 1f);
                 if (material == null || material1 == null)
                 {
                     ModLogger.Error("Failed to create material for ToiletSink");
@@ -1065,7 +1148,7 @@ namespace Behind_Bars.Systems
                 // Apply material to all renderers in the prefab
                 var allRenderers = toiletSinkGO.GetComponentsInChildren<Renderer>(true);
                 ModLogger.Debug($"Found {allRenderers.Length} renderers in prefab");
-                var drainMaterial = AssetManager.CreateMaterial(new Color(0f, 0f, 0f, 1f));
+                var drainMaterial = AssetManager.CreateMetalMaterial(new Color(0f, 0f, 0f, 1f), 1f);
 #if MONO
                 List<Material> materials = new List<Material>();
 #else
@@ -1404,7 +1487,7 @@ namespace Behind_Bars.Systems
                 var prefabPath = config?.PrefabPath ?? "Assets/Jail/CommonRoomTable.prefab";
                 var layerName = config?.LayerName ?? "Common_Room_Table";
                 var colliderSize = config?.ColliderSize ?? new Vector3(3f, 1f, 2f);
-                var materialColor = config?.MaterialColor ?? new Color(0.6f, 0.4f, 0.2f, 1.0f);
+                var materialColor = config?.MaterialColor ?? new Color(0.5f, 0.5f, 0.5f, 1.0f);
 
                 // Load the prefab
                 var prefab = AssetManager.bundle.LoadAsset<GameObject>(prefabPath);
@@ -1434,7 +1517,7 @@ namespace Behind_Bars.Systems
                 }
 
                 // Create material using the new CreateMaterial method with the configured color
-                var material = AssetManager.CreateMaterial(materialColor);
+                var material = AssetManager.CreateMetalMaterial(materialColor, 0.75f);
                 if (material == null)
                 {
                     ModLogger.Error("Failed to create material for CommonRoomTable");
@@ -1810,7 +1893,7 @@ namespace Behind_Bars.Systems
                 var prefabPath = config?.PrefabPath ?? "Assets/Jail/CellTable.prefab";
                 var layerName = config?.LayerName ?? "Cell_Table";
                 var colliderSize = config?.ColliderSize ?? new Vector3(2f, 1f, 1.5f);
-                var materialColor = config?.MaterialColor ?? new Color(0.4f, 0.3f, 0.2f, 1.0f);
+                var materialColor = config?.MaterialColor ?? new Color(0.5f, 0.5f, 0.5f, 1.0f);
 
                 // Load the prefab
                 var prefab = AssetManager.bundle.LoadAsset<GameObject>(prefabPath);
@@ -1840,7 +1923,7 @@ namespace Behind_Bars.Systems
                 }
 
                 // Create material using the new CreateMaterial method with the configured color
-                var material = AssetManager.CreateMaterial(materialColor);
+                var material = AssetManager.CreateMetalMaterial(materialColor, 0.75f);
                 if (material == null)
                 {
                     ModLogger.Error("Failed to create material for CellTable");
