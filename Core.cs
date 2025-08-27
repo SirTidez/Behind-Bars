@@ -61,6 +61,10 @@ namespace Behind_Bars
             ClassInjector.RegisterTypeInIl2Cpp<ToiletSinkManager>();
             ClassInjector.RegisterTypeInIl2Cpp<BunkBed>();
             ClassInjector.RegisterTypeInIl2Cpp<BunkBedManager>();
+            ClassInjector.RegisterTypeInIl2Cpp<CommonRoomTable>();
+            ClassInjector.RegisterTypeInIl2Cpp<CommonRoomTableManager>();
+            ClassInjector.RegisterTypeInIl2Cpp<CellTable>();
+            ClassInjector.RegisterTypeInIl2Cpp<CellTableManager>();
 #endif
             // Initialize core systems
             HarmonyPatches.Initialize(this);
@@ -111,6 +115,30 @@ namespace Behind_Bars
                     else
                     {
                         ModLogger.Warn("Failed to spawn bunk bed on scene initialization");
+                    }
+
+                    // Spawn common room table using generic method
+                    var commonRoomTable = AssetManager.SpawnAsset<CommonRoomTable>(FurnitureType.CommonRoomTable);
+                    if (commonRoomTable != null)
+                    {
+                        ModLogger.Info($"Successfully spawned common room table on scene initialization: {commonRoomTable.GetDebugInfo()}");
+                        ModLogger.Debug($"Total common room tables in scene: {CommonRoomTableManager.GetCommonRoomTableCount()}");
+                    }
+                    else
+                    {
+                        ModLogger.Warn("Failed to spawn common room table on scene initialization");
+                    }
+
+                    // Spawn cell table using generic method
+                    var cellTable = AssetManager.SpawnAsset<CellTable>(FurnitureType.CellTable);
+                    if (cellTable != null)
+                    {
+                        ModLogger.Info($"Successfully spawned cell table on scene initialization: {cellTable.GetDebugInfo()}");
+                        ModLogger.Debug($"Total cell tables in scene: {CellTableManager.GetCellTableCount()}");
+                    }
+                    else
+                    {
+                        ModLogger.Warn("Failed to spawn cell table on scene initialization");
                     }
 
                     // Test the systems after successful spawning

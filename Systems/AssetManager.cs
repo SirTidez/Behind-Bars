@@ -307,7 +307,9 @@ namespace Behind_Bars.Systems
     public enum FurnitureType
     {
         BunkBed,
-        ToiletSink
+        ToiletSink,
+        CommonRoomTable,
+        CellTable
     }
 
     /// <summary>
@@ -368,6 +370,26 @@ namespace Behind_Bars.Systems
                     new Vector3(1f, 1f, 1f),
                     new Color(0.5f, 0.5f, 0.5f, 1.0f)
                 )
+            },
+            {
+                FurnitureType.CommonRoomTable,
+                new AssetSpawnConfig(
+                    new Vector3(-60f, -2.5f, -55f),
+                    "Assets/Jail/CommonRoomTable.prefab",
+                    "Common_Room_Table",
+                    new Vector3(3f, 1f, 2f),
+                    new Color(0.6f, 0.4f, 0.2f, 1.0f)
+                )
+            },
+            {
+                FurnitureType.CellTable,
+                new AssetSpawnConfig(
+                    new Vector3(-62f, -2.5f, -52f),
+                    "Assets/Jail/CellTable.prefab",
+                    "Cell_Table",
+                    new Vector3(2f, 1f, 1.5f),
+                    new Color(0.4f, 0.3f, 0.2f, 1.0f)
+                )
             }
         };
 
@@ -402,6 +424,8 @@ namespace Behind_Bars.Systems
             {
                 FurnitureType.BunkBed => BunkBedManager.CreateBunkBed(config.SpawnPoint, config),
                 FurnitureType.ToiletSink => ToiletSinkManager.CreateToiletSink(config.SpawnPoint, config),
+                FurnitureType.CommonRoomTable => CommonRoomTableManager.CreateCommonRoomTable(config.SpawnPoint, config),
+                FurnitureType.CellTable => CellTableManager.CreateCellTable(config.SpawnPoint, config),
                 _ => null
             };
         }
@@ -1272,6 +1296,818 @@ namespace Behind_Bars.Systems
             {
                 // With this line:
                 ToiletSinkManager.RemoveToiletSink(this);
+            }
+        }
+    }
+
+#if MONO
+    public sealed class CommonRoomTableManager : MonoBehaviour
+#else
+    public sealed class CommonRoomTableManager(IntPtr ptr) : MonoBehaviour(ptr)
+#endif
+    {
+        private static CommonRoomTableManager _instance;
+        private static readonly List<CommonRoomTable> _commonRoomTables = new();
+        private static bool _isInitialized = false;
+
+        public static CommonRoomTableManager Instance
+        {
+            get
+            {
+                if (_instance == null)
+                {
+                    var go = new GameObject("CommonRoomTableManager");
+                    _instance = go.AddComponent<CommonRoomTableManager>();
+                    DontDestroyOnLoad(go);
+                }
+                return _instance;
+            }
+        }
+
+        public static CommonRoomTable CreateCommonRoomTable(Vector3 spawnLocation, AssetSpawnConfig config = null)
+        {
+            if (_instance == null)
+            {
+                Instance.Initialize();
+            }
+
+            // Check if we already have a common room table at this location
+            foreach (var existingTable in _commonRoomTables)
+            {
+                if (Vector3.Distance(existingTable.transform.position, spawnLocation) < 0.1f)
+                {
+                    ModLogger.Debug($"Common room table already exists at location {spawnLocation}");
+                    return existingTable;
+                }
+            }
+
+            // Create new common room table
+            var commonRoomTable = Instance.SpawnCommonRoomTable(spawnLocation, config);
+            if (commonRoomTable != null)
+            {
+                _commonRoomTables.Add(commonRoomTable);
+                ModLogger.Debug($"Created new common room table at {spawnLocation}. Total tables: {_commonRoomTables.Count}");
+            }
+
+            return commonRoomTable;
+        }
+
+        public static void RemoveCommonRoomTable(CommonRoomTable commonRoomTable)
+        {
+            if (_commonRoomTables.Remove(commonRoomTable))
+            {
+                if (commonRoomTable != null && commonRoomTable.gameObject != null)
+                {
+                    Destroy(commonRoomTable.gameObject);
+                }
+                ModLogger.Debug($"Removed common room table. Total tables: {_commonRoomTables.Count}");
+            }
+        }
+
+        public static void ClearAllCommonRoomTables()
+        {
+            foreach (var table in _commonRoomTables.ToList())
+            {
+                RemoveCommonRoomTable(table);
+            }
+        }
+
+        public static List<CommonRoomTable> GetAllCommonRoomTables()
+        {
+            return new List<CommonRoomTable>(_commonRoomTables);
+        }
+
+        public static int GetCommonRoomTableCount()
+        {
+            return _commonRoomTables.Count;
+        }
+
+        private void Initialize()
+        {
+            if (_isInitialized) return;
+            
+            ModLogger.Debug("CommonRoomTableManager initialized");
+            _isInitialized = true;
+        }
+
+        private CommonRoomTable SpawnCommonRoomTable(Vector3 spawnLocation, AssetSpawnConfig config = null)
+        {
+            try
+            {
+                if (AssetManager.bundle == null)
+                {
+                    ModLogger.Error("Asset bundle is not loaded.");
+                    return null;
+                }
+
+                // Use config if provided, otherwise use defaults
+                var prefabPath = config?.PrefabPath ?? "Assets/Jail/CommonRoomTable.prefab";
+                var layerName = config?.LayerName ?? "Common_Room_Table";
+                var colliderSize = config?.ColliderSize ?? new Vector3(3f, 1f, 2f);
+                var materialColor = config?.MaterialColor ?? new Color(0.6f, 0.4f, 0.2f, 1.0f);
+
+                // Load the prefab
+                var prefab = AssetManager.bundle.LoadAsset<GameObject>(prefabPath);
+                if (prefab == null)
+                {
+                    ModLogger.Error("Failed to load CommonRoomTable prefab from bundle");
+                    
+                    // Debug: List all available prefabs
+                    var allPrefabs = AssetManager.bundle.LoadAllAssets<GameObject>();
+                    ModLogger.Debug($"Available prefabs in bundle:");
+                    foreach (var p in allPrefabs)
+                    {
+                        ModLogger.Debug($"  {p.name}");
+                    }
+                    return null;
+                }
+
+                ModLogger.Debug($"Successfully loaded prefab: {prefab.name}");
+                
+                // Debug: Check prefab components
+                var prefabMeshFilter = prefab.GetComponent<MeshFilter>();
+                var prefabMeshRenderer = prefab.GetComponent<MeshRenderer>();
+                ModLogger.Debug($"Prefab has MeshFilter: {prefabMeshFilter != null}, MeshRenderer: {prefabMeshRenderer != null}");
+                if (prefabMeshFilter != null)
+                {
+                    ModLogger.Debug($"Prefab mesh: {prefabMeshFilter.sharedMesh?.name ?? "null"}");
+                }
+
+                // Create material using the new CreateMaterial method with the configured color
+                var material = AssetManager.CreateMaterial(materialColor);
+                if (material == null)
+                {
+                    ModLogger.Error("Failed to create material for CommonRoomTable");
+                    return null;
+                }
+
+                ModLogger.Debug($"Successfully created material: {material.name}");
+
+                // Instantiate the prefab instead of creating a new GameObject
+                var commonRoomTableGO = Object.Instantiate(prefab);
+                commonRoomTableGO.name = "CommonRoomTable";
+                
+                ModLogger.Debug($"Instantiated prefab: {commonRoomTableGO.name}, Active: {commonRoomTableGO.activeInHierarchy}, ActiveSelf: {commonRoomTableGO.activeSelf}");
+                
+                // Ensure required components exist
+                var meshRenderer = commonRoomTableGO.GetComponent<MeshRenderer>();
+                var meshFilter = commonRoomTableGO.GetComponent<MeshFilter>();
+                var boxCollider = commonRoomTableGO.GetComponent<BoxCollider>();
+                
+                ModLogger.Debug($"Instantiated object components - MeshFilter: {meshFilter != null}, MeshRenderer: {meshRenderer != null}, BoxCollider: {boxCollider != null}");
+                
+                // Add missing components if they don't exist
+                if (meshRenderer == null)
+                {
+                    meshRenderer = commonRoomTableGO.AddComponent<MeshRenderer>();
+                    ModLogger.Debug("Added MeshRenderer component");
+                }
+                
+                if (meshFilter == null)
+                {
+                    meshFilter = commonRoomTableGO.AddComponent<MeshFilter>();
+                    ModLogger.Debug("Added MeshFilter component");
+                }
+                
+                if (boxCollider == null)
+                {
+                    boxCollider = commonRoomTableGO.AddComponent<BoxCollider>();
+                    ModLogger.Debug("Added BoxCollider component");
+                }
+
+                // Set position
+                commonRoomTableGO.transform.position = spawnLocation;
+
+                // Find parent container
+                GameObject map = GameObject.Find("Map");
+                if (map != null)
+                {
+                    commonRoomTableGO.transform.SetParent(map.transform, false);
+                }
+                else
+                {
+                    ModLogger.Warn("Map container not found, spawning at world position");
+                }
+
+                // Apply material to all renderers in the prefab
+                var allRenderers = commonRoomTableGO.GetComponentsInChildren<Renderer>(true);
+                ModLogger.Debug($"Found {allRenderers.Length} renderers in prefab");
+                
+                foreach (var renderer in allRenderers)
+                {
+                    if (renderer != null)
+                    {
+                        renderer.material = material;
+                        ModLogger.Debug($"Applied material to renderer: {renderer.name}");
+                        
+                        // Debug: Check if material was applied correctly
+                        if (renderer.material != null)
+                        {
+                            ModLogger.Debug($"  Material applied: {renderer.material.name}, Shader: {renderer.material.shader?.name ?? "null"}");
+                        }
+                        else
+                        {
+                            ModLogger.Warn($"  Failed to apply material to renderer: {renderer.name}");
+                        }
+                    }
+                }
+
+                // Add the CommonRoomTable component
+                var commonRoomTable = commonRoomTableGO.AddComponent<CommonRoomTable>();
+
+                // Initialize the CommonRoomTable component
+                commonRoomTable.Initialize(spawnLocation, material, colliderSize);
+
+                // Set layer
+                SetLayerRecursively(commonRoomTableGO.transform, LayerMask.NameToLayer(layerName));
+
+                // Final visibility check
+                ModLogger.Debug($"Final object state:");
+                ModLogger.Debug($"  Active: {commonRoomTableGO.activeInHierarchy}, ActiveSelf: {commonRoomTableGO.activeSelf}");
+                ModLogger.Debug($"  Position: {commonRoomTableGO.transform.position}");
+                ModLogger.Debug($"  Layer: {commonRoomTableGO.layer} ({LayerMask.LayerToName(commonRoomTableGO.layer)})");
+                ModLogger.Debug($"  MeshFilter has mesh: {meshFilter.sharedMesh != null}, MeshRenderer has material: {meshRenderer.material != null}");
+                ModLogger.Debug($"  MeshRenderer enabled: {meshRenderer.enabled}");
+                ModLogger.Debug($"  MeshRenderer visible: {meshRenderer.isVisible}");
+                
+                // Force visibility and check for issues
+                ForceObjectVisibility(commonRoomTableGO);
+                
+                return commonRoomTable;
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error spawning common room table: {e.Message}");
+                ModLogger.Error($"Stack trace: {e.StackTrace}");
+                return null;
+            }
+        }
+
+        private void ForceObjectVisibility(GameObject obj)
+        {
+            try
+            {
+                // Ensure the object is active
+                obj.SetActive(true);
+                
+                // Check all renderers and ensure they're enabled
+                var renderers = obj.GetComponentsInChildren<Renderer>(true);
+                foreach (var renderer in renderers)
+                {
+                    if (renderer != null)
+                    {
+                        renderer.enabled = true;
+                        ModLogger.Debug($"Enabled renderer: {renderer.name}");
+                        
+                        // Check if the renderer has a material
+                        if (renderer.material == null)
+                        {
+                            ModLogger.Warn($"Renderer {renderer.name} has no material!");
+                        }
+                        else
+                        {
+                            ModLogger.Debug($"Renderer {renderer.name} material: {renderer.material.name}");
+                        }
+                    }
+                }
+                
+                // Check if the object is in the camera's culling mask
+                var camera = Camera.main;
+                if (camera != null)
+                {
+                    var layerMask = camera.cullingMask;
+                    var objectLayer = 1 << obj.layer;
+                    if ((layerMask & objectLayer) == 0)
+                    {
+                        ModLogger.Warn($"Object layer {obj.layer} ({LayerMask.LayerToName(obj.layer)}) is not in camera culling mask!");
+                    }
+                    else
+                    {
+                        ModLogger.Debug($"Object layer {obj.layer} ({LayerMask.LayerToName(obj.layer)}) is visible to camera");
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error forcing object visibility: {e.Message}");
+            }
+        }
+
+        private static void SetLayerRecursively(Transform root, int layer)
+        {
+            if (root == null) return;
+
+            root.gameObject.layer = layer;
+
+            int count = root.childCount;
+            for (int i = 0; i < count; i++)
+            {
+                var child = root.GetChild(i);
+                SetLayerRecursively(child, layer);
+            }
+        }
+    }
+
+#if MONO
+    public sealed class CommonRoomTable : MonoBehaviour, ISpawnableAsset
+#else
+    public sealed class CommonRoomTable(IntPtr ptr) : MonoBehaviour(ptr), ISpawnableAsset
+#endif
+    {
+        private bool _initialized = false;
+        private Vector3 _currentPosition;
+        private Material _assignedMaterial;
+        private MeshRenderer _meshRenderer;
+        private BoxCollider _boxCollider;
+
+        public bool IsInitialized => _initialized;
+        public Vector3 Position => _currentPosition;
+
+        public void Initialize(Vector3 spawnLocation, Material material, Vector3? colliderSize = null)
+        {
+            if (_initialized) return;
+
+            _currentPosition = spawnLocation;
+            _assignedMaterial = material;
+            
+            // Get component references
+            _meshRenderer = GetComponent<MeshRenderer>();
+            _boxCollider = GetComponent<BoxCollider>();
+
+            if (_meshRenderer == null)
+            {
+                ModLogger.Error("MeshRenderer component not found on CommonRoomTable");
+                return;
+            }
+
+            if (_boxCollider == null)
+            {
+                ModLogger.Error("BoxCollider component not found on CommonRoomTable");
+                return;
+            }
+
+            // Apply material
+            _meshRenderer.material = _assignedMaterial;
+
+            // Set up collider properties
+            _boxCollider.isTrigger = false;
+            _boxCollider.size = colliderSize ?? new Vector3(3f, 1f, 2f); // Use provided size or default
+
+            _initialized = true;
+            ModLogger.Debug($"CommonRoomTable initialized at {_currentPosition}");
+        }
+
+        public void SetPosition(Vector3 newPosition)
+        {
+            if (!_initialized) return;
+
+            _currentPosition = newPosition;
+            transform.position = _currentPosition;
+            ModLogger.Debug($"CommonRoomTable moved to {_currentPosition}");
+        }
+
+        public void SetMaterial(Material newMaterial)
+        {
+            if (!_initialized || _meshRenderer == null) return;
+
+            _assignedMaterial = newMaterial;
+            _meshRenderer.material = _assignedMaterial;
+            ModLogger.Debug($"CommonRoomTable material changed to {newMaterial.name}");
+        }
+
+        public void DestroyCommonRoomTable()
+        {
+            if (!_initialized) return;
+
+            CommonRoomTableManager.RemoveCommonRoomTable(this);
+            _initialized = false;
+        }
+
+        public void DestroyAsset()
+        {
+            DestroyCommonRoomTable();
+        }
+
+        public string GetDebugInfo()
+        {
+            if (!_initialized)
+                return "CommonRoomTable not initialized";
+            
+            return $"CommonRoomTable at {_currentPosition}, Material: {_assignedMaterial?.name ?? "None"}, " +
+                   $"MeshRenderer: {_meshRenderer != null}, BoxCollider: {_boxCollider != null}";
+        }
+
+        private void OnDestroy()
+        {
+            if (_initialized)
+            {
+                CommonRoomTableManager.RemoveCommonRoomTable(this);
+            }
+        }
+    }
+
+#if MONO
+    public sealed class CellTableManager : MonoBehaviour
+#else
+    public sealed class CellTableManager(IntPtr ptr) : MonoBehaviour(ptr)
+#endif
+    {
+        private static CellTableManager _instance;
+        private static readonly List<CellTable> _cellTables = new();
+        private static bool _isInitialized = false;
+
+        public static CellTableManager Instance
+        {
+            get
+            {
+                if (_instance == null)
+                {
+                    var go = new GameObject("CellTableManager");
+                    _instance = go.AddComponent<CellTableManager>();
+                    DontDestroyOnLoad(go);
+                }
+                return _instance;
+            }
+        }
+
+        public static CellTable CreateCellTable(Vector3 spawnLocation, AssetSpawnConfig config = null)
+        {
+            if (_instance == null)
+            {
+                Instance.Initialize();
+            }
+
+            // Check if we already have a cell table at this location
+            foreach (var existingTable in _cellTables)
+            {
+                if (Vector3.Distance(existingTable.transform.position, spawnLocation) < 0.1f)
+                {
+                    ModLogger.Debug($"Cell table already exists at location {spawnLocation}");
+                    return existingTable;
+                }
+            }
+
+            // Create new cell table
+            var cellTable = Instance.SpawnCellTable(spawnLocation, config);
+            if (cellTable != null)
+            {
+                _cellTables.Add(cellTable);
+                ModLogger.Debug($"Created new cell table at {spawnLocation}. Total tables: {_cellTables.Count}");
+            }
+
+            return cellTable;
+        }
+
+        public static void RemoveCellTable(CellTable cellTable)
+        {
+            if (_cellTables.Remove(cellTable))
+            {
+                if (cellTable != null && cellTable.gameObject != null)
+                {
+                    Destroy(cellTable.gameObject);
+                }
+                ModLogger.Debug($"Removed cell table. Total tables: {_cellTables.Count}");
+            }
+        }
+
+        public static void ClearAllCellTables()
+        {
+            foreach (var table in _cellTables.ToList())
+            {
+                RemoveCellTable(table);
+            }
+        }
+
+        public static List<CellTable> GetAllCellTables()
+        {
+            return new List<CellTable>(_cellTables);
+        }
+
+        public static int GetCellTableCount()
+        {
+            return _cellTables.Count;
+        }
+
+        private void Initialize()
+        {
+            if (_isInitialized) return;
+            
+            ModLogger.Debug("CellTableManager initialized");
+            _isInitialized = true;
+        }
+
+        private CellTable SpawnCellTable(Vector3 spawnLocation, AssetSpawnConfig config = null)
+        {
+            try
+            {
+                if (AssetManager.bundle == null)
+                {
+                    ModLogger.Error("Asset bundle is not loaded.");
+                    return null;
+                }
+
+                // Use config if provided, otherwise use defaults
+                var prefabPath = config?.PrefabPath ?? "Assets/Jail/CellTable.prefab";
+                var layerName = config?.LayerName ?? "Cell_Table";
+                var colliderSize = config?.ColliderSize ?? new Vector3(2f, 1f, 1.5f);
+                var materialColor = config?.MaterialColor ?? new Color(0.4f, 0.3f, 0.2f, 1.0f);
+
+                // Load the prefab
+                var prefab = AssetManager.bundle.LoadAsset<GameObject>(prefabPath);
+                if (prefab == null)
+                {
+                    ModLogger.Error("Failed to load CellTable prefab from bundle");
+                    
+                    // Debug: List all available prefabs
+                    var allPrefabs = AssetManager.bundle.LoadAllAssets<GameObject>();
+                    ModLogger.Debug($"Available prefabs in bundle:");
+                    foreach (var p in allPrefabs)
+                    {
+                        ModLogger.Debug($"  {p.name}");
+                    }
+                    return null;
+                }
+
+                ModLogger.Debug($"Successfully loaded prefab: {prefab.name}");
+                
+                // Debug: Check prefab components
+                var prefabMeshFilter = prefab.GetComponent<MeshFilter>();
+                var prefabMeshRenderer = prefab.GetComponent<MeshRenderer>();
+                ModLogger.Debug($"Prefab has MeshFilter: {prefabMeshFilter != null}, MeshRenderer: {prefabMeshRenderer != null}");
+                if (prefabMeshFilter != null)
+                {
+                    ModLogger.Debug($"Prefab mesh: {prefabMeshFilter.sharedMesh?.name ?? "null"}");
+                }
+
+                // Create material using the new CreateMaterial method with the configured color
+                var material = AssetManager.CreateMaterial(materialColor);
+                if (material == null)
+                {
+                    ModLogger.Error("Failed to create material for CellTable");
+                    return null;
+                }
+
+                ModLogger.Debug($"Successfully created material: {material.name}");
+
+                // Instantiate the prefab instead of creating a new GameObject
+                var cellTableGO = Object.Instantiate(prefab);
+                cellTableGO.name = "CellTable";
+                
+                ModLogger.Debug($"Instantiated prefab: {cellTableGO.name}, Active: {cellTableGO.activeInHierarchy}, ActiveSelf: {cellTableGO.activeSelf}");
+                
+                // Ensure required components exist
+                var meshRenderer = cellTableGO.GetComponent<MeshRenderer>();
+                var meshFilter = cellTableGO.GetComponent<MeshFilter>();
+                var boxCollider = cellTableGO.GetComponent<BoxCollider>();
+                
+                ModLogger.Debug($"Instantiated object components - MeshFilter: {meshFilter != null}, MeshRenderer: {meshRenderer != null}, BoxCollider: {boxCollider != null}");
+                
+                // Add missing components if they don't exist
+                if (meshRenderer == null)
+                {
+                    meshRenderer = cellTableGO.AddComponent<MeshRenderer>();
+                    ModLogger.Debug("Added MeshRenderer component");
+                }
+                
+                if (meshFilter == null)
+                {
+                    meshFilter = cellTableGO.AddComponent<MeshFilter>();
+                    ModLogger.Debug("Added MeshFilter component");
+                }
+                
+                if (boxCollider == null)
+                {
+                    boxCollider = cellTableGO.AddComponent<BoxCollider>();
+                    ModLogger.Debug("Added BoxCollider component");
+                }
+
+                // Set position
+                cellTableGO.transform.position = spawnLocation;
+
+                // Find parent container
+                GameObject map = GameObject.Find("Map");
+                if (map != null)
+                {
+                    cellTableGO.transform.SetParent(map.transform, false);
+                }
+                else
+                {
+                    ModLogger.Warn("Map container not found, spawning at world position");
+                }
+
+                // Apply material to all renderers in the prefab
+                var allRenderers = cellTableGO.GetComponentsInChildren<Renderer>(true);
+                ModLogger.Debug($"Found {allRenderers.Length} renderers in prefab");
+                
+                foreach (var renderer in allRenderers)
+                {
+                    if (renderer != null)
+                    {
+                        renderer.material = material;
+                        ModLogger.Debug($"Applied material to renderer: {renderer.name}");
+                        
+                        // Debug: Check if material was applied correctly
+                        if (renderer.material != null)
+                        {
+                            ModLogger.Debug($"  Material applied: {renderer.material.name}, Shader: {renderer.material.shader?.name ?? "null"}");
+                        }
+                        else
+                        {
+                            ModLogger.Warn($"  Failed to apply material to renderer: {renderer.name}");
+                        }
+                    }
+                }
+
+                // Add the CellTable component
+                var cellTable = cellTableGO.AddComponent<CellTable>();
+
+                // Initialize the CellTable component
+                cellTable.Initialize(spawnLocation, material, colliderSize);
+
+                // Set layer
+                SetLayerRecursively(cellTableGO.transform, LayerMask.NameToLayer(layerName));
+
+                // Final visibility check
+                ModLogger.Debug($"Final object state:");
+                ModLogger.Debug($"  Active: {cellTableGO.activeInHierarchy}, ActiveSelf: {cellTableGO.activeSelf}");
+                ModLogger.Debug($"  Position: {cellTableGO.transform.position}");
+                ModLogger.Debug($"  Layer: {cellTableGO.layer} ({LayerMask.LayerToName(cellTableGO.layer)})");
+                ModLogger.Debug($"  MeshFilter has mesh: {meshFilter.sharedMesh != null}, MeshRenderer has material: {meshRenderer.material != null}");
+                ModLogger.Debug($"  MeshRenderer enabled: {meshRenderer.enabled}");
+                ModLogger.Debug($"  MeshRenderer visible: {meshRenderer.isVisible}");
+                
+                // Force visibility and check for issues
+                ForceObjectVisibility(cellTableGO);
+                
+                return cellTable;
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error spawning cell table: {e.Message}");
+                ModLogger.Error($"Stack trace: {e.StackTrace}");
+                return null;
+            }
+        }
+
+        private void ForceObjectVisibility(GameObject obj)
+        {
+            try
+            {
+                // Ensure the object is active
+                obj.SetActive(true);
+                
+                // Check all renderers and ensure they're enabled
+                var renderers = obj.GetComponentsInChildren<Renderer>(true);
+                foreach (var renderer in renderers)
+                {
+                    if (renderer != null)
+                    {
+                        renderer.enabled = true;
+                        ModLogger.Debug($"Enabled renderer: {renderer.name}");
+                        
+                        // Check if the renderer has a material
+                        if (renderer.material == null)
+                        {
+                            ModLogger.Warn($"Renderer {renderer.name} has no material!");
+                        }
+                        else
+                        {
+                            ModLogger.Debug($"Renderer {renderer.name} material: {renderer.material.name}");
+                        }
+                    }
+                }
+                
+                // Check if the object is in the camera's culling mask
+                var camera = Camera.main;
+                if (camera != null)
+                {
+                    var layerMask = camera.cullingMask;
+                    var objectLayer = 1 << obj.layer;
+                    if ((layerMask & objectLayer) == 0)
+                    {
+                        ModLogger.Warn($"Object layer {obj.layer} ({LayerMask.LayerToName(obj.layer)}) is not in camera culling mask!");
+                    }
+                    else
+                    {
+                        ModLogger.Debug($"Object layer {obj.layer} ({LayerMask.LayerToName(obj.layer)}) is visible to camera");
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error forcing object visibility: {e.Message}");
+            }
+        }
+
+        private static void SetLayerRecursively(Transform root, int layer)
+        {
+            if (root == null) return;
+
+            root.gameObject.layer = layer;
+
+            int count = root.childCount;
+            for (int i = 0; i < count; i++)
+            {
+                var child = root.GetChild(i);
+                SetLayerRecursively(child, layer);
+            }
+        }
+    }
+
+#if MONO
+    public sealed class CellTable : MonoBehaviour, ISpawnableAsset
+#else
+    public sealed class CellTable(IntPtr ptr) : MonoBehaviour(ptr), ISpawnableAsset
+#endif
+    {
+        private bool _initialized = false;
+        private Vector3 _currentPosition;
+        private Material _assignedMaterial;
+        private MeshRenderer _meshRenderer;
+        private BoxCollider _boxCollider;
+
+        public bool IsInitialized => _initialized;
+        public Vector3 Position => _currentPosition;
+
+        public void Initialize(Vector3 spawnLocation, Material material, Vector3? colliderSize = null)
+        {
+            if (_initialized) return;
+
+            _currentPosition = spawnLocation;
+            _assignedMaterial = material;
+            
+            // Get component references
+            _meshRenderer = GetComponent<MeshRenderer>();
+            _boxCollider = GetComponent<BoxCollider>();
+
+            if (_meshRenderer == null)
+            {
+                ModLogger.Error("MeshRenderer component not found on CellTable");
+                return;
+            }
+
+            if (_boxCollider == null)
+            {
+                ModLogger.Error("BoxCollider component not found on CellTable");
+                return;
+            }
+
+            // Apply material
+            _meshRenderer.material = _assignedMaterial;
+
+            // Set up collider properties
+            _boxCollider.isTrigger = false;
+            _boxCollider.size = colliderSize ?? new Vector3(2f, 1f, 1.5f); // Use provided size or default
+
+            _initialized = true;
+            ModLogger.Debug($"CellTable initialized at {_currentPosition}");
+        }
+
+        public void SetPosition(Vector3 newPosition)
+        {
+            if (!_initialized) return;
+
+            _currentPosition = newPosition;
+            transform.position = _currentPosition;
+            ModLogger.Debug($"CellTable moved to {_currentPosition}");
+        }
+
+        public void SetMaterial(Material newMaterial)
+        {
+            if (!_initialized || _meshRenderer == null) return;
+
+            _assignedMaterial = newMaterial;
+            _meshRenderer.material = newMaterial;
+            ModLogger.Debug($"CellTable material changed to {newMaterial.name}");
+        }
+
+        public void DestroyCellTable()
+        {
+            if (!_initialized) return;
+
+            CellTableManager.RemoveCellTable(this);
+            _initialized = false;
+        }
+
+        public void DestroyAsset()
+        {
+            DestroyCellTable();
+        }
+
+        public string GetDebugInfo()
+        {
+            if (!_initialized)
+                return "CellTable not initialized";
+            
+            return $"CellTable at {_currentPosition}, Material: {_assignedMaterial?.name ?? "None"}, " +
+                   $"MeshRenderer: {_meshRenderer != null}, BoxCollider: {_boxCollider != null}";
+        }
+
+        private void OnDestroy()
+        {
+            if (_initialized)
+            {
+                CellTableManager.RemoveCellTable(this);
             }
         }
     }
