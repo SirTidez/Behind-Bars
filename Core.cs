@@ -82,22 +82,24 @@ namespace Behind_Bars
             {
                 ModLogger.Debug("ToiletSinkManager instance is null, creating...");
             }
-            
+
             // Spawn a toilet sink when the scene is initialized
             try
             {
-                var toiletSink = AssetManager.SpawnAsset(FurnitureType.ToiletSink);
-                if (toiletSink != null)
-                {
-                    ModLogger.Info($"Successfully spawned toilet sink on scene initialization: {toiletSink.GetDebugInfo()}");
-                    ModLogger.Debug($"Total toilet sinks in scene: {ToiletSinkManager.GetToiletSinkCount()}");
-                    
-                    // Test the system after successful spawning
-                    TestToiletSinkSystem();
-                }
-                else
-                {
-                    ModLogger.Warn("Failed to spawn toilet sink on scene initialization");
+                if (sceneName == "Main") { 
+                    var toiletSink = AssetManager.SpawnAsset(FurnitureType.ToiletSink);
+                    if (toiletSink != null)
+                    {
+                        ModLogger.Info($"Successfully spawned toilet sink on scene initialization: {toiletSink.GetDebugInfo()}");
+                        ModLogger.Debug($"Total toilet sinks in scene: {ToiletSinkManager.GetToiletSinkCount()}");
+
+                        // Test the system after successful spawning
+                        TestToiletSinkSystem();
+                    }
+                    else
+                    {
+                     ModLogger.Warn("Failed to spawn toilet sink on scene initialization");
+                    }
                 }
             }
             catch (Exception e)
