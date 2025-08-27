@@ -6,7 +6,7 @@
     </PropertyGroup>
 
     <PropertyGroup>
-        <UnityExplorer Condition="'$(IsMono)' == 'true'">D:\Schedule 1 Modding\UnityExplorer\UnityExplorer.BIE6.Mono.dll</UnityExplorer>
+        <UnityExplorer Condition="'$(IsMono)' == 'true'">D:\Schedule 1 Modding\UnityExplorer\UnityExplorer.ML.Mono.dll</UnityExplorer>
         <UnityExplorer Condition="'$(IsMono)' != 'true'">D:\Schedule 1 Modding\UnityExplorer\UnityExplorer.ML.IL2CPP.CoreCLR.dll</UnityExplorer>
         <MultiplayerMod Condition="'$(IsMono)' == 'true'">$(CommonDir)\LocalMultiplayer\LocalMultiplayer-Mono.dll</MultiplayerMod>
         <MultiplayerMod Condition="'$(IsMono)' != 'true'">$(CommonDir)\LocalMultiplayer\LocalMultiplayer-IL2CPP.dll</MultiplayerMod>
