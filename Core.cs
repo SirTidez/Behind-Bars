@@ -59,6 +59,8 @@ namespace Behind_Bars
 #if !MONO
             ClassInjector.RegisterTypeInIl2Cpp<ToiletSink>();
             ClassInjector.RegisterTypeInIl2Cpp<ToiletSinkManager>();
+            ClassInjector.RegisterTypeInIl2Cpp<BunkBed>();
+            ClassInjector.RegisterTypeInIl2Cpp<BunkBedManager>();
 #endif
             // Initialize core systems
             HarmonyPatches.Initialize(this);
@@ -83,28 +85,42 @@ namespace Behind_Bars
                 ModLogger.Debug("ToiletSinkManager instance is null, creating...");
             }
 
-            // Spawn a toilet sink when the scene is initialized
+            // Spawn furniture when the scene is initialized
             try
             {
                 if (sceneName == "Main") { 
-                    var toiletSink = AssetManager.SpawnAsset(FurnitureType.ToiletSink);
+                    // Spawn toilet sink using generic method
+                    var toiletSink = AssetManager.SpawnAsset<ToiletSink>(FurnitureType.ToiletSink);
                     if (toiletSink != null)
                     {
                         ModLogger.Info($"Successfully spawned toilet sink on scene initialization: {toiletSink.GetDebugInfo()}");
                         ModLogger.Debug($"Total toilet sinks in scene: {ToiletSinkManager.GetToiletSinkCount()}");
-
-                        // Test the system after successful spawning
-                        TestToiletSinkSystem();
                     }
                     else
                     {
-                     ModLogger.Warn("Failed to spawn toilet sink on scene initialization");
+                        ModLogger.Warn("Failed to spawn toilet sink on scene initialization");
                     }
+
+                    // Spawn bunk bed using generic method
+                    var bunkBed = AssetManager.SpawnAsset<BunkBed>(FurnitureType.BunkBed);
+                    if (bunkBed != null)
+                    {
+                        ModLogger.Info($"Successfully spawned bunk bed on scene initialization: {bunkBed.GetDebugInfo()}");
+                        ModLogger.Debug($"Total bunk beds in scene: {BunkBedManager.GetBunkBedCount()}");
+                    }
+                    else
+                    {
+                        ModLogger.Warn("Failed to spawn bunk bed on scene initialization");
+                    }
+
+                    // Test the systems after successful spawning
+                    TestToiletSinkSystem();
+                    TestBunkBedSystem();
                 }
             }
             catch (Exception e)
             {
-                ModLogger.Error($"Error spawning toilet sink on scene initialization: {e.Message}");
+                ModLogger.Error($"Error spawning furniture on scene initialization: {e.Message}");
             }
         }
 
@@ -178,7 +194,7 @@ namespace Behind_Bars
                 }
                 
                 // Test spawning another sink
-                var newSink = AssetManager.SpawnAsset(FurnitureType.ToiletSink);
+                var newSink = AssetManager.SpawnAsset<ToiletSink>(FurnitureType.ToiletSink);
                 if (newSink != null)
                 {
                     ModLogger.Info($"Successfully spawned additional toilet sink: {newSink.GetDebugInfo()}");
@@ -188,6 +204,36 @@ namespace Behind_Bars
             catch (Exception e)
             {
                 ModLogger.Error($"Error testing toilet sink system: {e.Message}");
+            }
+        }
+
+        public void TestBunkBedSystem()
+        {
+            ModLogger.Info("Testing BunkBed system from Core...");
+            
+            try
+            {
+                var bedCount = BunkBedManager.GetBunkBedCount();
+                ModLogger.Info($"Current bunk bed count: {bedCount}");
+                
+                var allBeds = BunkBedManager.GetAllBunkBeds();
+                for (int i = 0; i < allBeds.Count; i++)
+                {
+                    var bed = allBeds[i];
+                    ModLogger.Info($"BunkBed {i}: {bed.GetDebugInfo()}");
+                }
+                
+                // Test spawning another bed
+                var newBed = AssetManager.SpawnAsset<BunkBed>(FurnitureType.BunkBed);
+                if (newBed != null)
+                {
+                    ModLogger.Info($"Successfully spawned additional bunk bed: {newBed.GetDebugInfo()}");
+                    ModLogger.Info($"Total bunk beds now: {BunkBedManager.GetBunkBedCount()}");
+                }
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error testing bunk bed system: {e.Message}");
             }
         }
     }

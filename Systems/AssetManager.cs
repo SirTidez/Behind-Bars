@@ -65,30 +65,51 @@ namespace Behind_Bars.Systems
             }
         }
 
-        public ToiletSink SpawnAsset(FurnitureType t)
+        /// <summary>
+        /// Generic method to spawn any type of furniture asset
+        /// </summary>
+        /// <typeparam name="T">The type of asset to spawn (must implement ISpawnableAsset)</typeparam>
+        /// <param name="furnitureType">The furniture type to spawn</param>
+        /// <returns>The spawned asset or null if failed</returns>
+        public T SpawnAsset<T>(FurnitureType furnitureType) where T : class, ISpawnableAsset
         {
-            switch (t)
+            try
             {
-                case FurnitureType.BunkBed:
-                    // Spawn bunk bed logic here
-                    ModLogger.Debug("Bunk bed spawning not yet implemented");
+                var asset = AssetFactory.CreateAsset(furnitureType);
+                if (asset is T typedAsset)
+                {
+                    ModLogger.Debug($"Successfully spawned {furnitureType} as {typeof(T).Name}");
+                    return typedAsset;
+                }
+                else
+                {
+                    ModLogger.Error($"Failed to cast spawned asset to {typeof(T).Name}");
                     return null;
-                case FurnitureType.ToiletSink:
-                    // Use the new management system
-                    Vector3 spawnPoint = new Vector3(-58f, -1.0f, -57f);
-                    return ToiletSinkManager.CreateToiletSink(spawnPoint);
-                default:
-                    ModLogger.Error("Unknown furniture type.");
-                    return null;
+                }
             }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error spawning {furnitureType}: {e.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Non-generic method to spawn assets (returns ISpawnableAsset)
+        /// </summary>
+        /// <param name="furnitureType">The furniture type to spawn</param>
+        /// <returns>The spawned asset or null if failed</returns>
+        public ISpawnableAsset SpawnAsset(FurnitureType furnitureType)
+        {
+            return AssetFactory.CreateAsset(furnitureType);
         }
 
         public void TestToiletSinkSystem()
         {
             ModLogger.Debug("Testing ToiletSink management system...");
             
-            // Spawn a toilet sink
-            var sink = SpawnAsset(FurnitureType.ToiletSink);
+            // Spawn a toilet sink using generic method
+            var sink = SpawnAsset<ToiletSink>(FurnitureType.ToiletSink);
             if (sink != null)
             {
                 ModLogger.Debug($"Successfully spawned toilet sink: {sink.GetDebugInfo()}");
@@ -97,6 +118,23 @@ namespace Behind_Bars.Systems
             else
             {
                 ModLogger.Error("Failed to spawn toilet sink");
+            }
+        }
+
+        public void TestBunkBedSystem()
+        {
+            ModLogger.Debug("Testing BunkBed management system...");
+            
+            // Spawn a bunk bed using generic method
+            var bed = SpawnAsset<BunkBed>(FurnitureType.BunkBed);
+            if (bed != null)
+            {
+                ModLogger.Debug($"Successfully spawned bunk bed: {bed.GetDebugInfo()}");
+                ModLogger.Debug($"Total bunk beds: {BunkBedManager.GetBunkBedCount()}");
+            }
+            else
+            {
+                ModLogger.Error("Failed to spawn bunk bed");
             }
         }
 
@@ -109,6 +147,73 @@ namespace Behind_Bars.Systems
                 ModLogger.Debug("AssetBundle unloaded successfully.");
             }
         }
+
+        /// <summary>
+        /// Registers a new asset type with the factory system
+        /// </summary>
+        /// <param name="furnitureType">The new furniture type to register</param>
+        /// <param name="spawnPoint">Default spawn point</param>
+        /// <param name="prefabPath">Path to the prefab in the asset bundle</param>
+        /// <param name="layerName">Layer name for the asset</param>
+        /// <param name="colliderSize">Size of the collider</param>
+        /// <param name="materialColor">Default material color</param>
+        public void RegisterAssetType(FurnitureType furnitureType, Vector3 spawnPoint, string prefabPath, 
+            string layerName, Vector3 colliderSize, Color materialColor)
+        {
+            AssetFactory.RegisterAssetType(furnitureType, spawnPoint, prefabPath, layerName, colliderSize, materialColor);
+        }
+
+        /// <summary>
+        /// Gets all registered asset types
+        /// </summary>
+        /// <returns>List of registered furniture types</returns>
+        public List<FurnitureType> GetRegisteredAssetTypes()
+        {
+            return AssetFactory.GetRegisteredAssetTypes();
+        }
+
+        /// <summary>
+        /// Spawns all registered asset types at their default locations
+        /// </summary>
+        public void SpawnAllRegisteredAssets()
+        {
+            var assetTypes = GetRegisteredAssetTypes();
+            ModLogger.Info($"Spawning {assetTypes.Count} registered asset types...");
+            
+            foreach (var assetType in assetTypes)
+            {
+                var asset = SpawnAsset(assetType);
+                if (asset != null)
+                {
+                    ModLogger.Info($"Successfully spawned {assetType}");
+                }
+                else
+                {
+                    ModLogger.Warn($"Failed to spawn {assetType}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Example of how to add a new asset type:
+        /// 
+        /// 1. Add the new type to the FurnitureType enum:
+        ///    public enum FurnitureType { BunkBed, ToiletSink, NewAsset }
+        /// 
+        /// 2. Create the asset class implementing ISpawnableAsset:
+        ///    public sealed class NewAsset : MonoBehaviour, ISpawnableAsset { ... }
+        /// 
+        /// 3. Create the manager class following the same pattern as BunkBedManager
+        /// 
+        /// 4. Register the asset type:
+        ///    AssetManager.RegisterAssetType(FurnitureType.NewAsset, 
+        ///        new Vector3(0, 0, 0), "Assets/Jail/NewAsset.prefab", 
+        ///        "New_Asset", new Vector3(1, 1, 1), Color.white);
+        /// 
+        /// 5. Add the creation logic to AssetFactory.CreateAsset method
+        /// 
+        /// 6. Use it: var asset = AssetManager.SpawnAsset<NewAsset>(FurnitureType.NewAsset);
+        /// </summary>
 
         /// <summary>
         /// Creates a material with the specified color using Universal Render Pipeline shader
@@ -205,61 +310,540 @@ namespace Behind_Bars.Systems
         ToiletSink
     }
 
+    /// <summary>
+    /// Base interface for all spawnable furniture assets
+    /// </summary>
+    public interface ISpawnableAsset
+    {
+        bool IsInitialized { get; }
+        Vector3 Position { get; }
+        string GetDebugInfo();
+        void DestroyAsset();
+    }
+
+    /// <summary>
+    /// Configuration for asset spawning
+    /// </summary>
+    public class AssetSpawnConfig
+    {
+        public Vector3 SpawnPoint { get; set; }
+        public string PrefabPath { get; set; }
+        public string LayerName { get; set; }
+        public Vector3 ColliderSize { get; set; }
+        public Color MaterialColor { get; set; }
+
+        public AssetSpawnConfig(Vector3 spawnPoint, string prefabPath, string layerName, Vector3 colliderSize, Color materialColor)
+        {
+            SpawnPoint = spawnPoint;
+            PrefabPath = prefabPath;
+            LayerName = layerName;
+            ColliderSize = colliderSize;
+            MaterialColor = materialColor;
+        }
+    }
+
+    /// <summary>
+    /// Factory for creating different types of assets
+    /// </summary>
+    public static class AssetFactory
+    {
+        private static readonly Dictionary<FurnitureType, AssetSpawnConfig> _spawnConfigs = new()
+        {
+            {
+                FurnitureType.BunkBed,
+                new AssetSpawnConfig(
+                    new Vector3(-55f, -2.5f, -58f),
+                    "Assets/Jail/BunkBed.prefab",
+                    "Bunk_Bed",
+                    new Vector3(2f, 2f, 4f),
+                    new Color(0.7f, 0.7f, 0.7f, 1.0f)
+                )
+            },
+            {
+                FurnitureType.ToiletSink,
+                new AssetSpawnConfig(
+                    new Vector3(-58f, -2.5f, -57f),
+                    "Assets/Jail/ToiletSink.prefab",
+                    "Toilet_Sink",
+                    new Vector3(1f, 1f, 1f),
+                    new Color(0.5f, 0.5f, 0.5f, 1.0f)
+                )
+            }
+        };
+
+        public static AssetSpawnConfig GetSpawnConfig(FurnitureType furnitureType)
+        {
+            if (_spawnConfigs.TryGetValue(furnitureType, out var config))
+            {
+                return config;
+            }
+            
+            ModLogger.Error($"No spawn configuration found for furniture type: {furnitureType}");
+            return null;
+        }
+
+        public static void AddSpawnConfig(FurnitureType furnitureType, AssetSpawnConfig config)
+        {
+            if (_spawnConfigs.ContainsKey(furnitureType))
+            {
+                ModLogger.Warn($"Overwriting existing spawn configuration for {furnitureType}");
+            }
+            
+            _spawnConfigs[furnitureType] = config;
+            ModLogger.Debug($"Added spawn configuration for {furnitureType}");
+        }
+
+        public static ISpawnableAsset CreateAsset(FurnitureType furnitureType)
+        {
+            var config = GetSpawnConfig(furnitureType);
+            if (config == null) return null;
+
+            return furnitureType switch
+            {
+                FurnitureType.BunkBed => BunkBedManager.CreateBunkBed(config.SpawnPoint, config),
+                FurnitureType.ToiletSink => ToiletSinkManager.CreateToiletSink(config.SpawnPoint, config),
+                _ => null
+            };
+        }
+
+        /// <summary>
+        /// Registers a new asset type with the factory
+        /// </summary>
+        /// <param name="furnitureType">The new furniture type to register</param>
+        /// <param name="spawnPoint">Default spawn point</param>
+        /// <param name="prefabPath">Path to the prefab in the asset bundle</param>
+        /// <param name="layerName">Layer name for the asset</param>
+        /// <param name="colliderSize">Size of the collider</param>
+        /// <param name="materialColor">Default material color</param>
+        public static void RegisterAssetType(FurnitureType furnitureType, Vector3 spawnPoint, string prefabPath, 
+            string layerName, Vector3 colliderSize, Color materialColor)
+        {
+            var config = new AssetSpawnConfig(spawnPoint, prefabPath, layerName, colliderSize, materialColor);
+            AddSpawnConfig(furnitureType, config);
+            ModLogger.Info($"Registered new asset type: {furnitureType}");
+        }
+
+        /// <summary>
+        /// Gets all registered asset types
+        /// </summary>
+        /// <returns>List of registered furniture types</returns>
+        public static List<FurnitureType> GetRegisteredAssetTypes()
+        {
+            return _spawnConfigs.Keys.ToList();
+        }
+    }
+
 #if MONO
-    public sealed class BunkBedManager() : MonoBehaviour
+    public sealed class BunkBedManager : MonoBehaviour
 #else
     public sealed class BunkBedManager(IntPtr ptr) : MonoBehaviour(ptr)
 #endif
     {
-        private static readonly List<BunkBed> _bunkBeds = [];
-    }
+        private static BunkBedManager _instance;
+        private static readonly List<BunkBed> _bunkBeds = new();
+        private static bool _isInitialized = false;
 
-#if MONO
-    public sealed class BunkBed() : MonoBehaviour
-#else
-    public sealed class BunkBed(IntPtr ptr) : MonoBehaviour(ptr)
-#endif
-    {
-        public GameObject BunkBedObject;
-        public Transform SpawnTarget;
-
-        private bool _initialized;
-
-        public void Initialize()
+        public static BunkBedManager Instance
         {
-            CreateBed();
-
-            _initialized = true;
-        }
-
-        private void CreateBed()
-        {
-            try
+            get
             {
-                BunkBedObject = new GameObject("Bunk_Bed");
-
-            }
-            catch (Exception e)
-            {
-                ModLogger.Error($"Error creating bed: {e.Message}");
+                if (_instance == null)
+                {
+                    var go = new GameObject("BunkBedManager");
+                    _instance = go.AddComponent<BunkBedManager>();
+                    DontDestroyOnLoad(go);
+                }
+                return _instance;
             }
         }
 
-        private void LoadBundle()
+        public static BunkBed CreateBunkBed(Vector3 spawnLocation, AssetSpawnConfig config = null)
+        {
+            if (_instance == null)
+            {
+                Instance.Initialize();
+            }
+
+            // Check if we already have a bunk bed at this location
+            foreach (var existingBed in _bunkBeds)
+            {
+                if (Vector3.Distance(existingBed.transform.position, spawnLocation) < 0.1f)
+                {
+                    ModLogger.Debug($"Bunk bed already exists at location {spawnLocation}");
+                    return existingBed;
+                }
+            }
+
+            // Create new bunk bed
+            var bunkBed = Instance.SpawnBunkBed(spawnLocation, config);
+            if (bunkBed != null)
+            {
+                _bunkBeds.Add(bunkBed);
+                ModLogger.Debug($"Created new bunk bed at {spawnLocation}. Total beds: {_bunkBeds.Count}");
+            }
+
+            return bunkBed;
+        }
+
+        public static void RemoveBunkBed(BunkBed bunkBed)
+        {
+            if (_bunkBeds.Remove(bunkBed))
+            {
+                if (bunkBed != null && bunkBed.gameObject != null)
+                {
+                    Destroy(bunkBed.gameObject);
+                }
+                ModLogger.Debug($"Removed bunk bed. Total beds: {_bunkBeds.Count}");
+            }
+        }
+
+        public static void ClearAllBunkBeds()
+        {
+            foreach (var bed in _bunkBeds.ToList())
+            {
+                RemoveBunkBed(bed);
+            }
+        }
+
+        public static List<BunkBed> GetAllBunkBeds()
+        {
+            return new List<BunkBed>(_bunkBeds);
+        }
+
+        public static int GetBunkBedCount()
+        {
+            return _bunkBeds.Count;
+        }
+
+        private void Initialize()
+        {
+            if (_isInitialized) return;
+            
+            ModLogger.Debug("BunkBedManager initialized");
+            _isInitialized = true;
+        }
+
+        private BunkBed SpawnBunkBed(Vector3 spawnLocation, AssetSpawnConfig config = null)
         {
             try
             {
                 if (AssetManager.bundle == null)
                 {
                     ModLogger.Error("Asset bundle is not loaded.");
-                    return;
+                    return null;
                 }
 
-                var prefab = AssetManager.bundle.LoadAsset<GameObject>("Assets/Meshes/Jail/JailBunkBeds.prefab");
+                // Use config if provided, otherwise use defaults
+                var prefabPath = config?.PrefabPath ?? "Assets/Jail/JailBunkBeds.prefab";
+                var layerName = config?.LayerName ?? "Bunk_Bed";
+                var colliderSize = config?.ColliderSize ?? new Vector3(2f, 2f, 4f);
+                var materialColor = config?.MaterialColor ?? new Color(0.5f, 0.5f, 0.5f, 1.0f);
+
+                // Load the prefab
+                var prefab = AssetManager.bundle.LoadAsset<GameObject>(prefabPath);
+                if (prefab == null)
+                {
+                    ModLogger.Error("Failed to load BunkBed prefab from bundle");
+                    
+                    // Debug: List all available prefabs
+                    var allPrefabs = AssetManager.bundle.LoadAllAssets<GameObject>();
+                    ModLogger.Debug($"Available prefabs in bundle:");
+                    foreach (var p in allPrefabs)
+                    {
+                        ModLogger.Debug($"  {p.name}");
+                    }
+                    return null;
+                }
+
+                ModLogger.Debug($"Successfully loaded prefab: {prefab.name}");
+                
+                // Debug: Check prefab components
+                var prefabMeshFilter = prefab.GetComponent<MeshFilter>();
+                var prefabMeshRenderer = prefab.GetComponent<MeshRenderer>();
+                ModLogger.Debug($"Prefab has MeshFilter: {prefabMeshFilter != null}, MeshRenderer: {prefabMeshRenderer != null}");
+                if (prefabMeshFilter != null)
+                {
+                    ModLogger.Debug($"Prefab mesh: {prefabMeshFilter.sharedMesh?.name ?? "null"}");
+                }
+
+                // Create material using the new CreateMaterial method with the configured color
+                var material = AssetManager.CreateMaterial(new Color(0.02f, 0.2f, 0f, 1f));
+                var material1 = AssetManager.CreateMaterial(materialColor);
+                if (material == null)
+                {
+                    ModLogger.Error("Failed to create material for BunkBed");
+                    return null;
+                }
+
+                ModLogger.Debug($"Successfully created material: {material.name}");
+
+                // Instantiate the prefab instead of creating a new GameObject
+                var bunkBedGO = Object.Instantiate(prefab);
+                bunkBedGO.name = "BunkBed";
+                
+                ModLogger.Debug($"Instantiated prefab: {bunkBedGO.name}, Active: {bunkBedGO.activeInHierarchy}, ActiveSelf: {bunkBedGO.activeSelf}");
+                
+                // Ensure required components exist
+                var meshRenderer = bunkBedGO.GetComponent<MeshRenderer>();
+                var meshFilter = bunkBedGO.GetComponent<MeshFilter>();
+                var boxCollider = bunkBedGO.GetComponent<BoxCollider>();
+                
+                ModLogger.Debug($"Instantiated object components - MeshFilter: {meshFilter != null}, MeshRenderer: {meshRenderer != null}, BoxCollider: {boxCollider != null}");
+                
+                // Add missing components if they don't exist
+                if (meshRenderer == null)
+                {
+                    meshRenderer = bunkBedGO.AddComponent<MeshRenderer>();
+                    ModLogger.Debug("Added MeshRenderer component");
+                }
+                
+                if (meshFilter == null)
+                {
+                    meshFilter = bunkBedGO.AddComponent<MeshFilter>();
+                    ModLogger.Debug("Added MeshFilter component");
+                }
+                
+                if (boxCollider == null)
+                {
+                    boxCollider = bunkBedGO.AddComponent<BoxCollider>();
+                    ModLogger.Debug("Added BoxCollider component");
+                }
+
+                // Set position
+                bunkBedGO.transform.position = spawnLocation;
+
+                // Find parent container
+                GameObject map = GameObject.Find("Map");
+                if (map != null)
+                {
+                    bunkBedGO.transform.SetParent(map.transform, false);
+                }
+                else
+                {
+                    ModLogger.Warn("Map container not found, spawning at world position");
+                }
+
+                // Apply material to all renderers in the prefab
+                var allRenderers = bunkBedGO.GetComponentsInChildren<Renderer>(true);
+                ModLogger.Debug($"Found {allRenderers.Length} renderers in prefab");
+                
+                foreach (var renderer in allRenderers)
+                {
+                    if (renderer != null)
+                    {
+#if MONO
+                        List<Material> materials = new List<Material>();
+#else
+                        Il2CppSystem.Collections.Generic.List<Material> materials = new Il2CppSystem.Collections.Generic.List<Material>();
+#endif
+                        materials.Add(material);
+                        materials.Add(material1);
+                        renderer.SetMaterials(materials);
+                        //renderer.sharedMaterial = material;
+                        ModLogger.Debug($"Applied material to renderer: {renderer.name}");
+                        
+                        // Debug: Check if material was applied correctly
+                        if (renderer.sharedMaterial != null)
+                        {
+                            ModLogger.Debug($"  Material applied: {renderer.sharedMaterial.name}, Shader: {renderer.sharedMaterial.shader?.name ?? "null"}");
+                        }
+                        else
+                        {
+                            ModLogger.Warn($"  Failed to apply material to renderer: {renderer.name}");
+                        }
+                    }
+                }
+
+                // Add the BunkBed component
+                var bunkBed = bunkBedGO.AddComponent<BunkBed>();
+
+                // Initialize the BunkBed component
+                bunkBed.Initialize(spawnLocation, material, colliderSize);
+
+                // Set layer
+                SetLayerRecursively(bunkBedGO.transform, LayerMask.NameToLayer(layerName));
+
+                // Final visibility check
+                ModLogger.Debug($"Final object state:");
+                ModLogger.Debug($"  Active: {bunkBedGO.activeInHierarchy}, ActiveSelf: {bunkBedGO.activeSelf}");
+                ModLogger.Debug($"  Position: {bunkBedGO.transform.position}");
+                ModLogger.Debug($"  Layer: {bunkBedGO.layer} ({LayerMask.LayerToName(bunkBedGO.layer)})");
+                ModLogger.Debug($"  MeshFilter has mesh: {meshFilter.sharedMesh != null}, MeshRenderer has material: {meshRenderer.sharedMaterial != null}");
+                ModLogger.Debug($"  MeshRenderer enabled: {meshRenderer.enabled}");
+                ModLogger.Debug($"  MeshRenderer visible: {meshRenderer.isVisible}");
+                
+                // Force visibility and check for issues
+                ForceObjectVisibility(bunkBedGO);
+                
+                return bunkBed;
             }
             catch (Exception e)
             {
-                ModLogger.Error($"Error loading bundle: {e.Message}");
+                ModLogger.Error($"Error spawning bunk bed: {e.Message}");
+                ModLogger.Error($"Stack trace: {e.StackTrace}");
+                return null;
+            }
+        }
+
+        private void ForceObjectVisibility(GameObject obj)
+        {
+            try
+            {
+                // Ensure the object is active
+                obj.SetActive(true);
+                
+                // Check all renderers and ensure they're enabled
+                var renderers = obj.GetComponentsInChildren<Renderer>(true);
+                foreach (var renderer in renderers)
+                {
+                    if (renderer != null)
+                    {
+                        renderer.enabled = true;
+                        ModLogger.Debug($"Enabled renderer: {renderer.name}");
+                        
+                        // Check if the renderer has a material
+                        if (renderer.sharedMaterial == null)
+                        {
+                            ModLogger.Warn($"Renderer {renderer.name} has no material!");
+                        }
+                        else
+                        {
+                            ModLogger.Debug($"Renderer {renderer.name} material: {renderer.sharedMaterial.name}");
+                        }
+                    }
+                }
+                
+                // Check if the object is in the camera's culling mask
+                var camera = Camera.main;
+                if (camera != null)
+                {
+                    var layerMask = camera.cullingMask;
+                    var objectLayer = 1 << obj.layer;
+                    if ((layerMask & objectLayer) == 0)
+                    {
+                        ModLogger.Warn($"Object layer {obj.layer} ({LayerMask.LayerToName(obj.layer)}) is not in camera culling mask!");
+                    }
+                    else
+                    {
+                        ModLogger.Debug($"Object layer {obj.layer} ({LayerMask.LayerToName(obj.layer)}) is visible to camera");
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error forcing object visibility: {e.Message}");
+            }
+        }
+
+        private static void SetLayerRecursively(Transform root, int layer)
+        {
+            if (root == null) return;
+
+            root.gameObject.layer = layer;
+
+            int count = root.childCount;
+            for (int i = 0; i < count; i++)
+            {
+                var child = root.GetChild(i);
+                SetLayerRecursively(child, layer);
+            }
+        }
+    }
+
+#if MONO
+    public sealed class BunkBed : MonoBehaviour, ISpawnableAsset
+#else
+    public sealed class BunkBed(IntPtr ptr) : MonoBehaviour(ptr), ISpawnableAsset
+#endif
+    {
+        private bool _initialized = false;
+        private Vector3 _currentPosition;
+        private Material _assignedMaterial;
+        private MeshRenderer _meshRenderer;
+        private BoxCollider _boxCollider;
+
+        public bool IsInitialized => _initialized;
+        public Vector3 Position => _currentPosition;
+
+        public void Initialize(Vector3 spawnLocation, Material material, Vector3? colliderSize = null)
+        {
+            if (_initialized) return;
+
+            _currentPosition = spawnLocation;
+            _assignedMaterial = material;
+            
+            // Get component references
+            _meshRenderer = GetComponent<MeshRenderer>();
+            _boxCollider = GetComponent<BoxCollider>();
+
+            if (_meshRenderer == null)
+            {
+                ModLogger.Error("MeshRenderer component not found on BunkBed");
+                return;
+            }
+
+            if (_boxCollider == null)
+            {
+                ModLogger.Error("BoxCollider component not found on BunkBed");
+                return;
+            }
+
+            // Apply material
+            _meshRenderer.sharedMaterial = _assignedMaterial;
+
+            // Set up collider properties
+            _boxCollider.isTrigger = false;
+            _boxCollider.size = colliderSize ?? new Vector3(2f, 2f, 4f); // Use provided size or default
+
+            _initialized = true;
+            ModLogger.Debug($"BunkBed initialized at {_currentPosition}");
+        }
+
+        public void SetPosition(Vector3 newPosition)
+        {
+            if (!_initialized) return;
+
+            _currentPosition = newPosition;
+            transform.position = _currentPosition;
+            ModLogger.Debug($"BunkBed moved to {_currentPosition}");
+        }
+
+        public void SetMaterial(Material newMaterial)
+        {
+            if (!_initialized || _meshRenderer == null) return;
+
+            _assignedMaterial = newMaterial;
+            _meshRenderer.sharedMaterial = _assignedMaterial;
+            ModLogger.Debug($"BunkBed material changed to {newMaterial.name}");
+        }
+
+        public void DestroyBunkBed()
+        {
+            if (!_initialized) return;
+
+            BunkBedManager.RemoveBunkBed(this);
+            _initialized = false;
+        }
+
+        public void DestroyAsset()
+        {
+            DestroyBunkBed();
+        }
+
+        public string GetDebugInfo()
+        {
+            if (!_initialized)
+                return "BunkBed not initialized";
+            
+            return $"BunkBed at {_currentPosition}, Material: {_assignedMaterial?.name ?? "None"}, " +
+                   $"MeshRenderer: {_meshRenderer != null}, BoxCollider: {_boxCollider != null}";
+        }
+
+        private void OnDestroy()
+        {
+            if (_initialized)
+            {
+                BunkBedManager.RemoveBunkBed(this);
             }
         }
     }
@@ -288,7 +872,7 @@ namespace Behind_Bars.Systems
             }
         }
 
-        public static ToiletSink CreateToiletSink(Vector3 spawnLocation)
+        public static ToiletSink CreateToiletSink(Vector3 spawnLocation, AssetSpawnConfig config = null)
         {
             if (_instance == null)
             {
@@ -306,7 +890,7 @@ namespace Behind_Bars.Systems
             }
 
             // Create new toilet sink
-            var toiletSink = Instance.SpawnToiletSink(spawnLocation);
+            var toiletSink = Instance.SpawnToiletSink(spawnLocation, config);
             if (toiletSink != null)
             {
                 _toiletSinks.Add(toiletSink);
@@ -354,7 +938,7 @@ namespace Behind_Bars.Systems
             _isInitialized = true;
         }
 
-        private ToiletSink SpawnToiletSink(Vector3 spawnLocation)
+        private ToiletSink SpawnToiletSink(Vector3 spawnLocation, AssetSpawnConfig config = null)
         {
             try
             {
@@ -364,8 +948,14 @@ namespace Behind_Bars.Systems
                     return null;
                 }
 
+                // Use config if provided, otherwise use defaults
+                var prefabPath = config?.PrefabPath ?? "Assets/Jail/ToiletSink.prefab";
+                var layerName = config?.LayerName ?? "Toilet_Sink";
+                var colliderSize = config?.ColliderSize ?? new Vector3(1f, 1f, 1f);
+                var materialColor = config?.MaterialColor ?? new Color(0.5f, 0.5f, 0.5f, 1.0f);
+
                 // Load the prefab
-                var prefab = AssetManager.bundle.LoadAsset<GameObject>("Assets/Jail/ToiletSink.prefab");
+                var prefab = AssetManager.bundle.LoadAsset<GameObject>(prefabPath);
                 if (prefab == null)
                 {
                     ModLogger.Error("Failed to load ToiletSink prefab from bundle");
@@ -391,9 +981,10 @@ namespace Behind_Bars.Systems
                     ModLogger.Debug($"Prefab mesh: {prefabMeshFilter.sharedMesh?.name ?? "null"}");
                 }
 
-                // Create material using the new CreateMaterial method with a slightly gray color
-                var material = AssetManager.CreateMaterial(new Color(0.7f, 0.7f, 0.7f, 1.0f));
-                if (material == null)
+                // Create material using the new CreateMaterial method with the configured color
+                var material = AssetManager.CreateMaterial(materialColor);
+                var material1 = AssetManager.CreateMaterial(new Color(0f, 0f, 0f, 1f));
+                if (material == null || material1 == null)
                 {
                     ModLogger.Error("Failed to create material for ToiletSink");
                     return null;
@@ -429,8 +1020,8 @@ namespace Behind_Bars.Systems
                 
                 if (boxCollider == null)
                 {
-                    boxCollider = toiletSinkGO.AddComponent<BoxCollider>();
-                    ModLogger.Debug("Added BoxCollider component");
+                    //boxCollider = toiletSinkGO.AddComponent<BoxCollider>();
+                    //ModLogger.Debug("Added BoxCollider component");
                 }
 
                 // Set position
@@ -450,16 +1041,35 @@ namespace Behind_Bars.Systems
                 // Apply material to all renderers in the prefab
                 var allRenderers = toiletSinkGO.GetComponentsInChildren<Renderer>(true);
                 ModLogger.Debug($"Found {allRenderers.Length} renderers in prefab");
-                
+                var drainMaterial = AssetManager.CreateMaterial(new Color(0f, 0f, 0f, 1f));
+#if MONO
+                List<Material> materials = new List<Material>();
+#else
+                Il2CppSystem.Collections.Generic.List<Material> materials = new Il2CppSystem.Collections.Generic.List<Material>();
+#endif
+
+                materials.Add(material);
+                materials.Add(drainMaterial);
                 foreach (var renderer in allRenderers)
                 {
                     if (renderer != null)
                     {
-                        renderer.sharedMaterial = material;
+                        //if (renderer.name == "ToiletSink")
+                        //{
+                        //    renderer.material = material;
+                        //    ModLogger.Info($"Applied {material.color} material to ToiletSink renderer");
+                        //}
+                        //else
+                        //{
+                        //    renderer.material = material1;
+                        //    ModLogger.Info($"Applied {material1.color} material to ToiletSink renderer");
+                        //}
+                        renderer.SetMaterials(materials);
+
                         ModLogger.Debug($"Applied material to renderer: {renderer.name}");
                         
                         // Debug: Check if material was applied correctly
-                        if (renderer.sharedMaterial != null)
+                        if (renderer.material != null)
                         {
                             ModLogger.Debug($"  Material applied: {renderer.sharedMaterial.name}, Shader: {renderer.sharedMaterial.shader?.name ?? "null"}");
                         }
@@ -474,10 +1084,10 @@ namespace Behind_Bars.Systems
                 var toiletSink = toiletSinkGO.AddComponent<ToiletSink>();
 
                 // Initialize the ToiletSink component
-                toiletSink.Initialize(spawnLocation, material);
+                toiletSink.Initialize(spawnLocation, material, colliderSize);
 
                 // Set layer
-                SetLayerRecursively(toiletSinkGO.transform, LayerMask.NameToLayer("Toilet_Sink"));
+                SetLayerRecursively(toiletSinkGO.transform, LayerMask.NameToLayer(layerName));
 
                 // Final visibility check
                 ModLogger.Debug($"Final object state:");
@@ -567,9 +1177,9 @@ namespace Behind_Bars.Systems
     }
 
 #if MONO
-    public sealed class ToiletSink : MonoBehaviour
+    public sealed class ToiletSink : MonoBehaviour, ISpawnableAsset
 #else
-    public sealed class ToiletSink(IntPtr ptr) : MonoBehaviour(ptr)
+    public sealed class ToiletSink(IntPtr ptr) : MonoBehaviour(ptr), ISpawnableAsset
 #endif
     {
         private bool _initialized = false;
@@ -581,7 +1191,7 @@ namespace Behind_Bars.Systems
         public bool IsInitialized => _initialized;
         public Vector3 Position => _currentPosition;
 
-        public void Initialize(Vector3 spawnLocation, Material material)
+        public void Initialize(Vector3 spawnLocation, Material material, Vector3? colliderSize = null)
         {
             if (_initialized) return;
 
@@ -608,8 +1218,8 @@ namespace Behind_Bars.Systems
             _meshRenderer.sharedMaterial = _assignedMaterial;
 
             // Set up collider properties
-            _boxCollider.isTrigger = false;
-            _boxCollider.size = new Vector3(1f, 1f, 1f); // Adjust size as needed
+            //_boxCollider.isTrigger = false;
+            //_boxCollider.size = colliderSize ?? new Vector3(1f, 1f, 1f); // Use provided size or default
 
             _initialized = true;
             ModLogger.Debug($"ToiletSink initialized at {_currentPosition}");
@@ -637,8 +1247,14 @@ namespace Behind_Bars.Systems
         {
             if (!_initialized) return;
 
+            // Replace this line:
             ToiletSinkManager.RemoveToiletSink(this);
             _initialized = false;
+        }
+
+        public void DestroyAsset()
+        {
+            DestroyToiletSink();
         }
 
         public string GetDebugInfo()
@@ -654,6 +1270,7 @@ namespace Behind_Bars.Systems
         {
             if (_initialized)
             {
+                // With this line:
                 ToiletSinkManager.RemoveToiletSink(this);
             }
         }
