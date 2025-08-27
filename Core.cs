@@ -4,6 +4,8 @@ using HarmonyLib;
 using System;
 using Behind_Bars.Helpers;
 using UnityEngine;
+
+using Object = UnityEngine.Object;
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
 #else
@@ -18,6 +20,7 @@ using Behind_Bars.Harmony;
 using FishNet;
 #else
 using Il2CppFishNet;
+using Il2CppInterop.Runtime.Injection;
 #endif
 
 [assembly: MelonInfo(
@@ -34,6 +37,7 @@ namespace Behind_Bars
     public class Core : MelonMod
     {
         public static Core? Instance { get; private set; }
+        public static AssetManager AssetManager { get; private set; }
 
         // Core systems
         private JailSystem? _jailSystem;
@@ -52,7 +56,10 @@ namespace Behind_Bars
         public override void OnInitializeMelon()
         {
             Instance = this;
-            
+#if !MONO
+            ClassInjector.RegisterTypeInIl2Cpp<ToiletSink>();
+            ClassInjector.RegisterTypeInIl2Cpp<ToiletSinkManager>();
+#endif
             // Initialize core systems
             HarmonyPatches.Initialize(this);
             _jailSystem = new JailSystem();
@@ -60,7 +67,43 @@ namespace Behind_Bars
             _courtSystem = new CourtSystem();
             _probationSystem = new ProbationSystem();
             
+            AssetManager = new AssetManager();
+            AssetManager.Init();
+
             ModLogger.Info("Behind Bars initialized with all systems");
+        }
+
+        public override void OnSceneWasInitialized(int buildIndex, string sceneName)
+        {
+            ModLogger.Debug($"Scene initialized: {sceneName} (Build Index: {buildIndex})");
+            
+            // Ensure ToiletSinkManager exists
+            if (ToiletSinkManager.Instance == null)
+            {
+                ModLogger.Debug("ToiletSinkManager instance is null, creating...");
+            }
+            
+            // Spawn a toilet sink when the scene is initialized
+            try
+            {
+                var toiletSink = AssetManager.SpawnAsset(FurnitureType.ToiletSink);
+                if (toiletSink != null)
+                {
+                    ModLogger.Info($"Successfully spawned toilet sink on scene initialization: {toiletSink.GetDebugInfo()}");
+                    ModLogger.Debug($"Total toilet sinks in scene: {ToiletSinkManager.GetToiletSinkCount()}");
+                    
+                    // Test the system after successful spawning
+                    TestToiletSinkSystem();
+                }
+                else
+                {
+                    ModLogger.Warn("Failed to spawn toilet sink on scene initialization");
+                }
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error spawning toilet sink on scene initialization: {e.Message}");
+            }
         }
 
         public override void OnSceneWasLoaded(int buildIndex, string sceneName)
@@ -83,7 +126,6 @@ namespace Behind_Bars
             {
                 var playerHandler = new PlayerHandler(Player.Local);
                 _playerHandlers[Player.Local] = playerHandler;
-
                 // Subscribe to arrest events
 #if !MONO
                 Player.Local.onArrested.AddListener(new Action(OnPlayerArrested));
@@ -116,5 +158,35 @@ namespace Behind_Bars
         public BailSystem GetBailSystem() => _bailSystem!;
         public CourtSystem GetCourtSystem() => _courtSystem!;
         public ProbationSystem GetProbationSystem() => _probationSystem!;
+
+        public void TestToiletSinkSystem()
+        {
+            ModLogger.Info("Testing ToiletSink system from Core...");
+            
+            try
+            {
+                var sinkCount = ToiletSinkManager.GetToiletSinkCount();
+                ModLogger.Info($"Current toilet sink count: {sinkCount}");
+                
+                var allSinks = ToiletSinkManager.GetAllToiletSinks();
+                for (int i = 0; i < allSinks.Count; i++)
+                {
+                    var sink = allSinks[i];
+                    ModLogger.Info($"ToiletSink {i}: {sink.GetDebugInfo()}");
+                }
+                
+                // Test spawning another sink
+                var newSink = AssetManager.SpawnAsset(FurnitureType.ToiletSink);
+                if (newSink != null)
+                {
+                    ModLogger.Info($"Successfully spawned additional toilet sink: {newSink.GetDebugInfo()}");
+                    ModLogger.Info($"Total toilet sinks now: {ToiletSinkManager.GetToiletSinkCount()}");
+                }
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error testing toilet sink system: {e.Message}");
+            }
+        }
     }
 }
