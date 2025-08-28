@@ -214,6 +214,7 @@ This mod is provided as-is for educational and entertainment purposes. Use at yo
 ### Third-Party Dependencies
 - **MelonLoader**: Mod loading framework by LavaGang
 - **SwapperPlugin**: Asset swapping functionality by the_croods
+- **assetville**: https://www.unrealengine.com/en-US/eula/content
 
 ### Special Thanks
 - **DropDaDeuce**: AssetBundleUtils implementation and general asset development assistance
