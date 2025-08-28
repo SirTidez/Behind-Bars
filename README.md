@@ -188,10 +188,36 @@ This mod is provided as-is for educational and entertainment purposes. Use at yo
 
 ## Credits
 
+### Development
 - **Developer**: SirTidez
 - **Game**: Schedule I by TVGS
 - **Mod Loader**: MelonLoader
 - **Harmony**: pardeike
+
+### Assets
+
+#### 3D Models & Prefabs
+- **Bunk Bed**: Custom jail bunk bed design for cell accommodations
+- **Toilet Sink**: Combined toilet and sink unit for jail cells
+- **Common Room Table**: Multi-purpose table for jail common areas
+- **Cell Table**: Compact table designed for individual jail cells
+
+#### Materials & Textures
+- **Jail Metal**: Primary metallic material for jail infrastructure
+- **Jail Metal (Worn)**: Weathered variant for aged jail appearance
+- **M_JailMetal**: Alternative metallic material variant
+
+#### Asset Bundle
+- **behind_bars.bundle**: Custom asset bundle containing all mod assets
+- **Icon**: Mod icon and branding assets
+
+### Third-Party Dependencies
+- **MelonLoader**: Mod loading framework by LavaGang
+- **SwapperPlugin**: Asset swapping functionality by the_croods
+
+### Special Thanks
+- **DropDaDeuce**: AssetBundleUtils implementation and general asset development assistance
+- **spec**: Asset creation, modeling, and packaging for the jail environment
 
 ## Support
 
