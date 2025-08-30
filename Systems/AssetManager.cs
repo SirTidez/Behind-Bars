@@ -392,7 +392,8 @@ namespace Behind_Bars.Systems
         BunkBed,
         ToiletSink,
         CommonRoomTable,
-        CellTable
+        CellTable,
+        Jail
     }
 
     /// <summary>
@@ -473,6 +474,16 @@ namespace Behind_Bars.Systems
                     new Vector3(2f, 1f, 1.5f),
                     new Color(0.75f, 0.75f, 0.75f, 0.9f)
                 )
+            },
+            {
+                FurnitureType.Jail,
+                new AssetSpawnConfig(
+                    new Vector3(66.5362f, 8.5001f, -220.6056f),
+                    "Jail",
+                    "Jail",
+                    new Vector3(10f, 10f, 10f),
+                    new Color(0.6f, 0.6f, 0.6f, 1.0f)
+                )
             }
         };
 
@@ -509,6 +520,7 @@ namespace Behind_Bars.Systems
                 FurnitureType.ToiletSink => ToiletSinkManager.CreateToiletSink(config.SpawnPoint, config),
                 FurnitureType.CommonRoomTable => CommonRoomTableManager.CreateCommonRoomTable(config.SpawnPoint, config),
                 FurnitureType.CellTable => CellTableManager.CreateCellTable(config.SpawnPoint, config),
+                FurnitureType.Jail => JailManager.CreateJail(config.SpawnPoint, config),
                 _ => null
             };
         }
@@ -2191,6 +2203,259 @@ namespace Behind_Bars.Systems
             if (_initialized)
             {
                 CellTableManager.RemoveCellTable(this);
+            }
+        }
+    }
+
+#if MONO
+    public sealed class JailManager : MonoBehaviour
+#else
+    public sealed class JailManager(IntPtr ptr) : MonoBehaviour(ptr)
+#endif
+    {
+        private static JailManager _instance;
+        private static readonly List<Jail> _jails = new();
+        private static bool _isInitialized = false;
+
+        public static JailManager Instance
+        {
+            get
+            {
+                if (_instance == null)
+                {
+                    var go = new GameObject("JailManager");
+                    _instance = go.AddComponent<JailManager>();
+                    DontDestroyOnLoad(go);
+                }
+                return _instance;
+            }
+        }
+
+        public static Jail CreateJail(Vector3 spawnLocation, AssetSpawnConfig config = null)
+        {
+            if (_instance == null)
+            {
+                Instance.Initialize();
+            }
+
+            // Check if we already have a jail (only allow one jail)
+            if (_jails.Count > 0)
+            {
+                ModLogger.Debug($"Jail already exists, returning existing jail");
+                return _jails[0];
+            }
+
+            // Create new jail
+            var jail = Instance.SpawnJail(spawnLocation, config);
+            if (jail != null)
+            {
+                _jails.Add(jail);
+                ModLogger.Debug($"Created new jail at {spawnLocation}. Total jails: {_jails.Count}");
+            }
+
+            return jail;
+        }
+
+        public static void RemoveJail(Jail jail)
+        {
+            if (_jails.Remove(jail))
+            {
+                if (jail != null && jail.gameObject != null)
+                {
+                    Destroy(jail.gameObject);
+                }
+                ModLogger.Debug($"Removed jail. Total jails: {_jails.Count}");
+            }
+        }
+
+        public static void ClearAllJails()
+        {
+            foreach (var jail in _jails.ToList())
+            {
+                RemoveJail(jail);
+            }
+        }
+
+        public static List<Jail> GetAllJails()
+        {
+            return new List<Jail>(_jails);
+        }
+
+        public static int GetJailCount()
+        {
+            return _jails.Count;
+        }
+
+        private void Initialize()
+        {
+            if (_isInitialized) return;
+            
+            ModLogger.Debug("JailManager initialized");
+            _isInitialized = true;
+        }
+
+        private Jail SpawnJail(Vector3 spawnLocation, AssetSpawnConfig config = null)
+        {
+            try
+            {
+                if (AssetManager.bundle == null)
+                {
+                    ModLogger.Error("Asset bundle is not loaded.");
+                    return null;
+                }
+
+                // Use config if provided, otherwise use defaults
+                var prefabPath = config?.PrefabPath ?? "Assets/Jail/Jail.prefab";
+                var layerName = config?.LayerName ?? "Jail";
+                var colliderSize = config?.ColliderSize ?? new Vector3(10f, 10f, 10f);
+                var materialColor = config?.MaterialColor ?? new Color(0.6f, 0.6f, 0.6f, 1.0f);
+
+                // Load the prefab
+                var prefab = AssetManager.bundle.LoadAsset<GameObject>(prefabPath);
+                if (prefab == null)
+                {
+                    ModLogger.Error("Failed to load Jail prefab from bundle");
+                    
+                    // Debug: List all available prefabs
+                    var allPrefabs = AssetManager.bundle.LoadAllAssets<GameObject>();
+                    ModLogger.Debug($"Available prefabs in bundle:");
+                    foreach (var p in allPrefabs)
+                    {
+                        ModLogger.Debug($"  {p.name}");
+                    }
+                    return null;
+                }
+
+                ModLogger.Debug($"Successfully loaded prefab: {prefab.name}");
+
+                // Instantiate the prefab
+                var jailGO = Object.Instantiate(prefab);
+                jailGO.name = "[Prefab] JailHouseBlues";
+                
+                ModLogger.Debug($"Instantiated prefab: {jailGO.name}, Active: {jailGO.activeInHierarchy}, ActiveSelf: {jailGO.activeSelf}");
+
+                // Set position
+                jailGO.transform.position = spawnLocation;
+
+                // Don't parent to Map for jail - it's a large structure that should exist independently
+                ModLogger.Info($"Jail spawned at position: {jailGO.transform.position}");
+
+                // Apply materials to all renderers if needed
+                var allRenderers = jailGO.GetComponentsInChildren<Renderer>(true);
+                ModLogger.Debug($"Found {allRenderers.Length} renderers in jail prefab");
+                
+                if (allRenderers.Length > 0)
+                {
+                    var material = AssetManager.CreateMaterial(materialColor);
+                    if (material != null)
+                    {
+                        foreach (var renderer in allRenderers)
+                        {
+                            if (renderer != null && renderer.sharedMaterial == null)
+                            {
+                                renderer.sharedMaterial = material;
+                                ModLogger.Debug($"Applied material to renderer: {renderer.name}");
+                            }
+                        }
+                    }
+                }
+
+                // Add the Jail component
+                var jail = jailGO.AddComponent<Jail>();
+
+                // Initialize the Jail component
+                jail.Initialize(spawnLocation, null, colliderSize);
+
+                // Set layer recursively
+                SetLayerRecursively(jailGO.transform, LayerMask.NameToLayer(layerName));
+
+                // Final log
+                ModLogger.Info($"Jail successfully spawned with {allRenderers.Length} components");
+                
+                return jail;
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error spawning jail: {e.Message}");
+                ModLogger.Error($"Stack trace: {e.StackTrace}");
+                return null;
+            }
+        }
+
+        private static void SetLayerRecursively(Transform root, int layer)
+        {
+            if (root == null) return;
+
+            root.gameObject.layer = layer;
+
+            int count = root.childCount;
+            for (int i = 0; i < count; i++)
+            {
+                var child = root.GetChild(i);
+                SetLayerRecursively(child, layer);
+            }
+        }
+    }
+
+#if MONO
+    public sealed class Jail : MonoBehaviour, ISpawnableAsset
+#else
+    public sealed class Jail(IntPtr ptr) : MonoBehaviour(ptr), ISpawnableAsset
+#endif
+    {
+        private bool _initialized = false;
+        private Vector3 _currentPosition;
+        private Material _assignedMaterial;
+
+        public bool IsInitialized => _initialized;
+        public Vector3 Position => _currentPosition;
+
+        public void Initialize(Vector3 spawnLocation, Material material, Vector3? colliderSize = null)
+        {
+            if (_initialized) return;
+
+            _currentPosition = spawnLocation;
+            _assignedMaterial = material;
+
+            _initialized = true;
+            ModLogger.Debug($"Jail initialized at {_currentPosition}");
+        }
+
+        public void SetPosition(Vector3 newPosition)
+        {
+            if (!_initialized) return;
+
+            _currentPosition = newPosition;
+            transform.position = _currentPosition;
+            ModLogger.Debug($"Jail moved to {_currentPosition}");
+        }
+
+        public void DestroyJail()
+        {
+            if (!_initialized) return;
+
+            JailManager.RemoveJail(this);
+            _initialized = false;
+        }
+
+        public void DestroyAsset()
+        {
+            DestroyJail();
+        }
+
+        public string GetDebugInfo()
+        {
+            if (!_initialized)
+                return "Jail not initialized";
+            
+            return $"Jail at {_currentPosition}, Material: {_assignedMaterial?.name ?? "None"}";
+        }
+
+        private void OnDestroy()
+        {
+            if (_initialized)
+            {
+                JailManager.RemoveJail(this);
             }
         }
     }

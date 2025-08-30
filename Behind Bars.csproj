@@ -53,9 +53,11 @@
     <Import Project="build\events\preBuild.targets" />
     <Import Project="build\events\postBuild.targets" />
     <ItemGroup>
+      <None Remove="behind_bars" />
       <None Remove="behind_bars.bundle" />
     </ItemGroup>
     <ItemGroup>
+      <EmbeddedResource Include="behind_bars" />
       <EmbeddedResource Include="behind_bars.bundle" />
     </ItemGroup>
 
