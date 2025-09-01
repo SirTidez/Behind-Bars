@@ -362,6 +362,7 @@ namespace BehindBars.Areas
     public class BookingArea : JailAreaBase
     {
         public JailDoor prisonEntryDoor;
+        public JailDoor bookingInnerDoor;
         public JailDoor guardDoor;
         public List<Transform> processingStations = new List<Transform>();
         
@@ -375,29 +376,127 @@ namespace BehindBars.Areas
             FindAreaBounds(root);
             FindAreaLights(root);
             FindBookingComponents(root);
+            FindBookingDoors(root);
             
             isInitialized = true;
-            Debug.Log($"✓ Initialized Booking Area - {bounds.Count} bounds, {processingStations.Count} stations");
+            Debug.Log($"✓ Initialized Booking Area - {bounds.Count} bounds, {processingStations.Count} stations, {doors.Count} doors");
         }
         
         void FindBookingComponents(Transform root)
         {
             processingStations.Clear();
             
-            // IL2CPP-safe recursive search
+            // IL2CPP-safe recursive search for processing stations
             FindTransformsRecursive(root,
                 name => name.Contains("Processing") || name.Contains("Desk"),
                 transform => processingStations.Add(transform));
-                
-            FindTransformsRecursive(root,
-                name => name.Contains("Prison_EnterDoor"),
-                transform => {
-                    prisonEntryDoor = new JailDoor();
-                    prisonEntryDoor.doorHolder = transform;
-                    prisonEntryDoor.doorName = "Prison Entry Door";
-                    prisonEntryDoor.doorType = JailDoor.DoorType.EntryDoor;
-                    doors.Add(prisonEntryDoor);
-                });
+        }
+        
+        void FindBookingDoors(Transform root)
+        {
+            doors.Clear();
+            
+            // Find doors using exact static paths from hierarchy
+            Transform prisonEnterTransform = root.Find("Prison_EnterDoor");
+            if (prisonEnterTransform != null)
+            {
+                prisonEntryDoor = new JailDoor();
+                prisonEntryDoor.doorHolder = prisonEnterTransform;
+                prisonEntryDoor.doorName = "Prison Enter Door";
+                prisonEntryDoor.doorType = JailDoor.DoorType.EntryDoor;
+                prisonEntryDoor.currentState = JailDoor.DoorState.Closed;
+                doors.Add(prisonEntryDoor);
+                Debug.Log($"✓ Found Prison Enter Door at {prisonEnterTransform.name}");
+            }
+            
+            Transform bookingInnerTransform = root.Find("Booking_InnerDoor");
+            if (bookingInnerTransform != null)
+            {
+                bookingInnerDoor = new JailDoor();
+                bookingInnerDoor.doorHolder = bookingInnerTransform;
+                bookingInnerDoor.doorName = "Booking Inner Door";
+                bookingInnerDoor.doorType = JailDoor.DoorType.AreaDoor;
+                bookingInnerDoor.currentState = JailDoor.DoorState.Closed;
+                doors.Add(bookingInnerDoor);
+                Debug.Log($"✓ Found Booking Inner Door at {bookingInnerTransform.name}");
+            }
+            
+            Transform guardDoorTransform = root.Find("Booking_GuardDoor");
+            if (guardDoorTransform != null)
+            {
+                guardDoor = new JailDoor();
+                guardDoor.doorHolder = guardDoorTransform;
+                guardDoor.doorName = "Booking Guard Door";
+                guardDoor.doorType = JailDoor.DoorType.GuardDoor;
+                guardDoor.currentState = JailDoor.DoorState.Closed;
+                doors.Add(guardDoor);
+                Debug.Log($"✓ Found Booking Guard Door at {guardDoorTransform.name}");
+            }
+        }
+        
+        public void InstantiateDoors(GameObject steelDoorPrefab)
+        {
+            if (steelDoorPrefab == null)
+            {
+                Debug.LogError("BookingArea: No steel door prefab provided for door instantiation");
+                return;
+            }
+            
+            int instantiated = 0;
+            foreach (var door in doors)
+            {
+                if (door.IsValid() && !door.IsInstantiated())
+                {
+                    InstantiateSingleDoor(door, steelDoorPrefab);
+                    instantiated++;
+                }
+            }
+            
+            Debug.Log($"BookingArea: Instantiated {instantiated}/{doors.Count} doors");
+        }
+        
+        void InstantiateSingleDoor(JailDoor door, GameObject doorPrefab)
+        {
+            if (door.doorHolder == null) return;
+
+            // Clear existing door
+            if (door.doorInstance != null)
+            {
+                UnityEngine.Object.DestroyImmediate(door.doorInstance);
+            }
+
+            // Instantiate new door
+            door.doorInstance = UnityEngine.Object.Instantiate(doorPrefab, door.doorHolder);
+            door.doorInstance.transform.localPosition = Vector3.zero;
+            door.doorInstance.transform.localRotation = Quaternion.identity;
+
+            // Find the hinge (look for a child transform that could be the hinge)
+            door.doorHinge = FindDoorHinge(door.doorInstance);
+
+            // Initialize the door animation system
+            door.InitializeDoor();
+
+            Debug.Log($"✓ Instantiated {door.doorName} with hinge: {door.doorHinge?.name ?? "None"}");
+        }
+        
+        Transform FindDoorHinge(GameObject doorInstance)
+        {
+            // Look for common hinge names
+            string[] hingeNames = { "Hinge", "Pivot", "Door", "DoorMesh", "Model" };
+
+            foreach (string hingeName in hingeNames)
+            {
+                Transform hinge = doorInstance.transform.Find(hingeName);
+                if (hinge != null) return hinge;
+            }
+
+            // Fallback: use the first child if any
+            if (doorInstance.transform.childCount > 0)
+            {
+                return doorInstance.transform.GetChild(0);
+            }
+
+            return doorInstance.transform;
         }
         
         

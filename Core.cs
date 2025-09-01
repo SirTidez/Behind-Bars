@@ -53,9 +53,16 @@ namespace Behind_Bars
 
         // Player management
         private Dictionary<Player, PlayerHandler> _playerHandlers = new();
-        
+
         // Jail management
         public static JailController? ActiveJailController { get; private set; }
+        public static
+#if !MONO
+            Il2CppAssetBundle
+#else
+            AssetBundle
+#endif
+            ? CachedJailBundle { get; private set; }
 
         public JailSystem? JailSystem => _jailSystem;
         public BailSystem? BailSystem => _bailSystem;
@@ -76,7 +83,7 @@ namespace Behind_Bars
             ClassInjector.RegisterTypeInIl2Cpp<CellTableManager>();
             ClassInjector.RegisterTypeInIl2Cpp<Jail>();
             ClassInjector.RegisterTypeInIl2Cpp<JailManager>();
-            
+
             // Register Jail System Components
             ClassInjector.RegisterTypeInIl2Cpp<JailController>();
             ClassInjector.RegisterTypeInIl2Cpp<SecurityCamera>();
@@ -110,57 +117,57 @@ namespace Behind_Bars
             {
                 if (sceneName == "Main")
                 {
-                    // Spawn toilet sink using generic method
-                    var toiletSink = AssetManager.SpawnAsset<ToiletSink>(FurnitureType.ToiletSink);
-                    if (toiletSink != null)
-                    {
-                        ModLogger.Info($"Successfully spawned toilet sink on scene initialization: {toiletSink.GetDebugInfo()}");
-                        ModLogger.Debug($"Total toilet sinks in scene: {ToiletSinkManager.GetToiletSinkCount()}");
-                    }
-                    else
-                    {
-                        ModLogger.Warn("Failed to spawn toilet sink on scene initialization");
-                    }
+                    //// Spawn toilet sink using generic method
+                    //var toiletSink = AssetManager.SpawnAsset<ToiletSink>(FurnitureType.ToiletSink);
+                    //if (toiletSink != null)
+                    //{
+                    //    ModLogger.Info($"Successfully spawned toilet sink on scene initialization: {toiletSink.GetDebugInfo()}");
+                    //    ModLogger.Debug($"Total toilet sinks in scene: {ToiletSinkManager.GetToiletSinkCount()}");
+                    //}
+                    //else
+                    //{
+                    //    ModLogger.Warn("Failed to spawn toilet sink on scene initialization");
+                    //}
 
-                    // Spawn bunk bed using generic method
-                    var bunkBed = AssetManager.SpawnAsset<BunkBed>(FurnitureType.BunkBed);
-                    if (bunkBed != null)
-                    {
-                        ModLogger.Info($"Successfully spawned bunk bed on scene initialization: {bunkBed.GetDebugInfo()}");
-                        ModLogger.Debug($"Total bunk beds in scene: {BunkBedManager.GetBunkBedCount()}");
-                    }
-                    else
-                    {
-                        ModLogger.Warn("Failed to spawn bunk bed on scene initialization");
-                    }
+                    //// Spawn bunk bed using generic method
+                    //var bunkBed = AssetManager.SpawnAsset<BunkBed>(FurnitureType.BunkBed);
+                    //if (bunkBed != null)
+                    //{
+                    //    ModLogger.Info($"Successfully spawned bunk bed on scene initialization: {bunkBed.GetDebugInfo()}");
+                    //    ModLogger.Debug($"Total bunk beds in scene: {BunkBedManager.GetBunkBedCount()}");
+                    //}
+                    //else
+                    //{
+                    //    ModLogger.Warn("Failed to spawn bunk bed on scene initialization");
+                    //}
 
-                    // Spawn common room table using generic method
-                    var commonRoomTable = AssetManager.SpawnAsset<CommonRoomTable>(FurnitureType.CommonRoomTable);
-                    if (commonRoomTable != null)
-                    {
-                        ModLogger.Info($"Successfully spawned common room table on scene initialization: {commonRoomTable.GetDebugInfo()}");
-                        ModLogger.Debug($"Total common room tables in scene: {CommonRoomTableManager.GetCommonRoomTableCount()}");
-                    }
-                    else
-                    {
-                        ModLogger.Warn("Failed to spawn common room table on scene initialization");
-                    }
+                    //// Spawn common room table using generic method
+                    //var commonRoomTable = AssetManager.SpawnAsset<CommonRoomTable>(FurnitureType.CommonRoomTable);
+                    //if (commonRoomTable != null)
+                    //{
+                    //    ModLogger.Info($"Successfully spawned common room table on scene initialization: {commonRoomTable.GetDebugInfo()}");
+                    //    ModLogger.Debug($"Total common room tables in scene: {CommonRoomTableManager.GetCommonRoomTableCount()}");
+                    //}
+                    //else
+                    //{
+                    //    ModLogger.Warn("Failed to spawn common room table on scene initialization");
+                    //}
 
-                    // Spawn cell table using generic method
-                    var cellTable = AssetManager.SpawnAsset<CellTable>(FurnitureType.CellTable);
-                    if (cellTable != null)
-                    {
-                        ModLogger.Info($"Successfully spawned cell table on scene initialization: {cellTable.GetDebugInfo()}");
-                        ModLogger.Debug($"Total cell tables in scene: {CellTableManager.GetCellTableCount()}");
-                    }
-                    else
-                    {
-                        ModLogger.Warn("Failed to spawn cell table on scene initialization");
-                    }
+                    //// Spawn cell table using generic method
+                    //var cellTable = AssetManager.SpawnAsset<CellTable>(FurnitureType.CellTable);
+                    //if (cellTable != null)
+                    //{
+                    //    ModLogger.Info($"Successfully spawned cell table on scene initialization: {cellTable.GetDebugInfo()}");
+                    //    ModLogger.Debug($"Total cell tables in scene: {CellTableManager.GetCellTableCount()}");
+                    //}
+                    //else
+                    //{
+                    //    ModLogger.Warn("Failed to spawn cell table on scene initialization");
+                    //}
 
-                    // Test the systems after successful spawning
-                    TestToiletSinkSystem();
-                    TestBunkBedSystem();
+                    //// Test the systems after successful spawning
+                    //TestToiletSinkSystem();
+                    //TestBunkBedSystem();
 
                     // Load and setup jail from asset bundle (simplified approach)
                     MelonCoroutines.Start(SetupJail());
@@ -185,7 +192,7 @@ namespace Behind_Bars
         private IEnumerator InitializePlayerSystems()
         {
             ModLogger.Info("Waiting for player to be ready...");
-            #if !MONO
+#if !MONO
             // IL2CPP - More robust null checking
             while (true)
             {
@@ -201,11 +208,11 @@ namespace Behind_Bars
                 }
                 yield return null;
             }
-            #else
+#else
             // Mono - Standard Unity null check
             while (PlayerSingleton<AppsCanvas>.Instance == null)
                 yield return null;
-            #endif
+#endif
 
             // Initialize player handler for local player
             if (Player.Local != null)
@@ -232,9 +239,14 @@ namespace Behind_Bars
         private static IEnumerator SetupJail()
         {
             ModLogger.Info("Setting up jail from asset bundle...");
-            
-            // Load the behind-bars bundle specifically
-            var jailBundle = Utils.AssetBundleUtils.LoadAssetBundle("Behind_Bars.behind_bars");
+
+            // Load the behind-bars bundle specifically and cache it
+            if (CachedJailBundle == null)
+            {
+                CachedJailBundle = Utils.AssetBundleUtils.LoadAssetBundle("Behind_Bars.behind_bars");
+            }
+
+            var jailBundle = CachedJailBundle;
             if (jailBundle == null)
             {
                 ModLogger.Error("Failed to load behind-bars bundle");
@@ -268,7 +280,7 @@ namespace Behind_Bars
             }
 
             // Wait for player to be ready (using our IL2CPP-safe check)
-            #if !MONO
+#if !MONO
             while (true)
             {
                 try
@@ -283,10 +295,10 @@ namespace Behind_Bars
                 }
                 yield return null;
             }
-            #else
+#else
             while (PlayerSingleton<AppsCanvas>.Instance == null)
                 yield return null;
-            #endif
+#endif
 
             var jailPrefab = jailBundle.LoadAsset<GameObject>("Jail");
             if (jailPrefab == null)
@@ -298,9 +310,9 @@ namespace Behind_Bars
             // Spawn the jail
             var jail = Object.Instantiate(jailPrefab, new Vector3(66.5362f, 8.5001f, -220.6056f), Quaternion.identity);
             jail.name = "[Prefab] JailHouseBlues";
-            
+
             ModLogger.Info($"Jail spawned successfully at {jail.transform.position}");
-            
+
             // Initialize JailController system
             yield return new WaitForSeconds(1f); // Give the jail a moment to settle
             InitializeJailController(jail);
@@ -311,7 +323,7 @@ namespace Behind_Bars
             try
             {
                 ModLogger.Info("Initializing JailController system...");
-                
+
                 // Check if the jail already has a JailController
                 var existingController = jail.GetComponent<JailController>();
                 if (existingController != null)
@@ -325,17 +337,18 @@ namespace Behind_Bars
                     ActiveJailController = jail.AddComponent<JailController>();
                 }
 
-                // Load and assign prefabs from bundle before initialization
+                // Load and assign prefabs from bundle, then trigger door setup
                 if (ActiveJailController != null)
                 {
                     LoadAndAssignJailPrefabs(ActiveJailController);
-                    
-                    ModLogger.Info("Calling JailController.InitializeJail()...");
-                    ActiveJailController.InitializeJail();
-                    ModLogger.Info("✓ JailController initialized successfully!");
-                    
-                    // Log status for debugging
-                    LogJailControllerStatus();
+                    ModLogger.Info("✓ JailController prefabs loaded");
+
+                    // Manually call SetupDoors after prefabs are loaded
+                    ActiveJailController.SetupDoors();
+                    ModLogger.Info("✓ Door setup completed after prefab loading");
+
+                    // Log status after a frame to let everything complete
+                    MelonCoroutines.Start(LogStatusAfterFrame());
                 }
                 else
                 {
@@ -348,51 +361,69 @@ namespace Behind_Bars
                 ModLogger.Error($"Stack trace: {e.StackTrace}");
             }
         }
+        
+        private static IEnumerator LogStatusAfterFrame()
+        {
+            // Wait a frame to let Unity's Start() method complete
+            yield return null;
+            yield return new WaitForSeconds(0.5f); // Extra time for initialization
+            
+            ModLogger.Info("Logging jail status after initialization...");
+            LogJailControllerStatus();
+        }
 
         private static void LoadAndAssignJailPrefabs(JailController controller)
         {
             try
             {
                 ModLogger.Info("Loading jail prefabs from asset bundle...");
-                
-                // Load the behind-bars bundle
-                var jailBundle = Utils.AssetBundleUtils.LoadAssetBundle("Behind_Bars.behind_bars");
+
+                // Use the cached behind-bars bundle
+                var jailBundle = CachedJailBundle;
                 if (jailBundle == null)
                 {
-                    ModLogger.Error("Failed to load behind-bars bundle for prefabs");
+                    ModLogger.Error("Failed to load behind-bars bundle for prefabs - bundle not cached");
                     return;
                 }
 
-                // Load JailDoor prefab
+                // Load JailDoor prefab - try multiple naming variations
 #if MONO
-                var jailDoorPrefab = jailBundle.LoadAsset<GameObject>("JailDoor");
+                var jailDoorPrefab = jailBundle.LoadAsset<GameObject>("JailDoor") ??
+                                   jailBundle.LoadAsset<GameObject>("jaildoor") ??
+                                   jailBundle.LoadAsset<GameObject>("assets/behindbars/jaildoor.prefab");
 #else
-                var jailDoorPrefab = jailBundle.LoadAsset("JailDoor", Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>();
+                var jailDoorPrefab = jailBundle.LoadAsset("JailDoor", Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>() ??
+                                   jailBundle.LoadAsset("jaildoor", Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>() ??
+                                   jailBundle.LoadAsset("assets/behindbars/jaildoor.prefab", Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>();
 #endif
                 if (jailDoorPrefab != null)
                 {
                     controller.jailDoorPrefab = jailDoorPrefab;
-                    ModLogger.Info("✓ Loaded JailDoor prefab");
+                    ModLogger.Info($"✓ Loaded JailDoor prefab: {jailDoorPrefab.name}");
                 }
                 else
                 {
-                    ModLogger.Warn("JailDoor prefab not found in bundle");
+                    ModLogger.Warn("JailDoor prefab not found in bundle - no cell doors will be instantiated!");
                 }
 
-                // Load SteelDoor prefab  
+                // Load GuardDoors prefab - try multiple naming variations
 #if MONO
-                var steelDoorPrefab = jailBundle.LoadAsset<GameObject>("GuardDoors");
+                var steelDoorPrefab = jailBundle.LoadAsset<GameObject>("GuardDoors") ??
+                                    jailBundle.LoadAsset<GameObject>("guarddoors") ??
+                                    jailBundle.LoadAsset<GameObject>("assets/behindbars/guarddoors.prefab");
 #else
-                var steelDoorPrefab = jailBundle.LoadAsset("GuardDoors", Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>();
+                var steelDoorPrefab = jailBundle.LoadAsset("GuardDoors", Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>() ??
+                                    jailBundle.LoadAsset("guarddoors", Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>() ??
+                                    jailBundle.LoadAsset("assets/behindbars/guarddoors.prefab", Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>();
 #endif
                 if (steelDoorPrefab != null)
                 {
                     controller.steelDoorPrefab = steelDoorPrefab;
-                    ModLogger.Info("✓ Loaded SteelDoor prefab");
+                    ModLogger.Info($"✓ Loaded SteelDoor prefab: {steelDoorPrefab.name}");
                 }
                 else
                 {
-                    ModLogger.Warn("SteelDoor prefab not found in bundle");
+                    ModLogger.Warn("SteelDoor prefab not found in bundle - no steel doors will be instantiated!");
                 }
 
                 // Load SecurityCamera prefab (if available)
@@ -418,7 +449,7 @@ namespace Behind_Bars
                 ModLogger.Error($"Error loading jail prefabs: {e.Message}");
             }
         }
-        
+
         private static void LogJailControllerStatus()
         {
             if (ActiveJailController == null)
@@ -434,7 +465,8 @@ namespace Behind_Bars
                 ModLogger.Info($"Holding cells discovered: {ActiveJailController.holdingCells?.Count ?? 0}");
                 ModLogger.Info($"Security cameras: {ActiveJailController.securityCameras?.Count ?? 0}");
                 ModLogger.Info($"Area lights: {ActiveJailController.areaLights?.Count ?? 0}");
-                
+                ModLogger.Info($"Door prefabs loaded: JailDoor={ActiveJailController.jailDoorPrefab != null}, SteelDoor={ActiveJailController.steelDoorPrefab != null}");
+
                 // Check area initialization
                 var areas = new[]
                 {
@@ -537,7 +569,7 @@ namespace Behind_Bars
 
         // Jail Controller convenience methods
         public static bool IsJailControllerReady() => ActiveJailController != null;
-        
+
         public static void TriggerEmergencyLockdown()
         {
             if (ActiveJailController != null)
@@ -550,7 +582,7 @@ namespace Behind_Bars
                 ModLogger.Warn("Cannot trigger emergency lockdown - JailController not available");
             }
         }
-        
+
         public static void UnlockAllDoors()
         {
             if (ActiveJailController != null)
@@ -563,7 +595,7 @@ namespace Behind_Bars
                 ModLogger.Warn("Cannot unlock doors - JailController not available");
             }
         }
-        
+
         public static void SetJailLighting(JailController.LightingState state)
         {
             if (ActiveJailController != null)
@@ -576,7 +608,7 @@ namespace Behind_Bars
                 ModLogger.Warn("Cannot set lighting - JailController not available");
             }
         }
-        
+
         public static string GetPlayerCurrentArea()
         {
             if (ActiveJailController != null && Player.Local != null)
