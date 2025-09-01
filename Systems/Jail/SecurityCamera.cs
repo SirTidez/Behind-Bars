@@ -75,11 +75,21 @@ public sealed class SecurityCamera(IntPtr ptr) : MonoBehaviour(ptr)
             renderTexture = new RenderTexture(renderTextureSize, renderTextureSize, 16);
             renderTexture.name = $"SecurityCam_{gameObject.name}";
             renderTexture.filterMode = FilterMode.Bilinear;
+            
+#if MONO
+            // Mono-specific: Ensure render texture is created immediately
+            renderTexture.Create();
+#endif
         }
 
         if (cameraComponent != null)
         {
             cameraComponent.targetTexture = renderTexture;
+#if MONO
+            // Mono-specific: Force camera to recognize the render texture
+            cameraComponent.enabled = false;
+            cameraComponent.enabled = true;
+#endif
         }
     }
 
