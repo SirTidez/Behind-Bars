@@ -5,6 +5,7 @@ using MelonLoader;
 using HarmonyLib;
 using System;
 using Behind_Bars.Helpers;
+using Behind_Bars.Systems.NPCs;
 using UnityEngine;
 
 using Object = UnityEngine.Object;
@@ -15,6 +16,7 @@ using ScheduleOne.PlayerScripts;
 #endif
 using Behind_Bars.Players;
 using Behind_Bars.Systems;
+using Behind_Bars.Systems.NPCs;
 using Behind_Bars.Harmony;
 
 
@@ -88,6 +90,18 @@ namespace Behind_Bars
             ClassInjector.RegisterTypeInIl2Cpp<JailController>();
             ClassInjector.RegisterTypeInIl2Cpp<SecurityCamera>();
             ClassInjector.RegisterTypeInIl2Cpp<MonitorController>();
+
+            // Register NPC Behavior Components
+            ClassInjector.RegisterTypeInIl2Cpp<JailGuardBehavior>();
+            ClassInjector.RegisterTypeInIl2Cpp<JailInmateBehavior>();
+            
+            // Register State Machine Components (skip abstract base class)
+            ClassInjector.RegisterTypeInIl2Cpp<GuardStateMachine>();
+            ClassInjector.RegisterTypeInIl2Cpp<InmateStateMachine>();
+            
+            // Register Test Components
+            ClassInjector.RegisterTypeInIl2Cpp<TestNPCController>();
+            ClassInjector.RegisterTypeInIl2Cpp<MoveableTargetController>();
 #endif
             // Initialize core systems
             HarmonyPatches.Initialize(this);
@@ -313,8 +327,12 @@ namespace Behind_Bars
 
             ModLogger.Info($"Jail spawned successfully at {jail.transform.position}");
 
+            // Attach NavMesh data from asset bundle (asset bundles don't preserve NavMesh data)
+            yield return new WaitForSeconds(0.5f); // Let components settle first
+            JailNavMeshSetup.AttachJailNavMesh(jail.transform);
+
             // Initialize JailController system
-            yield return new WaitForSeconds(1f); // Give the jail a moment to settle
+            yield return new WaitForSeconds(1f); // Give the NavMesh time to build
             InitializeJailController(jail);
         }
 
@@ -349,6 +367,9 @@ namespace Behind_Bars
 
                     // Log status after a frame to let everything complete
                     MelonCoroutines.Start(LogStatusAfterFrame());
+
+                    // Create jail NPCs after JailController is fully initialized
+                    MelonCoroutines.Start(CreateJailNPCs());
                 }
                 else
                 {
@@ -371,6 +392,142 @@ namespace Behind_Bars
             ModLogger.Info("Logging jail status after initialization...");
             LogJailControllerStatus();
         }
+
+        private static IEnumerator CreateJailNPCs()
+        {
+            // Wait for everything to be fully initialized before creating NPCs
+            yield return new WaitForSeconds(2f);
+
+            ModLogger.Info("Creating jail NPCs...");
+
+            // Create jail guards at strategic positions
+            // Temporarily disable other NPCs to focus on TestNPC debugging
+            // CreateJailGuards();
+            // CreateTestInmates();
+            
+            // Create test NPC for pathfinding debugging
+            CreateTestNPC();
+
+            ModLogger.Info("✓ Jail NPCs created successfully");
+            
+            // Door interaction system temporarily disabled to reduce log spam
+            // NPCDoorInteraction.InitializeDoorDatabase();
+            // ModLogger.Info("✓ Door interaction system initialized");
+            
+            // Validate NavMesh before finishing
+            yield return new WaitForSeconds(1f);
+            var jail = Core.ActiveJailController;
+            if (jail != null)
+            {
+                if (JailNavMeshSetup.HasValidNavMesh(jail.transform))
+                {
+                    ModLogger.Info("✓ NavMesh validation passed");
+                }
+                else
+                {
+                    ModLogger.Warn("NavMesh validation failed - NavMesh may not be properly attached");
+                }
+            }
+            
+            yield return new WaitForSeconds(1f);
+            ModLogger.Info("✓ NPC initialization completed");
+        }
+
+        private static void CreateTestNPC()
+        {
+            try
+            {
+                var jailController = UnityEngine.Object.FindObjectOfType<JailController>();
+                if (jailController == null)
+                {
+                    ModLogger.Error("JailController not found for test NPC positioning");
+                    return;
+                }
+
+                // Position at jail center (relative to jail transform) - but find a valid NavMesh position first
+                Vector3 jailCenter = jailController.transform.position;
+                ModLogger.Info($"Jail center is at: {jailCenter}");
+                
+                // FORCE spawn at known ground-level patrol points - no searching!
+                Vector3[] knownGroundPositions = {
+                    new Vector3(54.72f, 9.31f, -232.63f), // Patrol_Upper_Right (from logs)
+                    new Vector3(52.53f, 9.31f, -204.89f), // Patrol_Upper_Left 
+                    new Vector3(52.53f, 9.31f, -205.00f), // Patrol_Lower_Left
+                    new Vector3(81.92f, 9.31f, -203.99f), // Patrol_Kitchen
+                    new Vector3(78.62f, 9.31f, -235.63f), // Patrol_Laundry
+                };
+                
+                Vector3 testNPCPosition = knownGroundPositions[0]; // Default to first patrol point
+                
+                // Try each known ground position until we find NavMesh
+                foreach (var groundPos in knownGroundPositions)
+                {
+                    if (UnityEngine.AI.NavMesh.SamplePosition(groundPos, out UnityEngine.AI.NavMeshHit hit, 2f, UnityEngine.AI.NavMesh.AllAreas))
+                    {
+                        testNPCPosition = hit.position;
+                        ModLogger.Info($"Using GROUND LEVEL NavMesh at: {testNPCPosition} (Y={testNPCPosition.y:F2})");
+                        
+                        // CRITICAL: Reject if Y position is too high (roof level)
+                        if (testNPCPosition.y > 11f)
+                        {
+                            ModLogger.Warn($"Rejected roof position Y={testNPCPosition.y:F2}, trying next...");
+                            continue;
+                        }
+                        break;
+                    }
+                }
+                
+                ModLogger.Info($"Final TestNPC position: {testNPCPosition} (Y={testNPCPosition.y:F2})");
+                
+                ModLogger.Info($"Creating test NPC at jail center: {testNPCPosition}");
+                
+                var testNPC = DirectNPCBuilder.CreateTestNPC("TestNPC", testNPCPosition);
+                if (testNPC == null)
+                {
+                    ModLogger.Error("DirectNPCBuilder.CreateTestNPC returned null!");
+                    return;
+                }
+                
+                ModLogger.Info($"✓ DirectNPCBuilder created GameObject: {testNPC.name} at {testNPC.transform.position}");
+                ModLogger.Info($"TestNPC components: {string.Join(", ", testNPC.GetComponents<Component>().Select(c => c.GetType().Name))}");
+                
+                // Verify the NPC is active and positioned correctly
+                if (!testNPC.activeSelf)
+                {
+                    testNPC.SetActive(true);
+                    ModLogger.Info("✓ Activated TestNPC GameObject");
+                }
+                
+                // Initialize patrol points in JailController first
+                jailController.InitializePatrolPoints();
+                
+                // Initialize patrol and debug systems
+                PatrolSystem.Initialize();
+                
+                // Add the test controller
+                try
+                {
+                    var testController = testNPC.AddComponent<TestNPCController>();
+                    ModLogger.Info($"✓ Added TestNPCController to test NPC");
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Error($"Failed to add TestNPCController: {ex.Message}");
+                }
+                
+                // Create debug targets for TestNPC and planned participants
+                //CreateDebugTargetsForParticipants(jailCenter);
+                
+                ModLogger.Info($"✓ Created test NPC at {testNPCPosition} for pathfinding debugging");
+                ModLogger.Info("Use Arrow Keys + Numpad 9/3 to move the red target cube, NPC should follow it");
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error creating test NPC: {e.Message}");
+                ModLogger.Error($"Stack trace: {e.StackTrace}");
+            }
+        }
+
 
         private static void LoadAndAssignJailPrefabs(JailController controller)
         {

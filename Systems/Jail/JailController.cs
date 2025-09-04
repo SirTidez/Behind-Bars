@@ -23,6 +23,52 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
 
     public List<SecurityCamera> securityCameras = new List<SecurityCamera>();
 
+    // Patrol Points - registered once on initialization
+    public List<Transform> patrolPoints = new List<Transform>();
+    
+    /// <summary>
+    /// Initialize patrol points by finding them explicitly by name
+    /// </summary>
+    public void InitializePatrolPoints()
+    {
+        patrolPoints.Clear();
+        
+        // Known patrol point names from the jail structure
+        string[] patrolPointNames = {
+            "Patrol_Upper_Right",
+            "Patrol_Upper_Left", 
+            "Patrol_Lower_Left",
+            "Patrol_Kitchen",
+            "Patrol_Laundry"
+        };
+        
+        foreach (string pointName in patrolPointNames)
+        {
+            Transform patrolPoint = transform.Find(pointName);
+            if (patrolPoint == null)
+            {
+                // Try searching in PatrolPoints container
+                Transform patrolContainer = transform.Find("PatrolPoints");
+                if (patrolContainer != null)
+                {
+                    patrolPoint = patrolContainer.Find(pointName);
+                }
+            }
+            
+            if (patrolPoint != null)
+            {
+                patrolPoints.Add(patrolPoint);
+                ModLogger.Info($"✓ Registered patrol point: {pointName}");
+            }
+            else
+            {
+                ModLogger.Warn($"⚠️  Could not find patrol point: {pointName}");
+            }
+        }
+        
+        ModLogger.Info($"✓ Initialized {patrolPoints.Count} patrol points in JailController");
+    }
+
     public KitchenArea kitchen = new KitchenArea();
     public LaundryArea laundry = new LaundryArea();
     public PhoneArea phoneArea = new PhoneArea();
@@ -672,6 +718,9 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         SetupDoors();
         SetupSecurityCameras();
         SetupMonitorAssignments(); // Add monitor setup
+        
+        // Initialize patrol points for NPCs
+        InitializePatrolPoints();
         
         // Initialize static spawn points for holding cells
         InitializeHoldingCellSpawnPoints();
