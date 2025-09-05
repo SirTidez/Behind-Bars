@@ -716,6 +716,7 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     {
         DiscoverJailStructure();
         SetupDoors();
+        SetupCellBeds(); // Set up bed functionality
         SetupSecurityCameras();
         SetupMonitorAssignments(); // Add monitor setup
         
@@ -784,10 +785,14 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
             // Find cell bounds - look for any child with "Bounds" in name
             cell.cellBounds = FindChildContaining(cellTransform, "Bounds");
             
+            // Find cell beds - look for CellBedBottom and CellBedTop
+            cell.cellBedBottom = FindChildContaining(cellTransform, "CellBedBottom");
+            cell.cellBedTop = FindChildContaining(cellTransform, "CellBedTop");
+            
             // Find spawn points - look for children with "Spawn" in name
             cell.spawnPoints = FindAllChildrenContaining(cellTransform, "Spawn");
 
-            Debug.Log($"Cell setup: DoorHolder={cell.cellDoor.doorHolder != null}, Bounds={cell.cellBounds != null}, SpawnPoints={cell.spawnPoints.Count}");
+            Debug.Log($"Cell setup: DoorHolder={cell.cellDoor.doorHolder != null}, Bounds={cell.cellBounds != null}, Beds={cell.cellBedBottom != null}/{cell.cellBedTop != null}, SpawnPoints={cell.spawnPoints.Count}");
 
             if (cell.IsValid())
             {
@@ -1379,6 +1384,79 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         }
 
         Debug.Log($"Setup area doors complete");
+    }
+
+    void SetupCellBeds()
+    {
+        int bedsSetupCount = 0;
+        
+        foreach (var cell in cells)
+        {
+            int cellBedsSetup = 0;
+            
+            // Setup bottom bed
+            if (cell.cellBedBottom != null)
+            {
+                cell.bedBottomComponent = SetupJailBed(cell.cellBedBottom, $"{cell.cellName} Bottom Bunk", false);
+                if (cell.bedBottomComponent != null)
+                {
+                    cellBedsSetup++;
+                    bedsSetupCount++;
+                }
+            }
+            
+            // Setup top bed
+            if (cell.cellBedTop != null)
+            {
+                cell.bedTopComponent = SetupJailBed(cell.cellBedTop, $"{cell.cellName} Top Bunk", true);
+                if (cell.bedTopComponent != null)
+                {
+                    cellBedsSetup++;
+                    bedsSetupCount++;
+                }
+            }
+            
+            if (cellBedsSetup > 0)
+            {
+                ModLogger.Info($"✓ Setup {cellBedsSetup} beds for {cell.cellName}");
+            }
+            else if (cell.cellBedBottom != null || cell.cellBedTop != null)
+            {
+                ModLogger.Warn($"⚠️ Found bed transforms but failed to setup beds for {cell.cellName}");
+            }
+        }
+        
+        ModLogger.Info($"Cell bed setup complete: {bedsSetupCount} beds across {cells.Count} cells");
+    }
+    
+    JailBed SetupJailBed(Transform bedTransform, string bedName, bool isTopBunk)
+    {
+        if (bedTransform == null) return null;
+        
+        try
+        {
+            // Check if bed component already exists
+            JailBed bedComponent = bedTransform.GetComponent<JailBed>();
+            if (bedComponent == null)
+            {
+                bedComponent = bedTransform.gameObject.AddComponent<JailBed>();
+            }
+            
+            // Configure the bed
+            bedComponent.bedName = bedName;
+            bedComponent.isTopBunk = isTopBunk;
+            
+            // Set sleep position to the bed transform itself
+            bedComponent.sleepPosition = bedTransform;
+            
+            ModLogger.Debug($"✓ Setup jail bed: {bedName}");
+            return bedComponent;
+        }
+        catch (System.Exception ex)
+        {
+            ModLogger.Error($"✗ Failed to setup jail bed '{bedName}': {ex.Message}");
+            return null;
+        }
     }
 
     void InstantiateDoor(JailDoor door, GameObject doorPrefab)
@@ -2082,6 +2160,133 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         }
 
         Debug.Log("🔓 All areas opened");
+    }
+
+    // Bed Testing Methods
+    public void TestBedSystem()
+    {
+        Debug.Log("=== TESTING BED SYSTEM ===");
+        int totalBeds = 0;
+
+        foreach (var cell in cells)
+        {
+            int cellBeds = 0;
+
+            if (cell.bedBottomComponent != null)
+            {
+                cellBeds++;
+                totalBeds++;
+            }
+
+            if (cell.bedTopComponent != null)
+            {
+                cellBeds++;
+                totalBeds++;
+            }
+
+            if (cellBeds > 0)
+            {
+                Debug.Log($"  {cell.cellName}: {cellBeds} beds setup");
+            }
+        }
+
+        Debug.Log($"Bed System Stats: {totalBeds} total beds across {cells.Count} cells");
+        
+        // Test Schedule I's sleep canvas using reflection
+        try
+        {
+            var sleepCanvasType = System.Type.GetType("ScheduleOne.UI.SleepCanvas, Assembly-CSharp");
+            if (sleepCanvasType != null)
+            {
+                var instanceProp = sleepCanvasType.GetProperty("Instance");
+                if (instanceProp != null)
+                {
+                    var sleepCanvas = instanceProp.GetValue(null);
+                    if (sleepCanvas != null)
+                    {
+                        Debug.Log("✓ Schedule I SleepCanvas found - beds will work with native sleep system");
+                    }
+                    else
+                    {
+                        Debug.LogWarning("✗ Schedule I SleepCanvas instance is null");
+                    }
+                }
+                else
+                {
+                    Debug.LogWarning("✗ Schedule I SleepCanvas Instance property not found");
+                }
+            }
+            else
+            {
+                Debug.LogWarning("✗ Schedule I SleepCanvas type not found");
+            }
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogWarning($"✗ Could not access SleepCanvas: {ex.Message}");
+        }
+        
+        // Test TimeManager using reflection
+        try
+        {
+            var timeManagerType = System.Type.GetType("ScheduleOne.GameTime.TimeManager, Assembly-CSharp");
+            if (timeManagerType != null)
+            {
+                var instanceProp = timeManagerType.GetProperty("Instance");
+                if (instanceProp != null)
+                {
+                    var timeManager = instanceProp.GetValue(null);
+                    if (timeManager != null)
+                    {
+                        Debug.Log("✓ Schedule I TimeManager found - sleep time restrictions will work");
+                    }
+                    else
+                    {
+                        Debug.LogWarning("✗ Schedule I TimeManager instance is null");
+                    }
+                }
+                else
+                {
+                    Debug.LogWarning("✗ Schedule I TimeManager Instance property not found");
+                }
+            }
+            else
+            {
+                Debug.LogWarning("✗ Schedule I TimeManager type not found");
+            }
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogWarning($"✗ Could not access TimeManager: {ex.Message}");
+        }
+    }
+
+    public void TestBedInteraction()
+    {
+        Debug.Log("=== TESTING BED INTERACTION ===");
+        
+        // Find first bed
+        JailBed firstBed = null;
+        foreach (var cell in cells)
+        {
+            firstBed = cell.GetFirstBed();
+            if (firstBed != null)
+            {
+                Debug.Log($"Found bed: {firstBed.bedName} in {cell.cellName}");
+                break;
+            }
+        }
+        
+        if (firstBed != null)
+        {
+            Debug.Log("Testing bed hover...");
+            firstBed.Hovered();
+            Debug.Log("Use this bed in-game to test Schedule I's sleep system");
+        }
+        else
+        {
+            Debug.Log("No beds found for testing");
+        }
     }
 
     // Area Detection Methods

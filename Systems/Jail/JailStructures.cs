@@ -203,6 +203,12 @@ public class CellDetail
     public Transform cellBounds;
     public JailDoor cellDoor;
     
+    // Bed references for sleeping functionality
+    public Transform cellBedBottom;
+    public Transform cellBedTop;
+    public JailBed bedBottomComponent;
+    public JailBed bedTopComponent;
+    
     // Spawn points for arrested players
     public List<Transform> spawnPoints = new List<Transform>();
     
@@ -415,6 +421,42 @@ public class CellDetail
             else
                 cellDoor.UnlockDoor();
         }
+    }
+
+    /// <summary>
+    /// Check if this cell has beds available
+    /// </summary>
+    /// <returns>True if cell has at least one bed</returns>
+    public bool HasBeds()
+    {
+        return cellBedBottom != null || cellBedTop != null;
+    }
+
+    /// <summary>
+    /// Get all beds in this cell
+    /// </summary>
+    /// <returns>List of JailBed components</returns>
+    public List<JailBed> GetAllBeds()
+    {
+        var beds = new List<JailBed>();
+        if (bedBottomComponent != null)
+            beds.Add(bedBottomComponent);
+        if (bedTopComponent != null)
+            beds.Add(bedTopComponent);
+        return beds;
+    }
+
+    /// <summary>
+    /// Get the first bed in this cell (bottom bunk preferred)
+    /// </summary>
+    /// <returns>JailBed component or null if no beds</returns>
+    public JailBed GetFirstBed()
+    {
+        if (bedBottomComponent != null)
+            return bedBottomComponent;
+        if (bedTopComponent != null)
+            return bedTopComponent;
+        return null;
     }
 }
 
