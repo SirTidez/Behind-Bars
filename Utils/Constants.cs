@@ -53,6 +53,7 @@ namespace Behind_Bars.Helpers
         /// Debug and testing
         /// </summary>
         public const bool ENABLE_DEBUG_LOGGING = true;
+        public const bool DEBUG_LOGGING = false;
         public const bool ENABLE_TEST_MODE = false;
     }
 }

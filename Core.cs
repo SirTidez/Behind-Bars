@@ -6,7 +6,9 @@ using HarmonyLib;
 using System;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.NPCs;
+using Behind_Bars.UI;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 using Object = UnityEngine.Object;
 #if !MONO
@@ -106,6 +108,9 @@ namespace Behind_Bars
             // Register Test Components
             ClassInjector.RegisterTypeInIl2Cpp<TestNPCController>();
             ClassInjector.RegisterTypeInIl2Cpp<MoveableTargetController>();
+            
+            // Register UI Components
+            ClassInjector.RegisterTypeInIl2Cpp<BehindBarsUIWrapper>();
 #endif
             // Initialize core systems
             HarmonyPatches.Initialize(this);
@@ -116,6 +121,9 @@ namespace Behind_Bars
 
             AssetManager = new AssetManager();
             AssetManager.Init();
+
+            // Add scene change detection for cleanup
+            SceneManager.activeSceneChanged += OnSceneChanged;
 
             ModLogger.Info("Behind Bars initialized with all systems");
         }
@@ -187,6 +195,9 @@ namespace Behind_Bars
                     //TestToiletSinkSystem();
                     //TestBunkBedSystem();
 
+                    // Initialize UI system
+                    MelonCoroutines.Start(InitializeUISystem());
+                    
                     // Load and setup jail from asset bundle (simplified approach)
                     MelonCoroutines.Start(SetupJail());
                 }
@@ -252,6 +263,85 @@ namespace Behind_Bars
                 yield return new WaitForSeconds(2f);
                 MelonCoroutines.Start(InitializePlayerSystems());
             }
+        }
+
+        private static IEnumerator InitializeUISystem()
+        {
+            ModLogger.Info("Initializing Behind Bars UI system...");
+            
+            // Wait for essential systems to be ready
+#if !MONO
+            while (true)
+            {
+                try
+                {
+                    var instance = PlayerSingleton<AppsCanvas>.Instance;
+                    if (instance != null && instance.Pointer != System.IntPtr.Zero)
+                        break;
+                }
+                catch
+                {
+                    // Instance is null or not ready
+                }
+                yield return null;
+            }
+#else
+            while (PlayerSingleton<AppsCanvas>.Instance == null)
+                yield return null;
+#endif
+            
+            // Wait for asset manager to be ready
+            yield return new WaitForSeconds(1f);
+            
+            // Initialize the UI manager
+            try
+            {
+                BehindBarsUIManager.Instance.Initialize();
+                ModLogger.Info("✓ Behind Bars UI system initialized successfully");
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error initializing UI system: {e.Message}");
+                yield break;
+            }
+            
+            // Test the UI system (optional - can be removed in production)
+            if (Constants.DEBUG_LOGGING)
+            {
+                yield return new WaitForSeconds(2f);
+                TestUISystem();
+            }
+        }
+        
+        private static void TestUISystem()
+        {
+            ModLogger.Info("Testing Behind Bars UI system...");
+            
+            try
+            {
+                // Show test jail info UI
+                BehindBarsUIManager.Instance.ShowJailInfoUI(
+                    crime: "Major Possession, Assaulting Officer, Resisting Arrest", 
+                    timeInfo: "2 days", 
+                    bailInfo: "$500"
+                );
+                
+                ModLogger.Info("✓ Test UI displayed successfully - check your screen!");
+                
+                // Auto-hide after 10 seconds for testing
+                MelonCoroutines.Start(AutoHideTestUI());
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error testing UI system: {e.Message}");
+            }
+        }
+        
+        private static IEnumerator AutoHideTestUI()
+        {
+            yield return new WaitForSeconds(10f);
+            BehindBarsUIManager.Instance.HideJailInfoUI();
+            ModLogger.Info("Test UI auto-hidden after 10 seconds");
         }
 
         private static IEnumerator SetupJail()
@@ -783,6 +873,38 @@ namespace Behind_Bars
         }
 
         /// <summary>
+        /// Public API: Show jail information UI
+        /// </summary>
+        public static void ShowJailInfoUI(string crime, string timeInfo, string bailInfo)
+        {
+            try
+            {
+                BehindBarsUIManager.Instance.ShowJailInfoUI(crime, timeInfo, bailInfo);
+                ModLogger.Info($"Jail info UI shown: Crime={crime}, Time={timeInfo}, Bail={bailInfo}");
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error showing jail info UI: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Public API: Hide jail information UI
+        /// </summary>
+        public static void HideJailInfoUI()
+        {
+            try
+            {
+                BehindBarsUIManager.Instance.HideJailInfoUI();
+                ModLogger.Info("Jail info UI hidden");
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error hiding jail info UI: {e.Message}");
+            }
+        }
+
+        /// <summary>
         /// Handle hotkeys for testing and debugging
         /// </summary>
         public override void OnUpdate()
@@ -800,6 +922,12 @@ namespace Behind_Bars
                 {
                     TeleportToTacoTicklers();
                 }
+                
+                // Insert key - Test Jail UI (DISABLED - UI should only show when actually in jail)
+                // if (Input.GetKeyDown(KeyCode.Insert))
+                // {
+                //     TestJailUIHotkey();
+                // }
             }
             catch (Exception e)
             {
@@ -862,6 +990,89 @@ namespace Behind_Bars
             catch (Exception e)
             {
                 ModLogger.Error($"Error teleporting to Taco Ticklers: {e.Message}");
+            }
+        }
+        
+        /// <summary>
+        /// Test jail UI via hotkey (Insert key)
+        /// </summary>
+        private void TestJailUIHotkey()
+        {
+            try
+            {
+                ModLogger.Info("Testing jail UI via Insert key...");
+                
+                if (BehindBarsUIManager.Instance.IsUIVisible)
+                {
+                    // If UI is visible, hide it
+                    HideJailInfoUI();
+                }
+                else
+                {
+                    // If UI is not visible, show it with test data
+                    ShowJailInfoUI(
+                        crime: "Major Possession, Assaulting Officer, Resisting Arrest, Public Intoxication", 
+                        timeInfo: "5 days", 
+                        bailInfo: "$2,500"
+                    );
+                }
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error testing jail UI via hotkey: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Handle scene changes for cleanup (especially when game is quit)
+        /// </summary>
+        private void OnSceneChanged(Scene oldScene, Scene newScene)
+        {
+            try
+            {
+                ModLogger.Info($"Scene changed from '{oldScene.name}' to '{newScene.name}'");
+
+                // Clean up UI when leaving the main game scene
+                if (oldScene.name == "Main" || newScene.name == "Menu" || newScene.name == "Loading")
+                {
+                    ModLogger.Info("Game scene exiting - cleaning up Behind Bars UI");
+                    HideJailInfoUI();
+                    
+                    // Stop any dynamic updates that might be running
+                    if (BehindBarsUIManager.Instance != null)
+                    {
+                        BehindBarsUIManager.Instance.DestroyJailInfoUI();
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error handling scene change: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Cleanup when mod is being destroyed
+        /// </summary>
+        public override void OnDeinitializeMelon()
+        {
+            try
+            {
+                ModLogger.Info("Behind Bars shutting down - cleaning up...");
+
+                // Unsubscribe from scene events
+                SceneManager.activeSceneChanged -= OnSceneChanged;
+
+                // Clean up UI
+                HideJailInfoUI();
+                if (BehindBarsUIManager.Instance != null)
+                {
+                    BehindBarsUIManager.Instance.DestroyJailInfoUI();
+                }
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error during Behind Bars cleanup: {e.Message}");
             }
         }
     }

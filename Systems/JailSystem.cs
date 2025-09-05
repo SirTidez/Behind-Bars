@@ -1,5 +1,6 @@
 using System.Collections;
 using Behind_Bars.Helpers;
+using Behind_Bars.UI;
 using UnityEngine;
 using MelonLoader;
 
@@ -170,6 +171,9 @@ namespace Behind_Bars.Systems
 
             ModLogger.Info($"Assessed crime severity: {sentence.Severity}, " +
                           $"Jail time: {sentence.JailTime}s, Fine: ${sentence.FineAmount}");
+
+            // Show UI with crime information
+            ShowJailInfoUI(sentence, player);
 
             return sentence;
         }
@@ -686,10 +690,134 @@ namespace Behind_Bars.Systems
                 // BlackOverlay might not have isOpen property, just try to close it
             }
 
+            // Hide the jail info UI
+            try
+            {
+                BehindBarsUIManager.Instance.DestroyJailInfoUI();
+                ModLogger.Debug("Jail info UI hidden on player release");
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"Could not hide jail info UI: {ex.Message}");
+            }
+
             // Reset the arrest handling flag for future arrests
             Behind_Bars.Harmony.HarmonyPatches.ResetArrestHandlingFlag();
 
             ModLogger.Info($"Player {player.name} released from jail successfully - all controls restored");
+        }
+
+        /// <summary>
+        /// Show the jail info UI with crime details
+        /// </summary>
+        private void ShowJailInfoUI(JailSentence sentence, Player player)
+        {
+            try
+            {
+                // Get crime details for display
+                string crimeInfo = GetCrimeDescription(sentence.Severity, player);
+                string timeInfo = FormatJailTime(sentence.JailTime);
+                string bailInfo = FormatBailAmount(sentence.FineAmount);
+
+                // Show the UI using the BehindBarsUIManager with dynamic updates
+                BehindBarsUIManager.Instance.ShowJailInfoUI(
+                    crimeInfo, 
+                    timeInfo, 
+                    bailInfo,
+                    sentence.JailTime,  // Pass actual jail time in seconds for dynamic updates
+                    sentence.FineAmount // Pass bail amount for dynamic updates
+                );
+
+                ModLogger.Info($"Jail info UI displayed with dynamic updates: Crime={crimeInfo}, Time={timeInfo}, Bail={bailInfo}");
+            }
+            catch (System.Exception e)
+            {
+                ModLogger.Error($"Error showing jail info UI: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Get a user-friendly description of the crimes committed
+        /// </summary>
+        private string GetCrimeDescription(JailSeverity severity, Player player)
+        {
+            // Try to get specific crime names from CrimeData
+            if (player?.CrimeData?.Crimes != null && player.CrimeData.Crimes.Count > 0)
+            {
+                var crimes = new System.Collections.Generic.List<string>();
+                foreach (var crimeEntry in player.CrimeData.Crimes)
+                {
+                    var crime = crimeEntry.Key;
+                    int count = crimeEntry.Value;
+                    string crimeName = GetFriendlyCrimeName(crime.GetType().Name);
+                    
+                    if (count > 1)
+                        crimes.Add($"{crimeName} ({count}x)");
+                    else
+                        crimes.Add(crimeName);
+                }
+                
+                if (crimes.Count > 0)
+                    return string.Join(", ", crimes.ToArray());
+            }
+
+            // Fallback to severity-based descriptions
+            switch (severity)
+            {
+                case JailSeverity.Minor: return "Minor Infractions";
+                case JailSeverity.Moderate: return "Moderate Offenses";
+                case JailSeverity.Major: return "Serious Crimes";
+                case JailSeverity.Severe: return "Major Criminal Activity";
+                default: return "Unknown Charges";
+            }
+        }
+
+        /// <summary>
+        /// Convert technical crime names to user-friendly ones
+        /// </summary>
+        private string GetFriendlyCrimeName(string technicalName)
+        {
+            switch (technicalName)
+            {
+                case "Trespassing": return "Trespassing";
+                case "Theft": return "Theft";
+                case "Assault": return "Assault";
+                case "Burglary": return "Burglary";
+                case "VehicleTheft": return "Vehicle Theft";
+                case "DrugPossession": return "Drug Possession";
+                case "PublicIntoxication": return "Public Intoxication";
+                case "DisturbingPeace": return "Disturbing the Peace";
+                case "Speeding": return "Speeding";
+                case "RecklessDriving": return "Reckless Driving";
+                case "HitAndRun": return "Hit and Run";
+                default: return technicalName.Replace("Crime", "").Replace("Data", "");
+            }
+        }
+
+        /// <summary>
+        /// Format jail time in a user-friendly way
+        /// </summary>
+        private string FormatJailTime(float timeInSeconds)
+        {
+            if (timeInSeconds < 60)
+                return $"{(int)timeInSeconds} seconds";
+            else if (timeInSeconds < 3600)
+                return $"{(int)(timeInSeconds / 60)} minutes";
+            else if (timeInSeconds < 86400)
+                return $"{(int)(timeInSeconds / 3600)} hours";
+            else
+                return $"{(int)(timeInSeconds / 86400)} days";
+        }
+
+        /// <summary>
+        /// Format bail amount in a user-friendly way
+        /// </summary>
+        private string FormatBailAmount(float amount)
+        {
+            if (amount <= 0)
+                return "No Bail";
+            else
+                return $"${amount:F0}";
         }
     }
 }
