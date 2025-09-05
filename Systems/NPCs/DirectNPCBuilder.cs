@@ -148,15 +148,14 @@ namespace Behind_Bars.Systems.NPCs
                 // 11. CRITICAL: Activate after everything is set up
                 npcObject.SetActive(true);
 
-                // 12. Add door interaction system for guards
+                // 12. Add jail-specific behavior components for guards
                 if (npcType == NPCType.JailGuard)
                 {                    
-                    // Add state machine for advanced guard behavior
-                    var guardStateMachine = npcObject.AddComponent<GuardStateMachine>();
-                    guardStateMachine.badgeNumber = lastName.Replace("Guard", "").Replace("_", "");
-                    guardStateMachine.role = GuardRole.PatrolGuard; // Default role
+                    // Add new JailGuardBehavior component instead of old GuardStateMachine
+                    var jailGuardBehavior = npcObject.AddComponent<JailGuardBehavior>();
+                    // Note: Initialize method will be called by PrisonNPCManager with proper assignment
                     
-                    ModLogger.Debug($"✓ Guard state machine added to {firstName} {lastName}");
+                    ModLogger.Debug($"✓ JailGuardBehavior component added to {firstName} {lastName}");
                 }
                 else if (npcType == NPCType.JailInmate)
                 {
@@ -213,11 +212,16 @@ namespace Behind_Bars.Systems.NPCs
                 var navAgent = npc.AddComponent<UnityEngine.AI.NavMeshAgent>();
                 navAgent.height = 1.9f;     // Match NavMesh bake: 1.9
                 navAgent.radius = 0.23f;    // Match NavMesh bake: 0.23 (EXACT from Unity screenshot)
-                navAgent.speed = 2.0f;
+                navAgent.speed = 3.5f; // Fast enough for stair climbing and navigation
                 navAgent.stoppingDistance = 0.8f;
                 navAgent.acceleration = 4f;
                 navAgent.angularSpeed = 90f;
-                navAgent.obstacleAvoidanceType = UnityEngine.AI.ObstacleAvoidanceType.MedQualityObstacleAvoidance;
+                
+                // CRITICAL: Stair climbing settings - improved pathfinding
+                navAgent.baseOffset = 0.1f; // Slightly elevate agent to avoid stairs collision issues
+                
+                // Enhanced obstacle avoidance for stairs and complex geometry
+                navAgent.obstacleAvoidanceType = UnityEngine.AI.ObstacleAvoidanceType.HighQualityObstacleAvoidance;
                 navAgent.areaMask = -1; // Use all NavMesh areas
                 navAgent.autoRepath = true;
                 navAgent.autoBraking = true;
@@ -258,11 +262,16 @@ namespace Behind_Bars.Systems.NPCs
                 var navAgent = npc.AddComponent<UnityEngine.AI.NavMeshAgent>();
                 navAgent.height = 1.9f;     // Match NavMesh bake: 1.9
                 navAgent.radius = 0.23f;    // Match NavMesh bake: 0.23 (EXACT from Unity screenshot)
-                navAgent.speed = 2.0f; // Slower walking speed for jail environment
+                navAgent.speed = 3.5f; // Fast enough for stair climbing and patrol movement
                 navAgent.stoppingDistance = 0.8f; // Larger stopping distance for jail
                 navAgent.acceleration = 4f; // Slower acceleration
                 navAgent.angularSpeed = 90f; // Slower turning
-                navAgent.obstacleAvoidanceType = UnityEngine.AI.ObstacleAvoidanceType.MedQualityObstacleAvoidance;
+                
+                // CRITICAL: Stair climbing settings - improved pathfinding
+                navAgent.baseOffset = 0.1f; // Slightly elevate agent to avoid stairs collision issues
+                
+                // Enhanced obstacle avoidance for stairs and complex geometry
+                navAgent.obstacleAvoidanceType = UnityEngine.AI.ObstacleAvoidanceType.HighQualityObstacleAvoidance;
                 navAgent.areaMask = -1; // Use all NavMesh areas
                 navAgent.autoRepath = true;
                 navAgent.autoBraking = true;
@@ -988,9 +997,13 @@ namespace Behind_Bars.Systems.NPCs
                 {
                     npc_casted.Avatar = copiedAvatar;
                     
-                    // Only enable the main avatar GameObject, not all its children
+                    // Enable the main avatar GameObject
                     avatarCopy.SetActive(true);
-                    // Don't enable all children - they may contain clothing/accessories that look janky
+                    
+                    // RADICAL APPROACH: Just add the TestNPCController that we know works
+                    var testController = target.AddComponent<TestNPCController>();
+                    testController.usePatrolMode = true; // Use patrol mode for prison NPCs
+                    ModLogger.Info($"✓ Added working TestNPCController to {target.name} for guaranteed animations");
                     
                     ModLogger.Info($"✓ Copied and enabled complete avatar structure to {target.name} ({avatarCopy.transform.childCount} child objects)");
                 }
@@ -1399,10 +1412,14 @@ namespace Behind_Bars.Systems.NPCs
                     // Enable the NavMeshAgent
                     navAgent.enabled = true;
                     
-                    // Start basic patrol behavior (except for TestNPC which has its own controller)
-                    if (!npc.name.Contains("TestNPC"))
+                    // Start basic patrol behavior (except for TestNPC and guards with JailGuardBehavior)
+                    if (!npc.name.Contains("TestNPC") && npc.GetComponent<JailGuardBehavior>() == null)
                     {
                         MelonLoader.MelonCoroutines.Start(BasicPatrolBehavior(npc, navAgent));
+                    }
+                    else if (npc.GetComponent<JailGuardBehavior>() != null)
+                    {
+                        ModLogger.Info($"Skipped BasicPatrolBehavior for JailGuard with JailGuardBehavior: {npc.name}");
                     }
                     else
                     {
@@ -1420,10 +1437,14 @@ namespace Behind_Bars.Systems.NPCs
                         navAgent.enabled = true;
                         ModLogger.Info($"✓ Positioned {npc.name} on distant NavMesh at {hit.position}");
                         
-                        // Start basic patrol behavior (except for TestNPC which has its own controller)
-                        if (!npc.name.Contains("TestNPC"))
+                        // Start basic patrol behavior (except for TestNPC and guards with JailGuardBehavior)
+                        if (!npc.name.Contains("TestNPC") && npc.GetComponent<JailGuardBehavior>() == null)
                         {
                             MelonLoader.MelonCoroutines.Start(BasicPatrolBehavior(npc, navAgent));
+                        }
+                        else if (npc.GetComponent<JailGuardBehavior>() != null)
+                        {
+                            ModLogger.Info($"Skipped BasicPatrolBehavior for distant NavMesh JailGuard: {npc.name}");
                         }
                         else
                         {
@@ -1498,6 +1519,264 @@ namespace Behind_Bars.Systems.NPCs
                 {
                     yield return new UnityEngine.WaitForSeconds(waitTime + UnityEngine.Random.Range(0f, 5f));
                 }
+            }
+        }
+
+        /// <summary>
+        /// Add NPCAnimation component which handles movement animation
+        /// </summary>
+        private static void AddNPCAnimationComponent(GameObject npc, 
+#if !MONO
+            Il2CppScheduleOne.AvatarFramework.Avatar avatar,
+            Il2CppScheduleOne.NPCs.NPC npcComponent
+#else
+            ScheduleOne.AvatarFramework.Avatar avatar,
+            ScheduleOne.NPCs.NPC npcComponent
+#endif
+        )
+        {
+            try
+            {
+                // Check if NPCAnimation already exists
+                var existingNPCAnimation = npc.GetComponent<
+#if !MONO
+                    Il2CppScheduleOne.NPCs.NPCAnimation
+#else
+                    ScheduleOne.NPCs.NPCAnimation
+#endif
+                >();
+
+                if (existingNPCAnimation == null)
+                {
+                    // Add NPCAnimation component
+                    var npcAnimation = npc.AddComponent<
+#if !MONO
+                        Il2CppScheduleOne.NPCs.NPCAnimation
+#else
+                        ScheduleOne.NPCs.NPCAnimation
+#endif
+                    >();
+
+                    // Configure all required references for NPCAnimation
+                    ConfigureNPCAnimationReferences(npc, npcAnimation, avatar, npcComponent);
+                    
+                    ModLogger.Info($"✓ NPCAnimation component added and configured for {npc.name}");
+                }
+                else
+                {
+                    // Update existing component references
+                    ConfigureNPCAnimationReferences(npc, existingNPCAnimation, avatar, npcComponent);
+                    ModLogger.Info($"✓ Updated existing NPCAnimation on {npc.name}");
+                }
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error adding NPCAnimation component: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Configure all references needed for NPCAnimation to work properly
+        /// </summary>
+        private static void ConfigureNPCAnimationReferences(GameObject npc,
+#if !MONO
+            Il2CppScheduleOne.NPCs.NPCAnimation npcAnimation,
+            Il2CppScheduleOne.AvatarFramework.Avatar avatar,
+            Il2CppScheduleOne.NPCs.NPC npcComponent
+#else
+            ScheduleOne.NPCs.NPCAnimation npcAnimation,
+            ScheduleOne.AvatarFramework.Avatar avatar,
+            ScheduleOne.NPCs.NPC npcComponent
+#endif
+        )
+        {
+            try
+            {
+                // Set Avatar reference
+                npcAnimation.Avatar = avatar;
+
+                // Find AvatarAnimation component (should be on avatar GameObject)
+                var avatarAnimation = avatar.GetComponent<
+#if !MONO
+                    Il2CppScheduleOne.AvatarFramework.Animation.AvatarAnimation
+#else
+                    ScheduleOne.AvatarFramework.Animation.AvatarAnimation
+#endif
+                >();
+
+                if (avatarAnimation == null)
+                {
+                    avatarAnimation = avatar.GetComponentInChildren<
+#if !MONO
+                        Il2CppScheduleOne.AvatarFramework.Animation.AvatarAnimation
+#else
+                        ScheduleOne.AvatarFramework.Animation.AvatarAnimation
+#endif
+                    >();
+                }
+
+                // Find SmoothedVelocityCalculator component
+                var velocityCalculator = avatar.GetComponent<
+#if !MONO
+                    Il2CppScheduleOne.Tools.SmoothedVelocityCalculator
+#else
+                    ScheduleOne.Tools.SmoothedVelocityCalculator
+#endif
+                >();
+
+                if (velocityCalculator == null)
+                {
+                    velocityCalculator = avatar.GetComponentInChildren<
+#if !MONO
+                        Il2CppScheduleOne.Tools.SmoothedVelocityCalculator
+#else
+                        ScheduleOne.Tools.SmoothedVelocityCalculator
+#endif
+                    >();
+                }
+
+                // Find NPCMovement component
+                var npcMovement = npc.GetComponent<
+#if !MONO
+                    Il2CppScheduleOne.NPCs.NPCMovement
+#else
+                    ScheduleOne.NPCs.NPCMovement
+#endif
+                >();
+
+                // Use reflection to set private fields since they're protected/private
+                var npcAnimationType = npcAnimation.GetType();
+                
+                // Set anim field
+                if (avatarAnimation != null)
+                {
+                    var animField = npcAnimationType.GetField("anim", 
+                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    animField?.SetValue(npcAnimation, avatarAnimation);
+                    ModLogger.Debug($"✓ Set AvatarAnimation reference for {npc.name}");
+                }
+
+                // Set velocityCalculator field
+                if (velocityCalculator != null)
+                {
+                    var velocityField = npcAnimationType.GetField("velocityCalculator", 
+                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    velocityField?.SetValue(npcAnimation, velocityCalculator);
+                    ModLogger.Debug($"✓ Set SmoothedVelocityCalculator reference for {npc.name}");
+                }
+
+                // Set movement field
+                if (npcMovement != null)
+                {
+                    var movementField = npcAnimationType.GetField("movement", 
+                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    movementField?.SetValue(npcAnimation, npcMovement);
+                    ModLogger.Debug($"✓ Set NPCMovement reference for {npc.name}");
+                }
+
+                // Set npc field
+                var npcField = npcAnimationType.GetField("npc", 
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                npcField?.SetValue(npcAnimation, npcComponent);
+
+                ModLogger.Info($"✓ NPCAnimation fully configured for {npc.name} with all component references");
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error configuring NPCAnimation references: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Initialize animation system using the approach from TestController that works
+        /// </summary>
+        private static void InitializeAnimationSystemForNPC(GameObject npc, 
+#if !MONO
+            Il2CppScheduleOne.AvatarFramework.Avatar avatar
+#else
+            ScheduleOne.AvatarFramework.Avatar avatar
+#endif
+        )
+        {
+            try
+            {
+                ModLogger.Info($"Initializing animation system for {npc.name} using TestController approach...");
+                
+                // Look for AvatarAnimation component (TestController approach)
+#if !MONO
+                var avatarAnimationComponent = npc.GetComponentInChildren<Il2CppScheduleOne.AvatarFramework.Animation.AvatarAnimation>();
+                if (avatarAnimationComponent == null)
+                {
+                    // Try to find it by type name since IL2CPP can be tricky
+                    var allComponents = npc.GetComponentsInChildren<Component>();
+                    foreach (var comp in allComponents)
+                    {
+                        if (comp != null && comp.GetType().Name.Contains("AvatarAnimation"))
+                        {
+                            avatarAnimationComponent = comp as Il2CppScheduleOne.AvatarFramework.Animation.AvatarAnimation;
+                            break;
+                        }
+                    }
+                }
+#else
+                var avatarAnimationComponent = npc.GetComponentInChildren<ScheduleOne.AvatarFramework.Animation.AvatarAnimation>();
+#endif
+                
+                if (avatarAnimationComponent != null)
+                {
+                    avatarAnimationComponent.enabled = true;
+                    ModLogger.Info($"✓ Found and enabled AvatarAnimation component: {avatarAnimationComponent.GetType().Name}");
+                }
+                else
+                {
+                    ModLogger.Warn($"AvatarAnimation component not found on {npc.name} - animations may not work properly");
+                }
+                
+                // Look for SmoothedVelocityCalculator (TestController approach)
+#if !MONO
+                var velocityCalculatorComponent = npc.GetComponentInChildren<Il2CppScheduleOne.Tools.SmoothedVelocityCalculator>();
+                if (velocityCalculatorComponent == null)
+                {
+                    var allComponents = npc.GetComponentsInChildren<Component>();
+                    foreach (var comp in allComponents)
+                    {
+                        if (comp != null && comp.GetType().Name.Contains("SmoothedVelocityCalculator"))
+                        {
+                            velocityCalculatorComponent = comp as Il2CppScheduleOne.Tools.SmoothedVelocityCalculator;
+                            break;
+                        }
+                    }
+                }
+#else
+                var velocityCalculatorComponent = npc.GetComponentInChildren<ScheduleOne.Tools.SmoothedVelocityCalculator>();
+#endif
+                
+                if (velocityCalculatorComponent != null)
+                {
+                    velocityCalculatorComponent.enabled = true;
+                    // Apply TestController's working animation settings
+                    velocityCalculatorComponent.SampleLength = 0.1f;
+                    velocityCalculatorComponent.MaxReasonableVelocity = 15f;
+                    ModLogger.Info($"✓ Found and configured SmoothedVelocityCalculator component");
+                }
+                else
+                {
+                    ModLogger.Warn($"SmoothedVelocityCalculator component not found on {npc.name}");
+                }
+                
+                // Enable Animator component if present
+                var animator = npc.GetComponentInChildren<UnityEngine.Animator>();
+                if (animator != null)
+                {
+                    animator.enabled = true;
+                    ModLogger.Info($"✓ Enabled Animator component for {npc.name}");
+                }
+                
+                ModLogger.Info($"✓ Animation system initialized for {npc.name} using TestController approach");
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error initializing animation system for {npc.name}: {e.Message}");
             }
         }
 

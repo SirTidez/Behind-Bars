@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.NPCs;
@@ -22,29 +23,37 @@ namespace Behind_Bars.Systems.NPCs
 {
     /// <summary>
     /// Jail-specific behavior for guard NPCs with patrol routes and prisoner monitoring
+    /// Enhanced version with proper 4-guard system and coordinated patrols
     /// </summary>
     public class JailGuardBehavior : MonoBehaviour
     {
         public enum GuardRole
         {
-            StationGuard,      // Guards specific areas
-            PatrolGuard,       // Patrols between areas
-            WatchTowerGuard,   // Monitors from security cameras
-            ResponseGuard,      // Responds to incidents
-            CellBlockGuard
+            GuardRoomStationary,    // Guards stationed in guard room (2 guards)
+            BookingStationary,      // Guards stationed in booking area (2 guards)
+            CoordinatedPatrol,      // Guards doing coordinated patrol together
+            ResponseGuard           // Responds to incidents
+        }
+        
+        public enum GuardAssignment
+        {
+            GuardRoom0,    // Guard room spawn point 0
+            GuardRoom1,    // Guard room spawn point 1  
+            Booking0,      // Booking spawn point 0
+            Booking1       // Booking spawn point 1
         }
 
         [System.Serializable]
         public class PatrolData
         {
             public Vector3[] points;
-            public float speed = 2f;
+            public float speed = 2.5f; // Default patrol speed for stair climbing
             public float waitTime = 3f;
         }
 
         // Saveable fields for persistence across game sessions
         [SaveableField("guard_role")]
-        public GuardRole role = GuardRole.StationGuard;
+        public GuardRole role = GuardRole.GuardRoomStationary;
 
         [SaveableField("guard_patrol_route")]
         public PatrolData patrolRoute = new PatrolData();
@@ -61,7 +70,7 @@ namespace Behind_Bars.Systems.NPCs
         [SaveableField("guard_badge_number")]
         public string badgeNumber = "";
 
-        // Runtime state
+        // Enhanced runtime state
         private UnityEngine.AI.NavMeshAgent navAgent;
         private int currentPatrolIndex = 0;
         private float lastPatrolTime = 0f;
@@ -70,6 +79,19 @@ namespace Behind_Bars.Systems.NPCs
         private bool hasReachedDestination = true;
         private Vector3 currentDestination;
         private float lastDestinationTime = 0f;
+        
+        // Guard assignment and coordination
+        public GuardAssignment assignment;
+        private Transform assignedSpawnPoint;
+        private JailGuardBehavior patrolPartner; // For coordinated patrols
+        private bool isPatrolLeader = false;
+        private float patrolStartDelay = 0f;
+        
+        // Static coordination system
+        private static List<JailGuardBehavior> allActiveGuards = new List<JailGuardBehavior>();
+        private static bool isPatrolInProgress = false;
+        private static float nextPatrolTime = 0f;
+        private static readonly float PATROL_COOLDOWN = 300f; // 5 minutes between coordinated patrols
 
 #if !MONO
         private Il2CppScheduleOne.NPCs.NPC npcComponent;
@@ -77,17 +99,33 @@ namespace Behind_Bars.Systems.NPCs
         private ScheduleOne.NPCs.NPC npcComponent;
 #endif
 
-        public void Initialize(GuardRole guardRole, string badge = "")
+        public void Initialize(GuardAssignment guardAssignment, string badge = "")
         {
-            role = guardRole;
+            assignment = guardAssignment;
             badgeNumber = string.IsNullOrEmpty(badge) ? GenerateBadgeNumber() : badge;
             shiftStartTime = Time.time;
+            
+            // Set role based on assignment
+            switch (assignment)
+            {
+                case GuardAssignment.GuardRoom0:
+                case GuardAssignment.GuardRoom1:
+                    role = GuardRole.GuardRoomStationary;
+                    break;
+                case GuardAssignment.Booking0:
+                case GuardAssignment.Booking1:
+                    role = GuardRole.BookingStationary;
+                    break;
+            }
+            
+            // Find and set assigned spawn point
+            SetAssignedSpawnPoint();
+            
+            // Register this guard
+            if (!allActiveGuards.Contains(this))
+                allActiveGuards.Add(this);
 
-            ModLogger.Info($"Initializing {role} guard with badge {badgeNumber}");
-
-            // Apply appropriate appearance
-            //var appearanceType = role == GuardRole.WatchTowerGuard ? NPCAppearanceManager.GuardType.Senior : NPCAppearanceManager.GuardType.Regular;
-            //NPCAppearanceManager.ApplyGuardAppearance(gameObject, appearanceType, badgeNumber);
+            ModLogger.Info($"Initializing {role} guard with badge {badgeNumber} at assignment {assignment}");
         }
 
         private void Start()
@@ -126,45 +164,91 @@ namespace Behind_Bars.Systems.NPCs
         {
             switch (role)
             {
-                case GuardRole.PatrolGuard:
+                case GuardRole.GuardRoomStationary:
+                    SetupStationaryPosition();
+                    break;
+                case GuardRole.BookingStationary:
+                    SetupStationaryPosition();
+                    break;
+                case GuardRole.CoordinatedPatrol:
                     SetupPatrolRoute();
-                    break;
-                case GuardRole.StationGuard:
-                    SetupStationPosition();
-                    break;
-                case GuardRole.WatchTowerGuard:
-                    SetupWatchTowerPosition();
                     break;
                 case GuardRole.ResponseGuard:
                     SetupResponsePosition();
                     break;
             }
         }
-
-        private void SetupPatrolRoute()
+        
+        /// <summary>
+        /// Set assigned spawn point based on guard assignment
+        /// </summary>
+        private void SetAssignedSpawnPoint()
         {
-            // Default patrol route around jail areas
-            if (patrolRoute.points == null || patrolRoute.points.Length == 0)
+            var jailController = Core.ActiveJailController;
+            if (jailController == null) return;
+            
+            switch (assignment)
             {
-                patrolRoute.points = new Vector3[]
-                {
-                    new Vector3(50f, 8.6593f, -215f),   // Cell block area
-                    new Vector3(55f, 8.6593f, -220f),   // Common area
-                    new Vector3(60f, 8.6593f, -225f),   // Kitchen area
-                    new Vector3(52f, 8.6593f, -230f)    // Back to start
-                };
-                patrolRoute.speed = 2f;
-                patrolRoute.waitTime = 5f;
+                case GuardAssignment.GuardRoom0:
+                    if (jailController.guardRoom.guardSpawns.Count > 0)
+                        assignedSpawnPoint = jailController.guardRoom.guardSpawns[0];
+                    break;
+                case GuardAssignment.GuardRoom1:
+                    if (jailController.guardRoom.guardSpawns.Count > 1)
+                        assignedSpawnPoint = jailController.guardRoom.guardSpawns[1];
+                    break;
+                case GuardAssignment.Booking0:
+                    if (jailController.booking.guardSpawns.Count > 0)
+                        assignedSpawnPoint = jailController.booking.guardSpawns[0];
+                    break;
+                case GuardAssignment.Booking1:
+                    if (jailController.booking.guardSpawns.Count > 1)
+                        assignedSpawnPoint = jailController.booking.guardSpawns[1];
+                    break;
+            }
+            
+            if (assignedSpawnPoint != null)
+            {
+                ModLogger.Info($"Guard {badgeNumber} assigned to spawn point: {assignedSpawnPoint.name}");
+            }
+            else
+            {
+                ModLogger.Warn($"Could not find spawn point for assignment {assignment}");
             }
         }
 
-        private void SetupStationPosition()
+        private void SetupPatrolRoute()
         {
-            // Station guard stays in one area
-            Vector3 stationPosition = new Vector3(52.4923f, 8.6593f, -219.0759f);
-            if (navAgent != null)
+            // Use JailController patrol points instead of hardcoded positions
+            var jailController = Core.ActiveJailController;
+            if (jailController == null || jailController.patrolPoints.Count == 0)
             {
-                SetDestinationOnce(stationPosition);
+                ModLogger.Warn($"No patrol points available for guard {badgeNumber}");
+                return;
+            }
+            
+            // Convert Transform patrol points to Vector3 positions
+            var patrolPositions = new List<Vector3>();
+            foreach (var point in jailController.patrolPoints)
+            {
+                if (point != null)
+                    patrolPositions.Add(point.position);
+            }
+            
+            patrolRoute.points = patrolPositions.ToArray();
+            patrolRoute.speed = 2.5f; // Sufficient speed for stair climbing during patrols
+            patrolRoute.waitTime = 8f; // Longer wait times for thorough patrol
+            
+            ModLogger.Info($"Guard {badgeNumber} patrol route setup with {patrolRoute.points.Length} points");
+        }
+
+        private void SetupStationaryPosition()
+        {
+            // Use assigned spawn point as stationary position
+            if (assignedSpawnPoint != null && navAgent != null)
+            {
+                SetDestinationOnce(assignedSpawnPoint.position);
+                ModLogger.Info($"Guard {badgeNumber} stationed at {assignedSpawnPoint.name}");
             }
         }
 
@@ -232,63 +316,244 @@ namespace Behind_Bars.Systems.NPCs
                 
                 switch (role)
                 {
-                    case GuardRole.PatrolGuard:
-                        yield return HandlePatrolBehavior();
+                    case GuardRole.GuardRoomStationary:
+                    case GuardRole.BookingStationary:
+                        yield return HandleStationaryBehavior();
+                        // Check for coordinated patrol opportunity
+                        yield return CheckForPatrolOpportunity();
                         break;
-                    case GuardRole.StationGuard:
-                        yield return HandleStationBehavior();
-                        break;
-                    case GuardRole.WatchTowerGuard:
-                        yield return HandleWatchTowerBehavior();
+                    case GuardRole.CoordinatedPatrol:
+                        yield return HandleCoordinatedPatrolBehavior();
                         break;
                     case GuardRole.ResponseGuard:
                         yield return HandleResponseBehavior();
                         break;
                 }
 
-                // Much longer wait to prevent constant behavior updates
-                yield return new WaitForSeconds(5f);
+                // Behavior check interval
+                yield return new WaitForSeconds(3f);
             }
         }
 
-        private IEnumerator HandlePatrolBehavior()
+        /// <summary>
+        /// Handle coordinated patrol behavior with partner synchronization
+        /// </summary>
+        private IEnumerator HandleCoordinatedPatrolBehavior()
         {
             if (patrolRoute.points == null || patrolRoute.points.Length == 0)
             {
+                // End patrol if no route available
+                yield return EndCoordinatedPatrol();
+                yield break;
+            }
+            
+            // Handle patrol start delay for coordination
+            if (patrolStartDelay > 0f)
+            {
+                patrolStartDelay -= Time.deltaTime;
                 yield break;
             }
 
-            // Only move to next patrol point if we've reached the current one
+            // Move to next patrol point if we've reached the current one
             if (hasReachedDestination)
             {
-                // Wait at the patrol point before moving to next
+                // Wait at patrol point
                 if (Time.time - lastDestinationTime > patrolRoute.waitTime)
                 {
-                    currentPatrolIndex = (currentPatrolIndex + 1) % patrolRoute.points.Length;
+                    // Check if we've completed the patrol route
+                    if (currentPatrolIndex >= patrolRoute.points.Length - 1)
+                    {
+                        ModLogger.Info($"Guard {badgeNumber} completed patrol route");
+                        yield return EndCoordinatedPatrol();
+                        yield break;
+                    }
+                    
+                    // Move to next point
+                    currentPatrolIndex++;
                     Vector3 targetPoint = patrolRoute.points[currentPatrolIndex];
                     
                     if (navAgent != null)
                     {
                         navAgent.speed = patrolRoute.speed;
-                        SetDestinationOnce(targetPoint);
+                        
+                        // Leader coordinates movement
+                        if (isPatrolLeader && patrolPartner != null)
+                        {
+                            // Ensure partner is ready before moving
+                            if (patrolPartner.hasReachedDestination || 
+                                Vector3.Distance(transform.position, patrolPartner.transform.position) < 8f)
+                            {
+                                SetDestinationOnce(targetPoint);
+                                ModLogger.Debug($"Patrol leader {badgeNumber} moving to point {currentPatrolIndex}");
+                            }
+                        }
+                        else if (!isPatrolLeader)
+                        {
+                            // Partner follows with slight delay
+                            yield return new WaitForSeconds(1f);
+                            SetDestinationOnce(targetPoint);
+                            ModLogger.Debug($"Patrol partner {badgeNumber} following to point {currentPatrolIndex}");
+                        }
+                        else
+                        {
+                            // Solo patrol (partner lost)
+                            SetDestinationOnce(targetPoint);
+                        }
                     }
                 }
             }
         }
-
-        private IEnumerator HandleStationBehavior()
+        
+        /// <summary>
+        /// End coordinated patrol and return to stationary positions
+        /// </summary>
+        private IEnumerator EndCoordinatedPatrol()
         {
-            // Station guards just stay in position - only rotate occasionally
-            if (hasReachedDestination && UnityEngine.Random.Range(0f, 1f) < 0.1f) // 10% chance to look around
+            ModLogger.Info($"Guard {badgeNumber} ending coordinated patrol");
+            
+            // Reset patrol state
+            if (isPatrolLeader)
             {
-                // Rotate to look around
-                float startRotation = transform.eulerAngles.y;
-                float targetRotation = startRotation + UnityEngine.Random.Range(-45f, 45f);
-                
-                // Simple rotation without complex animation
-                transform.eulerAngles = new Vector3(0, targetRotation, 0);
+                isPatrolInProgress = false;
+                if (patrolPartner != null)
+                {
+                    MelonCoroutines.Start(patrolPartner.EndCoordinatedPatrol());
+                }
             }
+            
+            // Reset guard state
+            switch (assignment)
+            {
+                case GuardAssignment.GuardRoom0:
+                case GuardAssignment.GuardRoom1:
+                    role = GuardRole.GuardRoomStationary;
+                    break;
+                case GuardAssignment.Booking0:
+                case GuardAssignment.Booking1:
+                    role = GuardRole.BookingStationary;
+                    break;
+            }
+            
+            // Clear patrol data
+            patrolPartner = null;
+            isPatrolLeader = false;
+            currentPatrolIndex = 0;
+            patrolStartDelay = 0f;
+            
+            // Return to assigned position
+            if (assignedSpawnPoint != null && navAgent != null)
+            {
+                navAgent.speed = 2.2f; // Sufficient speed for stair climbing when returning
+                SetDestinationOnce(assignedSpawnPoint.position);
+                ModLogger.Info($"Guard {badgeNumber} returning to station at {assignedSpawnPoint.name}");
+            }
+            
+            yield return new WaitForSeconds(1f);
+        }
+
+        private IEnumerator HandleStationaryBehavior()
+        {
+            // Ensure guard is at assigned position
+            if (!hasReachedDestination && assignedSpawnPoint != null)
+            {
+                SetDestinationOnce(assignedSpawnPoint.position);
+                yield return new WaitForSeconds(1f);
+                yield break;
+            }
+            
+            // Stationary guards look around occasionally
+            if (hasReachedDestination && UnityEngine.Random.Range(0f, 1f) < 0.15f)
+            {
+                // More natural looking around behavior
+                float baseRotation = assignedSpawnPoint != null ? assignedSpawnPoint.eulerAngles.y : transform.eulerAngles.y;
+                float lookDirection = baseRotation + UnityEngine.Random.Range(-60f, 60f);
+                
+                // Smooth rotation
+                var targetRotation = Quaternion.Euler(0, lookDirection, 0);
+                transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, Time.deltaTime * 2f);
+            }
+            
             yield break;
+        }
+        
+        /// <summary>
+        /// Check if this guard should participate in a coordinated patrol
+        /// </summary>
+        private IEnumerator CheckForPatrolOpportunity()
+        {
+            // Only guards from same area can patrol together
+            if (!CanParticipateInPatrol()) yield break;
+            
+            // Check if it's time for a patrol and no patrol is in progress
+            if (Time.time >= nextPatrolTime && !isPatrolInProgress)
+            {
+                // Try to start a coordinated patrol
+                yield return TryStartCoordinatedPatrol();
+            }
+            
+            yield break;
+        }
+        
+        private bool CanParticipateInPatrol()
+        {
+            // Must be at assigned position and on duty
+            if (!isOnDuty || !hasReachedDestination) return false;
+            
+            // Only stationary guards can leave for patrol
+            if (role != GuardRole.GuardRoomStationary && role != GuardRole.BookingStationary) return false;
+            
+            return true;
+        }
+        
+        /// <summary>
+        /// Try to start a coordinated patrol with another guard from same area
+        /// </summary>
+        private IEnumerator TryStartCoordinatedPatrol()
+        {
+            // Find a partner from the same area
+            var partner = FindPatrolPartner();
+            if (partner == null) yield break;
+            
+            ModLogger.Info($"Guard {badgeNumber} starting coordinated patrol with {partner.badgeNumber}");
+            
+            // Set patrol state
+            isPatrolInProgress = true;
+            nextPatrolTime = Time.time + PATROL_COOLDOWN;
+            
+            // Convert to patrol role temporarily
+            role = GuardRole.CoordinatedPatrol;
+            partner.role = GuardRole.CoordinatedPatrol;
+            
+            // Set patrol relationships
+            isPatrolLeader = true;
+            patrolPartner = partner;
+            partner.patrolPartner = this;
+            partner.isPatrolLeader = false;
+            partner.patrolStartDelay = 2f; // Slight delay for coordination
+            
+            // Setup patrol routes for both guards
+            SetupPatrolRoute();
+            partner.SetupPatrolRoute();
+            
+            ModLogger.Info($"✓ Coordinated patrol initiated: Leader {badgeNumber}, Partner {partner.badgeNumber}");
+        }
+        
+        private JailGuardBehavior FindPatrolPartner()
+        {
+            foreach (var guard in allActiveGuards)
+            {
+                if (guard == this || !guard.CanParticipateInPatrol()) continue;
+                
+                // Must be from same area (both guard room or both booking)
+                bool sameArea = (role == GuardRole.GuardRoomStationary && guard.role == GuardRole.GuardRoomStationary) ||
+                               (role == GuardRole.BookingStationary && guard.role == GuardRole.BookingStationary);
+                
+                if (sameArea)
+                {
+                    return guard;
+                }
+            }
+            return null;
         }
 
         private IEnumerator HandleWatchTowerBehavior()
@@ -340,12 +605,12 @@ namespace Behind_Bars.Systems.NPCs
         {
             switch (role)
             {
-                case GuardRole.StationGuard:
+                case GuardRole.GuardRoomStationary:
                     return $"Officer {badgeNumber}: You need something, inmate?";
-                case GuardRole.PatrolGuard:
+                case GuardRole.BookingStationary:
                     return $"Officer {badgeNumber}: Keep moving, nothing to see here.";
-                case GuardRole.WatchTowerGuard:
-                    return $"Security Chief {badgeNumber}: I'm watching you.";
+                case GuardRole.CoordinatedPatrol:
+                    return $"Officer {badgeNumber}: On patrol - stay back.";
                 case GuardRole.ResponseGuard:
                     return $"Response Officer {badgeNumber}: Any trouble here?";
                 default:
@@ -473,12 +738,25 @@ namespace Behind_Bars.Systems.NPCs
         public void EndShift()
         {
             isOnDuty = false;
+            
+            // Clean up from coordination system
+            if (allActiveGuards.Contains(this))
+                allActiveGuards.Remove(this);
+                
+            // End any ongoing patrol
+            if (role == GuardRole.CoordinatedPatrol)
+            {
+                MelonCoroutines.Start(EndCoordinatedPatrol());
+            }
+            
             ModLogger.Info($"Guard {badgeNumber} ended their shift");
         }
 
         public bool IsOnDuty() => isOnDuty;
 
         public GuardRole GetRole() => role;
+        
+        public GuardAssignment GetAssignment() => assignment;
 
         public string GetBadgeNumber() => badgeNumber;
     }
@@ -525,6 +803,12 @@ namespace Behind_Bars.Systems.NPCs
         private Vector3 cellPosition;
         private float lastMealTime = 0f;
         private float lastActivityTime = 0f;
+        
+        // Group and faction system
+        public InmateFaction faction = InmateFaction.None;
+        public int groupID = -1; // ID of current group, -1 if not in group
+        private static Dictionary<int, InmateGroup> activeGroups = new Dictionary<int, InmateGroup>();
+        private static int nextGroupID = 0;
 
 #if !MONO
         private Il2CppScheduleOne.NPCs.NPC npcComponent;
@@ -539,8 +823,11 @@ namespace Behind_Bars.Systems.NPCs
             prisonerID = string.IsNullOrEmpty(prisonerId) ? GeneratePrisonerID() : prisonerId;
             timeServed = 0f;
             behaviorScore = 50f; // Start with neutral behavior
+            
+            // Assign faction based on behavior score and crime type
+            AssignInmateFaction(crime, sentence);
 
-            ModLogger.Info($"Initializing inmate {prisonerID} for {crime} - {sentence} days");
+            ModLogger.Info($"Initializing inmate {prisonerID} for {crime} - {sentence} days, Faction: {faction}");
 
             // Apply appropriate appearance based on crime severity
             //var prisonerType = DetermineInmateTypeFromCrime(crime);
@@ -655,7 +942,9 @@ namespace Behind_Bars.Systems.NPCs
 
         private IEnumerator HandleRegularInmateBehavior()
         {
-            // Regular daily routine
+            // Regular daily routine with proper jail movement
+            yield return ExecuteJailMovementRoutine();
+            
             yield return new WaitForSeconds(UnityEngine.Random.Range(15f, 45f));
             
             // Randomly modify behavior score
@@ -927,6 +1216,663 @@ namespace Behind_Bars.Systems.NPCs
         public InmateStatus GetStatus() => status;
         public string GetCrimeType() => crimeType;
         public int GetRemainingDays() => sentenceDaysRemaining;
+
+        #region Jail Movement and Grouping System
+
+        /// <summary>
+        /// Execute proper jail movement routine based on time of day and inmate status
+        /// </summary>
+        private IEnumerator ExecuteJailMovementRoutine()
+        {
+            // Check if inmate is outside jail boundaries
+            if (!IsWithinJailBounds())
+            {
+                yield return ReturnToJailArea();
+            }
+
+            // Determine movement based on "time of day" simulation
+            var currentHour = Mathf.FloorToInt((Time.time % 86400f) / 3600f); // 24 hour cycle
+            
+            if (currentHour >= 22 || currentHour <= 6) // Night time (10pm - 6am)
+            {
+                yield return MoveToCellArea();
+            }
+            else if (currentHour >= 12 && currentHour <= 13) // Lunch time
+            {
+                yield return MoveToMealArea();
+            }
+            else if (currentHour >= 14 && currentHour <= 16) // Recreation time
+            {
+                yield return MoveToRecreationArea();
+            }
+            else // General time - common areas
+            {
+                yield return MoveToCommonArea();
+            }
+        }
+
+        /// <summary>
+        /// Check if inmate is within jail boundaries
+        /// </summary>
+        private bool IsWithinJailBounds()
+        {
+            var position = transform.position;
+            
+            // Define jail boundaries (adjust these based on your jail layout)
+            var jailBounds = new Bounds(
+                new Vector3(65f, 9f, -220f), // Center of jail area
+                new Vector3(40f, 10f, 40f)   // Size of jail area
+            );
+
+            bool withinBounds = jailBounds.Contains(position);
+            
+            if (!withinBounds)
+            {
+                ModLogger.Warn($"Inmate {prisonerID} is outside jail bounds at {position}");
+            }
+            
+            return withinBounds;
+        }
+
+        /// <summary>
+        /// Return inmate to jail area if they've wandered outside
+        /// </summary>
+        private IEnumerator ReturnToJailArea()
+        {
+            ModLogger.Info($"Returning inmate {prisonerID} to jail area");
+            
+            var navAgent = GetComponent<UnityEngine.AI.NavMeshAgent>();
+            if (navAgent != null)
+            {
+                // Move to center of jail common area
+                var jailCenter = new Vector3(65f, 9f, -220f);
+                navAgent.SetDestination(jailCenter);
+                
+                // Wait for movement to complete
+                while (navAgent.pathPending || navAgent.remainingDistance > 2f)
+                {
+                    yield return new WaitForSeconds(0.5f);
+                    if (!navAgent.enabled) break;
+                }
+                
+                ModLogger.Info($"✓ Inmate {prisonerID} returned to jail area");
+            }
+            
+            yield return new WaitForSeconds(1f);
+        }
+
+        /// <summary>
+        /// Move inmate to cell area for rest/sleep
+        /// </summary>
+        private IEnumerator MoveToCellArea()
+        {
+            var navAgent = GetComponent<UnityEngine.AI.NavMeshAgent>();
+            if (navAgent != null)
+            {
+                // Move to cell block area
+                var cellArea = new Vector3(
+                    UnityEngine.Random.Range(50f, 70f), 
+                    12f, 
+                    UnityEngine.Random.Range(-235f, -205f)
+                );
+                
+                navAgent.SetDestination(cellArea);
+                ModLogger.Debug($"Inmate {prisonerID} moving to cell area for rest");
+                
+                // Wait for movement
+                yield return WaitForMovementComplete(navAgent);
+            }
+            
+            // Stay in cell area for a while
+            yield return new WaitForSeconds(UnityEngine.Random.Range(30f, 120f));
+        }
+
+        /// <summary>
+        /// Move inmate to meal area
+        /// </summary>
+        private IEnumerator MoveToMealArea()
+        {
+            var navAgent = GetComponent<UnityEngine.AI.NavMeshAgent>();
+            if (navAgent != null)
+            {
+                // Move to dining/kitchen area
+                var mealArea = new Vector3(
+                    UnityEngine.Random.Range(75f, 85f), 
+                    9f, 
+                    UnityEngine.Random.Range(-210f, -200f)
+                );
+                
+                navAgent.SetDestination(mealArea);
+                ModLogger.Debug($"Inmate {prisonerID} moving to meal area");
+                
+                yield return WaitForMovementComplete(navAgent);
+            }
+            
+            // Stay for meal time
+            yield return new WaitForSeconds(UnityEngine.Random.Range(15f, 30f));
+        }
+
+        /// <summary>
+        /// Move inmate to MainRec area for group activities
+        /// </summary>
+        private IEnumerator MoveToRecreationArea()
+        {
+            ModLogger.Info($"Inmate {prisonerID} ({faction}) moving to MainRec area for recreation");
+            
+            // Check if we have access to the jail controller for MainRec bounds
+            var jailController = Core.ActiveJailController;
+            if (jailController != null)
+            {
+                ModLogger.Debug("Using ActiveJailController for MainRec area bounds");
+            }
+            
+            // Move to MainRec area and engage in group behavior
+            yield return ExecuteMainRecGroupBehavior();
+        }
+
+        /// <summary>
+        /// Move inmate to common area for general activities
+        /// </summary>
+        private IEnumerator MoveToCommonArea()
+        {
+            var navAgent = GetComponent<UnityEngine.AI.NavMeshAgent>();
+            if (navAgent != null)
+            {
+                // Move to common area
+                var commonArea = new Vector3(
+                    UnityEngine.Random.Range(55f, 75f), 
+                    9f, 
+                    UnityEngine.Random.Range(-230f, -210f)
+                );
+                
+                navAgent.SetDestination(commonArea);
+                ModLogger.Debug($"Inmate {prisonerID} moving to common area");
+                
+                yield return WaitForMovementComplete(navAgent);
+            }
+            
+            // Engage in common area activities
+            yield return ExecuteCommonAreaBehavior();
+        }
+
+        /// <summary>
+        /// Execute MainRec area group behavior with faction-based grouping
+        /// </summary>
+        private IEnumerator ExecuteMainRecGroupBehavior()
+        {
+            // Define MainRec area bounds (you can adjust these based on your jail layout)
+            var mainRecBounds = new Bounds(
+                new Vector3(70f, 9f, -220f), // Center of MainRec area  
+                new Vector3(20f, 5f, 15f)     // Size of MainRec area
+            );
+            
+            var navAgent = GetComponent<UnityEngine.AI.NavMeshAgent>();
+            if (navAgent == null) yield break;
+            
+            // First, move into MainRec area
+            var initialPosition = GetRandomPositionInBounds(mainRecBounds);
+            navAgent.SetDestination(initialPosition);
+            yield return WaitForMovementComplete(navAgent);
+            
+            ModLogger.Info($"Inmate {prisonerID} ({faction}) arrived in MainRec area");
+            
+            // Try to join an existing compatible group or form a new one
+            yield return HandleGroupFormationAndJoining();
+            
+            // Stay in MainRec area for recreation period
+            float recreationEndTime = Time.time + UnityEngine.Random.Range(30f, 90f);
+            
+            while (Time.time < recreationEndTime)
+            {
+                // Update group behavior
+                yield return UpdateGroupBehavior();
+                yield return new WaitForSeconds(5f);
+            }
+            
+            // Leave group when recreation ends
+            LeaveCurrentGroup();
+            ModLogger.Info($"Inmate {prisonerID} leaving MainRec area");
+        }
+
+        /// <summary>
+        /// Common area behavior - inmates wander and interact
+        /// </summary>
+        private IEnumerator ExecuteCommonAreaBehavior()
+        {
+            // Random movement within common area
+            var navAgent = GetComponent<UnityEngine.AI.NavMeshAgent>();
+            if (navAgent != null)
+            {
+                for (int i = 0; i < UnityEngine.Random.Range(2, 5); i++)
+                {
+                    var randomPoint = new Vector3(
+                        UnityEngine.Random.Range(55f, 75f),
+                        9f,
+                        UnityEngine.Random.Range(-230f, -210f)
+                    );
+                    
+                    navAgent.SetDestination(randomPoint);
+                    yield return WaitForMovementComplete(navAgent);
+                    yield return new WaitForSeconds(UnityEngine.Random.Range(5f, 15f));
+                }
+            }
+        }
+
+        /// <summary>
+        /// Find nearby inmates for grouping behaviors
+        /// </summary>
+        private List<JailInmateBehavior> FindNearbyInmates(float radius)
+        {
+            var nearbyInmates = new List<JailInmateBehavior>();
+            var allInmates = UnityEngine.Object.FindObjectsOfType<JailInmateBehavior>();
+            
+            foreach (var inmate in allInmates)
+            {
+                if (inmate != this && inmate != null)
+                {
+                    float distance = Vector3.Distance(transform.position, inmate.transform.position);
+                    if (distance <= radius)
+                    {
+                        nearbyInmates.Add(inmate);
+                    }
+                }
+            }
+            
+            return nearbyInmates;
+        }
+
+        /// <summary>
+        /// Calculate center position of a group of inmates
+        /// </summary>
+        private Vector3 CalculateGroupCenter(List<JailInmateBehavior> inmates)
+        {
+            if (inmates.Count == 0) return transform.position;
+            
+            Vector3 center = Vector3.zero;
+            foreach (var inmate in inmates)
+            {
+                center += inmate.transform.position;
+            }
+            center /= inmates.Count;
+            
+            return center;
+        }
+
+        /// <summary>
+        /// Wait for NavMeshAgent movement to complete
+        /// </summary>
+        private IEnumerator WaitForMovementComplete(UnityEngine.AI.NavMeshAgent navAgent)
+        {
+            if (navAgent == null) yield break;
+            
+            while (navAgent.enabled && navAgent.pathPending)
+            {
+                yield return new WaitForSeconds(0.1f);
+            }
+            
+            while (navAgent.enabled && navAgent.remainingDistance > 1.5f)
+            {
+                yield return new WaitForSeconds(0.5f);
+            }
+        }
+
+        /// <summary>
+        /// Assign inmate faction based on crime and sentence
+        /// </summary>
+        private void AssignInmateFaction(string crime, int sentence)
+        {
+            float random = UnityEngine.Random.Range(0f, 1f);
+            
+            // Faction assignment based on crime type and sentence length
+            if (sentence > 180) // Long sentences tend toward OldTimers
+            {
+                faction = random < 0.6f ? InmateFaction.OldTimers : InmateFaction.Neutral;
+            }
+            else if (sentence < 30) // Short sentences tend toward YoungGuns
+            {
+                faction = random < 0.5f ? InmateFaction.YoungGuns : InmateFaction.Neutral;
+            }
+            else if (random < 0.15f) // 15% chance of being a Loner
+            {
+                faction = InmateFaction.Loners;
+            }
+            else // Default to Neutral or faction based on behavior
+            {
+                faction = random < 0.4f ? InmateFaction.Neutral : 
+                         (random < 0.7f ? InmateFaction.OldTimers : InmateFaction.YoungGuns);
+            }
+        }
+
+        /// <summary>
+        /// Get random position within bounds
+        /// </summary>
+        private Vector3 GetRandomPositionInBounds(Bounds bounds)
+        {
+            return new Vector3(
+                UnityEngine.Random.Range(bounds.min.x, bounds.max.x),
+                bounds.center.y,
+                UnityEngine.Random.Range(bounds.min.z, bounds.max.z)
+            );
+        }
+
+        /// <summary>
+        /// Handle group formation and joining logic
+        /// </summary>
+        private IEnumerator HandleGroupFormationAndJoining()
+        {
+            // Clean up inactive groups first
+            CleanupInactiveGroups();
+            
+            // Try to join an existing compatible group
+            var compatibleGroup = FindCompatibleGroup();
+            
+            if (compatibleGroup != null)
+            {
+                compatibleGroup.AddMember(this);
+                yield return MoveToGroupPosition(compatibleGroup);
+                ModLogger.Info($"Inmate {prisonerID} joined existing group {compatibleGroup.GroupID}");
+            }
+            else
+            {
+                // Form a new group if no compatible groups or if we're a natural leader
+                if (ShouldFormNewGroup())
+                {
+                    yield return FormNewGroup();
+                }
+                else
+                {
+                    // Stay as individual for now
+                    ModLogger.Debug($"Inmate {prisonerID} remaining individual in MainRec");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Update behavior while in a group
+        /// </summary>
+        private IEnumerator UpdateGroupBehavior()
+        {
+            if (groupID == -1) yield break; // Not in a group
+            
+            if (!activeGroups.ContainsKey(groupID))
+            {
+                groupID = -1; // Group was dissolved
+                yield break;
+            }
+            
+            var group = activeGroups[groupID];
+            
+            // Handle single member groups - try to migrate
+            if (group.Members.Count == 1 && group.Members[0] == this)
+            {
+                ModLogger.Debug($"Group {groupID} has only one member, attempting migration");
+                yield return AttemptGroupMigration();
+            }
+            else
+            {
+                // Move to proper group position if needed
+                yield return MaintainGroupPosition(group);
+            }
+        }
+
+        /// <summary>
+        /// Find compatible group to join
+        /// </summary>
+        private InmateGroup FindCompatibleGroup()
+        {
+            foreach (var group in activeGroups.Values)
+            {
+                if (group.IsActive && group.CanJoinGroup(this))
+                {
+                    return group;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Determine if inmate should form a new group
+        /// </summary>
+        private bool ShouldFormNewGroup()
+        {
+            // Loners rarely form groups
+            if (faction == InmateFaction.Loners) return UnityEngine.Random.Range(0f, 1f) < 0.2f;
+            
+            // OldTimers are more likely to form groups
+            if (faction == InmateFaction.OldTimers) return UnityEngine.Random.Range(0f, 1f) < 0.7f;
+            
+            // YoungGuns are moderately likely to form groups
+            if (faction == InmateFaction.YoungGuns) return UnityEngine.Random.Range(0f, 1f) < 0.5f;
+            
+            // Neutral inmates form groups occasionally
+            return UnityEngine.Random.Range(0f, 1f) < 0.3f;
+        }
+
+        /// <summary>
+        /// Form a new group
+        /// </summary>
+        private IEnumerator FormNewGroup()
+        {
+            var gatherPoint = transform.position + UnityEngine.Random.insideUnitSphere * 2f;
+            gatherPoint.y = transform.position.y;
+            
+            var newGroup = new InmateGroup(nextGroupID++, gatherPoint, faction);
+            activeGroups[newGroup.GroupID] = newGroup;
+            newGroup.AddMember(this);
+            
+            ModLogger.Info($"Inmate {prisonerID} formed new group {newGroup.GroupID} for faction {faction}");
+            
+            yield return new WaitForSeconds(1f);
+        }
+
+        /// <summary>
+        /// Move to proper position within group
+        /// </summary>
+        private IEnumerator MoveToGroupPosition(InmateGroup group)
+        {
+            var memberIndex = group.Members.IndexOf(this);
+            if (memberIndex == -1) yield break;
+            
+            var targetPosition = group.GetPositionForMember(memberIndex);
+            var navAgent = GetComponent<UnityEngine.AI.NavMeshAgent>();
+            
+            if (navAgent != null)
+            {
+                navAgent.SetDestination(targetPosition);
+                yield return WaitForMovementComplete(navAgent);
+            }
+        }
+
+        /// <summary>
+        /// Maintain proper position within group
+        /// </summary>
+        private IEnumerator MaintainGroupPosition(InmateGroup group)
+        {
+            var memberIndex = group.Members.IndexOf(this);
+            if (memberIndex == -1) yield break;
+            
+            var expectedPosition = group.GetPositionForMember(memberIndex);
+            var currentPosition = transform.position;
+            
+            // If too far from expected position, move back to group  
+            if (Vector3.Distance(currentPosition, expectedPosition) > 1.2f)
+            {
+                var navAgent = GetComponent<UnityEngine.AI.NavMeshAgent>();
+                if (navAgent != null)
+                {
+                    navAgent.SetDestination(expectedPosition);
+                    yield return WaitForMovementComplete(navAgent);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Attempt to migrate single member to another group
+        /// </summary>
+        private IEnumerator AttemptGroupMigration()
+        {
+            var compatibleGroup = FindCompatibleGroup();
+            
+            if (compatibleGroup != null)
+            {
+                LeaveCurrentGroup();
+                compatibleGroup.AddMember(this);
+                yield return MoveToGroupPosition(compatibleGroup);
+                ModLogger.Info($"Inmate {prisonerID} migrated to group {compatibleGroup.GroupID}");
+            }
+            else
+            {
+                // Stay in single-member group for a while
+                yield return new WaitForSeconds(10f);
+            }
+        }
+
+        /// <summary>
+        /// Leave current group
+        /// </summary>
+        private void LeaveCurrentGroup()
+        {
+            if (groupID == -1) return;
+            
+            if (activeGroups.ContainsKey(groupID))
+            {
+                var group = activeGroups[groupID];
+                group.RemoveMember(this);
+                
+                // Clean up empty groups
+                if (group.Members.Count == 0)
+                {
+                    activeGroups.Remove(groupID);
+                    ModLogger.Debug($"Group {groupID} dissolved - no members remaining");
+                }
+            }
+            
+            groupID = -1;
+        }
+
+        /// <summary>
+        /// Clean up inactive or empty groups
+        /// </summary>
+        private static void CleanupInactiveGroups()
+        {
+            var groupsToRemove = new List<int>();
+            
+            foreach (var kvp in activeGroups)
+            {
+                var group = kvp.Value;
+                
+                // Remove empty or inactive groups
+                if (!group.IsActive || group.Members.Count == 0)
+                {
+                    groupsToRemove.Add(kvp.Key);
+                }
+                
+                // Remove groups that have been inactive for too long
+                if (Time.time - group.FormationTime > 300f && group.Members.Count == 0) // 5 minutes
+                {
+                    groupsToRemove.Add(kvp.Key);
+                }
+            }
+            
+            foreach (var groupId in groupsToRemove)
+            {
+                activeGroups.Remove(groupId);
+                ModLogger.Debug($"Cleaned up inactive group {groupId}");
+            }
+        }
+
+        #endregion
+    }
+
+    /// <summary>
+    /// Inmate factions for group alignment and behavior
+    /// </summary>
+    public enum InmateFaction
+    {
+        None = 0,
+        Neutral = 1,
+        OldTimers = 2,    // Long-term inmates, experienced
+        YoungGuns = 3,    // Younger, more aggressive inmates
+        Loners = 4        // Prefer to be alone or in very small groups
+    }
+
+    /// <summary>
+    /// Represents a group of inmates in MainRec area
+    /// </summary>
+    public class InmateGroup
+    {
+        public int GroupID { get; set; }
+        public List<JailInmateBehavior> Members { get; set; } = new List<JailInmateBehavior>();
+        public Vector3 GatherPoint { get; set; }
+        public InmateFaction PrimaryFaction { get; set; }
+        public float FormationTime { get; set; }
+        public bool IsActive { get; set; } = true;
+        
+        public InmateGroup(int id, Vector3 gatherPoint, InmateFaction faction)
+        {
+            GroupID = id;
+            GatherPoint = gatherPoint;
+            PrimaryFaction = faction;
+            FormationTime = Time.time;
+        }
+        
+        public bool CanJoinGroup(JailInmateBehavior inmate)
+        {
+            // Groups have max 3 members
+            if (Members.Count >= 3) return false;
+            
+            // Faction compatibility
+            if (PrimaryFaction != InmateFaction.None && inmate.faction != InmateFaction.None)
+            {
+                return inmate.faction == PrimaryFaction || inmate.faction == InmateFaction.Neutral;
+            }
+            
+            return true;
+        }
+        
+        public void AddMember(JailInmateBehavior inmate)
+        {
+            if (!Members.Contains(inmate) && CanJoinGroup(inmate))
+            {
+                Members.Add(inmate);
+                inmate.groupID = GroupID;
+                ModLogger.Info($"Inmate {inmate.prisonerID} joined group {GroupID} ({Members.Count}/3 members)");
+            }
+        }
+        
+        public void RemoveMember(JailInmateBehavior inmate)
+        {
+            if (Members.Remove(inmate))
+            {
+                inmate.groupID = -1;
+                ModLogger.Info($"Inmate {inmate.prisonerID} left group {GroupID} ({Members.Count}/3 members)");
+                
+                // Handle group dissolution or migration
+                if (Members.Count == 0)
+                {
+                    IsActive = false;
+                }
+                else if (Members.Count == 1)
+                {
+                    // Single member might migrate to another group
+                    var remainingMember = Members[0];
+                    ModLogger.Debug($"Group {GroupID} has only one member left: {remainingMember.prisonerID}");
+                }
+            }
+        }
+        
+        public Vector3 GetPositionForMember(int memberIndex)
+        {
+            // Position members much closer together, like people actually talking
+            float angle = (memberIndex * 120f) * Mathf.Deg2Rad; // 120° apart for up to 3 members
+            float radius = 0.8f; // Much closer - almost shoulder to shoulder
+            
+            return GatherPoint + new Vector3(
+                Mathf.Cos(angle) * radius,
+                0f,
+                Mathf.Sin(angle) * radius
+            );
+        }
     }
 
     /// <summary>

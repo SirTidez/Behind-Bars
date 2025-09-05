@@ -16,7 +16,6 @@ using ScheduleOne.PlayerScripts;
 #endif
 using Behind_Bars.Players;
 using Behind_Bars.Systems;
-using Behind_Bars.Systems.NPCs;
 using Behind_Bars.Harmony;
 
 
@@ -98,6 +97,11 @@ namespace Behind_Bars
             // Register State Machine Components (skip abstract base class)
             ClassInjector.RegisterTypeInIl2Cpp<GuardStateMachine>();
             ClassInjector.RegisterTypeInIl2Cpp<InmateStateMachine>();
+            
+            // Register Prison NPC System Components
+            ClassInjector.RegisterTypeInIl2Cpp<PrisonNPCManager>();
+            ClassInjector.RegisterTypeInIl2Cpp<PrisonGuard>();
+            ClassInjector.RegisterTypeInIl2Cpp<PrisonInmate>();
             
             // Register Test Components
             ClassInjector.RegisterTypeInIl2Cpp<TestNPCController>();
@@ -398,17 +402,20 @@ namespace Behind_Bars
             // Wait for everything to be fully initialized before creating NPCs
             yield return new WaitForSeconds(2f);
 
-            ModLogger.Info("Creating jail NPCs...");
+            ModLogger.Info("Creating jail NPCs with custom appearances...");
 
-            // Create jail guards at strategic positions
-            // Temporarily disable other NPCs to focus on TestNPC debugging
-            // CreateJailGuards();
-            // CreateTestInmates();
-            
-            // Create test NPC for pathfinding debugging
-            CreateTestNPC();
+            // Create PrisonNPCManager to handle all NPC spawning and management
+            if (ActiveJailController != null)
+            {
+                var npcManager = ActiveJailController.gameObject.AddComponent<PrisonNPCManager>();
+                ModLogger.Info("✓ PrisonNPCManager added to JailController");
+            }
+            else
+            {
+                ModLogger.Error("ActiveJailController is null - cannot add PrisonNPCManager");
+            }
 
-            ModLogger.Info("✓ Jail NPCs created successfully");
+            ModLogger.Info("✓ Jail NPCs created successfully with custom appearances");
             
             // Door interaction system temporarily disabled to reduce log spam
             // NPCDoorInteraction.InitializeDoorDatabase();
@@ -773,6 +780,54 @@ namespace Behind_Bars
                 return ActiveJailController.GetPlayerCurrentArea(Player.Local.transform.position);
             }
             return "Unknown - JailController not available";
+        }
+
+        /// <summary>
+        /// Handle hotkeys for testing and debugging
+        /// </summary>
+        public override void OnUpdate()
+        {
+            try
+            {
+                // Home key - Teleport to jail for testing
+                if (Input.GetKeyDown(KeyCode.Home))
+                {
+                    TeleportToJail();
+                }
+            }
+            catch (Exception e)
+            {
+                // Silently ignore input errors to avoid spam
+            }
+        }
+
+        /// <summary>
+        /// Teleport player to inside the jail for testing
+        /// </summary>
+        private void TeleportToJail()
+        {
+            try
+            {
+#if !MONO
+                var player = Object.FindObjectOfType<Il2CppScheduleOne.PlayerScripts.Player>();
+#else
+                var player = Object.FindObjectOfType<ScheduleOne.PlayerScripts.Player>();
+#endif
+                if (player != null)
+                {
+                    Vector3 jailPosition = new Vector3(66.5362f, 9.5001f, -220.6056f);
+                    player.transform.position = jailPosition;
+                    ModLogger.Info($"✓ Teleported player to jail at {jailPosition}");
+                }
+                else
+                {
+                    ModLogger.Warn("Player not found for teleportation");
+                }
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error teleporting to jail: {e.Message}");
+            }
         }
     }
 }
