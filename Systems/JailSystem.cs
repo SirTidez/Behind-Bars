@@ -42,28 +42,110 @@ namespace Behind_Bars.Systems
             public string Description { get; set; } = "";
         }
 
-        public IEnumerator HandlePlayerArrest(Player player)
+        /// <summary>
+        /// NEW: Handle immediate arrest without going through police station/ticket GUI
+        /// </summary>
+        public IEnumerator HandleImmediateArrest(Player player)
         {
-            ModLogger.Info($"Processing arrest for player: {player.name}");
+            ModLogger.Info($"Processing IMMEDIATE arrest for player: {player.name}");
 
+            // Immediately take control of player state to prevent game systems from interfering
+            SetPlayerJailState(player, true);
+
+            // Show "Busted" effect like the original game
+            yield return ShowBustedEffect();
+            
             // Assess the crime severity
             var sentence = AssessCrimeSeverity(player);
+            
+            ModLogger.Info($"Crime assessment: {sentence.Severity}, Time: {sentence.JailTime}s, Fine: ${sentence.FineAmount}");
 
-            /// DEBUG LOGGING
-            int i = 0;
-            foreach (Accessory accessory in player.Avatar.appliedAccessories)
+            // Determine jail time threshold for holding vs main cell
+            // 1 game day = 24 real-world minutes (from TimeManager CYCLE_DURATION_MINS)
+            // Convert to seconds: 24 * 60 = 1440 seconds
+            const float ONE_GAME_DAY_SECONDS = 1440f;
+            
+            if (sentence.JailTime < ONE_GAME_DAY_SECONDS)
             {
-                if (accessory == null)
-                {
-                    i++;
-                    continue;
-                }
-                ModLogger.Info($"Player accessory {i}: {accessory.name}");
-                i++;
+                // Short sentence - send directly to holding cell
+                ModLogger.Info($"Short sentence ({sentence.JailTime}s < {ONE_GAME_DAY_SECONDS}s) - sending to holding cell");
+                yield return SendPlayerToHoldingCell(player, sentence);
             }
+            else
+            {
+                // Long sentence - start in holding cell, then process to main cell
+                ModLogger.Info($"Long sentence ({sentence.JailTime}s >= {ONE_GAME_DAY_SECONDS}s) - processing to main jail cell");
+                yield return ProcessPlayerToJail(player, sentence);
+            }
+        }
+        
+        /// <summary>
+        /// Show "Busted" fade effect like the original game
+        /// </summary>
+        private IEnumerator ShowBustedEffect()
+        {
+            ModLogger.Info("Showing 'Busted' fade effect");
+            
+            // Try to use the BlackOverlay system like the original game does
+            bool overlayWorked = false;
+            try
+            {
+                // Use the BlackOverlay system - try different Open method signatures
+                Singleton<BlackOverlay>.Instance.Open(2f);
+                overlayWorked = true;
+                ModLogger.Info("BlackOverlay opened successfully");
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"BlackOverlay error (trying fallback): {ex.Message}");
+            }
+            
+            if (!overlayWorked)
+            {
+                // Fallback - try simpler approach
+                try
+                {
+                    // Just disable player controls briefly to simulate the "busted" pause
+                    PlayerSingleton<PlayerMovement>.Instance.canMove = false;
+                    PlayerSingleton<PlayerCamera>.Instance.SetCanLook(false);
+                    ModLogger.Info("Using fallback 'busted' effect - controls disabled briefly");
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Debug($"Fallback busted effect error: {ex.Message}");
+                }
+            }
+            
+            // Wait for the effect duration
+            yield return new WaitForSeconds(2f);
+            
+            // Re-enable controls if we disabled them in fallback
+            if (!overlayWorked)
+            {
+                try
+                {
+                    PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+                    PlayerSingleton<PlayerCamera>.Instance.SetCanLook(true);
+                    ModLogger.Info("Re-enabled controls after fallback busted effect");
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Debug($"Error re-enabling controls: {ex.Message}");
+                }
+            }
+            
+            ModLogger.Info("'Busted' effect completed");
+        }
 
-            // Present options to the player
-            yield return PresentJailOptions(player, sentence);
+        /// <summary>
+        /// LEGACY: Original arrest handler (kept for compatibility)
+        /// </summary>
+        public IEnumerator HandlePlayerArrest(Player player)
+        {
+            ModLogger.Info($"Processing LEGACY arrest for player: {player.name}");
+            
+            // Use the new immediate arrest system
+            yield return HandleImmediateArrest(player);
         }
 
         private JailSentence AssessCrimeSeverity(Player player)
@@ -94,48 +176,132 @@ namespace Behind_Bars.Systems
 
         private JailSeverity DetermineSeverityFromCrimeData(object crimeData)
         {
-            // TODO: Implement actual crime data analysis
-            // This is a placeholder that should be expanded based on the actual CrimeData structure
-            return JailSeverity.Moderate;
+            // Calculate based on total crime fine amount (like PenaltyHandler does)
+            float totalFine = CalculateTotalCrimeFines(Player.Local);
+            
+            // Convert fine amount to severity levels
+            if (totalFine <= 100f) return JailSeverity.Minor;        // Traffic violations, small stuff
+            if (totalFine <= 300f) return JailSeverity.Moderate;     // Moderate crimes  
+            if (totalFine <= 800f) return JailSeverity.Major;        // Serious crimes
+            return JailSeverity.Severe;                              // Major criminal activity
+        }
+        
+        /// <summary>
+        /// Calculate total fines based on the same logic as PenaltyHandler.ProcessCrimeList
+        /// </summary>
+        private float CalculateTotalCrimeFines(Player player)
+        {
+            if (player?.CrimeData?.Crimes == null)
+                return 50f; // Default minor fine
+                
+            float totalFine = 0f;
+            
+            // Process each crime type like PenaltyHandler does
+            foreach (var crimeEntry in player.CrimeData.Crimes)
+            {
+                var crime = crimeEntry.Key;
+                int count = crimeEntry.Value;
+                
+                // Match PenaltyHandler fine calculations exactly
+                string crimeName = crime.GetType().Name;
+                
+                switch (crimeName)
+                {
+                    case "PossessingControlledSubstances":
+                        totalFine += 5f * count;
+                        break;
+                    case "PossessingLowSeverityDrug":
+                        totalFine += 10f * count;
+                        break;
+                    case "PossessingModerateSeverityDrug":
+                        totalFine += 20f * count;
+                        break;
+                    case "PossessingHighSeverityDrug":
+                        totalFine += 30f * count;
+                        break;
+                    case "Evading":
+                        totalFine += 50f;
+                        break;
+                    case "FailureToComply":
+                        totalFine += 50f;
+                        break;
+                    case "ViolatingCurfew":
+                        totalFine += 100f;
+                        break;
+                    case "AttemptingToSell":
+                        totalFine += 150f;
+                        break;
+                    case "Assault":
+                        totalFine += 75f;
+                        break;
+                    case "DeadlyAssault":
+                        totalFine += 150f;
+                        break;
+                    case "Vandalism":
+                        totalFine += 50f;
+                        break;
+                    case "Theft":
+                        totalFine += 50f;
+                        break;
+                    case "BrandishingWeapon":
+                        totalFine += 50f;
+                        break;
+                    case "DischargeFirearm":
+                        totalFine += 50f;
+                        break;
+                    default:
+                        // Unknown crime type - assign moderate fine
+                        totalFine += 25f;
+                        break;
+                }
+            }
+            
+            // Check for evaded arrest (not stored in Crimes dict)
+            if (player.CrimeData.EvadedArrest)
+            {
+                totalFine += 50f;
+            }
+            
+            ModLogger.Info($"Calculated total crime fines: ${totalFine}");
+            return totalFine;
         }
 
         private void CalculateSentence(JailSentence sentence, Player player)
         {
-            // Base calculations
-            float baseJailTime = 0f;
-            float baseFine = 0f;
-
+            // Calculate actual fine amount
+            float actualFine = CalculateTotalCrimeFines(player);
+            sentence.FineAmount = actualFine;
+            
+            // Convert fine to jail time - more realistic scaling
+            // Base conversion: $1 = 2 seconds jail time (but with minimums per severity)
+            float baseJailTime = actualFine * 2f;
+            
             switch (sentence.Severity)
             {
                 case JailSeverity.Minor:
-                    baseJailTime = 30f;
-                    baseFine = 100f;
-                    sentence.Description = "Minor offense - traffic violation or petty theft";
+                    baseJailTime = Mathf.Max(baseJailTime, 120f);  // At least 2 minutes
+                    sentence.Description = $"Minor offenses (${actualFine} in fines)";
                     break;
                 case JailSeverity.Moderate:
-                    baseJailTime = 60f;
-                    baseFine = 500f;
-                    sentence.Description = "Moderate offense - assault or theft";
+                    baseJailTime = Mathf.Max(baseJailTime, 300f);  // At least 5 minutes  
+                    sentence.Description = $"Moderate offenses (${actualFine} in fines)";
                     break;
                 case JailSeverity.Major:
-                    baseJailTime = 120f;
-                    baseFine = 1000f;
-                    sentence.Description = "Major offense - drug dealing or major assault";
+                    baseJailTime = Mathf.Max(baseJailTime, 600f);  // At least 10 minutes
+                    sentence.Description = $"Major offenses (${actualFine} in fines)";
                     break;
                 case JailSeverity.Severe:
-                    baseJailTime = 300f;
-                    baseFine = 5000f;
-                    sentence.Description = "Severe offense - murder or major drug operations";
+                    baseJailTime = Mathf.Max(baseJailTime, 1200f); // At least 20 minutes
+                    sentence.Description = $"Severe offenses (${actualFine} in fines)";
                     break;
             }
 
-            // Adjust based on player level/status
+            // Apply level multiplier but keep reasonable bounds
             float levelMultiplier = GetPlayerLevelMultiplier(player);
-            sentence.JailTime = Mathf.Clamp(baseJailTime * levelMultiplier, MIN_JAIL_TIME, MAX_JAIL_TIME);
-            sentence.FineAmount = baseFine * levelMultiplier;
+            sentence.JailTime = Mathf.Clamp(baseJailTime * levelMultiplier, MIN_JAIL_TIME, 1800f); // Max 30 min
 
-            // Determine if player can pay fine
-            sentence.CanPayFine = CanPlayerAffordFine(player, sentence.FineAmount);
+            // For immediate jail system, we don't offer fine payment
+            sentence.CanPayFine = false;
         }
 
         private float GetPlayerLevelMultiplier(Player player)
@@ -152,35 +318,104 @@ namespace Behind_Bars.Systems
             return true; // Placeholder
         }
 
-        private IEnumerator PresentJailOptions(Player player, JailSentence sentence)
-        {
-            ModLogger.Info($"Presenting jail options to player: {sentence.Description}");
-
-            // TODO: Implement UI for presenting options
-            // For now, just log the options
-
-            if (sentence.CanPayFine)
-            {
-                ModLogger.Info($"Player can pay fine of ${sentence.FineAmount} or serve {sentence.JailTime}s in jail");
-                // TODO: Show UI with "Pay Fine" or "Go to Jail" options
-            }
-            else
-            {
-                ModLogger.Info($"Player cannot afford fine, must serve {sentence.JailTime}s in jail");
-                // TODO: Show UI with jail time information
-            }
-
-            // For now, automatically send to jail after a delay
-            yield return new WaitForSeconds(0.1f);
-            yield return SendPlayerToJail(player, sentence);
-        }
 
 
         private Dictionary<string, Vector3> _lastKnownPlayerPosition = new();
-
-        private IEnumerator SendPlayerToJail(Player player, JailSentence sentence)
+        
+        /// <summary>
+        /// Set player state for jail (enable/disable controls properly)
+        /// </summary>
+        private void SetPlayerJailState(Player player, bool inJail)
         {
-            ModLogger.Info($"Sending player {player.name} to jail for {sentence.JailTime}s");
+            if (inJail)
+            {
+                // Player is going to jail - ensure they maintain all controls
+                ModLogger.Info("Setting player state for jail - keeping all controls enabled");
+                
+                try
+                {
+                    // Enable all controls - player should be able to move around in the cell
+                    PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
+                    PlayerSingleton<PlayerCamera>.Instance.SetCanLook(true);
+                    PlayerSingleton<PlayerCamera>.Instance.LockMouse();
+                    PlayerSingleton<PlayerMovement>.Instance.canMove = true; // Allow movement
+                    
+                    // Keep HUD enabled
+                    Singleton<HUD>.Instance.canvas.enabled = true;
+                    Singleton<HUD>.Instance.SetCrosshairVisible(true);
+                    
+                    ModLogger.Info("Jail state set - player can move, use inventory, and look around");
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Error($"Error setting jail state: {ex.Message}");
+                }
+            }
+            else
+            {
+                // Player is being released - ensure all controls are enabled
+                ModLogger.Info("Setting player state for release - enabling all controls");
+                
+                try
+                {
+                    PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+                    PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
+                    PlayerSingleton<PlayerCamera>.Instance.SetCanLook(true);
+                    PlayerSingleton<PlayerCamera>.Instance.LockMouse();
+                    Singleton<HUD>.Instance.canvas.enabled = true;
+                    Singleton<HUD>.Instance.SetCrosshairVisible(true);
+                    
+                    ModLogger.Info("Release state set - all controls enabled");
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Error($"Error setting release state: {ex.Message}");
+                }
+            }
+        }
+        
+        /// <summary>
+        /// Wait for the specified time while maintaining player controls in jail
+        /// </summary>
+        private IEnumerator WaitWithControlMaintenance(float waitTime, Player player)
+        {
+            ModLogger.Info($"Starting jail time with control maintenance for {waitTime}s");
+            
+            float elapsed = 0f;
+            const float checkInterval = 1f; // Check every second
+            
+            while (elapsed < waitTime)
+            {
+                // Wait for the check interval or remaining time, whichever is shorter
+                float timeToWait = Mathf.Min(checkInterval, waitTime - elapsed);
+                yield return new WaitForSeconds(timeToWait);
+                elapsed += timeToWait;
+                
+                // Ensure controls are still enabled
+                try
+                {
+                    PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
+                    PlayerSingleton<PlayerCamera>.Instance.SetCanLook(true);
+                    PlayerSingleton<PlayerCamera>.Instance.LockMouse();
+                    PlayerSingleton<PlayerMovement>.Instance.canMove = true; // Enable movement in jail
+                    Singleton<HUD>.Instance.canvas.enabled = true;
+                    Singleton<HUD>.Instance.SetCrosshairVisible(true);
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Debug($"Control maintenance error: {ex.Message}");
+                }
+            }
+            
+            ModLogger.Info($"Jail time completed after {elapsed}s with control maintenance");
+        }
+
+        /// <summary>
+        /// Send player directly to holding cell for short sentences
+        /// </summary>
+        private IEnumerator SendPlayerToHoldingCell(Player player, JailSentence sentence)
+        {
+            ModLogger.Info($"Sending player {player.name} to holding cell for {sentence.JailTime}s");
 
             // Get jail system and find available holding cell
             var jailController = Core.ActiveJailController;
@@ -191,13 +426,14 @@ namespace Behind_Bars.Systems
                 yield break;
             }
 
+            // Store current position before jailing
             if (_lastKnownPlayerPosition.ContainsKey(player.name))
                 _lastKnownPlayerPosition[player.name] = player.transform.position;
             else
                 _lastKnownPlayerPosition.Add(player.name, player.transform.position);
 
-            // Find an available holding cell (for now, use first one)
-            var holdingCell = jailController.GetAvailableHoldingCell();
+            // Find an available holding cell
+            var holdingCell = GetAvailableHoldingCell(jailController);
             if (holdingCell == null)
             {
                 ModLogger.Error("No holding cells available, using fallback jail method");
@@ -206,10 +442,10 @@ namespace Behind_Bars.Systems
             }
 
             // Get spawn point in the holding cell
-            Transform spawnPoint = holdingCell.GetRandomSpawnPoint();
+            Transform spawnPoint = holdingCell.AssignPlayerToSpawnPoint(player.name);
             if (spawnPoint == null)
             {
-                ModLogger.Error($"No spawn point found in holding cell {holdingCell.cellName}, using fallback jail method");
+                ModLogger.Error($"No spawn points available in holding cell {holdingCell.cellName}");
                 yield return FallbackJailMethod(player, sentence);
                 yield break;
             }
@@ -219,45 +455,195 @@ namespace Behind_Bars.Systems
             // Teleport player to holding cell
             player.transform.position = spawnPoint.position;
 
-            // Mark holding cell as occupied
-            holdingCell.isOccupied = true;
-            holdingCell.occupantName = player.name;
-
             // Lock the holding cell door
-            holdingCell.LockCell(true);
-            holdingCell.CloseCell();
+            holdingCell.cellDoor.LockDoor();
+            holdingCell.cellDoor.CloseDoor();
 
-            // Disable inventory but keep movement (let them move around in the cell)
-            PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(false);
+            // Keep player controls enabled in jail - they can still access inventory and look around
+            // Don't disable inventory - let them use items and hotbar
+            // Don't disable mouse - let them look around
+            // Only movement is restricted by the locked cell door
+            ModLogger.Info("Player controls left enabled during jail time - can access inventory and look around");
 
             ModLogger.Info($"Player {player.name} placed in {holdingCell.cellName} for {sentence.JailTime}s");
 
-            // Wait for jail time
-            yield return new WaitForSeconds(sentence.JailTime);
+            // Wait for jail time while ensuring controls stay enabled
+            yield return WaitWithControlMaintenance(sentence.JailTime, player);
 
-            ModLogger.Info($"Player {player.name} has served their jail time");
+            ModLogger.Info($"Player {player.name} has served their holding cell time");
 
             // Release from holding cell
-            holdingCell.isOccupied = false;
-            holdingCell.occupantName = "";
-            holdingCell.LockCell(false);
-            holdingCell.OpenCell();
+            holdingCell.ReleasePlayerFromSpawnPoint(player.name);
+            holdingCell.cellDoor.UnlockDoor();
 
             ReleasePlayerFromJail(player);
         }
+
+        /// <summary>
+        /// Process player to main jail cell (starts in holding, then transfers)
+        /// </summary>
+        private IEnumerator ProcessPlayerToJail(Player player, JailSentence sentence)
+        {
+            ModLogger.Info($"Processing player {player.name} to main jail cell for {sentence.JailTime}s");
+
+            // First, put them in holding cell for "processing"
+            yield return SendPlayerToHoldingCellForProcessing(player, sentence);
+            
+            // Then move to main jail cell
+            yield return TransferToMainJailCell(player, sentence);
+        }
+
+        private IEnumerator SendPlayerToHoldingCellForProcessing(Player player, JailSentence sentence)
+        {
+            ModLogger.Info($"Sending player {player.name} to holding cell for processing");
+
+            var jailController = Core.ActiveJailController;
+            if (jailController == null)
+            {
+                yield return FallbackJailMethod(player, sentence);
+                yield break;
+            }
+
+            // Store current position
+            if (_lastKnownPlayerPosition.ContainsKey(player.name))
+                _lastKnownPlayerPosition[player.name] = player.transform.position;
+            else
+                _lastKnownPlayerPosition.Add(player.name, player.transform.position);
+
+            var holdingCell = GetAvailableHoldingCell(jailController);
+            if (holdingCell == null)
+            {
+                yield return FallbackJailMethod(player, sentence);
+                yield break;
+            }
+
+            Transform spawnPoint = holdingCell.AssignPlayerToSpawnPoint(player.name);
+            if (spawnPoint == null)
+            {
+                yield return FallbackJailMethod(player, sentence);
+                yield break;
+            }
+
+            // Teleport to holding cell
+            player.transform.position = spawnPoint.position;
+            holdingCell.cellDoor.LockDoor();
+            holdingCell.cellDoor.CloseDoor();
+
+            // Keep controls enabled during processing
+            ModLogger.Info("Player controls kept enabled during processing");
+
+            ModLogger.Info($"Player {player.name} in holding cell for processing - waiting 60 seconds");
+
+            // Processing delay - 60 seconds with control maintenance
+            yield return WaitWithControlMaintenance(60f, player);
+
+            // Release from holding cell (but don't release from jail yet)
+            holdingCell.ReleasePlayerFromSpawnPoint(player.name);
+            holdingCell.cellDoor.UnlockDoor();
+        }
+
+        private IEnumerator TransferToMainJailCell(Player player, JailSentence sentence)
+        {
+            ModLogger.Info($"Transferring player {player.name} to main jail cell");
+
+            var jailController = Core.ActiveJailController;
+            if (jailController == null)
+            {
+                yield return FallbackJailMethod(player, sentence);
+                yield break;
+            }
+
+            // Find available main jail cell
+            var mainCell = GetAvailableMainCell(jailController);
+            if (mainCell == null)
+            {
+                ModLogger.Error("No main cells available, keeping in holding cell");
+                // Continue with remaining sentence in holding cell
+                var holdingCell = GetAvailableHoldingCell(jailController);
+                if (holdingCell != null)
+                {
+                    Transform holdingSpawn = holdingCell.AssignPlayerToSpawnPoint(player.name);
+                    if (holdingSpawn != null)
+                    {
+                        player.transform.position = holdingSpawn.position;
+                        holdingCell.cellDoor.LockDoor();
+                        yield return WaitWithControlMaintenance(sentence.JailTime - 60f, player); // Subtract processing time
+                        holdingCell.ReleasePlayerFromSpawnPoint(player.name);
+                        holdingCell.cellDoor.UnlockDoor();
+                        ReleasePlayerFromJail(player);
+                    }
+                }
+                yield break;
+            }
+
+            // Get spawn point in main cell
+            Transform cellSpawnPoint = mainCell.AssignPlayerToSpawnPoint(player.name);
+            if (cellSpawnPoint == null)
+            {
+                ModLogger.Error($"No spawn point in main cell {mainCell.cellName}");
+                yield return FallbackJailMethod(player, sentence);
+                yield break;
+            }
+
+            // Teleport to main cell
+            player.transform.position = cellSpawnPoint.position;
+            mainCell.cellDoor.LockDoor();
+            mainCell.cellDoor.CloseDoor();
+
+            ModLogger.Info($"Player {player.name} transferred to main cell {mainCell.cellName} for remaining {sentence.JailTime - 60f}s");
+
+            // Wait for remaining sentence time (minus the 60s processing time)
+            float remainingTime = sentence.JailTime - 60f;
+            yield return WaitWithControlMaintenance(remainingTime, player);
+
+            ModLogger.Info($"Player {player.name} has served their main cell time");
+
+            // Release from main cell
+            mainCell.ReleasePlayerFromSpawnPoint(player.name);
+            mainCell.cellDoor.UnlockDoor();
+
+            ReleasePlayerFromJail(player);
+        }
+
+        private CellDetail GetAvailableHoldingCell(JailController jailController)
+        {
+            // Find holding cell with available spawn points
+            foreach (var holdingCell in jailController.holdingCells)
+            {
+                if (holdingCell.GetAvailableSpawnPoint() != null)
+                {
+                    return holdingCell;
+                }
+            }
+            return null;
+        }
+
+        private CellDetail GetAvailableMainCell(JailController jailController)
+        {
+            // Find main cell that's not occupied
+            foreach (var cell in jailController.cells)
+            {
+                if (!cell.isOccupied)
+                {
+                    return cell;
+                }
+            }
+            return null;
+        }
+
 
         /// <summary>
         /// Fallback method when holding cells are not available
         /// </summary>
         private IEnumerator FallbackJailMethod(Player player, JailSentence sentence)
         {
-            PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(false);
-            PlayerSingleton<PlayerMovement>.Instance.canMove = false;
+            // Keep all controls enabled even in fallback
+            PlayerSingleton<PlayerMovement>.Instance.canMove = true;
             Singleton<BlackOverlay>.Instance.Open(2f);
 
             ModLogger.Info($"Player {player.name} using fallback jail method (screen blackout) for {sentence.JailTime}s");
 
-            yield return new WaitForSeconds(sentence.JailTime);
+            yield return WaitWithControlMaintenance(sentence.JailTime, player);
 
             ModLogger.Info($"Player {player.name} has served their jail time (fallback method)");
             ReleasePlayerFromJail(player);
@@ -267,11 +653,28 @@ namespace Behind_Bars.Systems
         {
             ModLogger.Info($"Releasing player {player.name} from jail");
 
-            player.transform.position = _lastKnownPlayerPosition[player.name];
+            // Teleport player to jail exit location (outside the jail)
+            if (_lastKnownPlayerPosition.ContainsKey(player.name))
+            {
+                player.transform.position = _lastKnownPlayerPosition[player.name];
+                _lastKnownPlayerPosition.Remove(player.name);
+            }
 
-            // Restore player abilities
-            PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
-            PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+            // Reset arrest state FIRST
+            player.IsArrested = false;
+            
+            // Use our state management method
+            SetPlayerJailState(player, false);
+
+            // Remove any active UI elements from arrest
+            try
+            {
+                PlayerSingleton<PlayerCamera>.Instance.RemoveActiveUIElement("Arrested");
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"Could not remove 'Arrested' UI element: {ex.Message}");
+            }
 
             // Close black overlay if it's open (for fallback method)
             try
@@ -283,17 +686,10 @@ namespace Behind_Bars.Systems
                 // BlackOverlay might not have isOpen property, just try to close it
             }
 
-            // TODO: Teleport player to jail exit location
-            // For now, let them walk out of the holding cell
+            // Reset the arrest handling flag for future arrests
+            Behind_Bars.Harmony.HarmonyPatches.ResetArrestHandlingFlag();
 
-            // TODO: Notify other systems about release
-            // var playerHandler = Core.Instance?.GetPlayerHandler(player);
-            // if (playerHandler != null)
-            // {
-            //     playerHandler.OnReleasedFromJail(0f, 0f);
-            // }
-
-            ModLogger.Info($"Player {player.name} released from jail successfully");
+            ModLogger.Info($"Player {player.name} released from jail successfully - all controls restored");
         }
     }
 }

@@ -794,6 +794,12 @@ namespace Behind_Bars
                 {
                     TeleportToJail();
                 }
+                
+                // End key - Teleport to Taco Ticklers
+                if (Input.GetKeyDown(KeyCode.End))
+                {
+                    TeleportToTacoTicklers();
+                }
             }
             catch (Exception e)
             {
@@ -827,6 +833,35 @@ namespace Behind_Bars
             catch (Exception e)
             {
                 ModLogger.Error($"Error teleporting to jail: {e.Message}");
+            }
+        }
+        
+        /// <summary>
+        /// Teleport player to Taco Ticklers for testing
+        /// </summary>
+        private void TeleportToTacoTicklers()
+        {
+            try
+            {
+#if !MONO
+                var player = Object.FindObjectOfType<Il2CppScheduleOne.PlayerScripts.Player>();
+#else
+                var player = Object.FindObjectOfType<ScheduleOne.PlayerScripts.Player>();
+#endif
+                if (player != null)
+                {
+                    Vector3 tacoTicklersPosition = new Vector3(-30.4759f, 2.0734f, 61.9903f);
+                    player.transform.position = tacoTicklersPosition;
+                    ModLogger.Info($"✓ Teleported player to Taco Ticklers at {tacoTicklersPosition}");
+                }
+                else
+                {
+                    ModLogger.Warn("Player not found for teleportation");
+                }
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error teleporting to Taco Ticklers: {e.Message}");
             }
         }
     }
