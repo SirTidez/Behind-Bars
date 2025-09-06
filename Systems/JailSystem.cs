@@ -1,10 +1,10 @@
 using System.Collections;
 using Behind_Bars.Helpers;
 using Behind_Bars.UI;
+using Behind_Bars.Harmony;
+using Behind_Bars.Systems.CrimeDetection;
 using UnityEngine;
 using MelonLoader;
-
-
 
 
 #if !MONO
@@ -24,7 +24,7 @@ namespace Behind_Bars.Systems
     public class JailSystem
     {
         private const float MIN_JAIL_TIME = 30f; // 30 seconds minimum
-        private const float MAX_JAIL_TIME = 300f; // 5 minutes maximum
+        private const float MAX_JAIL_TIME = 300f; // 7200f|2hours maximum
 
         public enum JailSeverity
         {
@@ -55,17 +55,17 @@ namespace Behind_Bars.Systems
 
             // Show "Busted" effect like the original game
             yield return ShowBustedEffect();
-            
+
             // Assess the crime severity
             var sentence = AssessCrimeSeverity(player);
-            
+
             ModLogger.Info($"Crime assessment: {sentence.Severity}, Time: {sentence.JailTime}s, Fine: ${sentence.FineAmount}");
 
             // Determine jail time threshold for holding vs main cell
             // 1 game day = 24 real-world minutes (from TimeManager CYCLE_DURATION_MINS)
             // Convert to seconds: 24 * 60 = 1440 seconds
             const float ONE_GAME_DAY_SECONDS = 1440f;
-            
+
             if (sentence.JailTime < ONE_GAME_DAY_SECONDS)
             {
                 // Short sentence - send directly to holding cell
@@ -79,14 +79,14 @@ namespace Behind_Bars.Systems
                 yield return ProcessPlayerToJail(player, sentence);
             }
         }
-        
+
         /// <summary>
         /// Show "Busted" fade effect like the original game
         /// </summary>
         private IEnumerator ShowBustedEffect()
         {
             ModLogger.Info("Showing 'Busted' fade effect");
-            
+
             // Try to use the BlackOverlay system like the original game does
             bool overlayWorked = false;
             try
@@ -100,7 +100,7 @@ namespace Behind_Bars.Systems
             {
                 ModLogger.Debug($"BlackOverlay error (trying fallback): {ex.Message}");
             }
-            
+
             if (!overlayWorked)
             {
                 // Fallback - try simpler approach
@@ -116,10 +116,10 @@ namespace Behind_Bars.Systems
                     ModLogger.Debug($"Fallback busted effect error: {ex.Message}");
                 }
             }
-            
+
             // Wait for the effect duration
             yield return new WaitForSeconds(2f);
-            
+
             // Re-enable controls if we disabled them in fallback
             if (!overlayWorked)
             {
@@ -134,7 +134,7 @@ namespace Behind_Bars.Systems
                     ModLogger.Debug($"Error re-enabling controls: {ex.Message}");
                 }
             }
-            
+
             ModLogger.Info("'Busted' effect completed");
         }
 
@@ -144,7 +144,7 @@ namespace Behind_Bars.Systems
         public IEnumerator HandlePlayerArrest(Player player)
         {
             ModLogger.Info($"Processing LEGACY arrest for player: {player.name}");
-            
+
             // Use the new immediate arrest system
             yield return HandleImmediateArrest(player);
         }
@@ -182,33 +182,63 @@ namespace Behind_Bars.Systems
         {
             // Calculate based on total crime fine amount (like PenaltyHandler does)
             float totalFine = CalculateTotalCrimeFines(Player.Local);
-            
+
             // Convert fine amount to severity levels
             if (totalFine <= 100f) return JailSeverity.Minor;        // Traffic violations, small stuff
             if (totalFine <= 300f) return JailSeverity.Moderate;     // Moderate crimes  
             if (totalFine <= 800f) return JailSeverity.Major;        // Serious crimes
             return JailSeverity.Severe;                              // Major criminal activity
         }
-        
+
         /// <summary>
         /// Calculate total fines based on the same logic as PenaltyHandler.ProcessCrimeList
+        /// ENHANCED: Now includes crimes from our crime detection system
         /// </summary>
         private float CalculateTotalCrimeFines(Player player)
         {
-            if (player?.CrimeData?.Crimes == null)
-                return 50f; // Default minor fine
-                
             float totalFine = 0f;
-            
+
+            // First, get crimes from our enhanced crime detection system
+            var crimeDetectionSystem = HarmonyPatches.GetCrimeDetectionSystem();
+            if (crimeDetectionSystem != null)
+            {
+                float enhancedCrimeFines = crimeDetectionSystem.CalculateTotalFines();
+                totalFine += enhancedCrimeFines;
+                ModLogger.Info($"Enhanced crime system fines: ${enhancedCrimeFines:F2}");
+            }
+
+            // Then add crimes from Schedule I's native system (for compatibility)
+            if (player?.CrimeData?.Crimes != null)
+            {
+                float nativeCrimeFines = CalculateNativeCrimeFines(player);
+                totalFine += nativeCrimeFines;
+                ModLogger.Info($"Native crime system fines: ${nativeCrimeFines:F2}");
+            }
+
+            // If no crimes found anywhere, return default
+            if (totalFine <= 0f)
+                return 50f; // Default minor fine
+
+            ModLogger.Info($"Total calculated fines: ${totalFine:F2}");
+            return totalFine;
+        }
+
+        /// <summary>
+        /// Calculate fines from Schedule I's native crime system
+        /// </summary>
+        private float CalculateNativeCrimeFines(Player player)
+        {
+            float totalFine = 0f;
+
             // Process each crime type like PenaltyHandler does
             foreach (var crimeEntry in player.CrimeData.Crimes)
             {
                 var crime = crimeEntry.Key;
                 int count = crimeEntry.Value;
-                
+
                 // Match PenaltyHandler fine calculations exactly
                 string crimeName = crime.GetType().Name;
-                
+
                 switch (crimeName)
                 {
                     case "PossessingControlledSubstances":
@@ -253,19 +283,40 @@ namespace Behind_Bars.Systems
                     case "DischargeFirearm":
                         totalFine += 50f;
                         break;
+
+                    // NEW ENHANCED CRIME TYPES
+                    case "Murder":
+                        totalFine += 1000f;
+                        break;
+                    case "Manslaughter":
+                        totalFine += 300f;
+                        break;
+                    case "AssaultOnCivilian":
+                        totalFine += 100f;
+                        break;
+                    case "WitnessIntimidation":
+                        totalFine += 150f;
+                        break;
+                    case "VehicularAssault":
+                        totalFine += 100f;
+                        break;
+                    case "DrugTrafficking":
+                        totalFine += 200f;
+                        break;
+
                     default:
                         // Unknown crime type - assign moderate fine
                         totalFine += 25f;
                         break;
                 }
             }
-            
+
             // Check for evaded arrest (not stored in Crimes dict)
             if (player.CrimeData.EvadedArrest)
             {
                 totalFine += 50f;
             }
-            
+
             ModLogger.Info($"Calculated total crime fines: ${totalFine}");
             return totalFine;
         }
@@ -275,11 +326,11 @@ namespace Behind_Bars.Systems
             // Calculate actual fine amount
             float actualFine = CalculateTotalCrimeFines(player);
             sentence.FineAmount = actualFine;
-            
+
             // Convert fine to jail time - more realistic scaling
             // Base conversion: $1 = 2 seconds jail time (but with minimums per severity)
             float baseJailTime = actualFine * 2f;
-            
+
             switch (sentence.Severity)
             {
                 case JailSeverity.Minor:
@@ -302,7 +353,7 @@ namespace Behind_Bars.Systems
 
             // Apply level multiplier but keep reasonable bounds
             float levelMultiplier = GetPlayerLevelMultiplier(player);
-            sentence.JailTime = Mathf.Clamp(baseJailTime * levelMultiplier, MIN_JAIL_TIME, 1800f); // Max 30 min
+            sentence.JailTime = Mathf.Clamp(baseJailTime * levelMultiplier, MIN_JAIL_TIME, MAX_JAIL_TIME);
 
             // For immediate jail system, we don't offer fine payment
             sentence.CanPayFine = false;
@@ -325,7 +376,7 @@ namespace Behind_Bars.Systems
 
 
         private Dictionary<string, Vector3> _lastKnownPlayerPosition = new();
-        
+
         /// <summary>
         /// Set player state for jail (enable/disable controls properly)
         /// </summary>
@@ -335,7 +386,7 @@ namespace Behind_Bars.Systems
             {
                 // Player is going to jail - ensure they maintain all controls
                 ModLogger.Info("Setting player state for jail - keeping all controls enabled");
-                
+
                 try
                 {
                     // Enable all controls - player should be able to move around in the cell
@@ -343,11 +394,11 @@ namespace Behind_Bars.Systems
                     PlayerSingleton<PlayerCamera>.Instance.SetCanLook(true);
                     PlayerSingleton<PlayerCamera>.Instance.LockMouse();
                     PlayerSingleton<PlayerMovement>.Instance.canMove = true; // Allow movement
-                    
+
                     // Keep HUD enabled
                     Singleton<HUD>.Instance.canvas.enabled = true;
                     Singleton<HUD>.Instance.SetCrosshairVisible(true);
-                    
+
                     ModLogger.Info("Jail state set - player can move, use inventory, and look around");
                 }
                 catch (Exception ex)
@@ -359,7 +410,7 @@ namespace Behind_Bars.Systems
             {
                 // Player is being released - ensure all controls are enabled
                 ModLogger.Info("Setting player state for release - enabling all controls");
-                
+
                 try
                 {
                     PlayerSingleton<PlayerMovement>.Instance.canMove = true;
@@ -368,7 +419,7 @@ namespace Behind_Bars.Systems
                     PlayerSingleton<PlayerCamera>.Instance.LockMouse();
                     Singleton<HUD>.Instance.canvas.enabled = true;
                     Singleton<HUD>.Instance.SetCrosshairVisible(true);
-                    
+
                     ModLogger.Info("Release state set - all controls enabled");
                 }
                 catch (Exception ex)
@@ -377,24 +428,24 @@ namespace Behind_Bars.Systems
                 }
             }
         }
-        
+
         /// <summary>
         /// Wait for the specified time while maintaining player controls in jail
         /// </summary>
         private IEnumerator WaitWithControlMaintenance(float waitTime, Player player)
         {
             ModLogger.Info($"Starting jail time with control maintenance for {waitTime}s");
-            
+
             float elapsed = 0f;
             const float checkInterval = 1f; // Check every second
-            
+
             while (elapsed < waitTime)
             {
                 // Wait for the check interval or remaining time, whichever is shorter
                 float timeToWait = Mathf.Min(checkInterval, waitTime - elapsed);
                 yield return new WaitForSeconds(timeToWait);
                 elapsed += timeToWait;
-                
+
                 // Ensure controls are still enabled
                 try
                 {
@@ -410,7 +461,7 @@ namespace Behind_Bars.Systems
                     ModLogger.Debug($"Control maintenance error: {ex.Message}");
                 }
             }
-            
+
             ModLogger.Info($"Jail time completed after {elapsed}s with control maintenance");
         }
 
@@ -492,7 +543,7 @@ namespace Behind_Bars.Systems
 
             // First, put them in holding cell for "processing"
             yield return SendPlayerToHoldingCellForProcessing(player, sentence);
-            
+
             // Then move to main jail cell
             yield return TransferToMainJailCell(player, sentence);
         }
@@ -664,11 +715,13 @@ namespace Behind_Bars.Systems
                 _lastKnownPlayerPosition.Remove(player.name);
             }
 
-            // Reset arrest state FIRST
+            // Reset arrest state FIRST - this is critical for interaction to work
             player.IsArrested = false;
-            
-            // Use our state management method
-            SetPlayerJailState(player, false);
+            ModLogger.Info("Player arrest state cleared");
+
+            // Reset the arrest handling flag BEFORE any other operations
+            Behind_Bars.Harmony.HarmonyPatches.ResetArrestHandlingFlag();
+            ModLogger.Info("Harmony arrest handling flag reset");
 
             // Remove any active UI elements from arrest
             try
@@ -701,10 +754,75 @@ namespace Behind_Bars.Systems
                 ModLogger.Debug($"Could not hide jail info UI: {ex.Message}");
             }
 
-            // Reset the arrest handling flag for future arrests
-            Behind_Bars.Harmony.HarmonyPatches.ResetArrestHandlingFlag();
+            // Clear crimes from both native and enhanced systems (player has served their time)
+            if (player.CrimeData != null)
+            {
+                player.CrimeData.ClearCrimes();
+                ModLogger.Info("Cleared crimes from native system - player has served sentence");
+            }
 
-            ModLogger.Info($"Player {player.name} released from jail successfully - all controls restored");
+            // Also clear crimes from our enhanced crime detection system
+            var crimeDetectionSystem = HarmonyPatches.GetCrimeDetectionSystem();
+            if (crimeDetectionSystem != null)
+            {
+                crimeDetectionSystem.ClearAllCrimes();
+                ModLogger.Info("Cleared crimes from enhanced system - player has served sentence");
+            }
+
+            // Now call the game's native Player.Free() to properly restore all systems
+            try
+            {
+                player.Free();
+                ModLogger.Info("Called Player.Free() to restore all systems");
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"Error calling Player.Free(): {ex.Message}");
+
+                // Fallback: manually restore player state
+                SetPlayerJailState(player, false);
+                ModLogger.Info("Used fallback player state restoration");
+            }
+
+            // Force enable all interaction systems explicitly
+            try
+            {
+                // Enable player combat system - PlayerCombat class not found, skipping
+                // if (PlayerSingleton<PlayerCombat>.Instance != null)
+                // {
+                //     PlayerSingleton<PlayerCombat>.Instance.enabled = true;
+                //     ModLogger.Debug("Re-enabled PlayerCombat");
+                // }
+
+                // Ensure interaction system is enabled - PlayerInteraction class not found, skipping
+                // if (PlayerSingleton<PlayerInteraction>.Instance != null)
+                // {
+                //     PlayerSingleton<PlayerInteraction>.Instance.enabled = true;
+                //     ModLogger.Debug("Re-enabled PlayerInteraction");
+                // }
+
+                // Make sure movement is fully enabled
+                PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+                PlayerSingleton<PlayerMovement>.Instance.enabled = true;
+                ModLogger.Debug("Re-enabled PlayerMovement");
+
+                // Enable inventory access
+                PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
+                PlayerSingleton<PlayerInventory>.Instance.enabled = true;
+                ModLogger.Debug("Re-enabled PlayerInventory");
+
+                // Enable camera controls
+                PlayerSingleton<PlayerCamera>.Instance.SetCanLook(true);
+                PlayerSingleton<PlayerCamera>.Instance.enabled = true;
+                ModLogger.Debug("Re-enabled PlayerCamera");
+
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"Error force-enabling player systems: {ex.Message}");
+            }
+
+            ModLogger.Info($"Player {player.name} released from jail successfully - all controls and interactions restored");
         }
 
         /// <summary>
@@ -717,15 +835,18 @@ namespace Behind_Bars.Systems
                 // Get crime details for display
                 string crimeInfo = GetCrimeDescription(sentence.Severity, player);
                 string timeInfo = FormatJailTime(sentence.JailTime);
-                string bailInfo = FormatBailAmount(sentence.FineAmount);
+
+                // Calculate proper bail amount (much higher than fine for serious crimes)
+                float bailAmount = CalculateBailAmount(sentence.FineAmount, sentence.Severity);
+                string bailInfo = FormatBailAmount(bailAmount);
 
                 // Show the UI using the BehindBarsUIManager with dynamic updates
                 BehindBarsUIManager.Instance.ShowJailInfoUI(
-                    crimeInfo, 
-                    timeInfo, 
+                    crimeInfo,
+                    timeInfo,
                     bailInfo,
                     sentence.JailTime,  // Pass actual jail time in seconds for dynamic updates
-                    sentence.FineAmount // Pass bail amount for dynamic updates
+                    bailAmount // Pass calculated bail amount for dynamic updates
                 );
 
                 ModLogger.Info($"Jail info UI displayed with dynamic updates: Crime={crimeInfo}, Time={timeInfo}, Bail={bailInfo}");
@@ -738,28 +859,47 @@ namespace Behind_Bars.Systems
 
         /// <summary>
         /// Get a user-friendly description of the crimes committed
+        /// ENHANCED: Now includes crimes from our enhanced detection system
         /// </summary>
         private string GetCrimeDescription(JailSeverity severity, Player player)
         {
-            // Try to get specific crime names from CrimeData
+            var allCrimes = new System.Collections.Generic.List<string>();
+
+            // First, get crimes from our enhanced crime detection system
+            var crimeDetectionSystem = HarmonyPatches.GetCrimeDetectionSystem();
+            if (crimeDetectionSystem != null)
+            {
+                var crimeSummary = crimeDetectionSystem.GetCrimeSummary();
+                foreach (var crimeEntry in crimeSummary)
+                {
+                    string crimeName = crimeEntry.Key;
+                    int count = crimeEntry.Value;
+
+                    if (count > 1)
+                        allCrimes.Add($"{crimeName} ({count}x)");
+                    else
+                        allCrimes.Add(crimeName);
+                }
+            }
+
+            // Then add crimes from Schedule I's native system
             if (player?.CrimeData?.Crimes != null && player.CrimeData.Crimes.Count > 0)
             {
-                var crimes = new System.Collections.Generic.List<string>();
                 foreach (var crimeEntry in player.CrimeData.Crimes)
                 {
                     var crime = crimeEntry.Key;
                     int count = crimeEntry.Value;
                     string crimeName = GetFriendlyCrimeName(crime.GetType().Name);
-                    
+
                     if (count > 1)
-                        crimes.Add($"{crimeName} ({count}x)");
+                        allCrimes.Add($"{crimeName} ({count}x)");
                     else
-                        crimes.Add(crimeName);
+                        allCrimes.Add(crimeName);
                 }
-                
-                if (crimes.Count > 0)
-                    return string.Join(", ", crimes.ToArray());
             }
+
+            if (allCrimes.Count > 0)
+                return string.Join(", ", allCrimes.ToArray());
 
             // Fallback to severity-based descriptions
             switch (severity)
@@ -779,17 +919,41 @@ namespace Behind_Bars.Systems
         {
             switch (technicalName)
             {
+                // Original crimes
                 case "Trespassing": return "Trespassing";
                 case "Theft": return "Theft";
                 case "Assault": return "Assault";
+                case "DeadlyAssault": return "Assault with a Deadly Weapon";
                 case "Burglary": return "Burglary";
                 case "VehicleTheft": return "Vehicle Theft";
+                case "VehicularAssault": return "Vehicular Assault";
                 case "DrugPossession": return "Drug Possession";
+                case "DrugTrafficking": return "Drug Trafficking";
                 case "PublicIntoxication": return "Public Intoxication";
                 case "DisturbingPeace": return "Disturbing the Peace";
                 case "Speeding": return "Speeding";
                 case "RecklessDriving": return "Reckless Driving";
                 case "HitAndRun": return "Hit and Run";
+                case "Vandalism": return "Vandalism";
+                case "BrandishingWeapon": return "Brandishing a Weapon";
+                case "DischargeFirearm": return "Illegal Discharge of Firearm";
+                case "ViolatingCurfew": return "Curfew Violation";
+                case "Evading": return "Evading Arrest";
+                case "FailureToComply": return "Failure to Comply";
+                case "AttemptingToSell": return "Attempted Sale of Controlled Substances";
+
+                // NEW ENHANCED CRIME TYPES
+                case "Murder": return "Murder";
+                case "Manslaughter": return "Involuntary Manslaughter";
+                case "AssaultOnCivilian": return "Assault on Civilian";
+                case "WitnessIntimidation": return "Witness Intimidation";
+
+                // Drug possession crimes
+                case "PossessingControlledSubstances": return "Possession of Controlled Substances";
+                case "PossessingLowSeverityDrug": return "Possession of Controlled Substances";
+                case "PossessingModerateSeverityDrug": return "Possession of Illegal Drugs";
+                case "PossessingHighSeverityDrug": return "Possession of High-Grade Narcotics";
+
                 default: return technicalName.Replace("Crime", "").Replace("Data", "");
             }
         }
@@ -810,8 +974,63 @@ namespace Behind_Bars.Systems
         }
 
         /// <summary>
-        /// Format bail amount in a user-friendly way
+        /// Calculate bail amount based on fine amount and crime severity
+        /// Bail should be significantly higher than the fine for serious crimes
         /// </summary>
+        private float CalculateBailAmount(float fineAmount, JailSeverity severity)
+        {
+            if (fineAmount <= 0)
+                return 0f;
+
+            // Base bail multiplier starts at 3x the fine amount
+            float bailMultiplier = 3.0f;
+
+            // Adjust multiplier based on severity
+            switch (severity)
+            {
+                case JailSeverity.Minor:
+                    bailMultiplier = 2.0f; // 2x fine for minor crimes
+                    break;
+                case JailSeverity.Moderate:
+                    bailMultiplier = 4.0f; // 4x fine for moderate crimes
+                    break;
+                case JailSeverity.Major:
+                    bailMultiplier = 7.0f; // 7x fine for major crimes (murder, etc.)
+                    break;
+                case JailSeverity.Severe:
+                    bailMultiplier = 12.0f; // 12x fine for severe crimes (multiple murders)
+                    break;
+            }
+
+            // Also get additional crimes from our enhanced detection system
+            var crimeDetectionSystem = HarmonyPatches.GetCrimeDetectionSystem();
+            if (crimeDetectionSystem != null)
+            {
+                var crimeSummary = crimeDetectionSystem.GetCrimeSummary();
+
+                // Add extra multiplier for murder charges specifically
+                if (crimeSummary.ContainsKey("Murder"))
+                {
+                    int murderCount = crimeSummary["Murder"];
+                    bailMultiplier += murderCount * 5.0f; // +5x multiplier per murder
+                    ModLogger.Info($"Adding murder bail multiplier: {murderCount} murders = +{murderCount * 5.0f}x multiplier");
+                }
+
+                // Add multiplier for witness intimidation (very serious)
+                if (crimeSummary.ContainsKey("Witness Intimidation"))
+                {
+                    int intimidationCount = crimeSummary["Witness Intimidation"];
+                    bailMultiplier += intimidationCount * 3.0f; // +3x multiplier per intimidation
+                }
+            }
+
+            float calculatedBail = fineAmount * bailMultiplier;
+
+            ModLogger.Info($"Calculated bail: ${calculatedBail:F0} (Fine: ${fineAmount:F0} x {bailMultiplier:F1} multiplier)");
+
+            return calculatedBail;
+        }
+
         private string FormatBailAmount(float amount)
         {
             if (amount <= 0)

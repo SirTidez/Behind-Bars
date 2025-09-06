@@ -807,7 +807,7 @@ namespace Behind_Bars.Systems.NPCs
                     }
                     hasAvatar = avatar != null;
                     
-                    ModLogger.Info($"Available NPC: {npc.name} (Avatar: {(hasAvatar ? "✓" : "✗")})");
+                    //ModLogger.Info($"Available NPC: {npc.name} (Avatar: {(hasAvatar ? "✓" : "✗")})");
                 }
             }
 
@@ -1490,7 +1490,7 @@ namespace Behind_Bars.Systems.NPCs
                     if (UnityEngine.AI.NavMesh.SamplePosition(randomDirection, out UnityEngine.AI.NavMeshHit hit, patrolRadius, UnityEngine.AI.NavMesh.AllAreas))
                     {
                         navAgent.SetDestination(hit.position);
-                        ModLogger.Debug($"{npc.name} patrolling to {hit.position}");
+                        //ModLogger.Debug($"{npc.name} patrolling to {hit.position}");
                     }
                 }
                 catch (Exception e)

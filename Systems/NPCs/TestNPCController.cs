@@ -65,92 +65,15 @@ namespace Behind_Bars.Systems.NPCs
             // Initialize patrol points from the jail system
             InitializePatrolPoints();
             
-            // Always create moveable target for fallback
-            if (moveableTarget == null)
-            {
-                CreateMoveableTarget();
-            }
-            
             // Set initial mode and target
             if (usePatrolMode && patrolPoints != null && patrolPoints.Count > 0)
             {
                 target = null; // Will use patrol points
                 ModLogger.Info("TestNPC starting in PATROL MODE - press P to toggle to moveable target");
             }
-            else
-            {
-                target = moveableTarget;
-                ModLogger.Info("TestNPC starting in MOVEABLE TARGET MODE - press P to toggle to patrol mode");
-            }
 
             // Start the main behavior loop
             MelonCoroutines.Start(TestNPCBehavior());
-        }
-        
-        void Update()
-        {
-            // Toggle between patrol mode and moveable target mode with P key
-            if (Input.GetKeyDown(KeyCode.P))
-            {
-                usePatrolMode = !usePatrolMode;
-                if (usePatrolMode && patrolPoints != null && patrolPoints.Count > 0)
-                {
-                    ModLogger.Info("✓ Switched to PATROL MODE");
-                    currentPatrolIndex = 0;
-                    lastPatrolTime = 0f;
-                    target = null;
-                }
-                else
-                {
-                    ModLogger.Info("✓ Switched to MOVEABLE TARGET MODE");
-                    target = moveableTarget;
-                }
-            }
-            
-            // Speed adjustment controls
-            if (Input.GetKeyDown(KeyCode.Equals) || Input.GetKeyDown(KeyCode.KeypadPlus))
-            {
-                AdjustNPCSpeed(0.5f);
-            }
-            
-            if (Input.GetKeyDown(KeyCode.Minus) || Input.GetKeyDown(KeyCode.KeypadMinus))
-            {
-                AdjustNPCSpeed(-0.5f);
-            }
-            
-            // Reset to default speed with R key
-            if (Input.GetKeyDown(KeyCode.R))
-            {
-                ResetNPCSpeed();
-            }
-            
-            // Animation speed adjustment controls
-            if (Input.GetKeyDown(KeyCode.LeftBracket))
-            {
-                AdjustAnimationSpeed(-0.2f);
-            }
-            
-            if (Input.GetKeyDown(KeyCode.RightBracket))
-            {
-                AdjustAnimationSpeed(0.2f);
-            }
-            
-            // Reset animation speed with T key
-            if (Input.GetKeyDown(KeyCode.T))
-            {
-                ResetAnimationSpeed();
-            }
-            
-            // Speed presets
-            if (Input.GetKeyDown(KeyCode.Alpha1))
-            {
-                SetWalkingSpeed();
-            }
-            
-            if (Input.GetKeyDown(KeyCode.Alpha2))
-            {
-                SetRunningSpeed();
-            }
         }
         
         private void AdjustNPCSpeed(float change)
@@ -162,26 +85,6 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
         
-        private void ResetNPCSpeed()
-        {
-            if (navAgent != null)
-            {
-                navAgent.speed = 2.5f; // Original default speed
-                ModLogger.Info($"TestNPC speed reset to default: {navAgent.speed:F1}");
-            }
-        }
-        
-        private void AdjustAnimationSpeed(float change)
-        {
-            animationSpeedMultiplier = Mathf.Clamp(animationSpeedMultiplier + change, 0.1f, 5f);
-            ModLogger.Info($"Animation speed multiplier adjusted to: {animationSpeedMultiplier:F1} (use [ ] keys to adjust, T to reset)");
-        }
-        
-        private void ResetAnimationSpeed()
-        {
-            animationSpeedMultiplier = 0.5f;
-            ModLogger.Info($"Animation speed multiplier reset to default: {animationSpeedMultiplier:F1}");
-        }
         
         private void SetWalkingSpeed()
         {
@@ -295,38 +198,6 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
         
-        private void CreateSimpleNPCVisual()
-        {
-            // Create a simple blue cube to represent the TestNPC
-            var npcVisual = GameObject.CreatePrimitive(PrimitiveType.Cube);
-            npcVisual.name = "TestNPC_Visual";
-            npcVisual.transform.SetParent(transform);
-            npcVisual.transform.localPosition = Vector3.up * 1f; // Float above ground
-            npcVisual.transform.localScale = Vector3.one * 1.5f; // Make it visible
-            
-            // Make it blue so it's distinguishable from the red target
-            var renderer = npcVisual.GetComponent<Renderer>();
-            if (renderer != null)
-            {
-                var blueMaterial = new Material(Shader.Find("Unlit/Color"));
-                if (blueMaterial.shader == null)
-                {
-                    blueMaterial = new Material(Shader.Find("Standard"));
-                }
-                blueMaterial.color = Color.blue;
-                renderer.material = blueMaterial;
-                
-                ModLogger.Info("✓ Created blue visual cube for TestNPC");
-            }
-            
-            // Remove collider to avoid physics conflicts
-            var collider = npcVisual.GetComponent<Collider>();
-            if (collider != null)
-            {
-                UnityEngine.Object.DestroyImmediate(collider);
-            }
-        }
-        
         private void DisableOtherBehaviors()
         {
             ModLogger.Info("Disabling other behaviors that might interfere with TestNPC...");
@@ -351,82 +222,7 @@ namespace Behind_Bars.Systems.NPCs
                         
             ModLogger.Info("✓ Finished disabling interfering behaviors on TestNPC");
         }
-        
-        private void CreateMoveableTarget()
-        {
-            ModLogger.Info($"Creating moveable target near TestNPC at {transform.position}...");
-            
-            try
-            {
-                // Create SUPER visible target cube
-                var targetObject = GameObject.CreatePrimitive(PrimitiveType.Cube);
-                if (targetObject == null)
-                {
-                    ModLogger.Error("Failed to create primitive cube!");
-                    return;
-                }
-                
-                targetObject.name = "BRIGHT_RED_TARGET";
-                
-                // Position it at ground level near the NPC
-                Vector3 targetPosition = transform.position + (Vector3.forward * 6f);
-                targetPosition.y = transform.position.y + 2f; // Elevated for visibility
-                targetObject.transform.position = targetPosition;
-                targetObject.transform.localScale = Vector3.one * 0.5f; // Right size
-                
-                ModLogger.Info($"LARGE Target positioned at {targetPosition}");
-                
-                // Create SUPER bright material - try multiple shaders
-                var renderer = targetObject.GetComponent<Renderer>();
-                if (renderer != null)
-                {
-                    Material brightMaterial = null;
-                    
-                    // Try unlit shader first (always visible)
-                    var unlitShader = Shader.Find("Unlit/Color");
-                    if (unlitShader != null)
-                    {
-                        brightMaterial = new Material(unlitShader);
-                        brightMaterial.color = Color.red;
-                        ModLogger.Info("✓ Using Unlit/Color shader");
-                    }
-                    else
-                    {
-                        // Fallback to standard
-                        brightMaterial = new Material(Shader.Find("Standard"));
-                        brightMaterial.color = Color.red;
-                        brightMaterial.SetColor("_EmissionColor", Color.red * 5f);
-                        brightMaterial.EnableKeyword("_EMISSION");
-                        ModLogger.Info("✓ Using Standard shader with emission");
-                    }
-                    
-                    renderer.material = brightMaterial;
-                    renderer.enabled = true;
-                    renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
-                    renderer.receiveShadows = false;
-                    
-                    ModLogger.Info($"✓ Target renderer: enabled={renderer.enabled}, bounds={renderer.bounds.size}");
-                }
-                
-                // Keep collider but make it trigger only
-                var collider = targetObject.GetComponent<Collider>();
-                if (collider != null)
-                {
-                    collider.isTrigger = true;
-                }
-                
-                // Add movement controller
-                targetObject.AddComponent<MoveableTargetController>();
-                
-                moveableTarget = targetObject.transform;
-                ModLogger.Info($"✓ SUPER VISIBLE target created at {moveableTarget.position} (scale: {targetObject.transform.localScale})");
-            }
-            catch (System.Exception e)
-            {
-                ModLogger.Error($"Exception creating target: {e.Message}");
-            }
-        }
-        
+
         private Transform FindPatrolPointTarget()
         {
             // Use the patrol points registered in JailController

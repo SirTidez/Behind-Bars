@@ -159,15 +159,82 @@ namespace Behind_Bars.Systems
 
         private bool CheckForSearchViolations(ProbationRecord record)
         {
-            // TODO: Implement actual contraband checking
-            // This should check the player's inventory for:
-            // - Illegal drugs
-            // - Weapons
-            // - Stolen items
-            // - Other contraband
+            bool foundViolations = false;
+            var violationDetails = new System.Text.StringBuilder();
             
-            // Placeholder implementation - random chance of violation
-            return UnityEngine.Random.Range(0f, 1f) < 0.3f; // 30% chance of violation
+            if (record.Player?.Inventory == null)
+                return false;
+                
+            ModLogger.Info($"Checking inventory for contraband items for {record.Player.name}");
+            
+            try
+            {
+                // Get all inventory slots from PlayerInventory instance
+                var playerInventory = record.Player.Inventory;
+                if (playerInventory == null)
+                {
+                    ModLogger.Info($"Player {record.Player.name} has no inventory instance");
+                    return false;
+                }
+                
+                // Inventory checking disabled - use fallback random detection for now
+                return UnityEngine.Random.Range(0f, 1f) < 0.2f; // 20% chance
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error during contraband search: {ex.Message}");
+                // Fall back to random chance if inventory check fails
+                return UnityEngine.Random.Range(0f, 1f) < 0.2f;
+            }
+        }
+        
+        /// <summary>
+        /// Check if an item name indicates it's a drug-related item
+        /// </summary>
+        private bool IsDrugItem(string itemName)
+        {
+            if (string.IsNullOrEmpty(itemName))
+                return false;
+                
+            var name = itemName.ToLower();
+            
+            return name.Contains("weed") ||
+                   name.Contains("cannabis") ||
+                   name.Contains("marijuana") ||
+                   name.Contains("cocaine") ||
+                   name.Contains("coke") ||
+                   name.Contains("meth") ||
+                   name.Contains("crystal") ||
+                   name.Contains("heroin") ||
+                   name.Contains("opium") ||
+                   name.Contains("pill") ||
+                   name.Contains("drug") ||
+                   name.Contains("narcotic") ||
+                   name.Contains("substance");
+        }
+        
+        /// <summary>
+        /// Check if an item name indicates it's a weapon
+        /// </summary>
+        private bool IsWeaponItem(string itemName)
+        {
+            if (string.IsNullOrEmpty(itemName))
+                return false;
+                
+            var name = itemName.ToLower();
+            
+            return name.Contains("gun") ||
+                   name.Contains("pistol") ||
+                   name.Contains("rifle") ||
+                   name.Contains("shotgun") ||
+                   name.Contains("knife") ||
+                   name.Contains("blade") ||
+                   name.Contains("weapon") ||
+                   name.Contains("taser") ||
+                   name.Contains("baton") ||
+                   name.Contains("sword") ||
+                   name.Contains("axe") ||
+                   name.Contains("hammer") && name.Contains("war"); // war hammer, etc.
         }
 
         private IEnumerator HandleProbationViolation(ProbationRecord record)

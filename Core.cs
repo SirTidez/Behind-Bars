@@ -7,6 +7,7 @@ using System;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.NPCs;
 using Behind_Bars.UI;
+using Behind_Bars.Systems.CrimeDetection;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -111,11 +112,15 @@ namespace Behind_Bars
             
             // Register UI Components
             ClassInjector.RegisterTypeInIl2Cpp<BehindBarsUIWrapper>();
+            ClassInjector.RegisterTypeInIl2Cpp<WantedLevelUI>();
 #endif
             // Initialize core systems
             HarmonyPatches.Initialize(this);
             _jailSystem = new JailSystem();
             _bailSystem = new BailSystem();
+            
+            // Initialize crime detection UI
+            CrimeUIManager.Instance.Initialize();
             _courtSystem = new CourtSystem();
             _probationSystem = new ProbationSystem();
 
@@ -921,6 +926,12 @@ namespace Behind_Bars
                 if (Input.GetKeyDown(KeyCode.End))
                 {
                     TeleportToTacoTicklers();
+                }
+                
+                // F9 key - Show crime details (debug)
+                if (Input.GetKeyDown(KeyCode.F9))
+                {
+                    CrimeUIManager.Instance.ShowCrimeDetails();
                 }
                 
                 // Insert key - Test Jail UI (DISABLED - UI should only show when actually in jail)

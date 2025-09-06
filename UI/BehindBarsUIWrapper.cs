@@ -37,6 +37,7 @@ namespace Behind_Bars.UI
         
         // Dynamic update tracking
         private float _remainingJailTime = 0f;
+        private float _originalJailTime = 0f; // Track original sentence time for bail lerping
         private float _originalBailAmount = 0f;
         private float _currentBailAmount = 0f;
         private bool _isUpdating = false;
@@ -45,7 +46,6 @@ namespace Behind_Bars.UI
         // Game time scaling constants
         private const float REAL_SECONDS_PER_GAME_MINUTE = 1f; // 1 real second = 1 game minute in Schedule I
         private const float GAME_SECONDS_PER_GAME_MINUTE = 60f; // 60 game seconds in 1 game minute
-        private const float BAIL_REDUCTION_INTERVAL_MINUTES = 5f; // Reduce bail every 5 game minutes
 
 #if !MONO
         public BehindBarsUIWrapper(System.IntPtr ptr) : base(ptr) { }
@@ -227,6 +227,7 @@ namespace Behind_Bars.UI
             // 1 real minute sentence = 1 game hour = 3600 game seconds
             float gameHours = jailTimeSeconds / 60f; // Convert real seconds to real minutes, then treat as game hours
             _remainingJailTime = gameHours * 3600f; // Convert game hours to game seconds
+            _originalJailTime = _remainingJailTime; // Store original time for bail lerping
             
             _originalBailAmount = bailAmount;
             _currentBailAmount = bailAmount;
@@ -260,8 +261,6 @@ namespace Behind_Bars.UI
 #endif
         private IEnumerator UpdateLoop()
         {
-            float lastBailReduction = 0f;
-            
             while (_isUpdating && _remainingJailTime > 0 && gameObject != null)
             {
                 yield return new WaitForSeconds(1f); // Update every real second (= 1 game minute)
@@ -272,17 +271,18 @@ namespace Behind_Bars.UI
                 _remainingJailTime -= GAME_SECONDS_PER_GAME_MINUTE;
                 if (_remainingJailTime < 0) _remainingJailTime = 0;
                 
-                // Track time for bail reduction (count game minutes)
-                lastBailReduction += 1f; // 1 game minute passed
-                if (lastBailReduction >= BAIL_REDUCTION_INTERVAL_MINUTES)
+                // Update bail amount using linear interpolation based on time remaining
+                if (_originalJailTime > 0 && _originalBailAmount > 0)
                 {
-                    if (_currentBailAmount > 0)
-                    {
-                        _currentBailAmount *= 0.9f; // 10% reduction every 5 game minutes
-                        if (_currentBailAmount < 50f) _currentBailAmount = 50f; // Minimum bail
-                        // ModLogger.Debug($"Bail reduced to ${_currentBailAmount:F0} after 5 game minutes");
-                    }
-                    lastBailReduction = 0f;
+                    // Calculate progress: 0 = just started, 1 = time is up
+                    float progress = 1f - (_remainingJailTime / _originalJailTime);
+                    
+                    // Lerp from original bail to minimum bail (50) based on progress
+                    float minBail = 50f;
+                    _currentBailAmount = Mathf.Lerp(_originalBailAmount, minBail, progress);
+                    
+                    // Ensure we don't go below minimum
+                    if (_currentBailAmount < minBail) _currentBailAmount = minBail;
                 }
                 
                 // Update the UI display every second for smooth countdown
