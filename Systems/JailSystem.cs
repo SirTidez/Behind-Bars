@@ -522,16 +522,103 @@ namespace Behind_Bars.Systems
 
             ModLogger.Info($"Player {player.name} placed in {holdingCell.cellName} for {sentence.JailTime}s");
 
-            // Wait for jail time while ensuring controls stay enabled
-            yield return WaitWithControlMaintenance(sentence.JailTime, player);
+            // NEW: Start booking process instead of just waiting
+            yield return StartBookingProcess(player, sentence, holdingCell);
 
-            ModLogger.Info($"Player {player.name} has served their holding cell time");
+            ModLogger.Info($"Player {player.name} has completed booking process");
 
             // Release from holding cell
             holdingCell.ReleasePlayerFromSpawnPoint(player.name);
             holdingCell.cellDoor.UnlockDoor();
 
             ReleasePlayerFromJail(player);
+        }
+        
+        /// <summary>
+        /// Start the booking process for the player
+        /// </summary>
+        private IEnumerator StartBookingProcess(Player player, JailSentence sentence, CellDetail holdingCell)
+        {
+            ModLogger.Info($"Starting booking process for {player.name}");
+            
+            // Find booking process system
+            var bookingProcess = UnityEngine.Object.FindObjectOfType<Behind_Bars.Systems.Jail.BookingProcess>();
+            if (bookingProcess == null)
+            {
+                ModLogger.Warn("No BookingProcess found - using traditional jail time");
+                yield return WaitWithControlMaintenance(sentence.JailTime, player);
+                yield break;
+            }
+            
+            bool bookingStarted = false;
+            try
+            {
+                // Start the booking process
+                bookingProcess.StartBooking(player);
+                bookingStarted = true;
+                ModLogger.Info("Booking process started successfully");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error starting booking process: {ex.Message}");
+                bookingStarted = false;
+            }
+            
+            if (!bookingStarted)
+            {
+                yield return WaitWithControlMaintenance(sentence.JailTime, player);
+                yield break;
+            }
+            
+            // Wait for booking to complete
+            float timeout = 300f; // 5 minutes max
+            float elapsed = 0f;
+            
+            while (elapsed < timeout)
+            {
+                bool isComplete = false;
+                try
+                {
+                    isComplete = bookingProcess.mugshotComplete && 
+                               bookingProcess.fingerprintComplete && 
+                               bookingProcess.inventoryProcessed;
+                }
+                catch (System.Exception ex)
+                {
+                    ModLogger.Error($"Error checking booking completion: {ex.Message}");
+                    break;
+                }
+                
+                if (isComplete)
+                {
+                    ModLogger.Info("Booking process completed successfully");
+                    break;
+                }
+                
+                elapsed += 1f;
+                yield return new WaitForSeconds(1f);
+            }
+            
+            if (elapsed >= timeout)
+            {
+                try
+                {
+                    ModLogger.Warn("Booking process timed out - forcing completion");
+                    bookingProcess.ForceCompleteBooking();
+                }
+                catch (System.Exception ex)
+                {
+                    ModLogger.Error($"Error forcing booking completion: {ex.Message}");
+                }
+            }
+            
+            // Additional jail time after booking (if sentence is longer than booking process)
+            float remainingTime = sentence.JailTime - elapsed;
+            if (remainingTime > 0)
+            {
+                ModLogger.Info($"Serving additional {remainingTime}s jail time after booking");
+                yield return WaitWithControlMaintenance(remainingTime, player);
+            }
         }
 
         /// <summary>

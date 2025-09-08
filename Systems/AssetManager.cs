@@ -2214,7 +2214,7 @@ namespace Behind_Bars.Systems
 #endif
     {
         private static JailManager _instance;
-        private static readonly List<Jail> _jails = new();
+        private static readonly List<JailAsset> _jails = new();
         private static bool _isInitialized = false;
 
         public static JailManager Instance
@@ -2231,7 +2231,7 @@ namespace Behind_Bars.Systems
             }
         }
 
-        public static Jail CreateJail(Vector3 spawnLocation, AssetSpawnConfig config = null)
+        public static JailAsset CreateJail(Vector3 spawnLocation, AssetSpawnConfig config = null)
         {
             if (_instance == null)
             {
@@ -2256,7 +2256,7 @@ namespace Behind_Bars.Systems
             return jail;
         }
 
-        public static void RemoveJail(Jail jail)
+        public static void RemoveJailAsset(JailAsset jail)
         {
             if (_jails.Remove(jail))
             {
@@ -2272,13 +2272,13 @@ namespace Behind_Bars.Systems
         {
             foreach (var jail in _jails.ToList())
             {
-                RemoveJail(jail);
+                RemoveJailAsset(jail);
             }
         }
 
-        public static List<Jail> GetAllJails()
+        public static List<JailAsset> GetAllJails()
         {
-            return new List<Jail>(_jails);
+            return new List<JailAsset>(_jails);
         }
 
         public static int GetJailCount()
@@ -2294,7 +2294,7 @@ namespace Behind_Bars.Systems
             _isInitialized = true;
         }
 
-        private Jail SpawnJail(Vector3 spawnLocation, AssetSpawnConfig config = null)
+        private JailAsset SpawnJail(Vector3 spawnLocation, AssetSpawnConfig config = null)
         {
             try
             {
@@ -2361,7 +2361,7 @@ namespace Behind_Bars.Systems
                 }
 
                 // Add the Jail component
-                var jail = jailGO.AddComponent<Jail>();
+                var jail = jailGO.AddComponent<JailAsset>();
 
                 // Initialize the Jail component
                 jail.Initialize(spawnLocation, null, colliderSize);
@@ -2398,9 +2398,9 @@ namespace Behind_Bars.Systems
     }
 
 #if MONO
-    public sealed class Jail : MonoBehaviour, ISpawnableAsset
+    public sealed class JailAsset : MonoBehaviour, ISpawnableAsset
 #else
-    public sealed class Jail(IntPtr ptr) : MonoBehaviour(ptr), ISpawnableAsset
+    public sealed class JailAsset(IntPtr ptr) : MonoBehaviour(ptr), ISpawnableAsset
 #endif
     {
         private bool _initialized = false;
@@ -2434,7 +2434,7 @@ namespace Behind_Bars.Systems
         {
             if (!_initialized) return;
 
-            JailManager.RemoveJail(this);
+            JailManager.RemoveJailAsset(this);
             _initialized = false;
         }
 
@@ -2455,7 +2455,7 @@ namespace Behind_Bars.Systems
         {
             if (_initialized)
             {
-                JailManager.RemoveJail(this);
+                JailManager.RemoveJailAsset(this);
             }
         }
     }

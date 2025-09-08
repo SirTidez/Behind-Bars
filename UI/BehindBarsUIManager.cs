@@ -2,16 +2,21 @@ using UnityEngine;
 using Behind_Bars.Helpers;
 using Behind_Bars.Utils;
 using Behind_Bars.Systems;
+using Behind_Bars.Systems.Jail;
 using System.Collections;
+using System.Collections.Generic;
+using UnityEngine.UI;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
 using Il2CppScheduleOne.UI.Phone;
 using Il2CppScheduleOne.DevUtilities;
+using Il2CppScheduleOne.UI;
 #else
 using ScheduleOne.PlayerScripts;
 using ScheduleOne.UI.Phone;
 using ScheduleOne.DevUtilities;
+using ScheduleOne.UI;
 #endif
 
 namespace Behind_Bars.UI
@@ -323,5 +328,214 @@ namespace Behind_Bars.UI
         /// Get the current UI wrapper instance
         /// </summary>
         public BehindBarsUIWrapper? GetUIWrapper() => _uiWrapper;
+
+        // === BOOKING NOTIFICATION SYSTEM ===
+        
+        private GameObject? _notificationUI;
+        private Text? _notificationText;
+        private Coroutine? _notificationCoroutine;
+        
+        /// <summary>
+        /// Show a booking notification to the player
+        /// </summary>
+        public void ShowNotification(string message, NotificationType type)
+        {
+            try
+            {
+                // Create notification UI if it doesn't exist
+                if (_notificationUI == null)
+                {
+                    CreateNotificationUI();
+                }
+                
+                if (_notificationUI == null || _notificationText == null)
+                {
+                    ModLogger.Error("Failed to create notification UI");
+                    return;
+                }
+                
+                // Set message and style based on type
+                _notificationText.text = message;
+                SetNotificationStyle(type);
+                
+                // Show notification with fade animation
+                MelonLoader.MelonCoroutines.Start(ShowNotificationCoroutine());
+                
+                ModLogger.Debug($"Showing {type} notification: {message}");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error showing notification: {ex.Message}");
+            }
+        }
+        
+        /// <summary>
+        /// Create the notification UI elements
+        /// </summary>
+        private void CreateNotificationUI()
+        {
+            try
+            {
+                // Find or create canvas
+                Canvas canvas = Singleton<HUD>.Instance?.canvas;
+                if (canvas == null)
+                {
+                    // Fallback: find any canvas in scene
+                    canvas = UnityEngine.Object.FindObjectOfType<Canvas>();
+                }
+                
+                if (canvas == null)
+                {
+                    ModLogger.Error("No canvas found for notification UI");
+                    return;
+                }
+                
+                // Create notification container
+                GameObject notificationGO = new GameObject("BookingNotification");
+                notificationGO.transform.SetParent(canvas.transform, false);
+                
+                // Set up RectTransform for top-center positioning
+                RectTransform rectTransform = notificationGO.AddComponent<RectTransform>();
+                rectTransform.anchorMin = new Vector2(0.5f, 1f);
+                rectTransform.anchorMax = new Vector2(0.5f, 1f);
+                rectTransform.pivot = new Vector2(0.5f, 1f);
+                rectTransform.anchoredPosition = new Vector2(0, -50);
+                rectTransform.sizeDelta = new Vector2(400, 60);
+                
+                // Add background panel
+                Image background = notificationGO.AddComponent<Image>();
+                background.color = new Color(0, 0, 0, 0.7f);
+                
+                // Create text element
+                GameObject textGO = new GameObject("NotificationText");
+                textGO.transform.SetParent(notificationGO.transform, false);
+                
+                RectTransform textRect = textGO.AddComponent<RectTransform>();
+                textRect.anchorMin = Vector2.zero;
+                textRect.anchorMax = Vector2.one;
+                textRect.offsetMin = new Vector2(10, 5);
+                textRect.offsetMax = new Vector2(-10, -5);
+                
+                Text text = textGO.AddComponent<Text>();
+                text.text = "";
+                text.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+                text.fontSize = 16;
+                text.color = Color.white;
+                text.alignment = TextAnchor.MiddleCenter;
+                text.horizontalOverflow = HorizontalWrapMode.Wrap;
+                text.verticalOverflow = VerticalWrapMode.Overflow;
+                
+                _notificationUI = notificationGO;
+                _notificationText = text;
+                
+                // Start hidden
+                _notificationUI.SetActive(false);
+                
+                ModLogger.Debug("Notification UI created successfully");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error creating notification UI: {ex.Message}");
+            }
+        }
+        
+        /// <summary>
+        /// Set notification visual style based on type
+        /// </summary>
+        private void SetNotificationStyle(NotificationType type)
+        {
+            if (_notificationText == null) return;
+            
+            switch (type)
+            {
+                case NotificationType.Instruction:
+                    _notificationText.color = Color.white;
+                    break;
+                case NotificationType.Progress:
+                    _notificationText.color = Color.green;
+                    break;
+                case NotificationType.Direction:
+                    _notificationText.color = Color.cyan;
+                    break;
+                case NotificationType.Warning:
+                    _notificationText.color = Color.red;
+                    break;
+            }
+        }
+        
+        /// <summary>
+        /// Coroutine to handle notification display and fade
+        /// </summary>
+        private IEnumerator ShowNotificationCoroutine()
+        {
+            if (_notificationUI == null) yield break;
+            
+            // Stop any existing notification
+            if (_notificationCoroutine != null)
+            {
+                MelonLoader.MelonCoroutines.Stop(_notificationCoroutine);
+            }
+            
+            // Show notification
+            _notificationUI.SetActive(true);
+            
+            // Fade in
+            CanvasGroup canvasGroup = _notificationUI.GetComponent<CanvasGroup>();
+            if (canvasGroup == null)
+            {
+                canvasGroup = _notificationUI.AddComponent<CanvasGroup>();
+            }
+            
+            // Fade in animation
+            float fadeInTime = 0.3f;
+            for (float t = 0; t < fadeInTime; t += Time.deltaTime)
+            {
+                canvasGroup.alpha = t / fadeInTime;
+                yield return null;
+            }
+            canvasGroup.alpha = 1f;
+            
+            // Hold for display duration
+            yield return new WaitForSeconds(4f);
+            
+            // Fade out animation
+            float fadeOutTime = 0.5f;
+            for (float t = 0; t < fadeOutTime; t += Time.deltaTime)
+            {
+                canvasGroup.alpha = 1f - (t / fadeOutTime);
+                yield return null;
+            }
+            canvasGroup.alpha = 0f;
+            
+            // Hide notification
+            _notificationUI.SetActive(false);
+        }
+        
+        /// <summary>
+        /// Show a task list to the player (for booking progress)
+        /// </summary>
+        public void ShowTaskList(List<string> tasks)
+        {
+            // Combine tasks into a single notification
+            string taskList = string.Join("\n", tasks);
+            ShowNotification($"Booking Tasks:\n{taskList}", NotificationType.Instruction);
+        }
+        
+        /// <summary>
+        /// Hide any active notification
+        /// </summary>
+        public void HideNotification()
+        {
+            if (_notificationUI != null && _notificationUI.activeInHierarchy)
+            {
+                _notificationUI.SetActive(false);
+            }
+            
+            if (_notificationCoroutine != null)
+            {
+                MelonLoader.MelonCoroutines.Stop(_notificationCoroutine);
+                _notificationCoroutine = null;
+            }
+        }
     }
 }

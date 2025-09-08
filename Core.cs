@@ -113,6 +113,12 @@ namespace Behind_Bars
             // Register UI Components
             ClassInjector.RegisterTypeInIl2Cpp<BehindBarsUIWrapper>();
             ClassInjector.RegisterTypeInIl2Cpp<WantedLevelUI>();
+            
+            // Register Booking System Components
+            ClassInjector.RegisterTypeInIl2Cpp<Behind_Bars.Systems.Jail.BookingProcess>();
+            ClassInjector.RegisterTypeInIl2Cpp<Behind_Bars.Systems.Jail.MugshotStation>();
+            ClassInjector.RegisterTypeInIl2Cpp<Behind_Bars.Systems.Jail.ScannerStation>();
+            ClassInjector.RegisterTypeInIl2Cpp<Behind_Bars.Systems.Jail.InventoryDropOff>();
 #endif
             // Initialize core systems
             HarmonyPatches.Initialize(this);
@@ -532,7 +538,142 @@ namespace Behind_Bars
             }
             
             yield return new WaitForSeconds(1f);
+            
+            // Initialize booking system
+            InitializeBookingSystem();
+            
             ModLogger.Info("✓ NPC initialization completed");
+        }
+        
+        /// <summary>
+        /// Initialize the booking process system
+        /// </summary>
+        private static void InitializeBookingSystem()
+        {
+            try
+            {
+                ModLogger.Info("Initializing booking system...");
+                
+                if (ActiveJailController == null)
+                {
+                    ModLogger.Error("Cannot initialize booking system - no active jail controller");
+                    return;
+                }
+                
+                GameObject jailGameObject = ActiveJailController.gameObject;
+                
+                // Add BookingProcess component if it doesn't exist
+                var bookingProcess = jailGameObject.GetComponent<Behind_Bars.Systems.Jail.BookingProcess>();
+                if (bookingProcess == null)
+                {
+                    bookingProcess = jailGameObject.AddComponent<Behind_Bars.Systems.Jail.BookingProcess>();
+                    ModLogger.Info("✓ BookingProcess component added to jail");
+                }
+                else
+                {
+                    ModLogger.Info("✓ BookingProcess component already exists");
+                }
+                
+                // Find and set up booking stations
+                SetupBookingStations(jailGameObject.transform);
+                
+                ModLogger.Info("✓ Booking system initialized successfully");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error initializing booking system: {ex.Message}");
+            }
+        }
+        
+        /// <summary>
+        /// Set up booking stations (mugshot and scanner)
+        /// </summary>
+        private static void SetupBookingStations(Transform jailTransform)
+        {
+            try
+            {
+                // Find booking area
+                Transform bookingArea = jailTransform.Find("Booking");
+                if (bookingArea == null)
+                {
+                    ModLogger.Error("Booking area not found in jail hierarchy");
+                    return;
+                }
+                
+                // Set up Mugshot Station - SINGLE COMPONENT ONLY (like ScannerStation)
+                Transform mugshotStation = bookingArea.Find("MugshotStation");
+                if (mugshotStation != null)
+                {
+                    var mugshotComponent = mugshotStation.GetComponent<Behind_Bars.Systems.Jail.MugshotStation>();
+                    if (mugshotComponent == null)
+                    {
+                        mugshotComponent = mugshotStation.gameObject.AddComponent<Behind_Bars.Systems.Jail.MugshotStation>();
+                        ModLogger.Info("✓ MugshotStation component added to main GameObject");
+                    }
+                    
+                    // DO NOT add manual collider - let InteractableObject handle collision detection
+                    ModLogger.Info("MugshotStation setup complete - single component approach");
+                }
+                else
+                {
+                    ModLogger.Warn("MugshotStation not found in booking area");
+                }
+                
+                // Set up Scanner Station - SINGLE COMPONENT ONLY
+                Transform scannerStation = bookingArea.Find("ScannerStation");
+                if (scannerStation != null)
+                {
+                    var scannerComponent = scannerStation.GetComponent<Behind_Bars.Systems.Jail.ScannerStation>();
+                    if (scannerComponent == null)
+                    {
+                        scannerComponent = scannerStation.gameObject.AddComponent<Behind_Bars.Systems.Jail.ScannerStation>();
+                        ModLogger.Info("✓ ScannerStation component added to main GameObject");
+                    }
+                    
+                    // DO NOT add ScannerStation to Interaction child - this causes duplicates!
+                    ModLogger.Info("ScannerStation setup complete - single component approach");
+                }
+                else
+                {
+                    ModLogger.Warn("ScannerStation not found in booking area");
+                }
+                
+                // Set up Inventory Drop-off
+                Transform storageArea = bookingArea.Find("Booking_StorageDoor");
+                if (storageArea == null)
+                {
+                    // Try alternative names
+                    storageArea = bookingArea.Find("Storage") ?? bookingArea.Find("InventoryStorage");
+                }
+                
+                if (storageArea != null)
+                {
+                    var inventoryComponent = storageArea.GetComponent<Behind_Bars.Systems.Jail.InventoryDropOff>();
+                    if (inventoryComponent == null)
+                    {
+                        inventoryComponent = storageArea.gameObject.AddComponent<Behind_Bars.Systems.Jail.InventoryDropOff>();
+                        ModLogger.Info("✓ InventoryDropOff component added");
+                    }
+                }
+                else
+                {
+                    ModLogger.Warn("Booking storage area not found - creating fallback");
+                    
+                    // Create fallback storage point
+                    GameObject storagePoint = new GameObject("InventoryDropOff");
+                    storagePoint.transform.SetParent(bookingArea);
+                    storagePoint.transform.localPosition = new Vector3(5, 0, 0); // Offset from booking center
+                    
+                    var inventoryComponent = storagePoint.AddComponent<Behind_Bars.Systems.Jail.InventoryDropOff>();
+                    ModLogger.Info("✓ Fallback InventoryDropOff created");
+                }
+                
+                ModLogger.Info("✓ Booking stations setup completed");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error setting up booking stations: {ex.Message}");
+            }
         }
 
         private static void CreateTestNPC()
@@ -960,7 +1101,7 @@ namespace Behind_Bars
 #endif
                 if (player != null)
                 {
-                    Vector3 jailPosition = new Vector3(66.5362f, 9.5001f, -220.6056f);
+                    Vector3 jailPosition = new Vector3(44.324f, 10.2846f, -218.7174f);
                     player.transform.position = jailPosition;
                     ModLogger.Info($"✓ Teleported player to jail at {jailPosition}");
                 }

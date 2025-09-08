@@ -30,6 +30,7 @@ namespace Behind_Bars.Harmony
         private static Core? _core;
         private static bool _jailSystemHandlingArrest = false;
         private static CrimeDetectionSystem? _crimeDetectionSystem;
+        private static bool _mugshotInProgress = false;
         
         public static void Initialize(Core core)
         {
@@ -44,6 +45,15 @@ namespace Behind_Bars.Harmony
         {
             _jailSystemHandlingArrest = false;
             ModLogger.Info("Reset arrest handling flag - future arrests will use default system unless jail system intercepts");
+        }
+        
+        /// <summary>
+        /// Set mugshot mode to override player visibility
+        /// </summary>
+        public static void SetMugshotInProgress(bool inProgress)
+        {
+            _mugshotInProgress = inProgress;
+            ModLogger.Info($"Mugshot mode set to: {inProgress}");
         }
 
         // NEW: Intercept arrests immediately at the Player.Arrest() level
@@ -133,15 +143,15 @@ namespace Behind_Bars.Harmony
             if (__instance != Player.Local)
                 return true; // Let normal execution continue for other players
                 
-            //// If our jail system is handling the arrest but hasn't cleared the flag yet, block the Free() call
-            //// Once we reset the flag in our release process, Player.Free() will be allowed to run
-            //if (_jailSystemHandlingArrest)
-            //{
-            //    ModLogger.Info("Jail system handling arrest - preventing premature Player.Free() call");
+            // If our jail system is handling the arrest but hasn't cleared the flag yet, block the Free() call
+            // Once we reset the flag in our release process, Player.Free() will be allowed to run
+            if (_jailSystemHandlingArrest)
+            {
+                ModLogger.Info("Jail system handling arrest - preventing premature Player.Free() call");
                 
-            //    // Prevent the default Free() logic from running while we're still processing
-            //    return false;
-            //}
+                // Prevent the default Free() logic from running while we're still processing
+                return false;
+            }
             
             // Let normal execution continue if we didn't handle the arrest or have finished processing
             return true;
@@ -293,6 +303,24 @@ namespace Behind_Bars.Harmony
         public static CrimeDetectionSystem GetCrimeDetectionSystem()
         {
             return _crimeDetectionSystem;
+        }
+        
+        /// <summary>
+        /// Override player visibility during mugshot capture to keep avatar on Player layer
+        /// </summary>
+        [HarmonyPatch(typeof(Player), nameof(Player.SetVisibleToLocalPlayer))]
+        [HarmonyPrefix]
+        public static bool Player_SetVisibleToLocalPlayer_Prefix(Player __instance, ref bool vis)
+        {
+            // Only override for local player during mugshot
+            if (__instance == Player.Local && _mugshotInProgress)
+            {
+                ModLogger.Debug($"Mugshot in progress - overriding SetVisibleToLocalPlayer({vis}) to true");
+                vis = true;
+                return true; // Continue with modified parameter
+            }
+            
+            return true; // Normal execution
         }
     }
 }
