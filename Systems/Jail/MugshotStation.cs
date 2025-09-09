@@ -6,6 +6,7 @@ using Behind_Bars.Helpers;
 using Behind_Bars.UI;
 
 #if !MONO
+using Il2CppInterop.Runtime.Attributes;
 using Il2CppScheduleOne.PlayerScripts;
 using Il2CppScheduleOne.Interaction;
 using Il2CppScheduleOne.DevUtilities;
@@ -22,9 +23,12 @@ namespace Behind_Bars.Systems.Jail
     /// <summary>
     /// Handles player mugshot capture during booking process
     /// </summary>
-    public class MugshotStation : InteractableObject
+    public class MugshotStation : MonoBehaviour
     {
-        [Header("Mugshot Components")]
+#if !MONO
+        public MugshotStation(System.IntPtr ptr) : base(ptr) { }
+#endif
+        
         public Camera mugshotCamera;
         public RawImage displayMonitor;
         public Transform attachmentPoint;
@@ -32,10 +36,12 @@ namespace Behind_Bars.Systems.Jail
         public Transform flashLight;
         private Light flashLightComponent;
         
+        // InteractableObject component for IL2CPP compatibility
+        private InteractableObject interactableObject;
+        
         // Camera switching support
         private bool inMugshotView = false;
         
-        [Header("Settings")]
         public float positioningDuration = 0.5f; // Quick positioning
         public float holdDuration = 0.5f; // Quick hold
         public Vector3 cameraOffset = new Vector3(0, 1f, -3f); // Position camera in front of and slightly above player
@@ -49,10 +55,10 @@ namespace Behind_Bars.Systems.Jail
             // Find booking process
             bookingProcess = FindObjectOfType<BookingProcess>();
             
-            // ALWAYS set up interaction directly on this component (like ScannerStation)
-            SetMessage("Take mugshot");
-            SetInteractionType(EInteractionType.Key_Press);
-            SetInteractableState(EInteractableState.Default); // Explicitly set to Default
+            // Set up InteractableObject component for IL2CPP compatibility
+            SetupInteractableComponent();
+            ModLogger.Info("MugshotStation interaction setup completed");
+            
             
             // Find mugshot camera using static structure: MugshotStation/MugshotCamera
             if (mugshotCamera == null)
@@ -198,18 +204,45 @@ namespace Behind_Bars.Systems.Jail
             }
         }
         
-        public override void StartInteract()
+        private void SetupInteractableComponent()
+        {
+            // Get or create InteractableObject component
+            interactableObject = GetComponent<InteractableObject>();
+            if (interactableObject == null)
+            {
+                interactableObject = gameObject.AddComponent<InteractableObject>();
+                ModLogger.Info("Added InteractableObject component to MugshotStation");
+            }
+            else
+            {
+                ModLogger.Info("Found existing InteractableObject component on MugshotStation");
+            }
+            
+            // Configure the interaction
+            interactableObject.SetMessage("Take mugshot");
+            interactableObject.SetInteractionType(InteractableObject.EInteractionType.Key_Press);
+            interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+            
+            // Set up event listeners with IL2CPP-safe casting
+#if !MONO
+            // Use System.Action for IL2CPP compatibility
+            interactableObject.onInteractStart.AddListener((System.Action)OnInteractStart);
+#else
+            // Use UnityAction for Mono
+            interactableObject.onInteractStart.AddListener(OnInteractStart);
+#endif
+            
+            ModLogger.Info("InteractableObject component configured with event listeners");
+        }
+        
+        private void OnInteractStart()
         {
             if (isCapturing)
             {
-                SetMessage("Mugshot in progress...");
-                SetInteractableState(EInteractableState.Invalid);
+                interactableObject.SetMessage("Mugshot in progress...");
+                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
                 return;
             }
-            
-            // Allow re-doing mugshots - remove completion check
-            
-            base.StartInteract();
             
             // Get player first
             currentPlayer = Player.Local;
@@ -218,8 +251,6 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Error("No local player found for mugshot!");
                 return;
             }
-            
-            // Remove debug logging for cleaner operation
             
             // Position player at StandingPoint X/Z only, keep current Y position
             if (attachmentPoint != null)
@@ -237,8 +268,6 @@ namespace Behind_Bars.Systems.Jail
             {
                 ModLogger.Warn("StandingPoint not found - using current player position");
             }
-            
-            // Keep avatar modifications minimal - only what's necessary for visibility
             
             // Now start camera view with player in correct position
             StartCameraView();
@@ -312,15 +341,24 @@ namespace Behind_Bars.Systems.Jail
             
             // Reset interaction
             isCapturing = false;
-            SetMessage("Take mugshot");
-            SetInteractableState(EInteractableState.Default);
+            if (interactableObject != null)
+            {
+                interactableObject.SetMessage("Take mugshot");
+                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+            }
         }
-        
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private IEnumerator CaptureMugshot(Player player)
         {
             isCapturing = true;
-            SetMessage("Taking mugshot...");
-            SetInteractableState(EInteractableState.Invalid);
+            if (interactableObject != null)
+            {
+                interactableObject.SetMessage("Taking mugshot...");
+                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+            }
             
             ModLogger.Info($"Starting mugshot capture for {player.name}");
             
@@ -475,10 +513,10 @@ namespace Behind_Bars.Systems.Jail
         void Update()
         {
             // Update interaction state - allow re-doing mugshots
-            if (!isCapturing)
+            if (!isCapturing && interactableObject != null)
             {
-                SetMessage("Take mugshot");
-                SetInteractableState(EInteractableState.Default);
+                interactableObject.SetMessage("Take mugshot");
+                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
             }
         }
     }

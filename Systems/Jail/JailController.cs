@@ -8,6 +8,13 @@ using UnityEngine.UI;
 using Behind_Bars.Helpers;
 
 
+
+#if !MONO
+using Il2CppInterop.Runtime.Attributes;
+using Il2CppInterop.Runtime;
+#endif
+
+
 #if MONO
 public sealed class JailController : MonoBehaviour
 #else
@@ -1312,6 +1319,9 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     /// <param name="parent">Parent transform to search in</param>
     /// <param name="namePart">Part of name to search for</param>
     /// <returns>List of all matching child transforms</returns>
+#if !MONO
+    [HideFromIl2Cpp]
+#endif
     List<Transform> FindAllChildrenContaining(Transform parent, string namePart)
     {
         List<Transform> results = new List<Transform>();
@@ -1330,6 +1340,9 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         return results;
     }
 
+#if !MONO
+    [HideFromIl2Cpp]
+#endif
     JailDoor CreateDoorFromHolder(Transform holder, string doorName, JailDoor.DoorType doorType)
     {
         JailDoor door = new JailDoor();
@@ -1435,11 +1448,35 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         
         try
         {
-            // Check if bed component already exists
-            JailBed bedComponent = bedTransform.GetComponent<JailBed>();
+            // Check if bed component already exists using IL2CPP-safe method
+            JailBed bedComponent = null;
+            
+#if !MONO
+            // IL2CPP-safe component access
+            var components = bedTransform.GetComponents<MonoBehaviour>();
+            foreach (var comp in components)
+            {
+                if (comp is JailBed jailBed)
+                {
+                    bedComponent = jailBed;
+                    break;
+                }
+            }
+#else
+            // Mono version - use standard GetComponent
+            bedComponent = bedTransform.GetComponent<JailBed>();
+#endif
+            
             if (bedComponent == null)
             {
+#if !MONO
+                // IL2CPP-safe component addition using Il2Cpp type
+                var component = bedTransform.gameObject.AddComponent(Il2CppType.Of<JailBed>());
+                bedComponent = component.Cast<JailBed>();
+#else
+                // Mono version
                 bedComponent = bedTransform.gameObject.AddComponent<JailBed>();
+#endif
             }
             
             // Configure the bed
@@ -1531,6 +1568,9 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         }
     }
 
+#if !MONO
+    [HideFromIl2Cpp]
+#endif
     Transform[] FindSecurityCameraPositions()
     {
         List<Transform> positions = new List<Transform>();
@@ -2343,6 +2383,9 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         }
     }
 
+#if !MONO
+    [HideFromIl2Cpp]
+#endif
     public JailAreaBase GetAreaByName(string areaName)
     {
         switch (areaName.ToLowerInvariant())
@@ -2358,11 +2401,17 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         }
     }
 
+#if !MONO
+    [HideFromIl2Cpp]
+#endif
     public CellDetail GetCellByIndex(int cellIndex)
     {
         return cells.FirstOrDefault(c => c.cellIndex == cellIndex);
     }
 
+#if !MONO
+    [HideFromIl2Cpp]
+#endif
     public CellDetail GetHoldingCellByIndex(int cellIndex)
     {
         return holdingCells.FirstOrDefault(c => c.cellIndex == cellIndex);
@@ -2486,6 +2535,9 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     /// Gets the first available holding cell spawn point for short sentences
     /// </summary>
     /// <returns>Available spawn point, or null if all are occupied</returns>
+#if !MONO
+    [HideFromIl2Cpp]
+#endif
     public HoldingCellSpawnPoint GetAvailableHoldingCellSpawnPoint()
     {
         return holdingCellSpawnPoints.FirstOrDefault(sp => !sp.isOccupied);

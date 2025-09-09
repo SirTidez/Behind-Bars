@@ -8,6 +8,10 @@ using Behind_Bars.Systems.NPCs;
 using MelonLoader;
 
 #if !MONO
+using Il2CppInterop.Runtime.Attributes;
+#endif
+
+#if !MONO
 using Il2CppScheduleOne.NPCs;
 using Il2CppScheduleOne.PlayerScripts;
 using Il2CppScheduleOne.Messaging;
@@ -88,13 +92,15 @@ namespace Behind_Bars.Systems.NPCs
         private float patrolStartDelay = 0f;
         
         // Static coordination system
-        private static List<JailGuardBehavior> allActiveGuards = new List<JailGuardBehavior>();
+        private static System.Collections.Generic.List<JailGuardBehavior> allActiveGuards = new System.Collections.Generic.List<JailGuardBehavior>();
         private static bool isPatrolInProgress = false;
         private static float nextPatrolTime = 0f;
         private static readonly float PATROL_COOLDOWN = 300f; // 5 minutes between coordinated patrols
 
 #if !MONO
         private Il2CppScheduleOne.NPCs.NPC npcComponent;
+
+        public JailGuardBehavior(System.IntPtr ptr) : base(ptr) { }
 #else
         private ScheduleOne.NPCs.NPC npcComponent;
 #endif
@@ -228,7 +234,7 @@ namespace Behind_Bars.Systems.NPCs
             }
             
             // Convert Transform patrol points to Vector3 positions
-            var patrolPositions = new List<Vector3>();
+            var patrolPositions = new System.Collections.Generic.List<Vector3>();
             foreach (var point in jailController.patrolPoints)
             {
                 if (point != null)
@@ -307,6 +313,9 @@ namespace Behind_Bars.Systems.NPCs
             return false;
         }
 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private IEnumerator GuardBehaviorLoop()
         {
             while (isOnDuty)
@@ -338,6 +347,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Handle coordinated patrol behavior with partner synchronization
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private IEnumerator HandleCoordinatedPatrolBehavior()
         {
             if (patrolRoute.points == null || patrolRoute.points.Length == 0)
@@ -407,6 +419,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// End coordinated patrol and return to stationary positions
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private IEnumerator EndCoordinatedPatrol()
         {
             ModLogger.Info($"Guard {badgeNumber} ending coordinated patrol");
@@ -451,6 +466,9 @@ namespace Behind_Bars.Systems.NPCs
             yield return new WaitForSeconds(1f);
         }
 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private IEnumerator HandleStationaryBehavior()
         {
             // Ensure guard is at assigned position
@@ -807,11 +825,13 @@ namespace Behind_Bars.Systems.NPCs
         // Group and faction system
         public InmateFaction faction = InmateFaction.None;
         public int groupID = -1; // ID of current group, -1 if not in group
-        private static Dictionary<int, InmateGroup> activeGroups = new Dictionary<int, InmateGroup>();
+        private static System.Collections.Generic.Dictionary<int, InmateGroup> activeGroups = new System.Collections.Generic.Dictionary<int, InmateGroup>();
         private static int nextGroupID = 0;
 
 #if !MONO
         private Il2CppScheduleOne.NPCs.NPC npcComponent;
+
+        public JailInmateBehavior(System.IntPtr ptr) : base(ptr) { }
 #else
         private ScheduleOne.NPCs.NPC npcComponent;
 #endif
@@ -1461,9 +1481,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Find nearby inmates for grouping behaviors
         /// </summary>
-        private List<JailInmateBehavior> FindNearbyInmates(float radius)
+        private System.Collections.Generic.List<JailInmateBehavior> FindNearbyInmates(float radius)
         {
-            var nearbyInmates = new List<JailInmateBehavior>();
+            var nearbyInmates = new System.Collections.Generic.List<JailInmateBehavior>();
             var allInmates = UnityEngine.Object.FindObjectsOfType<JailInmateBehavior>();
             
             foreach (var inmate in allInmates)
@@ -1484,7 +1504,7 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Calculate center position of a group of inmates
         /// </summary>
-        private Vector3 CalculateGroupCenter(List<JailInmateBehavior> inmates)
+        private Vector3 CalculateGroupCenter(System.Collections.Generic.List<JailInmateBehavior> inmates)
         {
             if (inmates.Count == 0) return transform.position;
             
@@ -1755,7 +1775,7 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private static void CleanupInactiveGroups()
         {
-            var groupsToRemove = new List<int>();
+            var groupsToRemove = new System.Collections.Generic.List<int>();
             
             foreach (var kvp in activeGroups)
             {
@@ -1802,7 +1822,7 @@ namespace Behind_Bars.Systems.NPCs
     public class InmateGroup
     {
         public int GroupID { get; set; }
-        public List<JailInmateBehavior> Members { get; set; } = new List<JailInmateBehavior>();
+        public System.Collections.Generic.List<JailInmateBehavior> Members { get; set; } = new System.Collections.Generic.List<JailInmateBehavior>();
         public Vector3 GatherPoint { get; set; }
         public InmateFaction PrimaryFaction { get; set; }
         public float FormationTime { get; set; }

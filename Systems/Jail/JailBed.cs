@@ -1,22 +1,26 @@
 using UnityEngine;
 using Behind_Bars.Helpers;
 
+#if MONO
+using FishNet.Object;
+#endif
+
+
+
 #if !MONO
 using Il2CppScheduleOne.Interaction;
 using Il2CppScheduleOne.GameTime;
 using Il2CppScheduleOne.PlayerScripts;
 using Il2CppScheduleOne.UI;
 using Il2CppScheduleOne.DevUtilities;
-using FishNet.Object;
-using FishNet;
+using Il2CppFishNet.Object;
+using Il2CppInterop.Runtime;
 #else
 using ScheduleOne.Interaction;
 using ScheduleOne.GameTime;
 using ScheduleOne.PlayerScripts;
 using ScheduleOne.UI;
 using ScheduleOne.DevUtilities;
-using FishNet.Object;
-using FishNet;
 #endif
 
 // Note: Behind Bars doesn't use FishNet, but we need to mimic the Schedule I Bed behavior
@@ -26,11 +30,9 @@ public class JailBed : MonoBehaviour
 public class JailBed : MonoBehaviour
 #endif
 {
-    [Header("Bed Configuration")]
     public string bedName = "Jail Bed";
     public bool isTopBunk = false;
     
-    [Header("References")]
     public InteractableObject interactableObject;
     public Transform sleepPosition;
     
@@ -48,8 +50,23 @@ public class JailBed : MonoBehaviour
     {
         if (isInitialized) return;
         
-        // Try to get or add a NetworkObject component
+        // Try to get or add a NetworkObject component using IL2CPP-safe method
+#if !MONO
+        // IL2CPP-safe NetworkObject access
+        var components = GetComponents<MonoBehaviour>();
+        foreach (var comp in components)
+        {
+            if (comp != null && comp.GetType().Name.Contains("NetworkObject"))
+            {
+                networkObject = comp as NetworkObject;
+                break;
+            }
+        }
+#else
+        // Mono version
         networkObject = GetComponent<NetworkObject>();
+#endif
+        
         if (networkObject == null)
         {
             // For jail beds, we might not be able to add a NetworkObject directly
@@ -57,13 +74,35 @@ public class JailBed : MonoBehaviour
             ModLogger.Debug("Could not add NetworkObject to jail bed - will use alternative approach");
         }
         
-        // Get or create InteractableObject
+        // Get or create InteractableObject using IL2CPP-safe method
         if (interactableObject == null)
         {
+#if !MONO
+            // IL2CPP-safe InteractableObject access
+            var allComponents = GetComponents<MonoBehaviour>();
+            foreach (var comp in allComponents)
+            {
+                if (comp is InteractableObject interactable)
+                {
+                    interactableObject = interactable;
+                    break;
+                }
+            }
+#else
+            // Mono version
             interactableObject = GetComponent<InteractableObject>();
+#endif
+            
             if (interactableObject == null)
             {
+#if !MONO
+                // IL2CPP-safe component addition using Il2Cpp type
+                var component = gameObject.AddComponent(Il2CppType.Of<InteractableObject>());
+                interactableObject = component.Cast<InteractableObject>();
+#else
+                // Mono version
                 interactableObject = gameObject.AddComponent<InteractableObject>();
+#endif
             }
         }
         
@@ -72,8 +111,13 @@ public class JailBed : MonoBehaviour
         interactableObject.MaxInteractionRange = 5f; // Match Schedule I's range
         
         // Set up event handlers - using Unity Events like Schedule I
+#if !MONO
+        interactableObject.onHovered.AddListener((System.Action)Hovered);
+        interactableObject.onInteractStart.AddListener((System.Action)Interacted);
+#else
         interactableObject.onHovered.AddListener(Hovered);
         interactableObject.onInteractStart.AddListener(Interacted);
+#endif
         
         // Set sleep position
         if (sleepPosition == null)

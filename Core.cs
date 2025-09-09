@@ -19,6 +19,7 @@ using ScheduleOne.PlayerScripts;
 #endif
 using Behind_Bars.Players;
 using Behind_Bars.Systems;
+using Behind_Bars.Systems.Jail;
 using Behind_Bars.Harmony;
 
 
@@ -85,7 +86,7 @@ namespace Behind_Bars
             ClassInjector.RegisterTypeInIl2Cpp<CommonRoomTableManager>();
             ClassInjector.RegisterTypeInIl2Cpp<CellTable>();
             ClassInjector.RegisterTypeInIl2Cpp<CellTableManager>();
-            ClassInjector.RegisterTypeInIl2Cpp<Jail>();
+            ClassInjector.RegisterTypeInIl2Cpp<JailAsset>();
             ClassInjector.RegisterTypeInIl2Cpp<JailManager>();
 
             // Register Jail System Components
@@ -115,10 +116,11 @@ namespace Behind_Bars
             ClassInjector.RegisterTypeInIl2Cpp<WantedLevelUI>();
             
             // Register Booking System Components
-            ClassInjector.RegisterTypeInIl2Cpp<Behind_Bars.Systems.Jail.BookingProcess>();
-            ClassInjector.RegisterTypeInIl2Cpp<Behind_Bars.Systems.Jail.MugshotStation>();
-            ClassInjector.RegisterTypeInIl2Cpp<Behind_Bars.Systems.Jail.ScannerStation>();
-            ClassInjector.RegisterTypeInIl2Cpp<Behind_Bars.Systems.Jail.InventoryDropOff>();
+            ClassInjector.RegisterTypeInIl2Cpp<BookingProcess>();
+            ClassInjector.RegisterTypeInIl2Cpp<MugshotStation>();
+            ClassInjector.RegisterTypeInIl2Cpp<ScannerStation>();
+            ClassInjector.RegisterTypeInIl2Cpp<InventoryDropOff>();
+            ClassInjector.RegisterTypeInIl2Cpp<JailBed>();
 #endif
             // Initialize core systems
             HarmonyPatches.Initialize(this);
@@ -134,7 +136,11 @@ namespace Behind_Bars
             AssetManager.Init();
 
             // Add scene change detection for cleanup
+#if !MONO
+            SceneManager.activeSceneChanged += new System.Action<Scene, Scene>(OnSceneChanged);
+#else
             SceneManager.activeSceneChanged += OnSceneChanged;
+#endif
 
             ModLogger.Info("Behind Bars initialized with all systems");
         }
@@ -1213,7 +1219,11 @@ namespace Behind_Bars
                 ModLogger.Info("Behind Bars shutting down - cleaning up...");
 
                 // Unsubscribe from scene events
+#if !MONO
+                SceneManager.activeSceneChanged -= new System.Action<Scene, Scene>(OnSceneChanged);
+#else
                 SceneManager.activeSceneChanged -= OnSceneChanged;
+#endif
 
                 // Clean up UI
                 HideJailInfoUI();

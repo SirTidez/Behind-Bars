@@ -10,6 +10,7 @@ using Il2CppScheduleOne.AvatarFramework;
 using Il2CppScheduleOne.NPCs;
 using Il2CppScheduleOne.Clothing;
 using Il2CppScheduleOne.Tools;
+using Il2CppInterop.Runtime.Attributes;
 #else
 using ScheduleOne.AvatarFramework;
 using ScheduleOne.NPCs;
@@ -47,6 +48,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Apply prison guard appearance to an NPC
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         public static void ApplyGuardAppearance(GameObject npc, string badgeNumber = "")
         {
             try
@@ -82,6 +86,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Apply prison inmate appearance to an NPC
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         public static void ApplyInmateAppearance(GameObject npc, string prisonerID = "", string crimeType = "")
         {
             try
@@ -117,6 +124,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Get existing avatar or create a basic one
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private static
 #if !MONO
             Il2CppScheduleOne.AvatarFramework.Avatar
@@ -173,6 +183,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Create avatar settings for prison guards
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private static
 #if !MONO
             Il2CppScheduleOne.AvatarFramework.AvatarSettings
@@ -232,6 +245,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Create avatar settings for prison inmates
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private static
 #if !MONO
             Il2CppScheduleOne.AvatarFramework.AvatarSettings
@@ -283,6 +299,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Apply avatar settings to an avatar component
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private static void ApplyAvatarSettings(
 #if !MONO
             Il2CppScheduleOne.AvatarFramework.Avatar avatar,
@@ -576,6 +595,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Apply random face features to avoid faceless appearance using actual AvatarSettings properties
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private static void ApplyRandomFaceFeatures(
 #if !MONO
             Il2CppScheduleOne.AvatarFramework.AvatarSettings settings
@@ -619,6 +641,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Add random face layers for character variation
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private static void AddRandomFaceLayers(
 #if !MONO
             Il2CppScheduleOne.AvatarFramework.AvatarSettings settings
@@ -663,6 +688,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Add basic body layers (will be overridden by clothing application)
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private static void AddRandomBodyLayers(
 #if !MONO
             Il2CppScheduleOne.AvatarFramework.AvatarSettings settings

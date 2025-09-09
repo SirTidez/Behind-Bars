@@ -5,7 +5,10 @@ using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.UI;
 
+
+
 #if !MONO
+using Il2CppInterop.Runtime.Attributes;
 using Il2CppScheduleOne.PlayerScripts;
 using Il2CppScheduleOne.DevUtilities;
 #else
@@ -20,22 +23,22 @@ namespace Behind_Bars.Systems.Jail
     /// </summary>
     public class BookingProcess : MonoBehaviour
     {
-        [Header("Booking Status")]
+#if !MONO
+        public BookingProcess(System.IntPtr ptr) : base(ptr) { }
+#endif
+        
         public bool mugshotComplete = false;
         public bool fingerprintComplete = false;
         public bool inventoryProcessed = false;
         
-        [Header("Booking Data")]
         public Texture2D mugshotImage;
         public string fingerprintData;
         public List<string> confiscatedItems = new List<string>();
         
-        [Header("Station References")]
         public MugshotStation mugshotStation;
         public ScannerStation scannerStation;
         public Transform inventoryDropOff;
         
-        [Header("Settings")]
         public bool requireBothStations = true;
         public bool allowAnyOrder = true;
         public float notificationDuration = 4f;
@@ -156,7 +159,10 @@ namespace Behind_Bars.Systems.Jail
             // Proceed to inventory phase
             MelonCoroutines.Start(StartInventoryPhase());
         }
-        
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private IEnumerator StartInventoryPhase()
         {
             yield return new WaitForSeconds(1f);
@@ -206,7 +212,10 @@ namespace Behind_Bars.Systems.Jail
             
             currentPlayer = null;
         }
-        
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private IEnumerator MonitorBookingProgress()
         {
             while (bookingInProgress && !IsBookingComplete())

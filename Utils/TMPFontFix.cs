@@ -1,9 +1,14 @@
 using UnityEngine;
-using TMPro;
 using Behind_Bars.Helpers;
 using System.Collections.Generic;
 using System.Linq;
 using System;
+
+#if MONO
+using TMPro;
+#else
+using Il2CppTMPro;
+#endif
 
 namespace Behind_Bars.Utils
 {
@@ -89,7 +94,7 @@ namespace Behind_Bars.Utils
             ModLogger.Debug($"Found {fonts.Length} TMP_FontAsset(s):");
             foreach (var f in fonts.OrderBy(f => f.name))
                 ModLogger.Debug($"  • {f.name}");
-            
+
             return fonts;
         }
 

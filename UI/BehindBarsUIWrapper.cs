@@ -1,5 +1,4 @@
 using UnityEngine;
-using TMPro;
 using Behind_Bars.Helpers;
 using Behind_Bars.Utils;
 using System;
@@ -11,7 +10,9 @@ using MelonLoader;
 #if !MONO
 using Il2CppInterop.Runtime.Attributes;
 using Il2CppScheduleOne.PlayerScripts;
+using Il2CppTMPro;
 #else
+using TMPro;
 using ScheduleOne.PlayerScripts;
 #endif
 
@@ -22,7 +23,10 @@ namespace Behind_Bars.UI
     /// </summary>
     public class BehindBarsUIWrapper : MonoBehaviour
     {
-        [Header("UI References")]
+#if !MONO
+        public BehindBarsUIWrapper(System.IntPtr ptr) : base(ptr) { }
+#endif
+
         public GameObject panel;
         public TextMeshProUGUI title;
         public TextMeshProUGUI lblCrime;
@@ -48,8 +52,6 @@ namespace Behind_Bars.UI
         private const float GAME_SECONDS_PER_GAME_MINUTE = 60f; // 60 game seconds in 1 game minute
 
 #if !MONO
-        public BehindBarsUIWrapper(System.IntPtr ptr) : base(ptr) { }
-
         [HideFromIl2Cpp]
 #endif
         void Start()

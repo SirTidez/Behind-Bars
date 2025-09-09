@@ -19,6 +19,10 @@ namespace Behind_Bars.Systems.NPCs
     /// </summary>
     public class PrisonNPCManager : MonoBehaviour
     {
+#if !MONO
+        public PrisonNPCManager(System.IntPtr ptr) : base(ptr) { }
+#endif
+
         public static PrisonNPCManager Instance { get; private set; }
         
         // NPC tracking
@@ -283,7 +287,11 @@ namespace Behind_Bars.Systems.NPCs
                 prisonGuard.Initialize(badgeNumber, firstName, assignment);
                 
                 // Apply custom appearance
+#if MONO
                 PrisonAvatarCustomizer.ApplyGuardAppearance(guardObject, badgeNumber);
+#else
+                ModLogger.Info($"Avatar customization disabled in IL2CPP for guard {badgeNumber}");
+#endif
                 
                 ModLogger.Info($"✓ Created prison guard: {firstName} (Badge: {badgeNumber}, Assignment: {assignment})");
                 return prisonGuard;
@@ -321,7 +329,11 @@ namespace Behind_Bars.Systems.NPCs
                 prisonInmate.Initialize(prisonerID, firstName, crimeType);
                 
                 // Apply custom appearance
+#if MONO
                 PrisonAvatarCustomizer.ApplyInmateAppearance(inmateObject, prisonerID, crimeType);
+#else
+                ModLogger.Info($"Avatar customization disabled in IL2CPP for inmate {prisonerID}");
+#endif
                 
                 ModLogger.Info($"✓ Created prison inmate: {firstName} (ID: {prisonerID}, Crime: {crimeType})");
                 return prisonInmate;
@@ -419,6 +431,10 @@ namespace Behind_Bars.Systems.NPCs
     /// </summary>
     public class PrisonGuard : MonoBehaviour
     {
+#if !MONO
+        public PrisonGuard(System.IntPtr ptr) : base(ptr) { }
+#endif
+
         public string badgeNumber;
         public string firstName;
         public JailGuardBehavior.GuardAssignment assignment;
@@ -461,6 +477,10 @@ namespace Behind_Bars.Systems.NPCs
     /// </summary>
     public class PrisonInmate : MonoBehaviour
     {
+#if !MONO
+        public PrisonInmate(System.IntPtr ptr) : base(ptr) { }
+#endif
+
         public string prisonerID;
         public string firstName;
         public string crimeType;

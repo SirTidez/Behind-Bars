@@ -18,6 +18,10 @@ namespace Behind_Bars.Systems.NPCs
     /// </summary>
     public class TestNPCController : MonoBehaviour
     {
+#if !MONO
+        public TestNPCController(System.IntPtr ptr) : base(ptr) { }
+#endif
+
         private NavMeshAgent navAgent;
         private Transform target;
         private static Transform moveableTarget;
@@ -678,6 +682,10 @@ namespace Behind_Bars.Systems.NPCs
     /// </summary>
     public class MoveableTargetController : MonoBehaviour
     {
+#if !MONO
+        public MoveableTargetController(System.IntPtr ptr) : base(ptr) { }
+#endif
+
         private float moveSpeed = 4f;
         private float lastMoveTime = 0f;
         

@@ -15,6 +15,10 @@ namespace Behind_Bars.UI
     /// </summary>
     public class WantedLevelUI : MonoBehaviour
     {
+#if !MONO
+        public WantedLevelUI(System.IntPtr ptr) : base(ptr) { }
+#endif
+
         private GameObject _wantedPanel;
         private TextMeshProUGUI _wantedLevelText;
         private TextMeshProUGUI _crimeCountText;

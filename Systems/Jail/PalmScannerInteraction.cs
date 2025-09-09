@@ -27,30 +27,25 @@ namespace Behind_Bars.Systems.Jail
     /// </summary>
     public class PalmScannerInteraction : InteractableObject
     {
-        [Header("Camera System")]
         public Camera interactionCamera;
         public Transform scannerTarget;
         public float scanValidRange = 0.15f;
         
-        [Header("Hand Representation")]
         public GameObject palmModel;           // The MockHand or palm prefab
         public Transform palmStartPosition;    // Where palm starts when interaction begins
         public LayerMask scannerSurfaceLayer = 1 << 8;
         
-        [Header("Dragging Settings")]
         public float dragSensitivity = 0.001f;
         public float hoverOffset = 0.02f;
         public float snapRadius = 0.1f;
         public float maxDragDistance = 0.3f;
         
-        [Header("Scanning Settings")]
         public float scanDuration = 3f;
         public UnityEngine.UI.Image scanProgressUI;
         public AudioSource scannerAudio;
         public AudioClip scanBeepSound;
         public AudioClip scanCompleteSound;
         
-        [Header("Canvas Animation")]
         public UnityEngine.UI.Image imgScanEffect;
         public Transform startTransform;
         public Transform endTransform;
@@ -119,14 +114,22 @@ namespace Behind_Bars.Systems.Jail
             SetInteractionType(EInteractionType.Key_Press);
             
             // Register exit listener like CameraHubController
+#if !MONO
+            GameInput.RegisterExitListener((Il2CppScheduleOne.GameInput.ExitDelegate)OnExit, priority: 2);
+#else
             GameInput.RegisterExitListener(OnExit, priority: 2);
+#endif
             
             ModLogger.Info($"PalmScannerInteraction initialized - Camera: {interactionCamera != null}, Target: {scannerTarget != null}");
         }
         
         void OnDestroy() 
         {
+#if !MONO
+            GameInput.DeregisterExitListener((Il2CppScheduleOne.GameInput.ExitDelegate)OnExit);
+#else
             GameInput.DeregisterExitListener(OnExit);
+#endif
         }
         
         private void OnExit(ExitAction action)
