@@ -55,6 +55,9 @@ namespace Behind_Bars.Systems
 
             // Show "Busted" effect like the original game
             yield return ShowBustedEffect();
+            
+            // Restore UI interactions so player can interact during booking process
+            Behind_Bars.Harmony.HarmonyPatches.RestoreUIInteractions();
 
             // Assess the crime severity
             var sentence = AssessCrimeSeverity(player);

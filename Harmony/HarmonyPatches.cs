@@ -55,6 +55,96 @@ namespace Behind_Bars.Harmony
             _mugshotInProgress = inProgress;
             ModLogger.Info($"Mugshot mode set to: {inProgress}");
         }
+        
+        /// <summary>
+        /// Restore UI interactions without teleporting (used during jail processing)
+        /// </summary>
+        public static void RestoreUIInteractions()
+        {
+            var localPlayer = Player.Local;
+            if (localPlayer == null)
+            {
+                ModLogger.Error("Cannot restore UI interactions - local player is null");
+                return;
+            }
+            
+            try
+            {
+                ModLogger.Info("Restoring UI interactions during jail processing");
+                
+                // Restore the main HUD canvas (this is what Player.Free() does)
+#if !MONO
+                var hud = Il2CppScheduleOne.UI.HUD.Instance;
+#else
+                var hud = ScheduleOne.UI.HUD.Instance;
+#endif
+                if (hud?.canvas != null)
+                {
+                    hud.canvas.enabled = true;
+                    ModLogger.Debug("HUD canvas re-enabled");
+                }
+                
+                // Re-enable inventory interactions
+#if !MONO
+                var playerInventory = Il2CppScheduleOne.PlayerScripts.PlayerInventory.Instance;
+#else
+                var playerInventory = ScheduleOne.PlayerScripts.PlayerInventory.Instance;
+#endif
+                if (playerInventory != null)
+                {
+                    playerInventory.SetInventoryEnabled(true);
+                    ModLogger.Debug("Player inventory re-enabled");
+                }
+                
+                // Re-enable camera look controls
+#if !MONO
+                var playerCamera = Il2CppScheduleOne.PlayerScripts.PlayerCamera.Instance;
+#else
+                var playerCamera = ScheduleOne.PlayerScripts.PlayerCamera.Instance;
+#endif
+                if (playerCamera != null)
+                {
+                    playerCamera.SetCanLook(true);
+                    ModLogger.Debug("Camera look controls re-enabled");
+                }
+                
+                // Re-enable movement
+#if !MONO
+                var playerMovement = Il2CppScheduleOne.PlayerScripts.PlayerMovement.Instance;
+#else
+                var playerMovement = ScheduleOne.PlayerScripts.PlayerMovement.Instance;
+#endif
+                if (playerMovement != null)
+                {
+                    playerMovement.canMove = true;
+                    ModLogger.Debug("Player movement re-enabled");
+                }
+                
+                // Show crosshair again
+                if (hud != null)
+                {
+                    hud.SetCrosshairVisible(true);
+                    ModLogger.Debug("Crosshair visibility restored");
+                }
+                
+                // Clear arrest status so player can be arrested again if needed
+                localPlayer.IsArrested = false;
+                ModLogger.Debug("IsArrested flag cleared - player can be arrested again");
+                
+                // Remove the "Arrested" UI element from PlayerCamera
+                if (playerCamera != null)
+                {
+                    playerCamera.RemoveActiveUIElement("Arrested");
+                    ModLogger.Debug("Removed 'Arrested' UI element");
+                }
+                
+                ModLogger.Info("UI interactions successfully restored without teleportation");
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"Error restoring UI interactions: {ex.Message}\nStack trace: {ex.StackTrace}");
+            }
+        }
 
         // NEW: Intercept arrests immediately at the Player.Arrest() level
         [HarmonyPatch(typeof(Player), "RpcLogic___Arrest_2166136261")]

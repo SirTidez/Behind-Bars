@@ -16,6 +16,7 @@ namespace Behind_Bars.Systems.NPCs
 {
     /// <summary>
     /// Manages prison NPCs with customizable appearances and behaviors
+    /// Enhanced for IL2CPP compatibility and intake coordination
     /// </summary>
     public class PrisonNPCManager : MonoBehaviour
     {
@@ -28,6 +29,13 @@ namespace Behind_Bars.Systems.NPCs
         // NPC tracking
         private List<PrisonGuard> activeGuards = new List<PrisonGuard>();
         private List<PrisonInmate> activeInmates = new List<PrisonInmate>();
+        
+        // Guard coordination for IL2CPP-safe management
+        private List<JailGuardBehavior> registeredGuards = new List<JailGuardBehavior>();
+        private JailGuardBehavior intakeOfficer = null;
+        private bool isPatrolInProgress = false;
+        private float nextPatrolTime = 0f;
+        private readonly float PATROL_COOLDOWN = 300f; // 5 minutes between coordinated patrols
         
         // Enhanced spawn configuration
         public int maxGuards = 4; // Exactly 4 guards: 2 in guard room, 2 in booking
@@ -424,6 +432,154 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         #endregion
+        
+        #region Guard Coordination Methods
+        
+        /// <summary>
+        /// Register a guard with the manager for coordination
+        /// </summary>
+        public void RegisterGuard(JailGuardBehavior guard)
+        {
+            if (!registeredGuards.Contains(guard))
+            {
+                registeredGuards.Add(guard);
+                
+                // Track intake officer specifically
+                if (guard.IsIntakeOfficer())
+                {
+                    intakeOfficer = guard;
+                    ModLogger.Info($"Registered intake officer: {guard.GetBadgeNumber()}");
+                }
+                
+                ModLogger.Debug($"Registered guard {guard.GetBadgeNumber()} with PrisonNPCManager");
+            }
+        }
+        
+        /// <summary>
+        /// Unregister a guard from the manager
+        /// </summary>
+        public void UnregisterGuard(JailGuardBehavior guard)
+        {
+            if (registeredGuards.Contains(guard))
+            {
+                registeredGuards.Remove(guard);
+                
+                if (guard == intakeOfficer)
+                {
+                    intakeOfficer = null;
+                    ModLogger.Info($"Unregistered intake officer: {guard.GetBadgeNumber()}");
+                }
+                
+                ModLogger.Debug($"Unregistered guard {guard.GetBadgeNumber()} from PrisonNPCManager");
+            }
+        }
+        
+        /// <summary>
+        /// Try to assign a coordinated patrol to guards
+        /// </summary>
+        public IEnumerator TryAssignPatrol(JailGuardBehavior requestingGuard)
+        {
+            // Check if it's time for a patrol and no patrol is in progress
+            if (Time.time < nextPatrolTime || isPatrolInProgress)
+            {
+                yield break;
+            }
+            
+            if (!requestingGuard.CanParticipateInPatrol())
+            {
+                yield break;
+            }
+            
+            // Find a partner from the same area
+            var partner = FindPatrolPartner(requestingGuard);
+            if (partner != null)
+            {
+                isPatrolInProgress = true;
+                nextPatrolTime = Time.time + PATROL_COOLDOWN;
+                
+                requestingGuard.StartCoordinatedPatrol(partner);
+                ModLogger.Info($"✓ Assigned coordinated patrol: {requestingGuard.GetBadgeNumber()} + {partner.GetBadgeNumber()}");
+            }
+            
+            yield break;
+        }
+        
+        /// <summary>
+        /// Find a suitable patrol partner for a guard
+        /// </summary>
+        private JailGuardBehavior FindPatrolPartner(JailGuardBehavior requestingGuard)
+        {
+            foreach (var guard in registeredGuards)
+            {
+                if (guard == requestingGuard || !guard.CanParticipateInPatrol()) continue;
+                
+                // Must be from same area (both guard room or both booking)
+                var requestingRole = requestingGuard.GetRole();
+                var guardRole = guard.GetRole();
+                
+                bool sameArea = (requestingRole == JailGuardBehavior.GuardRole.GuardRoomStationary && guardRole == JailGuardBehavior.GuardRole.GuardRoomStationary) ||
+                               (requestingRole == JailGuardBehavior.GuardRole.BookingStationary && guardRole == JailGuardBehavior.GuardRole.BookingStationary);
+                
+                if (sameArea)
+                {
+                    return guard;
+                }
+            }
+            return null;
+        }
+        
+        /// <summary>
+        /// End patrol coordination state
+        /// </summary>
+        public void EndPatrolCoordination()
+        {
+            isPatrolInProgress = false;
+            ModLogger.Debug("Patrol coordination ended");
+        }
+        
+        /// <summary>
+        /// Get the intake officer for prisoner processing
+        /// </summary>
+        public JailGuardBehavior GetIntakeOfficer()
+        {
+            return intakeOfficer;
+        }
+        
+        /// <summary>
+        /// Check if intake officer is available
+        /// </summary>
+        public bool IsIntakeOfficerAvailable()
+        {
+            return intakeOfficer != null && intakeOfficer.IsAvailableForIntake();
+        }
+        
+        /// <summary>
+        /// Request prisoner escort from intake officer
+        /// </summary>
+        public bool RequestPrisonerEscort(GameObject prisoner)
+        {
+            if (IsIntakeOfficerAvailable() && prisoner != null)
+            {
+                intakeOfficer.StartPrisonerEscort(prisoner);
+                ModLogger.Info($"Requested prisoner escort for {prisoner.name} from intake officer");
+                return true;
+            }
+            
+            ModLogger.Warn($"Cannot request prisoner escort - intake officer not available");
+            return false;
+        }
+        
+        /// <summary>
+        /// Get all registered guards
+        /// </summary>
+        public List<JailGuardBehavior> GetRegisteredGuards()
+        {
+            // Clean up null references
+            registeredGuards.RemoveAll(g => g == null);
+            return new List<JailGuardBehavior>(registeredGuards);
+        }
+        
+        #endregion
     }
 
     /// <summary>
@@ -514,5 +670,4 @@ namespace Behind_Bars.Systems.NPCs
         public string GetFirstName() => firstName;
         public string GetCrimeType() => crimeType;
     }
-
 }

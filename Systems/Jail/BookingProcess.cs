@@ -4,6 +4,7 @@ using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.UI;
+using Behind_Bars.Systems.NPCs;
 
 
 
@@ -45,6 +46,8 @@ namespace Behind_Bars.Systems.Jail
         
         private Player currentPlayer;
         private bool bookingInProgress = false;
+        private bool escortRequested = false;
+        private bool escortInProgress = false;
         private static BookingProcess _instance;
         
         public static BookingProcess Instance
@@ -151,13 +154,13 @@ namespace Behind_Bars.Systems.Jail
             if (BehindBarsUIManager.Instance != null)
             {
                 BehindBarsUIManager.Instance.ShowNotification(
-                    "Booking complete! Proceed to Storage", 
+                    "Booking complete! Wait for guard escort", 
                     NotificationType.Direction
                 );
             }
             
-            // Proceed to inventory phase
-            MelonCoroutines.Start(StartInventoryPhase());
+            // Request guard escort instead of proceeding directly
+            RequestGuardEscort();
         }
 
 #if !MONO
@@ -310,6 +313,8 @@ namespace Behind_Bars.Systems.Jail
             mugshotComplete = false;
             fingerprintComplete = false;
             inventoryProcessed = false;
+            escortRequested = false;
+            escortInProgress = false;
             mugshotImage = null;
             fingerprintData = null;
             confiscatedItems.Clear();
@@ -437,6 +442,130 @@ namespace Behind_Bars.Systems.Jail
         
         private bool guardEscortTriggered = false;
         
+        /// <summary>
+        /// Request guard escort for prisoner
+        /// </summary>
+        private void RequestGuardEscort()
+        {
+            if (escortRequested || currentPlayer == null)
+            {
+                return;
+            }
+            
+            escortRequested = true;
+            
+            // Request escort from PrisonNPCManager
+            if (PrisonNPCManager.Instance != null)
+            {
+                bool escortAssigned = PrisonNPCManager.Instance.RequestPrisonerEscort(currentPlayer.gameObject);
+                if (escortAssigned)
+                {
+                    escortInProgress = true;
+                    ModLogger.Info($"Guard escort requested for {currentPlayer.name}");
+                    
+                    if (BehindBarsUIManager.Instance != null)
+                    {
+                        BehindBarsUIManager.Instance.ShowNotification(
+                            "Guard is coming to escort you", 
+                            NotificationType.Progress
+                        );
+                    }
+                    
+                    // Start monitoring escort progress
+                    MelonCoroutines.Start(MonitorEscortProgress());
+                }
+                else
+                {
+                    // Fallback to old system if no guard available
+                    ModLogger.Warn("No guard available for escort - using fallback");
+                    MelonCoroutines.Start(StartInventoryPhase());
+                }
+            }
+            else
+            {
+                // Fallback to old system
+                ModLogger.Warn("PrisonNPCManager not available - using fallback escort");
+                MelonCoroutines.Start(StartInventoryPhase());
+            }
+        }
+        
+        /// <summary>
+        /// Monitor escort progress and handle completion
+        /// </summary>
+        private IEnumerator MonitorEscortProgress()
+        {
+            float escortStartTime = Time.time;
+            float maxEscortTime = 300f; // 5 minutes maximum
+            
+            while (escortInProgress && Time.time - escortStartTime < maxEscortTime)
+            {
+                // Check if escort is complete
+                if (IsEscortComplete())
+                {
+                    CompleteEscortProcess();
+                    yield break;
+                }
+                
+                yield return new WaitForSeconds(2f);
+            }
+            
+            // Timeout - complete anyway
+            if (escortInProgress)
+            {
+                ModLogger.Warn($"Escort timed out for {currentPlayer?.name}");
+                CompleteEscortProcess();
+            }
+        }
+        
+        /// <summary>
+        /// Complete the escort process
+        /// </summary>
+        private void CompleteEscortProcess()
+        {
+            escortInProgress = false;
+            inventoryProcessed = true;
+            
+            ModLogger.Info($"Escort process completed for {currentPlayer?.name}");
+            
+            // Assign cell and finish booking
+            AssignPlayerCell();
+            FinishBooking();
+        }
+        
+        /// <summary>
+        /// Assign a cell to the current player
+        /// </summary>
+        private void AssignPlayerCell()
+        {
+            if (currentPlayer == null) return;
+            
+            var cellManager = CellAssignmentManager.Instance;
+            if (cellManager != null)
+            {
+                int cellNumber = cellManager.AssignPlayerToCell(currentPlayer);
+                if (cellNumber >= 0)
+                {
+                    ModLogger.Info($"Player {currentPlayer.name} assigned to cell {cellNumber}");
+                    
+                    if (BehindBarsUIManager.Instance != null)
+                    {
+                        BehindBarsUIManager.Instance.ShowNotification(
+                            $"You have been assigned to cell {cellNumber}", 
+                            NotificationType.Direction
+                        );
+                    }
+                }
+                else
+                {
+                    ModLogger.Error($"Failed to assign cell to {currentPlayer.name}");
+                }
+            }
+            else
+            {
+                ModLogger.Warn("CellAssignmentManager not available");
+            }
+        }
+        
         private IEnumerator DelayedGuardEscort()
         {
             // Wait a moment for the last station to complete
@@ -482,6 +611,31 @@ namespace Behind_Bars.Systems.Jail
             {
                 ForceCompleteBooking();
             }
+        }
+        
+        /// <summary>
+        /// Check if prisoner needs escort (for guards to query)
+        /// </summary>
+        public bool NeedsPrisonerEscort()
+        {
+            return bookingInProgress && IsBookingComplete() && !escortRequested;
+        }
+        
+        /// <summary>
+        /// Get the current prisoner for escort (for guards)
+        /// </summary>
+        public GameObject GetPrisonerForEscort()
+        {
+            return currentPlayer?.gameObject;
+        }
+        
+        /// <summary>
+        /// Check if escort is complete (for guards)
+        /// </summary>
+        public bool IsEscortComplete()
+        {
+            // For now, simple time-based completion - can be enhanced
+            return inventoryProcessed || !bookingInProgress;
         }
     }
     

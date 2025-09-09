@@ -5,6 +5,7 @@ using System.Linq;
 using UnityEngine;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.NPCs;
+using Behind_Bars.Systems.Jail;
 using MelonLoader;
 
 #if !MONO
@@ -34,7 +35,8 @@ namespace Behind_Bars.Systems.NPCs
         public enum GuardRole
         {
             GuardRoomStationary,    // Guards stationed in guard room (2 guards)
-            BookingStationary,      // Guards stationed in booking area (2 guards)
+            BookingStationary,      // Guards stationed in booking area (1 guard)
+            IntakeOfficer,          // Dedicated intake processing guard (1 guard)
             CoordinatedPatrol,      // Guards doing coordinated patrol together
             ResponseGuard           // Responds to incidents
         }
@@ -91,11 +93,11 @@ namespace Behind_Bars.Systems.NPCs
         private bool isPatrolLeader = false;
         private float patrolStartDelay = 0f;
         
-        // Static coordination system
-        private static System.Collections.Generic.List<JailGuardBehavior> allActiveGuards = new System.Collections.Generic.List<JailGuardBehavior>();
-        private static bool isPatrolInProgress = false;
-        private static float nextPatrolTime = 0f;
-        private static readonly float PATROL_COOLDOWN = 300f; // 5 minutes between coordinated patrols
+        // IL2CPP-safe coordination - managed by PrisonNPCManager instead of static
+        private bool isIntakeActive = false;
+        private GameObject currentEscortTarget = null;
+        private System.Collections.Generic.Queue<Vector3> escortWaypoints = new System.Collections.Generic.Queue<Vector3>();
+        private readonly float PATROL_COOLDOWN = 300f; // 5 minutes between coordinated patrols
 
 #if !MONO
         private Il2CppScheduleOne.NPCs.NPC npcComponent;
@@ -119,17 +121,21 @@ namespace Behind_Bars.Systems.NPCs
                     role = GuardRole.GuardRoomStationary;
                     break;
                 case GuardAssignment.Booking0:
-                case GuardAssignment.Booking1:
                     role = GuardRole.BookingStationary;
+                    break;
+                case GuardAssignment.Booking1:
+                    role = GuardRole.IntakeOfficer; // Booking1 is the intake officer
                     break;
             }
             
             // Find and set assigned spawn point
             SetAssignedSpawnPoint();
             
-            // Register this guard
-            if (!allActiveGuards.Contains(this))
-                allActiveGuards.Add(this);
+            // Register this guard with PrisonNPCManager instead of static list
+            if (PrisonNPCManager.Instance != null)
+            {
+                PrisonNPCManager.Instance.RegisterGuard(this);
+            }
 
             ModLogger.Info($"Initializing {role} guard with badge {badgeNumber} at assignment {assignment}");
         }
@@ -165,6 +171,67 @@ namespace Behind_Bars.Systems.NPCs
                 ModLogger.Error($"Error starting JailGuardBehavior: {e.Message}");
             }
         }
+        
+        /// <summary>
+        /// Ensure NPC component is initialized (called when needed if Start() hasn't run yet)
+        /// </summary>
+        private void EnsureNPCComponentInitialized()
+        {
+            if (npcComponent != null) return;
+            
+            try
+            {
+#if !MONO
+                npcComponent = GetComponent<Il2CppScheduleOne.NPCs.NPC>();
+#else
+                npcComponent = GetComponent<ScheduleOne.NPCs.NPC>();
+#endif
+                
+                if (npcComponent != null)
+                {
+                    ModLogger.Debug($"NPC component initialized for guard {badgeNumber}");
+                }
+                else
+                {
+                    ModLogger.Error($"Failed to get NPC component for guard {gameObject.name}");
+                }
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error initializing NPC component for guard {gameObject.name}: {e.Message}");
+            }
+        }
+        
+        /// <summary>
+        /// Safely attempt to send a text message via NPC component
+        /// Returns true if message was sent successfully, false otherwise
+        /// </summary>
+        private bool TrySendNPCMessage(string message)
+        {
+            try
+            {
+                if (npcComponent == null)
+                {
+                    EnsureNPCComponentInitialized();
+                }
+                
+                if (npcComponent != null && 
+                    npcComponent.gameObject != null && 
+                    npcComponent.enabled && 
+                    npcComponent.gameObject.activeInHierarchy)
+                {
+                    npcComponent.SendTextMessage(message);
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                // Log once per guard but don't spam - text messaging is optional
+                ModLogger.Warn($"Guard {badgeNumber} text messaging unavailable: {ex.Message}");
+            }
+            
+            return false;
+        }
 
         private void SetupGuardBehavior()
         {
@@ -175,6 +242,9 @@ namespace Behind_Bars.Systems.NPCs
                     break;
                 case GuardRole.BookingStationary:
                     SetupStationaryPosition();
+                    break;
+                case GuardRole.IntakeOfficer:
+                    SetupIntakePosition();
                     break;
                 case GuardRole.CoordinatedPatrol:
                     SetupPatrolRoute();
@@ -268,6 +338,16 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        private void SetupIntakePosition()
+        {
+            // Intake officer stays near booking area but mobile for escort duties
+            if (assignedSpawnPoint != null && navAgent != null)
+            {
+                SetDestinationOnce(assignedSpawnPoint.position);
+                ModLogger.Info($"Intake officer {badgeNumber} positioned at booking area");
+            }
+        }
+        
         private void SetupResponsePosition()
         {
             // Response guard stays at central location
@@ -313,9 +393,6 @@ namespace Behind_Bars.Systems.NPCs
             return false;
         }
 
-#if !MONO
-        [HideFromIl2Cpp]
-#endif
         private IEnumerator GuardBehaviorLoop()
         {
             while (isOnDuty)
@@ -331,6 +408,9 @@ namespace Behind_Bars.Systems.NPCs
                         // Check for coordinated patrol opportunity
                         yield return CheckForPatrolOpportunity();
                         break;
+                    case GuardRole.IntakeOfficer:
+                        yield return HandleIntakeOfficerBehavior();
+                        break;
                     case GuardRole.CoordinatedPatrol:
                         yield return HandleCoordinatedPatrolBehavior();
                         break;
@@ -340,16 +420,50 @@ namespace Behind_Bars.Systems.NPCs
                 }
 
                 // Behavior check interval
-                yield return new WaitForSeconds(3f);
+                yield return new WaitForSeconds(2f);
             }
         }
 
         /// <summary>
         /// Handle coordinated patrol behavior with partner synchronization
         /// </summary>
-#if !MONO
-        [HideFromIl2Cpp]
-#endif
+        /// <summary>
+        /// Handle intake officer behavior - escort prisoners through booking process
+        /// </summary>
+        private IEnumerator HandleIntakeOfficerBehavior()
+        {
+            // Check if there's a prisoner waiting for intake
+            if (!isIntakeActive)
+            {
+                yield return CheckForIntakeAssignment();
+            }
+            
+            if (isIntakeActive && currentEscortTarget != null)
+            {
+                // Handle active escort
+                yield return HandlePrisonerEscort();
+            }
+            else
+            {
+                // Return to station when not escorting
+                if (hasReachedDestination && assignedSpawnPoint != null)
+                {
+                    // Occasional look around at station
+                    if (UnityEngine.Random.Range(0f, 1f) < 0.1f)
+                    {
+                        float baseRotation = assignedSpawnPoint.eulerAngles.y;
+                        float lookDirection = baseRotation + UnityEngine.Random.Range(-45f, 45f);
+                        var targetRotation = Quaternion.Euler(0, lookDirection, 0);
+                        transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, Time.deltaTime * 1.5f);
+                    }
+                }
+                else if (!hasReachedDestination && assignedSpawnPoint != null)
+                {
+                    SetDestinationOnce(assignedSpawnPoint.position);
+                }
+            }
+        }
+        
         private IEnumerator HandleCoordinatedPatrolBehavior()
         {
             if (patrolRoute.points == null || patrolRoute.points.Length == 0)
@@ -419,17 +533,13 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// End coordinated patrol and return to stationary positions
         /// </summary>
-#if !MONO
-        [HideFromIl2Cpp]
-#endif
         private IEnumerator EndCoordinatedPatrol()
         {
             ModLogger.Info($"Guard {badgeNumber} ending coordinated patrol");
             
-            // Reset patrol state
+            // Reset patrol state - simplified for IL2CPP compatibility
             if (isPatrolLeader)
             {
-                isPatrolInProgress = false;
                 if (patrolPartner != null)
                 {
                     MelonCoroutines.Start(patrolPartner.EndCoordinatedPatrol());
@@ -466,9 +576,6 @@ namespace Behind_Bars.Systems.NPCs
             yield return new WaitForSeconds(1f);
         }
 
-#if !MONO
-        [HideFromIl2Cpp]
-#endif
         private IEnumerator HandleStationaryBehavior()
         {
             // Ensure guard is at assigned position
@@ -496,82 +603,64 @@ namespace Behind_Bars.Systems.NPCs
         
         /// <summary>
         /// Check if this guard should participate in a coordinated patrol
+        /// IL2CPP-safe simplified version
         /// </summary>
         private IEnumerator CheckForPatrolOpportunity()
         {
             // Only guards from same area can patrol together
             if (!CanParticipateInPatrol()) yield break;
             
-            // Check if it's time for a patrol and no patrol is in progress
-            if (Time.time >= nextPatrolTime && !isPatrolInProgress)
+            // Simplified patrol logic - let PrisonNPCManager coordinate patrols
+            if (PrisonNPCManager.Instance != null)
             {
-                // Try to start a coordinated patrol
-                yield return TryStartCoordinatedPatrol();
+                yield return PrisonNPCManager.Instance.TryAssignPatrol(this);
             }
             
             yield break;
         }
         
-        private bool CanParticipateInPatrol()
+        
+        /// <summary>
+        /// Start coordinated patrol - simplified IL2CPP-safe version
+        /// </summary>
+        public void StartCoordinatedPatrol(JailGuardBehavior partner = null)
+        {
+            ModLogger.Info($"Guard {badgeNumber} starting coordinated patrol");
+            
+            // Convert to patrol role temporarily
+            role = GuardRole.CoordinatedPatrol;
+            
+            if (partner != null)
+            {
+                patrolPartner = partner;
+                isPatrolLeader = true;
+                partner.role = GuardRole.CoordinatedPatrol;
+                partner.patrolPartner = this;
+                partner.isPatrolLeader = false;
+                ModLogger.Info($"✓ Coordinated patrol: Leader {badgeNumber}, Partner {partner.badgeNumber}");
+            }
+            else
+            {
+                isPatrolLeader = true;
+                ModLogger.Info($"✓ Solo patrol initiated: {badgeNumber}");
+            }
+            
+            // Setup patrol route
+            SetupPatrolRoute();
+        }
+        
+        /// <summary>
+        /// Check if guard can participate in patrol - IL2CPP safe
+        /// </summary>
+        public bool CanParticipateInPatrol()
         {
             // Must be at assigned position and on duty
             if (!isOnDuty || !hasReachedDestination) return false;
             
-            // Only stationary guards can leave for patrol
+            // Only stationary guards can leave for patrol (not intake officers)
             if (role != GuardRole.GuardRoomStationary && role != GuardRole.BookingStationary) return false;
             
             return true;
-        }
-        
-        /// <summary>
-        /// Try to start a coordinated patrol with another guard from same area
-        /// </summary>
-        private IEnumerator TryStartCoordinatedPatrol()
-        {
-            // Find a partner from the same area
-            var partner = FindPatrolPartner();
-            if (partner == null) yield break;
-            
-            ModLogger.Info($"Guard {badgeNumber} starting coordinated patrol with {partner.badgeNumber}");
-            
-            // Set patrol state
-            isPatrolInProgress = true;
-            nextPatrolTime = Time.time + PATROL_COOLDOWN;
-            
-            // Convert to patrol role temporarily
-            role = GuardRole.CoordinatedPatrol;
-            partner.role = GuardRole.CoordinatedPatrol;
-            
-            // Set patrol relationships
-            isPatrolLeader = true;
-            patrolPartner = partner;
-            partner.patrolPartner = this;
-            partner.isPatrolLeader = false;
-            partner.patrolStartDelay = 2f; // Slight delay for coordination
-            
-            // Setup patrol routes for both guards
-            SetupPatrolRoute();
-            partner.SetupPatrolRoute();
-            
-            ModLogger.Info($"✓ Coordinated patrol initiated: Leader {badgeNumber}, Partner {partner.badgeNumber}");
-        }
-        
-        private JailGuardBehavior FindPatrolPartner()
-        {
-            foreach (var guard in allActiveGuards)
-            {
-                if (guard == this || !guard.CanParticipateInPatrol()) continue;
-                
-                // Must be from same area (both guard room or both booking)
-                bool sameArea = (role == GuardRole.GuardRoomStationary && guard.role == GuardRole.GuardRoomStationary) ||
-                               (role == GuardRole.BookingStationary && guard.role == GuardRole.BookingStationary);
-                
-                if (sameArea)
-                {
-                    return guard;
-                }
-            }
-            return null;
         }
 
         private IEnumerator HandleWatchTowerBehavior()
@@ -588,6 +677,168 @@ namespace Behind_Bars.Systems.NPCs
             yield break;
         }
 
+        /// <summary>
+        /// Check if there's a prisoner ready for intake processing
+        /// </summary>
+        private IEnumerator CheckForIntakeAssignment()
+        {
+            var bookingProcess = BookingProcess.Instance;
+            if (bookingProcess != null && bookingProcess.NeedsPrisonerEscort() && !isIntakeActive)
+            {
+                var prisoner = bookingProcess.GetPrisonerForEscort();
+                if (prisoner != null)
+                {
+                    StartPrisonerEscort(prisoner);
+                    ModLogger.Info($"Intake officer {badgeNumber} assigned to escort {prisoner.name}");
+                }
+            }
+            yield break;
+        }
+        
+        /// <summary>
+        /// Handle escorting a prisoner through the intake process
+        /// </summary>
+        private IEnumerator HandlePrisonerEscort()
+        {
+            if (currentEscortTarget == null)
+            {
+                EndPrisonerEscort();
+                yield break;
+            }
+            
+            // Check if we have waypoints to follow
+            if (escortWaypoints.Count > 0)
+            {
+                var nextWaypoint = escortWaypoints.Peek();
+                float distanceToWaypoint = Vector3.Distance(transform.position, nextWaypoint);
+                
+                // Move to waypoint if not close enough
+                if (distanceToWaypoint > 2f)
+                {
+                    SetDestinationOnce(nextWaypoint);
+                }
+                else
+                {
+                    // Reached waypoint, proceed to next
+                    escortWaypoints.Dequeue();
+                    ModLogger.Debug($"Intake officer reached waypoint, {escortWaypoints.Count} remaining");
+                    
+                    // Wait briefly at each waypoint
+                    yield return new WaitForSeconds(1f);
+                }
+            }
+            else
+            {
+                // No more waypoints - check if escort is complete
+                var bookingProcess = BookingProcess.Instance;
+                if (bookingProcess != null && bookingProcess.IsEscortComplete())
+                {
+                    EndPrisonerEscort();
+                }
+            }
+        }
+        
+        /// <summary>
+        /// Start escorting a prisoner
+        /// </summary>
+        public void StartPrisonerEscort(GameObject prisoner)
+        {
+            currentEscortTarget = prisoner;
+            isIntakeActive = true;
+            
+            // Get escort path from booking process or jail controller
+            SetupEscortWaypoints();
+            
+            // Ensure npcComponent is initialized before using it
+            if (npcComponent == null)
+            {
+                EnsureNPCComponentInitialized();
+            }
+            
+            // Text messaging is optional - guard escort works without it
+            if (TrySendNPCMessage("Follow me for processing."))
+            {
+                ModLogger.Debug($"Guard {badgeNumber} instructing prisoner to follow");
+            }
+            else
+            {
+                ModLogger.Debug($"Guard {badgeNumber} starting escort (text messaging unavailable)");
+            }
+        }
+        
+        /// <summary>
+        /// End prisoner escort and return to station
+        /// </summary>
+        public void EndPrisonerEscort()
+        {
+            currentEscortTarget = null;
+            isIntakeActive = false;
+            escortWaypoints.Clear();
+            
+            ModLogger.Info($"Intake officer {badgeNumber} completed escort duty");
+            
+            // Ensure npcComponent is initialized before using it
+            if (npcComponent == null)
+            {
+                EnsureNPCComponentInitialized();
+            }
+            
+            // Text messaging is optional - escort completion works without it
+            if (TrySendNPCMessage("Processing complete."))
+            {
+                ModLogger.Debug($"Guard {badgeNumber} notified prisoner processing is complete");
+            }
+            else
+            {
+                ModLogger.Debug($"Guard {badgeNumber} completed escort (text messaging unavailable)");
+            }
+        }
+        
+        /// <summary>
+        /// Setup waypoints for prisoner escort
+        /// </summary>
+        private void SetupEscortWaypoints()
+        {
+            escortWaypoints.Clear();
+            
+            var jailController = Core.ActiveJailController;
+            if (jailController == null) return;
+            
+            // Create escort path: Holding -> Mugshot -> Scanner -> Storage -> Cell
+            // For now, use basic waypoints - can be enhanced later
+            var mugshotPos = FindStationPosition("Mugshot");
+            var scannerPos = FindStationPosition("Scanner");
+            var storagePos = FindStationPosition("Storage");
+            
+            if (mugshotPos.HasValue) escortWaypoints.Enqueue(mugshotPos.Value);
+            if (scannerPos.HasValue) escortWaypoints.Enqueue(scannerPos.Value);
+            if (storagePos.HasValue) escortWaypoints.Enqueue(storagePos.Value);
+            
+            ModLogger.Info($"Setup {escortWaypoints.Count} escort waypoints for intake");
+        }
+        
+        /// <summary>
+        /// Find position of a station for escort waypoints
+        /// </summary>
+        private Vector3? FindStationPosition(string stationType)
+        {
+            // Simple implementation - can be enhanced with actual station positions
+            var jailController = Core.ActiveJailController;
+            if (jailController == null) return null;
+            
+            switch (stationType.ToLower())
+            {
+                case "mugshot":
+                    return jailController.transform.position + new Vector3(2f, 0f, -3f);
+                case "scanner":
+                    return jailController.transform.position + new Vector3(-2f, 0f, -3f);
+                case "storage":
+                    return jailController.transform.position + new Vector3(0f, 0f, -6f);
+                default:
+                    return null;
+            }
+        }
+        
         private IEnumerator HandleResponseBehavior()
         {
             // Response guards just idle in position waiting for alerts
@@ -627,6 +878,11 @@ namespace Behind_Bars.Systems.NPCs
                     return $"Officer {badgeNumber}: You need something, inmate?";
                 case GuardRole.BookingStationary:
                     return $"Officer {badgeNumber}: Keep moving, nothing to see here.";
+                case GuardRole.IntakeOfficer:
+                    if (isIntakeActive)
+                        return $"Officer {badgeNumber}: Follow me for processing.";
+                    else
+                        return $"Officer {badgeNumber}: Report to intake when called.";
                 case GuardRole.CoordinatedPatrol:
                     return $"Officer {badgeNumber}: On patrol - stay back.";
                 case GuardRole.ResponseGuard:
@@ -757,9 +1013,17 @@ namespace Behind_Bars.Systems.NPCs
         {
             isOnDuty = false;
             
-            // Clean up from coordination system
-            if (allActiveGuards.Contains(this))
-                allActiveGuards.Remove(this);
+            // Clean up any active escort
+            if (isIntakeActive)
+            {
+                EndPrisonerEscort();
+            }
+            
+            // Unregister from PrisonNPCManager
+            if (PrisonNPCManager.Instance != null)
+            {
+                PrisonNPCManager.Instance.UnregisterGuard(this);
+            }
                 
             // End any ongoing patrol
             if (role == GuardRole.CoordinatedPatrol)
@@ -777,6 +1041,12 @@ namespace Behind_Bars.Systems.NPCs
         public GuardAssignment GetAssignment() => assignment;
 
         public string GetBadgeNumber() => badgeNumber;
+        
+        public bool IsIntakeOfficer() => role == GuardRole.IntakeOfficer;
+        
+        public bool IsAvailableForIntake() => role == GuardRole.IntakeOfficer && !isIntakeActive;
+        
+        public GameObject GetCurrentEscortTarget() => currentEscortTarget;
     }
 
     /// <summary>

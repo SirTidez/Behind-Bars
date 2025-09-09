@@ -121,6 +121,9 @@ namespace Behind_Bars
             ClassInjector.RegisterTypeInIl2Cpp<ScannerStation>();
             ClassInjector.RegisterTypeInIl2Cpp<InventoryDropOff>();
             ClassInjector.RegisterTypeInIl2Cpp<JailBed>();
+            
+            // Register Cell Management Components
+            ClassInjector.RegisterTypeInIl2Cpp<CellAssignmentManager>();
 #endif
             // Initialize core systems
             HarmonyPatches.Initialize(this);
@@ -516,10 +519,14 @@ namespace Behind_Bars
             {
                 var npcManager = ActiveJailController.gameObject.AddComponent<PrisonNPCManager>();
                 ModLogger.Info("✓ PrisonNPCManager added to JailController");
+                
+                // Add CellAssignmentManager for cell tracking
+                var cellManager = ActiveJailController.gameObject.AddComponent<CellAssignmentManager>();
+                ModLogger.Info("✓ CellAssignmentManager added to JailController");
             }
             else
             {
-                ModLogger.Error("ActiveJailController is null - cannot add PrisonNPCManager");
+                ModLogger.Error("ActiveJailController is null - cannot add managers");
             }
 
             ModLogger.Info("✓ Jail NPCs created successfully with custom appearances");
