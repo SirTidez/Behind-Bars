@@ -56,6 +56,7 @@ namespace Behind_Bars.UI
 #endif
         void Start()
         {
+            ModLogger.Debug("BehindBarsUIWrapper.Start() called - initializing components");
             InitializeComponents();
         }
 
@@ -69,7 +70,7 @@ namespace Behind_Bars.UI
         {
             try
             {
-                // ModLogger.Debug("Initializing BehindBarsUI components...");
+                ModLogger.Debug("Initializing BehindBarsUI components...");
                 
                 // Debug: Log all children to understand the structure
                 LogChildrenRecursively(transform, 0);
@@ -81,9 +82,22 @@ namespace Behind_Bars.UI
                 if (panel == null)
                     panel = gameObject; // Use the root object if no panel found
 
-                // ModLogger.Debug($"Using panel: {panel.name}");
+                ModLogger.Debug($"Using panel: {panel.name}");
 
                 // Find all text components using multiple search strategies
+                ModLogger.Debug("Finding UI components...");
+#if !MONO
+                // IL2CPP-specific component finding
+                title = FindIL2CPPTextComponent("Title");
+                lblCrime = FindIL2CPPTextComponent("lblCrime");
+                txtCrime = FindIL2CPPTextComponent("txtCrime");
+                lblTime = FindIL2CPPTextComponent("lblTime");
+                txtTime = FindIL2CPPTextComponent("txtTime");
+                lblBail = FindIL2CPPTextComponent("lblBail");
+                txtBail = FindIL2CPPTextComponent("txtBail");
+                txtEntered = FindComponent<Button>("txtEntered");
+#else
+                // Mono version
                 title = FindComponent<TextMeshProUGUI>("Title");
                 lblCrime = FindComponent<TextMeshProUGUI>("lblCrime");
                 txtCrime = FindComponent<TextMeshProUGUI>("txtCrime");
@@ -92,27 +106,31 @@ namespace Behind_Bars.UI
                 lblBail = FindComponent<TextMeshProUGUI>("lblBail");
                 txtBail = FindComponent<TextMeshProUGUI>("txtBail");
                 txtEntered = FindComponent<Button>("txtEntered");
+#endif
 
                 // Log what we found
-                // ModLogger.Debug($"UI Components found:");
-                // ModLogger.Debug($"  Title: {(title != null ? "✓" : "✗")}");
-                // ModLogger.Debug($"  lblCrime: {(lblCrime != null ? "✓" : "✗")}");
-                // ModLogger.Debug($"  txtCrime: {(txtCrime != null ? "✓" : "✗")}");
-                // ModLogger.Debug($"  lblTime: {(lblTime != null ? "✓" : "✗")}");
-                // ModLogger.Debug($"  txtTime: {(txtTime != null ? "✓" : "✗")}");
-                // ModLogger.Debug($"  lblBail: {(lblBail != null ? "✓" : "✗")}");
-                // ModLogger.Debug($"  txtBail: {(txtBail != null ? "✓" : "✗")}");
-                // ModLogger.Debug($"  txtEntered: {(txtEntered != null ? "✓" : "✗")}");
+                ModLogger.Debug($"UI Components found:");
+                ModLogger.Debug($"  Title: {(title != null ? "✓" : "✗")}");
+                ModLogger.Debug($"  lblCrime: {(lblCrime != null ? "✓" : "✗")}");
+                ModLogger.Debug($"  txtCrime: {(txtCrime != null ? "✓" : "✗")}");
+                ModLogger.Debug($"  lblTime: {(lblTime != null ? "✓" : "✗")}");
+                ModLogger.Debug($"  txtTime: {(txtTime != null ? "✓" : "✗")}");
+                ModLogger.Debug($"  lblBail: {(lblBail != null ? "✓" : "✗")}");
+                ModLogger.Debug($"  txtBail: {(txtBail != null ? "✓" : "✗")}");
+                ModLogger.Debug($"  txtEntered: {(txtEntered != null ? "✓" : "✗")}");
 
                 // Apply font fixes
+                ModLogger.Debug("Applying font fixes...");
                 TMPFontFix.FixAllTMPFonts(gameObject, "base");
                 
                 // Fix text wrapping settings
+                ModLogger.Debug("Fixing text wrapping...");
                 FixTextWrapping();
                 
                 // Setup button if found
                 if (txtEntered != null)
                 {
+                    ModLogger.Debug("Setting up button click handler...");
 #if !MONO
                     txtEntered.onClick.AddListener(new System.Action(OnEnteredButtonClicked));
 #else
@@ -126,6 +144,7 @@ namespace Behind_Bars.UI
             catch (Exception e)
             {
                 ModLogger.Error($"Error initializing BehindBarsUI components: {e.Message}");
+                ModLogger.Error($"Stack trace: {e.StackTrace}");
             }
         }
 
@@ -435,6 +454,132 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
+        /// Find IL2CPP TextMeshProUGUI component specifically
+        /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+        private TextMeshProUGUI FindIL2CPPTextComponent(string name)
+        {
+            ModLogger.Debug($"Searching for IL2CPP TextMeshProUGUI component: {name}");
+            
+            // Strategy 1: Direct child search
+            var childTransform = panel.transform.Find(name);
+            if (childTransform != null)
+            {
+                ModLogger.Debug($"Found child transform for {name}");
+                var il2cppText = childTransform.GetComponent<Il2CppTMPro.TextMeshProUGUI>();
+                if (il2cppText != null)
+                {
+                    ModLogger.Debug($"Found {name} via direct child search - casting to TextMeshProUGUI");
+                    try
+                    {
+                        var cast = il2cppText.Cast<TextMeshProUGUI>();
+                        ModLogger.Debug($"Successfully cast {name} to TextMeshProUGUI");
+                        return cast;
+                    }
+                    catch (System.Exception ex)
+                    {
+                        ModLogger.Error($"Failed to cast {name}: {ex.Message}");
+                    }
+                }
+                else
+                {
+                    ModLogger.Debug($"Child {name} found but has no Il2CppTMPro.TextMeshProUGUI component");
+                }
+            }
+            else
+            {
+                ModLogger.Debug($"No direct child found for {name}");
+            }
+            
+            // Strategy 2: Recursive search
+            var recursive = FindIL2CPPTextInChildren(panel.transform, name);
+            if (recursive != null)
+            {
+                ModLogger.Debug($"Found {name} via recursive search");
+                return recursive;
+            }
+            
+            // Strategy 3: Search all Il2CppTMPro.TextMeshProUGUI components
+            ModLogger.Debug($"Searching all Il2CppTMPro.TextMeshProUGUI components for {name}");
+            try
+            {
+                var allIL2CPPTexts = GetComponentsInChildren<Il2CppTMPro.TextMeshProUGUI>(true);
+                ModLogger.Debug($"Found {allIL2CPPTexts.Length} total Il2CppTMPro.TextMeshProUGUI components");
+                
+                foreach (var comp in allIL2CPPTexts)
+                {
+                    if (comp != null)
+                    {
+                        ModLogger.Debug($"Checking component: {comp.name} vs {name}");
+                        if (comp.name.Equals(name, StringComparison.OrdinalIgnoreCase))
+                        {
+                            ModLogger.Debug($"Found {name} via component search - casting");
+                            try
+                            {
+                                var cast = comp.Cast<TextMeshProUGUI>();
+                                ModLogger.Debug($"Successfully cast {name} to TextMeshProUGUI via component search");
+                                return cast;
+                            }
+                            catch (System.Exception ex)
+                            {
+                                ModLogger.Error($"Failed to cast {name} via component search: {ex.Message}");
+                            }
+                        }
+                    }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error during component search for {name}: {ex.Message}");
+            }
+            
+            ModLogger.Debug($"Could not find IL2CPP TextMeshProUGUI component: {name}");
+            return null;
+        }
+        
+        /// <summary>
+        /// Find IL2CPP TextMeshProUGUI component recursively in children
+        /// </summary>
+        [HideFromIl2Cpp]
+        private TextMeshProUGUI FindIL2CPPTextInChildren(Transform parent, string name)
+        {
+            for (int i = 0; i < parent.childCount; i++)
+            {
+                var child = parent.GetChild(i);
+                if (child.name.Equals(name, StringComparison.OrdinalIgnoreCase))
+                {
+                    ModLogger.Debug($"Found matching child in recursive search: {name}");
+                    var il2cppText = child.GetComponent<Il2CppTMPro.TextMeshProUGUI>();
+                    if (il2cppText != null)
+                    {
+                        ModLogger.Debug($"Child {name} has Il2CppTMPro.TextMeshProUGUI component - casting");
+                        try
+                        {
+                            var cast = il2cppText.Cast<TextMeshProUGUI>();
+                            ModLogger.Debug($"Successfully cast {name} in recursive search");
+                            return cast;
+                        }
+                        catch (System.Exception ex)
+                        {
+                            ModLogger.Error($"Failed to cast {name} in recursive search: {ex.Message}");
+                        }
+                    }
+                    else
+                    {
+                        ModLogger.Debug($"Child {name} found but has no Il2CppTMPro.TextMeshProUGUI component");
+                    }
+                }
+                
+                // Recursive search
+                var found = FindIL2CPPTextInChildren(child, name);
+                if (found != null) return found;
+            }
+            return null;
+        }
+#endif
+
+        /// <summary>
         /// Find a component using multiple search strategies
         /// </summary>
 #if !MONO
@@ -458,7 +603,34 @@ namespace Behind_Bars.UI
                     return comp;
             }
             
-            // ModLogger.Debug($"Could not find component {name} of type {typeof(T).Name}");
+#if !MONO
+            // Strategy 4: IL2CPP-specific - Search for TextMeshProUGUI components manually
+            if (typeof(T) == typeof(TextMeshProUGUI))
+            {
+                var allMonoBehaviours = GetComponentsInChildren<MonoBehaviour>(true);
+                foreach (var comp in allMonoBehaviours)
+                {
+                    if (comp != null && comp.name.Equals(name, StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Try to cast to TextMeshProUGUI
+                        try
+                        {
+                            var tmpComp = comp.TryCast<Il2CppTMPro.TextMeshProUGUI>();
+                            if (tmpComp != null)
+                            {
+                                return tmpComp.TryCast<T>();
+                            }
+                        }
+                        catch (System.Exception)
+                        {
+                            // Cast failed, continue searching
+                        }
+                    }
+                }
+            }
+#endif
+            
+            ModLogger.Debug($"Could not find component {name} of type {typeof(T).Name}");
             return null;
         }
 
@@ -495,7 +667,7 @@ namespace Behind_Bars.UI
         private void LogChildrenRecursively(Transform parent, int depth)
         {
             string indent = new string(' ', depth * 2);
-            // ModLogger.Debug($"{indent}{parent.name} (Components: {string.Join(", ", parent.GetComponents<Component>().Select(c => c.GetType().Name))})");
+            ModLogger.Debug($"{indent}{parent.name} (Components: {string.Join(", ", parent.GetComponents<Component>().Select(c => c.GetType().Name))})");
             
             for (int i = 0; i < parent.childCount; i++)
             {

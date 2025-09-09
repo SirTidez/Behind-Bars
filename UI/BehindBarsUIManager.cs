@@ -104,6 +104,8 @@ namespace Behind_Bars.UI
         {
             try
             {
+                ModLogger.Info("Loading BehindBarsUI prefab from asset bundle...");
+                
                 // Use the cached jail bundle which contains the UI prefab
                 var bundle = Core.CachedJailBundle;
                 if (bundle == null)
@@ -118,6 +120,7 @@ namespace Behind_Bars.UI
                            bundle.LoadAsset<GameObject>("BehindBarsUI") ??
                            bundle.LoadAsset<GameObject>("behindbarsui");
 #else
+                ModLogger.Debug("Loading UI prefab in IL2CPP mode...");
                 _uiPrefab = bundle.LoadAsset("assets/behindbars/behindbarsui.prefab", Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>() ??
                            bundle.LoadAsset("BehindBarsUI", Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>() ??
                            bundle.LoadAsset("behindbarsui", Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>();
@@ -143,6 +146,7 @@ namespace Behind_Bars.UI
             catch (System.Exception e)
             {
                 ModLogger.Error($"Error loading UI prefab: {e.Message}");
+                ModLogger.Error($"Stack trace: {e.StackTrace}");
             }
         }
 
@@ -159,6 +163,8 @@ namespace Behind_Bars.UI
         /// </summary>
         public void ShowJailInfoUI(string crime, string timeInfo, string bailInfo, float jailTimeSeconds, float bailAmount)
         {
+            ModLogger.Info($"ShowJailInfoUI called: initialized={_isInitialized}, prefabLoaded={_uiPrefab != null}");
+            
             if (!_isInitialized)
             {
                 ModLogger.Error("BehindBarsUIManager not initialized - call Initialize() first");
@@ -173,13 +179,17 @@ namespace Behind_Bars.UI
 
             try
             {
+                ModLogger.Info("Creating jail info UI...");
+                
                 // Destroy existing UI first (including its canvas)
                 if (_activeUI != null)
                 {
+                    ModLogger.Debug("Destroying existing UI");
                     DestroyJailInfoUI();
                 }
 
                 // Create a fresh overlay canvas
+                ModLogger.Debug("Creating overlay canvas");
                 var canvas = FindOrCreateCanvas();
                 if (canvas == null)
                 {
@@ -188,13 +198,68 @@ namespace Behind_Bars.UI
                 }
 
                 // Instantiate the UI
+                ModLogger.Debug("Instantiating UI prefab");
                 _activeUI = UnityEngine.Object.Instantiate(_uiPrefab, canvas.transform);
                 _activeUI.name = "[Behind Bars] Jail Info UI";
 
                 // Add the wrapper component
+                ModLogger.Debug("Adding UI wrapper component");
+#if !MONO
+                // IL2CPP-safe component addition
+                try
+                {
+                    ModLogger.Debug("Using IL2CPP component addition method");
+                    var wrapperComponent = _activeUI.AddComponent(Il2CppInterop.Runtime.Il2CppType.Of<BehindBarsUIWrapper>());
+                    ModLogger.Debug("IL2CPP AddComponent succeeded, casting to BehindBarsUIWrapper");
+                    _uiWrapper = wrapperComponent.Cast<BehindBarsUIWrapper>();
+                    ModLogger.Debug("Cast to BehindBarsUIWrapper succeeded");
+                }
+                catch (System.Exception ex)
+                {
+                    ModLogger.Error($"Failed to add BehindBarsUIWrapper component via IL2CPP method: {ex.Message}");
+                    ModLogger.Error($"Stack trace: {ex.StackTrace}");
+                    return;
+                }
+#else
                 _uiWrapper = _activeUI.AddComponent<BehindBarsUIWrapper>();
+#endif
+
+                if (_uiWrapper == null)
+                {
+                    ModLogger.Error("Failed to add BehindBarsUIWrapper component - wrapper is null");
+                    return;
+                }
+                else
+                {
+                    ModLogger.Debug("BehindBarsUIWrapper component added successfully");
+                }
+
+#if !MONO
+                // In IL2CPP, Unity Start() method may not be called automatically
+                // So we manually initialize the wrapper component
+                ModLogger.Debug("Manually initializing BehindBarsUIWrapper for IL2CPP");
+                try
+                {
+                    // Call the initialization directly
+                    var initMethod = _uiWrapper.GetType().GetMethod("InitializeComponents", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    if (initMethod != null)
+                    {
+                        initMethod.Invoke(_uiWrapper, null);
+                        ModLogger.Debug("Manual initialization succeeded");
+                    }
+                    else
+                    {
+                        ModLogger.Error("Could not find InitializeComponents method for manual initialization");
+                    }
+                }
+                catch (System.Exception ex)
+                {
+                    ModLogger.Error($"Manual initialization failed: {ex.Message}");
+                }
+#endif
 
                 // Wait a frame for components to initialize, then update info and start dynamic updates
+                ModLogger.Debug("Starting UI update coroutine");
                 MelonLoader.MelonCoroutines.Start(UpdateUIAfterFrame(crime, timeInfo, bailInfo, jailTimeSeconds, bailAmount));
 
                 ModLogger.Info($"✓ Jail info UI created in overlay canvas '{canvas.name}' with sorting order {canvas.sortingOrder}");
@@ -202,6 +267,7 @@ namespace Behind_Bars.UI
             catch (System.Exception e)
             {
                 ModLogger.Error($"Error showing jail info UI: {e.Message}");
+                ModLogger.Error($"Stack trace: {e.StackTrace}");
             }
         }
 
@@ -376,18 +442,48 @@ namespace Behind_Bars.UI
         {
             try
             {
-                // Find or create canvas
-                Canvas canvas = Singleton<HUD>.Instance?.canvas;
+                // Find or create canvas using IL2CPP-safe methods
+                Canvas canvas = null;
+                
+#if !MONO
+                // IL2CPP-safe canvas finding
+                try
+                {
+                    var hudInstance = Singleton<Il2CppScheduleOne.UI.HUD>.Instance;
+                    if (hudInstance != null && hudInstance.Pointer != System.IntPtr.Zero)
+                    {
+                        canvas = hudInstance.canvas;
+                    }
+                }
+                catch (System.Exception)
+                {
+                    // HUD singleton not available
+                }
+                
+                if (canvas == null)
+                {
+                    // Fallback: find any canvas in scene using IL2CPP-safe method
+                    var allCanvases = UnityEngine.Object.FindObjectsOfType<Canvas>();
+                    if (allCanvases != null && allCanvases.Length > 0)
+                    {
+                        canvas = allCanvases[0];
+                    }
+                }
+#else
+                // Mono version
+                canvas = Singleton<HUD>.Instance?.canvas;
                 if (canvas == null)
                 {
                     // Fallback: find any canvas in scene
                     canvas = UnityEngine.Object.FindObjectOfType<Canvas>();
                 }
+#endif
                 
                 if (canvas == null)
                 {
-                    ModLogger.Error("No canvas found for notification UI");
-                    return;
+                    ModLogger.Error("No canvas found for notification UI - creating overlay canvas");
+                    // Create our own canvas as last resort
+                    canvas = FindOrCreateCanvas();
                 }
                 
                 // Create notification container
