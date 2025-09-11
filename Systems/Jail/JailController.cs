@@ -1,11 +1,15 @@
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using BehindBars.Areas;
+using MelonLoader;
+using UnityEngine.UI;
+using Behind_Bars.Helpers;
 
 
 #if MONO
-    public sealed class JailController : MonoBehaviour
+public sealed class JailController : MonoBehaviour
 #else
 public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
 #endif
@@ -26,6 +30,10 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     public GuardRoomArea guardRoom = new GuardRoomArea();
     public MainRecArea mainRec = new MainRecArea();
     public ShowerArea showers = new ShowerArea();
+
+    // Holding cell doors for easy access and testing
+    public Transform holdingCellDoor0;     // Alt+4
+    public Transform holdingCellDoor1;     // Alt+5
 
     public List<AreaLighting> areaLights = new List<AreaLighting>();
     public LightingState currentLightingState = LightingState.Normal;
@@ -234,6 +242,245 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         {
             CloseAllCells();
         }
+        
+        // Door testing keyboard shortcuts
+        HandleDoorKeyboardShortcuts();
+    }
+    
+    /// <summary>
+    /// Handle keyboard shortcuts for door testing
+    /// </summary>
+    void HandleDoorKeyboardShortcuts()
+    {
+        // Alt+1: Prison Enter Door
+        if (Input.GetKey(KeyCode.LeftAlt) && Input.GetKeyDown(KeyCode.Alpha1))
+        {
+            ToggleBookingDoor(booking.prisonEntryDoor, "Prison Enter Door");
+        }
+        
+        // Alt+2: Booking Inner Door  
+        if (Input.GetKey(KeyCode.LeftAlt) && Input.GetKeyDown(KeyCode.Alpha2))
+        {
+            ToggleBookingDoor(booking.bookingInnerDoor, "Booking Inner Door");
+        }
+        
+        // Alt+3: Guard Door
+        if (Input.GetKey(KeyCode.LeftAlt) && Input.GetKeyDown(KeyCode.Alpha3))
+        {
+            ToggleBookingDoor(booking.guardDoor, "Guard Door");
+        }
+        
+        // Alt+4: Holding Cell Door 0
+        if (Input.GetKey(KeyCode.LeftAlt) && Input.GetKeyDown(KeyCode.Alpha4))
+        {
+            ToggleDoor(holdingCellDoor0, "Holding Cell Door 0");
+        }
+        
+        // Alt+5: Holding Cell Door 1
+        if (Input.GetKey(KeyCode.LeftAlt) && Input.GetKeyDown(KeyCode.Alpha5))
+        {
+            ToggleDoor(holdingCellDoor1, "Holding Cell Door 1");
+        }
+    }
+    
+    /// <summary>
+    /// Toggle a booking area door open/closed with logging
+    /// </summary>
+    void ToggleBookingDoor(JailDoor jailDoor, string doorName)
+    {
+        if (jailDoor == null)
+        {
+            ModLogger.Warn($"{doorName} not found in booking area - cannot toggle");
+            return;
+        }
+        
+        if (!jailDoor.IsInstantiated())
+        {
+            ModLogger.Warn($"{doorName} not instantiated - cannot toggle");
+            return;
+        }
+        
+        if (jailDoor.IsOpen())
+        {
+            jailDoor.CloseDoor();
+            ModLogger.Info($"Closed {doorName}");
+        }
+        else
+        {
+            jailDoor.OpenDoor();
+            ModLogger.Info($"Opened {doorName}");
+        }
+    }
+    
+    /// <summary>
+    /// Toggle a door open/closed with logging
+    /// </summary>
+    void ToggleDoor(Transform doorTransform, string doorName)
+    {
+        if (doorTransform == null)
+        {
+            ModLogger.Warn($"{doorName} not assigned - cannot toggle");
+            return;
+        }
+        
+        // First, try to find the door in our door collections
+        JailDoor jailDoor = FindJailDoor(doorTransform);
+        if (jailDoor != null)
+        {
+            if (jailDoor.IsOpen())
+            {
+                jailDoor.CloseDoor();
+                ModLogger.Info($"Closed {doorName} via JailDoor");
+            }
+            else
+            {
+                jailDoor.OpenDoor();
+                ModLogger.Info($"Opened {doorName} via JailDoor");
+            }
+            return;
+        }
+        
+        ModLogger.Warn($"{doorName} not found in door collections - logging position for manual assignment");
+        ModLogger.Info($"{doorName} located at: {doorTransform.position} (Path: {GetGameObjectPath(doorTransform)})");
+    }
+    
+    /// <summary>
+    /// Find a JailDoor that matches the given transform
+    /// </summary>
+    JailDoor FindJailDoor(Transform doorTransform)
+    {
+        // Check all cell doors
+        foreach (var cell in cells)
+        {
+            if (cell.cellDoor?.doorHolder == doorTransform || 
+                cell.cellDoor?.doorInstance?.transform == doorTransform)
+            {
+                return cell.cellDoor;
+            }
+        }
+        
+        // Check all holding cell doors  
+        foreach (var holdingCell in holdingCells)
+        {
+            if (holdingCell.cellDoor?.doorHolder == doorTransform || 
+                holdingCell.cellDoor?.doorInstance?.transform == doorTransform)
+            {
+                return holdingCell.cellDoor;
+            }
+        }
+        
+        // Check area doors (booking, guard room, etc)
+        var allAreaDoors = new List<JailDoor>();
+        if (booking.doors != null) allAreaDoors.AddRange(booking.doors);
+        if (guardRoom.doors != null) allAreaDoors.AddRange(guardRoom.doors);
+        
+        foreach (var door in allAreaDoors)
+        {
+            if (door?.doorHolder == doorTransform || 
+                door?.doorInstance?.transform == doorTransform)
+            {
+                return door;
+            }
+        }
+        
+        return null;
+    }
+    
+    /// <summary>
+    /// Get the full hierarchy path of a GameObject for debugging
+    /// </summary>
+    string GetGameObjectPath(Transform transform)
+    {
+        string path = transform.name;
+        while (transform.parent != null)
+        {
+            transform = transform.parent;
+            path = transform.name + "/" + path;
+        }
+        return path;
+    }
+    
+    /// <summary>
+    /// Initialize holding cell door references for keyboard shortcuts
+    /// </summary>
+    void InitializeHoldingCellDoorReferences()
+    {
+        // Find holding cell doors for keyboard shortcuts
+        Transform holdingCells = transform.Find("HoldingCells");
+        if (holdingCells != null)
+        {
+            Transform holdingCell0 = holdingCells.Find("HoldingCell_00");
+            if (holdingCell0 != null)
+                holdingCellDoor0 = holdingCell0.Find("HoldingDoorHolder[0]");
+                
+            Transform holdingCell1 = holdingCells.Find("HoldingCell_01");  
+            if (holdingCell1 != null)
+                holdingCellDoor1 = holdingCell1.Find("HoldingDoorHolder[1]");
+        }
+        
+        ModLogger.Info($"Holding Cell Door 0: {(holdingCellDoor0 != null ? "✓ Found" : "✗ Missing")}");
+        ModLogger.Info($"Holding Cell Door 1: {(holdingCellDoor1 != null ? "✓ Found" : "✗ Missing")}");
+    }
+    
+    Transform FindDoorByName(params string[] possibleNames)
+    {
+        // Search in the entire jail hierarchy
+        Transform[] allTransforms = GetComponentsInChildren<Transform>();
+        
+        foreach (string doorName in possibleNames)
+        {
+            foreach (Transform t in allTransforms)
+            {
+                // Exact name match for precision
+                if (t.name == doorName)
+                {
+                    ModLogger.Debug($"Found door by exact name match: {doorName}");
+                    return t;
+                }
+            }
+        }
+        
+        // If exact match fails, log what we did find for debugging
+        ModLogger.Debug($"Exact name match failed. Available transforms containing searched terms:");
+        foreach (string doorName in possibleNames)
+        {
+            foreach (Transform t in allTransforms)
+            {
+                if (t.name.ToLower().Contains(doorName.ToLower()))
+                {
+                    ModLogger.Debug($"  Similar: {t.name} (contains '{doorName}')");
+                }
+            }
+        }
+        
+        return null;
+    }
+    
+    Transform FindDoorInHoldingCell(int holdingCellIndex)
+    {
+        var holdingCell = holdingCells.FirstOrDefault(c => c.cellIndex == holdingCellIndex);
+        if (holdingCell?.cellTransform != null)
+        {
+            // Look for door in the holding cell structure
+            Transform door = holdingCell.cellTransform.Find("HoldingDoorHolder[0]");
+            if (door != null) return door;
+            
+            // Alternative door names
+            string[] doorNames = {
+                "Door",
+                "HoldingDoor", 
+                "CellDoor",
+                $"HoldingCell_{holdingCellIndex}_Door"
+            };
+            
+            foreach (string doorName in doorNames)
+            {
+                door = FindChildRecursive(holdingCell.cellTransform, doorName);
+                if (door != null) return door;
+            }
+        }
+        
+        return null;
     }
 
     void UpdateDoorAnimations()
@@ -348,6 +595,25 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
             camera.SetupRenderTexture();
         }
 
+#if MONO
+        // Mono-specific: Additional validation and setup
+        if (camera.renderTexture != null && !camera.renderTexture.IsCreated())
+        {
+            camera.renderTexture.Create();
+            Debug.Log($"Mono: Force-created render texture for {camera.cameraName}");
+        }
+        
+        // Ensure the camera component is properly configured
+        if (camera.cameraComponent != null)
+        {
+            camera.cameraComponent.enabled = false;
+            camera.cameraComponent.targetTexture = camera.renderTexture;
+            camera.cameraComponent.enabled = true;
+        }
+        
+        // Wait a frame for Mono to process the texture assignment
+        MelonCoroutines.Start(SetMonitorCameraDelayed(monitor, camera));
+#else
         // Force the camera to render at least once
         if (camera.cameraComponent != null)
         {
@@ -363,17 +629,55 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
             monitor.screenImage.texture = camera.renderTexture;
             Debug.Log($"✓ Monitor {monitor.name} → {camera.cameraName} (texture: {camera.renderTexture.width}x{camera.renderTexture.height})");
         }
+#endif
+    }
+
+#if MONO
+    private IEnumerator SetMonitorCameraDelayed(MonitorController monitor, SecurityCamera camera)
+    {
+        Debug.Log($"Mono: Starting delayed camera assignment for monitor {monitor.name}");
+        
+        // Wait a frame for Mono to process changes
+        yield return null;
+        
+        Debug.Log($"Mono: Processing delayed assignment - Camera: {camera.cameraName}, RenderTexture: {camera.renderTexture != null}");
+        
+        // Force the camera to render at least once
+        if (camera.cameraComponent != null)
+        {
+            camera.cameraComponent.Render();
+            Debug.Log($"Mono: Forced camera render for {camera.cameraName}");
+        }
+
+        // Set the camera reference on the monitor
+        monitor.SetCamera(camera);
+        Debug.Log($"Mono: Set camera reference on monitor {monitor.name}");
+
+        // Force the texture assignment to the RawImage
+        if (camera.renderTexture != null && monitor.screenImage != null)
+        {
+            monitor.screenImage.texture = camera.renderTexture;
+            Debug.Log($"✓ Mono Monitor {monitor.name} → {camera.cameraName} (texture: {camera.renderTexture.width}x{camera.renderTexture.height}) - ASSIGNMENT COMPLETE");
+        }
         else
         {
-            Debug.LogError($"Failed to assign texture: Camera.renderTexture={camera.renderTexture != null}, Monitor.screenImage={monitor.screenImage != null}");
+            Debug.LogError($"Mono: Failed to assign texture: Camera.renderTexture={camera.renderTexture != null}, Monitor.screenImage={monitor.screenImage != null}");
         }
     }
+#endif
 
     public void InitializeJail()
     {
         DiscoverJailStructure();
         SetupDoors();
         SetupSecurityCameras();
+        SetupMonitorAssignments(); // Add monitor setup
+        
+        // Initialize static spawn points for holding cells
+        InitializeHoldingCellSpawnPoints();
+        
+        // Initialize holding cell door references for keyboard shortcuts
+        InitializeHoldingCellDoorReferences();
 
         if (showDebugInfo)
         {
@@ -430,8 +734,11 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
 
             // Find cell bounds - look for any child with "Bounds" in name
             cell.cellBounds = FindChildContaining(cellTransform, "Bounds");
+            
+            // Find spawn points - look for children with "Spawn" in name
+            cell.spawnPoints = FindAllChildrenContaining(cellTransform, "Spawn");
 
-            Debug.Log($"Cell setup: DoorHolder={cell.cellDoor.doorHolder != null}, Bounds={cell.cellBounds != null}");
+            Debug.Log($"Cell setup: DoorHolder={cell.cellDoor.doorHolder != null}, Bounds={cell.cellBounds != null}, SpawnPoints={cell.spawnPoints.Count}");
 
             if (cell.IsValid())
             {
@@ -502,13 +809,33 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
 
             // Find cell bounds - look for any child with "Bounds" in name
             holdingCell.cellBounds = FindChildContaining(holdingCellTransform, "Bounds");
+            
+            // Find exact spawn points - should be HoldingCellSpawn[0], [1], [2]
+            holdingCell.spawnPoints.Clear();
+            for (int spawnIndex = 0; spawnIndex < 3; spawnIndex++)
+            {
+                Transform spawnPoint = holdingCellTransform.Find($"HoldingCellSpawn[{spawnIndex}]");
+                if (spawnPoint != null)
+                {
+                    holdingCell.spawnPoints.Add(spawnPoint);
+                    Debug.Log($"  Found spawn point {spawnIndex}: {spawnPoint.name}");
+                }
+                else
+                {
+                    Debug.LogWarning($"  Missing spawn point {spawnIndex} for {holdingCellTransform.name}");
+                }
+            }
+            
+            // Set up holding cell properties
+            holdingCell.maxOccupants = 3; // Holding cells can hold up to 3 people
+            holdingCell.InitializeSpawnPointOccupancy();
 
-            Debug.Log($"Holding cell setup: DoorHolder={holdingCell.cellDoor.doorHolder != null}, Bounds={holdingCell.cellBounds != null}");
+            Debug.Log($"Holding cell setup: DoorHolder={holdingCell.cellDoor.doorHolder != null}, Bounds={holdingCell.cellBounds != null}, SpawnPoints={holdingCell.spawnPoints.Count}/3");
 
             if (holdingCell.IsValid())
             {
                 holdingCells.Add(holdingCell);
-                Debug.Log($"✓ Successfully added {holdingCell.cellName}");
+                Debug.Log($"✓ Successfully added {holdingCell.cellName} with {holdingCell.spawnPoints.Count} spawn points");
             }
             else
             {
@@ -925,6 +1252,30 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         return null;
     }
 
+    /// <summary>
+    /// Finds all children containing the specified name part
+    /// </summary>
+    /// <param name="parent">Parent transform to search in</param>
+    /// <param name="namePart">Part of name to search for</param>
+    /// <returns>List of all matching child transforms</returns>
+    List<Transform> FindAllChildrenContaining(Transform parent, string namePart)
+    {
+        List<Transform> results = new List<Transform>();
+        if (parent == null) return results;
+
+        // Search in direct children for names containing the specified part
+        for (int i = 0; i < parent.childCount; i++)
+        {
+            Transform child = parent.GetChild(i);
+            if (child.name.Contains(namePart))
+            {
+                results.Add(child);
+            }
+        }
+
+        return results;
+    }
+
     JailDoor CreateDoorFromHolder(Transform holder, string doorName, JailDoor.DoorType doorType)
     {
         JailDoor door = new JailDoor();
@@ -935,7 +1286,7 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     }
 
 
-    void SetupDoors()
+    public void SetupDoors()
     {
         SetupCellDoors();
         SetupHoldingCellDoors();
@@ -968,18 +1319,17 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
 
     void SetupAreaDoors()
     {
-        // Setup booking area doors
-        if (booking.prisonEntryDoor != null && booking.prisonEntryDoor.IsValid() && steelDoorPrefab != null)
+        // Setup booking area doors using the area's own method
+        if (booking.isInitialized)
         {
-            InstantiateDoor(booking.prisonEntryDoor, steelDoorPrefab);
+            booking.InstantiateDoors(steelDoorPrefab);
+        }
+        else
+        {
+            Debug.LogWarning("Booking area not initialized - cannot setup doors");
         }
 
-        if (booking.guardDoor != null && booking.guardDoor.IsValid() && steelDoorPrefab != null)
-        {
-            InstantiateDoor(booking.guardDoor, steelDoorPrefab);
-        }
-
-        Debug.Log($"Setup area doors");
+        Debug.Log($"Setup area doors complete");
     }
 
     void InstantiateDoor(JailDoor door, GameObject doorPrefab)
@@ -1034,9 +1384,10 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         // First, create/setup the actual security cameras
         CreateSecurityCameras();
 
+
         // Then setup monitor assignments
         SetupMonitorAssignments();
-        Debug.Log($"Security camera setup completed with {securityCameras.Count} cameras and {monitorAssignments.Count} monitor assignments");
+        ModLogger.Info($"Security camera setup completed with {securityCameras.Count} cameras and {monitorAssignments.Count} monitor assignments");
     }
 
     void CreateSecurityCameras()
@@ -1094,7 +1445,16 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         // Auto-discover monitors and assign cameras
         AutoDiscoverAndAssignMonitors();
 
-        Debug.Log($"Auto-assigned {monitorAssignments.Count} monitor assignments");
+        Debug.Log($"=== MONITOR SYSTEM SETUP COMPLETE ===");
+        Debug.Log($"Total monitor assignments created: {monitorAssignments.Count}");
+        Debug.Log($"Static monitors: {monitorAssignments.Count(m => !m.autoRotate)}");
+        Debug.Log($"Rotating monitors: {monitorAssignments.Count(m => m.autoRotate)}");
+        
+        foreach (var assignment in monitorAssignments)
+        {
+            string rotationType = assignment.autoRotate ? "Rotating" : "Static";
+            Debug.Log($"  {rotationType} monitor: {assignment.monitor.name} with {assignment.availableCameras.Count} cameras");
+        }
     }
 
     void AutoDiscoverAndAssignMonitors()
@@ -1133,6 +1493,7 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         var mainViewCameras = securityCameras.Where(cam => 
             cam.cameraType == SecurityCamera.CameraType.MainView).ToList();
         availableCameras.AddRange(mainViewCameras);
+        Debug.Log($"Found {mainViewCameras.Count} MainView cameras for static monitors");
         
         // Then add other camera types if we need more
         if (availableCameras.Count < staticMonitorsParent.childCount)
@@ -1140,19 +1501,36 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
             var otherCameras = securityCameras.Where(cam => 
                 cam.cameraType != SecurityCamera.CameraType.MainView).ToList();
             availableCameras.AddRange(otherCameras);
+            Debug.Log($"Added {otherCameras.Count} other cameras (total: {availableCameras.Count})");
         }
 
         Debug.Log($"Found {availableCameras.Count} cameras for {staticMonitorsParent.childCount} static monitors");
 
+        int successfulAssignments = 0;
         // Assign each static monitor to a specific camera
         for (int i = 0; i < staticMonitorsParent.childCount; i++)
         {
             Transform monitorTransform = staticMonitorsParent.GetChild(i);
+            
+#if MONO
+            ModLogger.Debug($"MONO: Processing static monitor {i}: {monitorTransform.name}");
+#endif
+            
             MonitorController monitor = FindMonitorController(monitorTransform);
 
             if (monitor == null)
             {
-                Debug.LogWarning($"No MonitorController found on {monitorTransform.name} or its children");
+                Debug.LogWarning($"✗ No MonitorController found/created on {monitorTransform.name} or its children");
+                continue;
+            }
+            
+#if MONO
+            ModLogger.Debug($"MONO: Successfully got MonitorController for {monitorTransform.name}");
+#endif
+
+            if (availableCameras.Count == 0)
+            {
+                Debug.LogWarning($"✗ No cameras available for monitor {monitorTransform.name}");
                 continue;
             }
 
@@ -1170,12 +1548,16 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
 
             // Set the camera immediately
             SetMonitorCamera(monitor, camera);
+            successfulAssignments++;
 
             Debug.Log($"✓ Static monitor {monitorTransform.name} → {camera.cameraName}");
         }
+        
+        Debug.Log($"Static monitor setup completed: {successfulAssignments}/{staticMonitorsParent.childCount} monitors assigned successfully");
     }
 
     // Helper method to find MonitorController on transform or its children
+    // Auto-creates MonitorController if not found on monitor objects
     MonitorController FindMonitorController(Transform parent)
     {
         // Check the parent first
@@ -1189,8 +1571,46 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
             if (monitor != null) return monitor;
         }
         
+        // If no MonitorController found anywhere, check if this is a monitor object and auto-create one
+        if (IsMonitorObject(parent))
+        {
+            ModLogger.Info($"Auto-creating MonitorController component on {parent.name}");
+            monitor = parent.gameObject.AddComponent<MonitorController>();
+            return monitor;
+        }
+        
         return null;
     }
+    
+    // Helper method to identify if a GameObject should have a MonitorController
+    bool IsMonitorObject(Transform obj)
+    {
+        string name = obj.name.ToLower();
+        
+        // Check if the object name indicates it's a monitor
+        bool hasMonitorName = name.Contains("monitor") || 
+                             name.Contains("screen") || 
+                             name.Contains("display");
+        
+        // Check if it has UI components that suggest it's a monitor
+        bool hasMonitorComponents = obj.GetComponent<RawImage>() != null || 
+                                   obj.GetComponentInChildren<RawImage>() != null;
+        
+        // Check if it's in a monitor hierarchy (parent path contains "monitor")
+        bool inMonitorHierarchy = obj.parent != null && 
+                                 (obj.parent.name.ToLower().Contains("monitor") ||
+                                  obj.parent.parent != null && obj.parent.parent.name.ToLower().Contains("monitor"));
+        
+#if MONO
+        if (hasMonitorName || hasMonitorComponents || inMonitorHierarchy)
+        {
+            ModLogger.Debug($"MONO: {obj.name} identified as monitor object (name: {hasMonitorName}, components: {hasMonitorComponents}, hierarchy: {inMonitorHierarchy})");
+        }
+#endif
+        
+        return hasMonitorName || hasMonitorComponents || inMonitorHierarchy;
+    }
+    
 
     void SetupRotatingMonitors(Transform rotatingMonitorsParent)
     {
@@ -1200,17 +1620,38 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         List<SecurityCamera> rotatingCameras = securityCameras.Where(cam =>
             cam.cameraType != SecurityCamera.CameraType.MainView).ToList();
 
-        Debug.Log($"Found {rotatingCameras.Count} rotating cameras for rotating monitors");
+        Debug.Log($"Found {rotatingCameras.Count} rotating cameras for {rotatingMonitorsParent.childCount} rotating monitors");
+        
+        foreach (var cam in rotatingCameras)
+        {
+            Debug.Log($"  Rotating camera: {cam.cameraName} (type: {cam.cameraType})");
+        }
 
+        int successfulAssignments = 0;
         // Assign each rotating monitor to cycle through cameras without overlap
         for (int i = 0; i < rotatingMonitorsParent.childCount; i++)
         {
             Transform monitorTransform = rotatingMonitorsParent.GetChild(i);
+            
+#if MONO
+            Debug.Log($"MONO: Processing rotating monitor {i}: {monitorTransform.name}");
+#endif
+            
             MonitorController monitor = FindMonitorController(monitorTransform);
 
             if (monitor == null)
             {
-                Debug.LogWarning($"No MonitorController found on {monitorTransform.name} or its children");
+                Debug.LogWarning($"✗ No MonitorController found/created on {monitorTransform.name} or its children");
+                continue;
+            }
+            
+#if MONO
+            Debug.Log($"MONO: Successfully got MonitorController for rotating monitor {monitorTransform.name}");
+#endif
+
+            if (rotatingCameras.Count == 0)
+            {
+                Debug.LogWarning($"✗ No rotating cameras available for monitor {monitorTransform.name}");
                 continue;
             }
 
@@ -1230,9 +1671,12 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
             {
                 SecurityCamera initialCamera = assignment.GetCurrentCamera();
                 SetMonitorCamera(monitor, initialCamera);
+                successfulAssignments++;
                 Debug.Log($"✓ Rotating monitor {monitorTransform.name} → {initialCamera.cameraName} (every {assignment.rotationInterval}s, starting after {i * 2f}s delay)");
             }
         }
+        
+        Debug.Log($"Rotating monitor setup completed: {successfulAssignments}/{rotatingMonitorsParent.childCount} monitors assigned successfully");
     }
 
     // Guard Control Methods
@@ -1387,6 +1831,50 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         holdingCells.Clear();
         DiscoverHoldingCells();
         Debug.Log($"Discovery completed. Found {holdingCells.Count} holding cells.");
+        
+        // Test the new spawn point system
+        TestHoldingCellSpawnSystem();
+    }
+    
+    public void TestHoldingCellSpawnSystem()
+    {
+        Debug.Log("=== TESTING HOLDING CELL SPAWN SYSTEM ===");
+        
+        var (totalSpawns, available, occupied, totalCells) = GetHoldingCellStatus();
+        Debug.Log($"Holding Cell Status: {totalCells} cells, {totalSpawns} total spawn points, {available} available, {occupied} occupied");
+        
+        // Test assigning players
+        Debug.Log("Testing player assignments:");
+        var spawn1 = AssignPlayerToHoldingCell("TestPlayer1");
+        var spawn2 = AssignPlayerToHoldingCell("TestPlayer2");
+        var spawn3 = AssignPlayerToHoldingCell("TestPlayer3");
+        var spawn4 = AssignPlayerToHoldingCell("TestPlayer4"); // Should work if we have 2 holding cells (6 total spawns)
+        
+        // Check status after assignments
+        var (totalAfter, availableAfter, occupiedAfter, totalCellsAfter) = GetHoldingCellStatus();
+        Debug.Log($"Status after assignments: {totalCellsAfter} cells, {totalAfter} total spawn points, {availableAfter} available, {occupiedAfter} occupied");
+        
+        // Test releasing players
+        Debug.Log("Testing player releases:");
+        ReleasePlayerFromHoldingCell("TestPlayer2");
+        ReleasePlayerFromHoldingCell("TestPlayer4");
+        
+        // Final status check
+        var (totalFinal, availableFinal, occupiedFinal, totalCellsFinal) = GetHoldingCellStatus();
+        Debug.Log($"Final status: {totalCellsFinal} cells, {totalFinal} total spawn points, {availableFinal} available, {occupiedFinal} occupied");
+        
+        // Detailed cell status
+        foreach (var holdingCell in holdingCells)
+        {
+            var (current, max, availableCell) = holdingCell.GetOccupancyStatus();
+            Debug.Log($"  {holdingCell.cellName}: {current}/{max} occupied, {availableCell} available");
+            
+            foreach (var spawn in holdingCell.spawnPointOccupancy)
+            {
+                string status = spawn.isOccupied ? $"occupied by {spawn.occupantName}" : "available";
+                Debug.Log($"    Spawn {spawn.spawnIndex}: {status}");
+            }
+        }
     }
 
     public void SetupMonitorAssignmentsMenu()
@@ -1436,10 +1924,10 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
 
     public void ForceSetupAllMonitors()
     {
-        Debug.Log("=== FORCE SETUP ALL MONITORS ===");
+        ModLogger.Info("=== FORCE SETUP ALL MONITORS ===");
         CreateSecurityCameras();
         SetupMonitorAssignments();
-        Debug.Log("Setup complete!");
+        ModLogger.Info("Setup complete!");
     }
 
     public void TestLightingSystem()
@@ -1624,6 +2112,210 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     public CellDetail GetHoldingCellByIndex(int cellIndex)
     {
         return holdingCells.FirstOrDefault(c => c.cellIndex == cellIndex);
+    }
+
+    /// <summary>
+    /// Represents a specific spawn point within a holding cell
+    /// </summary>
+    [System.Serializable]
+    public class HoldingCellSpawnPoint
+    {
+        public Transform spawnTransform;
+        public int cellIndex;
+        public int spawnIndex; // 0, 1, or 2
+        public bool isOccupied = false;
+        public string occupiedBy; // Player name or ID
+        
+        public string GetSpawnPointName()
+        {
+            return $"HoldingCell_{cellIndex}_Spawn_{spawnIndex}";
+        }
+    }
+    
+    // Static spawn point tracking for holding cells
+    public List<HoldingCellSpawnPoint> holdingCellSpawnPoints = new List<HoldingCellSpawnPoint>();
+
+    /// <summary>
+    /// Initialize holding cell spawn points from the discovered holding cells
+    /// </summary>
+    void InitializeHoldingCellSpawnPoints()
+    {
+        holdingCellSpawnPoints.Clear();
+        
+        ModLogger.Info($"Starting holding cell spawn point initialization with {holdingCells.Count} holding cells");
+        
+        foreach (var holdingCell in holdingCells)
+        {
+            ModLogger.Debug($"Processing holding cell {holdingCell.cellIndex}: {holdingCell.cellName} at {holdingCell.cellTransform?.name}");
+            
+            if (holdingCell.cellTransform == null)
+            {
+                ModLogger.Warn($"Holding cell {holdingCell.cellIndex} has null cellTransform - skipping");
+                continue;
+            }
+            
+            // Find all spawn points for this holding cell (should be 3: [0], [1], [2])
+            int foundSpawnPoints = 0;
+            for (int spawnIndex = 0; spawnIndex < 3; spawnIndex++)
+            {
+                Transform spawnPoint = FindSpawnPoint(holdingCell.cellTransform, spawnIndex);
+                if (spawnPoint != null)
+                {
+                    var holdingSpawn = new HoldingCellSpawnPoint();
+                    holdingSpawn.spawnTransform = spawnPoint;
+                    holdingSpawn.cellIndex = holdingCell.cellIndex;
+                    holdingSpawn.spawnIndex = spawnIndex;
+                    holdingSpawn.isOccupied = false;
+                    holdingSpawn.occupiedBy = null;
+                    
+                    holdingCellSpawnPoints.Add(holdingSpawn);
+                    foundSpawnPoints++;
+                    ModLogger.Debug($"✓ Registered holding spawn point: {holdingSpawn.GetSpawnPointName()} at {spawnPoint.position}");
+                }
+                else
+                {
+                    ModLogger.Warn($"✗ Missing spawn point {spawnIndex} for holding cell {holdingCell.cellIndex} (searched in {holdingCell.cellTransform.name})");
+                    
+                    // Debug: List all children of this holding cell to help identify naming issues
+                    ModLogger.Debug($"Holding cell {holdingCell.cellIndex} children:");
+                    for (int i = 0; i < holdingCell.cellTransform.childCount; i++)
+                    {
+                        var child = holdingCell.cellTransform.GetChild(i);
+                        ModLogger.Debug($"  Child {i}: {child.name}");
+                    }
+                }
+            }
+            
+            ModLogger.Info($"Holding cell {holdingCell.cellIndex} registered {foundSpawnPoints}/3 spawn points");
+        }
+        
+        ModLogger.Info($"Initialized {holdingCellSpawnPoints.Count} holding cell spawn points across {holdingCells.Count} holding cells");
+    }
+    
+    Transform FindSpawnPoint(Transform cellTransform, int spawnIndex)
+    {
+        // Look for HoldingCellSpawn[spawnIndex] in the cell hierarchy
+        string[] spawnNames = {
+            $"HoldingCellSpawn[{spawnIndex}]",
+            $"HoldingCellSpawn_{spawnIndex}",
+            $"Spawn[{spawnIndex}]",
+            $"Spawn_{spawnIndex}"
+        };
+        
+        foreach (string spawnName in spawnNames)
+        {
+            Transform spawn = cellTransform.Find(spawnName);
+            if (spawn != null) return spawn;
+            
+            // Search in children recursively
+            spawn = FindChildRecursive(cellTransform, spawnName);
+            if (spawn != null) return spawn;
+        }
+        
+        return null;
+    }
+    
+    Transform FindChildRecursive(Transform parent, string name)
+    {
+        for (int i = 0; i < parent.childCount; i++)
+        {
+            Transform child = parent.GetChild(i);
+            if (child.name == name) return child;
+            
+            Transform found = FindChildRecursive(child, name);
+            if (found != null) return found;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Gets the first available holding cell spawn point for short sentences
+    /// </summary>
+    /// <returns>Available spawn point, or null if all are occupied</returns>
+    public HoldingCellSpawnPoint GetAvailableHoldingCellSpawnPoint()
+    {
+        return holdingCellSpawnPoints.FirstOrDefault(sp => !sp.isOccupied);
+    }
+    
+    /// <summary>
+    /// Assigns a player to a holding cell spawn point using the new system
+    /// </summary>
+    /// <param name="playerName">Player name/ID to assign</param>
+    /// <returns>The assigned spawn point transform, or null if no space available</returns>
+    public Transform AssignPlayerToHoldingCell(string playerName)
+    {
+        // Find first holding cell with available space
+        foreach (var holdingCell in holdingCells)
+        {
+            var spawnPoint = holdingCell.AssignPlayerToSpawnPoint(playerName);
+            if (spawnPoint != null)
+            {
+                ModLogger.Info($"Assigned {playerName} to {holdingCell.cellName} at spawn point {spawnPoint.name}");
+                return spawnPoint;
+            }
+        }
+        
+        ModLogger.Warn($"No available holding cell spawn points - all {holdingCells.Count} holding cells are full!");
+        return null;
+    }
+    
+    /// <summary>
+    /// Releases a player from their holding cell spawn point using the new system
+    /// </summary>
+    /// <param name="playerName">Player name/ID to release</param>
+    public void ReleasePlayerFromHoldingCell(string playerName)
+    {
+        // Find the holding cell containing this player
+        foreach (var holdingCell in holdingCells)
+        {
+            // Check if this player is in this holding cell
+            if (holdingCell.spawnPointOccupancy.Any(sp => sp.occupantName == playerName))
+            {
+                holdingCell.ReleasePlayerFromSpawnPoint(playerName);
+                ModLogger.Info($"Released {playerName} from {holdingCell.cellName}");
+                return;
+            }
+        }
+        
+        ModLogger.Warn($"Player {playerName} not found in any holding cell");
+    }
+    
+    /// <summary>
+    /// Gets the first available (unoccupied) regular jail cell for longer sentences
+    /// </summary>
+    /// <returns>Available cell, or null if all are occupied</returns>
+    public CellDetail GetAvailableJailCell()
+    {
+        return cells.FirstOrDefault(c => !c.isOccupied);
+    }
+    
+    /// <summary>
+    /// Gets holding cell availability status using the new system
+    /// </summary>
+    public (int totalSpawnPoints, int availableSpawnPoints, int occupiedSpawnPoints, int totalCells) GetHoldingCellStatus()
+    {
+        int totalSpawnPoints = 0;
+        int occupiedSpawnPoints = 0;
+        
+        foreach (var holdingCell in holdingCells)
+        {
+            var (current, max, available) = holdingCell.GetOccupancyStatus();
+            totalSpawnPoints += max;
+            occupiedSpawnPoints += current;
+        }
+        
+        int availableSpawnPoints = totalSpawnPoints - occupiedSpawnPoints;
+        
+        return (totalSpawnPoints, availableSpawnPoints, occupiedSpawnPoints, holdingCells.Count);
+    }
+    
+    /// <summary>
+    /// Gets the first available (unoccupied) holding cell - backwards compatibility
+    /// </summary>
+    /// <returns>Available holding cell, or null if all are occupied</returns>
+    public CellDetail GetAvailableHoldingCell()
+    {
+        return holdingCells.FirstOrDefault(c => !c.isOccupied);
     }
 
     void OnValidate()
