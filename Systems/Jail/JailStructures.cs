@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
+using Behind_Bars.Systems.Jail;
 
 [System.Serializable]
 public class JailDoor
@@ -476,10 +478,39 @@ public class CellDetail
     public List<JailBed> GetAllBeds()
     {
         var beds = new List<JailBed>();
+
+        // Check for JailBed components first (backwards compatibility)
         if (bedBottomComponent != null)
             beds.Add(bedBottomComponent);
         if (bedTopComponent != null)
             beds.Add(bedTopComponent);
+
+        // If no JailBed components found, check for completed PrisonBedInteractable
+        if (beds.Count == 0)
+        {
+            if (cellBedBottom != null)
+            {
+                var prisonBed = cellBedBottom.GetComponent<PrisonBedInteractable>();
+                if (prisonBed != null && prisonBed.IsComplete)
+                {
+                    var jailBed = cellBedBottom.GetComponent<JailBed>();
+                    if (jailBed != null)
+                        beds.Add(jailBed);
+                }
+            }
+
+            if (cellBedTop != null)
+            {
+                var prisonBed = cellBedTop.GetComponent<PrisonBedInteractable>();
+                if (prisonBed != null && prisonBed.IsComplete)
+                {
+                    var jailBed = cellBedTop.GetComponent<JailBed>();
+                    if (jailBed != null)
+                        beds.Add(jailBed);
+                }
+            }
+        }
+
         return beds;
     }
 
@@ -489,11 +520,99 @@ public class CellDetail
     /// <returns>JailBed component or null if no beds</returns>
     public JailBed GetFirstBed()
     {
+        // Check for JailBed components first (backwards compatibility)
         if (bedBottomComponent != null)
             return bedBottomComponent;
         if (bedTopComponent != null)
             return bedTopComponent;
+
+        // Check for completed PrisonBedInteractable with JailBed (bottom preferred)
+        if (cellBedBottom != null)
+        {
+            var prisonBed = cellBedBottom.GetComponent<PrisonBedInteractable>();
+            if (prisonBed != null && prisonBed.IsComplete)
+            {
+                var jailBed = cellBedBottom.GetComponent<JailBed>();
+                if (jailBed != null)
+                    return jailBed;
+            }
+        }
+
+        if (cellBedTop != null)
+        {
+            var prisonBed = cellBedTop.GetComponent<PrisonBedInteractable>();
+            if (prisonBed != null && prisonBed.IsComplete)
+            {
+                var jailBed = cellBedTop.GetComponent<JailBed>();
+                if (jailBed != null)
+                    return jailBed;
+            }
+        }
+
         return null;
+    }
+
+    /// <summary>
+    /// Get all PrisonBedInteractable components in this cell
+    /// </summary>
+    /// <returns>List of PrisonBedInteractable components</returns>
+    public List<PrisonBedInteractable> GetAllPrisonBeds()
+    {
+        var beds = new List<PrisonBedInteractable>();
+
+        if (cellBedBottom != null)
+        {
+            var prisonBed = cellBedBottom.GetComponent<PrisonBedInteractable>();
+            if (prisonBed != null)
+                beds.Add(prisonBed);
+        }
+
+        if (cellBedTop != null)
+        {
+            var prisonBed = cellBedTop.GetComponent<PrisonBedInteractable>();
+            if (prisonBed != null)
+                beds.Add(prisonBed);
+        }
+
+        return beds;
+    }
+
+    /// <summary>
+    /// Reset all beds in this cell to unmade state
+    /// </summary>
+    public void ResetAllBeds()
+    {
+        var prisonBeds = GetAllPrisonBeds();
+        foreach (var bed in prisonBeds)
+        {
+            bed.ResetBed();
+        }
+    }
+
+    /// <summary>
+    /// Check if this cell is available for occupation
+    /// </summary>
+    /// <returns>True if cell is not occupied</returns>
+    public bool IsAvailable()
+    {
+        if (spawnPointOccupancy.Count > 0)
+        {
+            return spawnPointOccupancy.Any(sp => !sp.isOccupied);
+        }
+        return !isOccupied;
+    }
+
+    /// <summary>
+    /// Check if this cell has available space (for holding cells)
+    /// </summary>
+    /// <returns>True if cell has available space</returns>
+    public bool HasAvailableSpace()
+    {
+        if (spawnPointOccupancy.Count > 0)
+        {
+            return spawnPointOccupancy.Any(sp => !sp.isOccupied);
+        }
+        return !isOccupied;
     }
 }
 

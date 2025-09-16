@@ -62,7 +62,7 @@ namespace Behind_Bars.Systems.Jail
                 description = "A basic sleeping mat provided to inmates",
                 category = EItemCategory.Consumable,
                 iconResourcePath = "Behind_Bars.Icons.behindbars.bedroll",
-                prefabName = "assets/behindbars/bedroll.prefab"
+                prefabName = "BedRoll"
             },
             ["behindbars.sheetsnpillows"] = new PrisonItemInfo
             {
@@ -71,7 +71,7 @@ namespace Behind_Bars.Systems.Jail
                 description = "Basic bedding provided to inmates",
                 category = EItemCategory.Consumable,
                 iconResourcePath = "Behind_Bars.Icons.behindbars.sheetsnpillows",
-                prefabName = "assets/behindbars/pillowandsheets.prefab"
+                prefabName = "PillowAndSheets"
             },
             ["behindbars.cup"] = new PrisonItemInfo
             {
@@ -80,7 +80,7 @@ namespace Behind_Bars.Systems.Jail
                 description = "Standard issue drinking cup for inmates",
                 category = EItemCategory.Consumable,
                 iconResourcePath = "Behind_Bars.Icons.behindbars.cup",
-                prefabName = "assets/behindbars/jailcup.prefab"
+                prefabName = "JailCup"
             },
             ["behindbars.toothbrush"] = new PrisonItemInfo
             {
@@ -89,7 +89,7 @@ namespace Behind_Bars.Systems.Jail
                 description = "Basic hygiene item provided to inmates", 
                 category = EItemCategory.Consumable,
                 iconResourcePath = "Behind_Bars.Icons.behindbars.toothbrush",
-                prefabName = "assets/behindbars/JailToothBrush.prefab"
+                prefabName = "JailToothBrush"
             }
         };
         
@@ -149,12 +149,19 @@ namespace Behind_Bars.Systems.Jail
                     // Load prefab from asset bundle (if available)
                     try
                     {
-                        if (!string.IsNullOrEmpty(itemInfo.prefabName) && AssetManager.bundle != null)
+                        if (!string.IsNullOrEmpty(itemInfo.prefabName) && Behind_Bars.Core.CachedJailBundle != null)
                         {
+                            GameObject prefab = null;
 #if MONO
-                            var prefab = AssetManager.bundle.LoadAsset<GameObject>(itemInfo.prefabName);
+                            // Try multiple variations following JailDoor pattern
+                            prefab = Behind_Bars.Core.CachedJailBundle.LoadAsset<GameObject>(itemInfo.prefabName) ??
+                                    Behind_Bars.Core.CachedJailBundle.LoadAsset<GameObject>(itemInfo.prefabName.ToLower()) ??
+                                    Behind_Bars.Core.CachedJailBundle.LoadAsset<GameObject>(GetFullAssetPath(itemInfo.prefabName));
 #else
-                            var prefab = AssetManager.bundle.LoadAsset(itemInfo.prefabName, Il2CppType.Of<GameObject>())?.TryCast<GameObject>();
+                            // Try multiple variations following JailDoor pattern  
+                            prefab = Behind_Bars.Core.CachedJailBundle.LoadAsset(itemInfo.prefabName, Il2CppType.Of<GameObject>())?.TryCast<GameObject>() ??
+                                    Behind_Bars.Core.CachedJailBundle.LoadAsset(itemInfo.prefabName.ToLower(), Il2CppType.Of<GameObject>())?.TryCast<GameObject>() ??
+                                    Behind_Bars.Core.CachedJailBundle.LoadAsset(GetFullAssetPath(itemInfo.prefabName), Il2CppType.Of<GameObject>())?.TryCast<GameObject>();
 #endif
                             if (prefab != null)
                             {
@@ -196,6 +203,22 @@ namespace Behind_Bars.Systems.Jail
             {
                 ModLogger.Error($"Error registering prison items: {ex.Message}");
             }
+        }
+        
+        /// <summary>
+        /// Convert GameObject name to full asset path for fallback loading
+        /// </summary>
+        private static string GetFullAssetPath(string gameObjectName)
+        {
+            // Convert GameObject names to their corresponding asset paths
+            return gameObjectName switch
+            {
+                "BedRoll" => "assets/behindbars/bedroll.prefab",
+                "PillowAndSheets" => "assets/behindbars/pillowandsheets.prefab", 
+                "JailCup" => "assets/behindbars/jailcup.prefab",
+                "JailToothBrush" => "assets/behindbars/jailtoothbrush.prefab",
+                _ => $"assets/behindbars/{gameObjectName.ToLower()}.prefab"
+            };
         }
         
         private static Guid GenerateDeterministicGuid(string input)

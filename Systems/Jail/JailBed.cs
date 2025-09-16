@@ -74,35 +74,34 @@ public class JailBed : MonoBehaviour
             ModLogger.Debug("Could not add NetworkObject to jail bed - will use alternative approach");
         }
         
-        // Get or create InteractableObject using IL2CPP-safe method
+        // Get or create InteractableObject using simplified approach
         if (interactableObject == null)
         {
-#if !MONO
-            // IL2CPP-safe InteractableObject access
-            var allComponents = GetComponents<MonoBehaviour>();
-            foreach (var comp in allComponents)
-            {
-                if (comp is InteractableObject interactable)
-                {
-                    interactableObject = interactable;
-                    break;
-                }
-            }
-#else
-            // Mono version
             interactableObject = GetComponent<InteractableObject>();
-#endif
-            
+
             if (interactableObject == null)
             {
+                try
+                {
 #if !MONO
-                // IL2CPP-safe component addition using Il2Cpp type
-                var component = gameObject.AddComponent(Il2CppType.Of<InteractableObject>());
-                interactableObject = component.Cast<InteractableObject>();
+                    // IL2CPP-safe component addition
+                    var component = gameObject.AddComponent(Il2CppType.Of<InteractableObject>());
+                    interactableObject = component.Cast<InteractableObject>();
 #else
-                // Mono version
-                interactableObject = gameObject.AddComponent<InteractableObject>();
+                    // Mono version
+                    interactableObject = gameObject.AddComponent<InteractableObject>();
 #endif
+                    ModLogger.Info($"✓ Created InteractableObject for {bedName}");
+                }
+                catch (System.Exception ex)
+                {
+                    ModLogger.Error($"Failed to create InteractableObject for {bedName}: {ex.Message}");
+                    return; // Don't continue initialization if we can't create the interactable
+                }
+            }
+            else
+            {
+                ModLogger.Info($"✓ Found existing InteractableObject for {bedName}");
             }
         }
         
@@ -192,60 +191,14 @@ public class JailBed : MonoBehaviour
         }
     }
     
-    // Copy Schedule I's CanSleep method exactly  
+    // Simplified CanSleep method for jail beds - allow sleep anytime
     private bool CanSleep(out string noSleepReason)
     {
         noSleepReason = string.Empty;
-        
-        // Skip tutorial check - we're not in tutorial in jail
-        
-        // Check time restrictions - exactly like Schedule I
-        try
-        {
-#if MONO
-            // Use NetworkSingleton for Mono version like Schedule I does
-            if (!NetworkSingleton<TimeManager>.Instance.IsCurrentTimeWithinRange(1800, 400))
-            {
-                noSleepReason = "Can't sleep before " + TimeManager.Get12HourTime(1800f);
-                return false;
-            }
-#else
-            // Use NetworkSingleton for IL2CPP version
-            if (!NetworkSingleton<Il2CppScheduleOne.GameTime.TimeManager>.Instance.IsCurrentTimeWithinRange(1800, 400))
-            {
-                noSleepReason = "Can't sleep before " + Il2CppScheduleOne.GameTime.TimeManager.Get12HourTime(1800f);
-                return false;
-            }
-#endif
-        }
-        catch (System.Exception ex)
-        {
-            ModLogger.Debug($"Could not check time restrictions: {ex.Message}");
-            // Fallback - don't allow sleep during day hours (rough estimate)
-            var currentHour = System.DateTime.Now.Hour;
-            if (currentHour >= 6 && currentHour < 18)
-            {
-                noSleepReason = "Can't sleep before 6:00 PM";
-                return false;
-            }
-        }
-        
-        // Check for energizing products - like Schedule I
-        try
-        {
-            var player = Player.Local;
-            if (player != null && player.ConsumedProduct != null)
-            {
-                // This is simplified - Schedule I checks for specific product properties
-                // We'd need to expand this if we want full product checking
-                ModLogger.Debug("Player has consumed product - allowing sleep for now");
-            }
-        }
-        catch (System.Exception ex)
-        {
-            ModLogger.Debug($"Could not check player product status: {ex.Message}");
-        }
-        
+
+        // In jail, allow sleeping at any time - no time restrictions
+        ModLogger.Debug("Jail bed sleep check - allowing sleep at any time");
+
         return true;
     }
     

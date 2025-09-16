@@ -8,6 +8,7 @@ using Behind_Bars.Helpers;
 using Behind_Bars.Systems.NPCs;
 using Behind_Bars.UI;
 using Behind_Bars.Systems.CrimeDetection;
+using Behind_Bars.Systems.Jail;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
@@ -1031,7 +1032,7 @@ namespace Behind_Bars
             }
         }
 
-        public static void SetJailLighting(JailController.LightingState state)
+        public static void SetJailLighting(JailLightingController.LightingState state)
         {
             if (ActiveJailController != null)
             {

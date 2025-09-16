@@ -47,17 +47,7 @@ namespace Behind_Bars.Systems.Jail
         
         // Component references
         private InteractableObject interactableObject;
-        private MeshRenderer[] bedMatRenderers;
-        private MeshRenderer[] whiteSheetRenderers;
-        private MeshRenderer[] bedSheetRenderers;
-        private MeshRenderer[] pillowRenderers;
-        
-        // GameObject references for enabling/disabling entire objects
-        private GameObject[] bedMatObjects;
-        private GameObject[] whiteSheetObjects;
-        private GameObject[] bedSheetObjects;
-        private GameObject[] pillowObjects;
-        
+                
         // State tracking
         private bool isProcessing = false;
         private bool isComplete = false;
@@ -85,10 +75,7 @@ namespace Behind_Bars.Systems.Jail
         private void InitializeBedSetup()
         {
             ModLogger.Info($"Initializing prison bed setup for {(isTopBunk ? "top bunk" : "bottom bunk")} in {cellName}");
-            
-            // Cache mesh renderers for each component
-            CacheMeshRenderers();
-            
+                        
             // Set up interaction component
             SetupInteractableComponent();
             
@@ -100,40 +87,7 @@ namespace Behind_Bars.Systems.Jail
             
             ModLogger.Info($"Prison bed setup initialized at stage {setupStage}");
         }
-        
-        private void CacheMeshRenderers()
-        {
-            // Cache all mesh renderers and GameObjects for bed components
-            if (bedMat != null)
-            {
-                bedMatRenderers = bedMat.GetComponentsInChildren<MeshRenderer>();
-                bedMatObjects = GetChildGameObjects(bedMat);
-            }
                 
-            if (whiteSheet != null)
-            {
-                whiteSheetRenderers = whiteSheet.GetComponentsInChildren<MeshRenderer>();
-                whiteSheetObjects = GetChildGameObjects(whiteSheet);
-            }
-                
-            if (bedSheet != null)
-            {
-                bedSheetRenderers = bedSheet.GetComponentsInChildren<MeshRenderer>();
-                bedSheetObjects = GetChildGameObjects(bedSheet);
-            }
-                
-            if (pillow != null)
-            {
-                pillowRenderers = pillow.GetComponentsInChildren<MeshRenderer>();
-                pillowObjects = GetChildGameObjects(pillow);
-            }
-                
-            ModLogger.Debug($"Cached components - BedMat: {bedMatRenderers?.Length ?? 0} renderers, {bedMatObjects?.Length ?? 0} objects");
-            ModLogger.Debug($"WhiteSheet: {whiteSheetRenderers?.Length ?? 0} renderers, {whiteSheetObjects?.Length ?? 0} objects");
-            ModLogger.Debug($"BedSheet: {bedSheetRenderers?.Length ?? 0} renderers, {bedSheetObjects?.Length ?? 0} objects");
-            ModLogger.Debug($"Pillow: {pillowRenderers?.Length ?? 0} renderers, {pillowObjects?.Length ?? 0} objects");
-        }
-        
         private GameObject[] GetChildGameObjects(Transform parent)
         {
             if (parent == null) return null;
@@ -197,63 +151,19 @@ namespace Behind_Bars.Systems.Jail
         
         private void UpdateBedVisuals()
         {
-            // Enable/disable both GameObjects AND MeshRenderers to ensure visibility
+            // Simply enable/disable the GameObjects - much cleaner approach
             bool showMat = setupStage >= 1;
             bool showWhiteSheet = setupStage >= 2;
             bool showBedSheet = setupStage >= 3;
             bool showPillow = setupStage >= 4;
             
-            // Enable/disable GameObjects
-            SetGameObjectsEnabled(bedMatObjects, showMat);
-            SetGameObjectsEnabled(whiteSheetObjects, showWhiteSheet);
-            SetGameObjectsEnabled(bedSheetObjects, showBedSheet);
-            SetGameObjectsEnabled(pillowObjects, showPillow);
-            
-            // ALSO enable/disable MeshRenderers directly for double certainty
-            SetRenderersEnabled(bedMatRenderers, showMat);
-            SetRenderersEnabled(whiteSheetRenderers, showWhiteSheet);
-            SetRenderersEnabled(bedSheetRenderers, showBedSheet);
-            SetRenderersEnabled(pillowRenderers, showPillow);
+            // Enable/disable the bed component GameObjects
+            if (bedMat != null) bedMat.gameObject.SetActive(showMat);
+            if (whiteSheet != null) whiteSheet.gameObject.SetActive(showWhiteSheet);
+            if (bedSheet != null) bedSheet.gameObject.SetActive(showBedSheet);
+            if (pillow != null) pillow.gameObject.SetActive(showPillow);
             
             ModLogger.Debug($"Updated bed visuals for stage {setupStage} - Mat: {showMat}, WhiteSheet: {showWhiteSheet}, BedSheet: {showBedSheet}, Pillow: {showPillow}");
-        }
-        
-        private void SetGameObjectsEnabled(GameObject[] objects, bool enabled)
-        {
-            if (objects == null) return;
-            
-            foreach (var obj in objects)
-            {
-                if (obj != null && obj.activeSelf != enabled)
-                {
-                    obj.SetActive(enabled);
-                    ModLogger.Debug($"Set {obj.name} active state to {enabled}");
-                }
-            }
-        }
-        
-        private void SetRenderersEnabled(MeshRenderer[] renderers, bool enabled)
-        {
-            if (renderers == null) 
-            {
-                ModLogger.Debug("Renderers array is null");
-                return;
-            }
-            
-            ModLogger.Debug($"Setting {renderers.Length} renderers to enabled={enabled}");
-            
-            foreach (var renderer in renderers)
-            {
-                if (renderer != null)
-                {
-                    renderer.enabled = enabled;
-                    ModLogger.Debug($"Set renderer {renderer.gameObject.name} enabled to {enabled}");
-                }
-                else
-                {
-                    ModLogger.Debug("Found null renderer in array");
-                }
-            }
         }
         
         private void UpdateInteractionState()
@@ -460,11 +370,11 @@ namespace Behind_Bars.Systems.Jail
             switch (stage)
             {
                 case 0: // Place bed mat
-                    return "behindbars.bedroll";
+                    return "behindbars.bedroll"; // Correct item ID from PrisonItemRegistry
                 case 1: // Add bottom sheet - uses sheets & pillow item
-                case 2: // Add top sheet - uses sheets & pillow item
+                case 2: // Add top sheet - uses sheets & pillow item  
                 case 3: // Add pillow - consumes the sheets & pillow item
-                    return "behindbars.sheetsnpillows";
+                    return "behindbars.sheetsnpillows"; // Correct item ID from PrisonItemRegistry
                 default:
                     return null;
             }
@@ -491,6 +401,11 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         private bool CheckPlayerHasRequiredItem(string itemId)
         {
+            // TEMPORARY: Inventory check disabled for testing - always return true
+            ModLogger.Debug($"Inventory check disabled - allowing bed setup without item {itemId}");
+            return true;
+            
+            /* ORIGINAL CODE - Re-enable when inventory detection is working:
             try
             {
 #if !MONO
@@ -504,29 +419,19 @@ namespace Behind_Bars.Systems.Jail
                     return false;
                 }
 
-#if !MONO
-                var itemDef = Il2CppScheduleOne.Registry.GetItem(itemId);
-#else
-                var itemDef = ScheduleOne.Registry.GetItem(itemId);
-#endif
-                if (itemDef == null)
-                {
-                    ModLogger.Error($"Item definition not found for {itemId}");
-                    return false;
-                }
-
-                // TODO: Fix inventory API usage after game update
-                ModLogger.Debug($"Inventory API changed - assuming player has {itemId}");
-                return true; // Temporary workaround
-
-                ModLogger.Debug($"Item {itemId} not found in player inventory");
-                return false;
+                // Use the updated inventory API
+                uint itemCount = inventory.GetAmountOfItem(itemId);
+                bool hasItem = itemCount > 0;
+                
+                ModLogger.Debug($"Player has {itemCount} of item {itemId}: {hasItem}");
+                return hasItem;
             }
             catch (System.Exception ex)
             {
                 ModLogger.Error($"Error checking for required item {itemId}: {ex.Message}");
                 return false;
             }
+            */
         }
         
         /// <summary>
@@ -547,21 +452,28 @@ namespace Behind_Bars.Systems.Jail
                     return;
                 }
 
-                // TODO: Fix inventory API usage after game update
-                ModLogger.Info($"Inventory API changed - simulating consumption of {itemId}");
-                
-                string itemName = GetItemDisplayName(itemId);
-                if (BehindBarsUIManager.Instance != null)
+                // Check how many items the player has before consuming
+                uint itemCount = inventory.GetAmountOfItem(itemId);
+                if (itemCount > 0)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
-                        $"Used {itemName}", 
-                        NotificationType.Progress
-                    );
+                    // Consume 1 item
+                    inventory.RemoveAmountOfItem(itemId, 1);
+                    
+                    string itemName = GetItemDisplayName(itemId);
+                    ModLogger.Info($"Consumed 1 {itemName} from player inventory (had {itemCount})");
+                    
+                    if (BehindBarsUIManager.Instance != null)
+                    {
+                        BehindBarsUIManager.Instance.ShowNotification(
+                            $"Used {itemName}", 
+                            NotificationType.Progress
+                        );
+                    }
                 }
-                
-                return;
-
-                ModLogger.Warn($"Could not find {itemId} in inventory to consume");
+                else
+                {
+                    ModLogger.Warn($"Could not find {itemId} in inventory to consume (player has {itemCount})");
+                }
             }
             catch (System.Exception ex)
             {
