@@ -124,6 +124,9 @@ namespace Behind_Bars
             
             // Register Cell Management Components
             ClassInjector.RegisterTypeInIl2Cpp<CellAssignmentManager>();
+            
+            // Register Jail Inventory System
+            ClassInjector.RegisterTypeInIl2Cpp<JailInventoryPickupStation>();
 #endif
             // Initialize core systems
             HarmonyPatches.Initialize(this);
@@ -651,34 +654,53 @@ namespace Behind_Bars
                     ModLogger.Warn("ScannerStation not found in booking area");
                 }
                 
-                // Set up Inventory Drop-off
-                Transform storageArea = bookingArea.Find("Booking_StorageDoor");
-                if (storageArea == null)
-                {
-                    // Try alternative names
-                    storageArea = bookingArea.Find("Storage") ?? bookingArea.Find("InventoryStorage");
-                }
+                // Set up Inventory Drop-off Station
+                // Based on Unity hierarchy, look for Storage/InventoryDropOff
+                Transform storageArea = jailTransform.Find("Storage");
+                Transform inventoryDropOff = null;
                 
                 if (storageArea != null)
                 {
-                    var inventoryComponent = storageArea.GetComponent<Behind_Bars.Systems.Jail.InventoryDropOff>();
+                    inventoryDropOff = storageArea.Find("InventoryDropOff");
+                }
+                
+                if (inventoryDropOff != null)
+                {
+                    var inventoryComponent = inventoryDropOff.GetComponent<Behind_Bars.Systems.Jail.InventoryDropOffStation>();
                     if (inventoryComponent == null)
                     {
-                        inventoryComponent = storageArea.gameObject.AddComponent<Behind_Bars.Systems.Jail.InventoryDropOff>();
-                        ModLogger.Info("✓ InventoryDropOff component added");
+                        inventoryComponent = inventoryDropOff.gameObject.AddComponent<Behind_Bars.Systems.Jail.InventoryDropOffStation>();
+                        ModLogger.Info("✓ InventoryDropOffStation component added to InventoryDropOff GameObject");
                     }
+                    
+                    ModLogger.Info("InventoryDropOffStation setup complete");
                 }
                 else
                 {
-                    ModLogger.Warn("Booking storage area not found - creating fallback");
+                    ModLogger.Warn("Storage/InventoryDropOff not found in jail hierarchy");
+                }
+                
+                // Set up Inventory Pickup Station
+                Transform inventoryPickup = null;
+                if (storageArea != null)
+                {
+                    inventoryPickup = storageArea.Find("InventoryPickup");
+                }
+                
+                if (inventoryPickup != null)
+                {
+                    var pickupComponent = inventoryPickup.GetComponent<Behind_Bars.Systems.Jail.JailInventoryPickupStation>();
+                    if (pickupComponent == null)
+                    {
+                        pickupComponent = inventoryPickup.gameObject.AddComponent<Behind_Bars.Systems.Jail.JailInventoryPickupStation>();
+                        ModLogger.Info("✓ JailInventoryPickupStation component added to InventoryPickup GameObject");
+                    }
                     
-                    // Create fallback storage point
-                    GameObject storagePoint = new GameObject("InventoryDropOff");
-                    storagePoint.transform.SetParent(bookingArea);
-                    storagePoint.transform.localPosition = new Vector3(5, 0, 0); // Offset from booking center
-                    
-                    var inventoryComponent = storagePoint.AddComponent<Behind_Bars.Systems.Jail.InventoryDropOff>();
-                    ModLogger.Info("✓ Fallback InventoryDropOff created");
+                    ModLogger.Info("JailInventoryPickupStation setup complete");
+                }
+                else
+                {
+                    ModLogger.Warn("Storage/InventoryPickup not found in jail hierarchy");
                 }
                 
                 ModLogger.Info("✓ Booking stations setup completed");
@@ -1030,6 +1052,18 @@ namespace Behind_Bars
             }
             return "Unknown - JailController not available";
         }
+        
+        /// <summary>
+        /// Get the PlayerHandler for a given player
+        /// </summary>
+        public static PlayerHandler? GetPlayerHandler(Player player)
+        {
+            if (Instance != null && player != null && Instance._playerHandlers.ContainsKey(player))
+            {
+                return Instance._playerHandlers[player];
+            }
+            return null;
+        }
 
         /// <summary>
         /// Public API: Show jail information UI
@@ -1060,6 +1094,52 @@ namespace Behind_Bars
             catch (Exception e)
             {
                 ModLogger.Error($"Error hiding jail info UI: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Setup door triggers for the specific jail door triggers
+        /// Call this in-game to add DoorTriggerHandler components to your jail triggers
+        /// </summary>
+        public static void SetupDoorTriggers()
+        {
+            try
+            {
+                ModLogger.Info("Starting jail door trigger setup...");
+                
+                // Setup only the specific jail door triggers under PatrolPoints
+                Behind_Bars.Utils.ManualDoorTriggerSetup.SetupJailDoorTriggers();
+                
+                ModLogger.Info("Jail door trigger setup completed!");
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error setting up door triggers: {e.Message}");
+                ModLogger.Error($"Stack trace: {e.StackTrace}");
+            }
+        }
+
+        /// <summary>
+        /// Manual setup for a specific door trigger by name
+        /// Example: Core.SetupSpecificDoorTrigger("BookingDoorTrigger", "Booking Inner Door")
+        /// </summary>
+        public static void SetupSpecificDoorTrigger(string triggerName, string doorName = null)
+        {
+            try
+            {
+                bool success = Behind_Bars.Utils.ManualDoorTriggerSetup.SetupDoorTriggerByName(triggerName, doorName);
+                if (success)
+                {
+                    ModLogger.Info($"Successfully setup door trigger: {triggerName}");
+                }
+                else
+                {
+                    ModLogger.Error($"Failed to setup door trigger: {triggerName}");
+                }
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error setting up specific door trigger {triggerName}: {e.Message}");
             }
         }
 

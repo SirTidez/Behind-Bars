@@ -6,6 +6,7 @@ using BehindBars.Areas;
 using MelonLoader;
 using UnityEngine.UI;
 using Behind_Bars.Helpers;
+using Behind_Bars.Systems.Jail;
 
 
 
@@ -95,6 +96,22 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     public float lightCullingDistance = 50f;
     public int maxRealTimeLights = 20;
     public bool preferBakedLighting = true;
+
+    // Emissive Material Control
+    public Material emissiveMaterial;
+    public List<Material> allEmissiveMaterials = new List<Material>();
+    public string emissiveMaterialName = "M_LightEmissive";
+    public bool enableEmissiveControl = true;
+    
+    // Emissive colors for different lighting states
+    public Color emissiveNormalColor = Color.white;
+    public Color emissiveEmergencyColor = Color.red;
+    public Color emissiveBlackoutColor = Color.black;
+    
+    // Emissive intensities for different lighting states
+    public float emissiveNormalIntensity = 1.0f;
+    public float emissiveEmergencyIntensity = 0.8f;
+    public float emissiveBlackoutIntensity = 0.0f;
 
     [System.Serializable]
     public class AreaLighting
@@ -246,6 +263,7 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     public KeyCode unlockAllKey = KeyCode.U;
     public KeyCode openAllCellsKey = KeyCode.O;
     public KeyCode closeAllCellsKey = KeyCode.C;
+    public KeyCode blackoutKey = KeyCode.B;
 
     public float cameraDownwardAngle = 15f;
 
@@ -294,6 +312,11 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         if (Input.GetKeyDown(closeAllCellsKey))
         {
             CloseAllCells();
+        }
+        
+        if (Input.GetKeyDown(blackoutKey))
+        {
+            Blackout();
         }
         
         // Door testing keyboard shortcuts
@@ -735,6 +758,9 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         
         // Initialize holding cell door references for keyboard shortcuts
         InitializeHoldingCellDoorReferences();
+        
+        // Find and cache emissive material for lighting control
+        FindEmissiveMaterial();
 
         if (showDebugInfo)
         {
@@ -1448,51 +1474,103 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         
         try
         {
-            // Check if bed component already exists using IL2CPP-safe method
-            JailBed bedComponent = null;
+            // Check if prison bed interactable already exists
+            PrisonBedInteractable prisonBed = bedTransform.GetComponent<PrisonBedInteractable>();
             
-#if !MONO
-            // IL2CPP-safe component access
-            var components = bedTransform.GetComponents<MonoBehaviour>();
-            foreach (var comp in components)
+            if (prisonBed == null)
             {
-                if (comp is JailBed jailBed)
-                {
-                    bedComponent = jailBed;
-                    break;
-                }
-            }
-#else
-            // Mono version - use standard GetComponent
-            bedComponent = bedTransform.GetComponent<JailBed>();
-#endif
-            
-            if (bedComponent == null)
-            {
-#if !MONO
-                // IL2CPP-safe component addition using Il2Cpp type
-                var component = bedTransform.gameObject.AddComponent(Il2CppType.Of<JailBed>());
-                bedComponent = component.Cast<JailBed>();
-#else
-                // Mono version
-                bedComponent = bedTransform.gameObject.AddComponent<JailBed>();
-#endif
+                // Add PrisonBedInteractable component for bed-making interaction
+                prisonBed = bedTransform.gameObject.AddComponent<PrisonBedInteractable>();
+                
+                // Configure the prison bed setup
+                prisonBed.isTopBunk = isTopBunk;
+                prisonBed.cellName = ExtractCellNameFromBedName(bedName);
+                
+                // Find and assign bed component references
+                SetupBedComponentReferences(prisonBed, bedTransform);
+                
+                ModLogger.Debug($"✓ Setup prison bed interactable: {bedName}");
             }
             
-            // Configure the bed
-            bedComponent.bedName = bedName;
-            bedComponent.isTopBunk = isTopBunk;
+            // Check if there's already a completed JailBed (in case bed is already made)
+            JailBed jailBed = bedTransform.GetComponent<JailBed>();
+            if (jailBed != null)
+            {
+                // Bed is already complete - configure JailBed
+                jailBed.bedName = bedName;
+                jailBed.isTopBunk = isTopBunk;
+                jailBed.sleepPosition = bedTransform;
+                ModLogger.Debug($"✓ Found existing jail bed: {bedName}");
+            }
             
-            // Set sleep position to the bed transform itself
-            bedComponent.sleepPosition = bedTransform;
-            
-            ModLogger.Debug($"✓ Setup jail bed: {bedName}");
-            return bedComponent;
+            return jailBed; // May be null if bed isn't made yet
         }
         catch (System.Exception ex)
         {
             ModLogger.Error($"✗ Failed to setup jail bed '{bedName}': {ex.Message}");
             return null;
+        }
+    }
+    
+    /// <summary>
+    /// Extract cell name from bed name (e.g., "Cell 00 Bottom Bunk" → "Cell 00")
+    /// </summary>
+    private string ExtractCellNameFromBedName(string bedName)
+    {
+        if (string.IsNullOrEmpty(bedName)) return "Unknown Cell";
+        
+        // Remove " Bottom Bunk" or " Top Bunk" from the end
+        string cellName = bedName;
+        if (cellName.EndsWith(" Bottom Bunk"))
+            cellName = cellName.Substring(0, cellName.Length - " Bottom Bunk".Length);
+        else if (cellName.EndsWith(" Top Bunk"))
+            cellName = cellName.Substring(0, cellName.Length - " Top Bunk".Length);
+            
+        return cellName;
+    }
+    
+    /// <summary>
+    /// Find and assign references to bed component child objects
+    /// </summary>
+    private void SetupBedComponentReferences(PrisonBedInteractable prisonBed, Transform bedTransform)
+    {
+        // Look for bed component children in the PrisonBed structure
+        Transform prisonBedChild = bedTransform.Find("PrisonBed");
+        if (prisonBedChild != null)
+        {
+            // Find bed components under PrisonBed
+            prisonBed.bedMat = prisonBedChild.Find("BedMat");
+            prisonBed.whiteSheet = prisonBedChild.Find("WhiteSheet");
+            prisonBed.bedSheet = prisonBedChild.Find("BedSheet");
+            prisonBed.pillow = prisonBedChild.Find("Pillow");
+            
+            ModLogger.Debug($"Found bed components for {prisonBed.cellName}: BedMat={prisonBed.bedMat != null}, WhiteSheet={prisonBed.whiteSheet != null}, BedSheet={prisonBed.bedSheet != null}, Pillow={prisonBed.pillow != null}");
+        }
+        else
+        {
+            // Try alternative structure - look directly under bed transform
+            prisonBed.bedMat = bedTransform.Find("BedMat");
+            prisonBed.whiteSheet = bedTransform.Find("WhiteSheet");
+            prisonBed.bedSheet = bedTransform.Find("BedSheet");
+            prisonBed.pillow = bedTransform.Find("Pillow");
+            
+            ModLogger.Debug($"Searched directly under bed transform for {prisonBed.cellName}");
+        }
+        
+        // Log what we found
+        int foundComponents = 0;
+        if (prisonBed.bedMat != null) foundComponents++;
+        if (prisonBed.whiteSheet != null) foundComponents++;
+        if (prisonBed.bedSheet != null) foundComponents++;
+        if (prisonBed.pillow != null) foundComponents++;
+        
+        if (foundComponents > 0)
+        {
+            ModLogger.Info($"✓ Found {foundComponents}/4 bed components for {prisonBed.cellName} {(prisonBed.isTopBunk ? "top bunk" : "bottom bunk")}");
+        }
+        else
+        {
+            ModLogger.Warn($"⚠️ No bed components found for {prisonBed.cellName} - bed making will not be available");
         }
     }
 
@@ -1892,6 +1970,14 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         Debug.Log("🔓 All doors unlocked! Normal lighting restored.");
     }
 
+    public void Blackout()
+    {
+        // Set blackout lighting (all lights off, emissive materials off)
+        SetJailLighting(LightingState.Blackout);
+
+        Debug.Log("🌑 BLACKOUT ACTIVATED! All lights are off.");
+    }
+
     public void OpenAllCells()
     {
         foreach (var cell in cells)
@@ -1922,6 +2008,9 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         {
             areaLighting.SetLightingState(state);
         }
+        
+        // Update emissive material to match lighting state
+        SetEmissiveMaterial(state);
 
         string stateName = state switch
         {
@@ -1959,6 +2048,215 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         else
         {
             Debug.LogWarning($"Area lighting not found: {areaName}");
+        }
+    }
+
+    // Emissive Material Control Methods
+    void FindEmissiveMaterial()
+    {
+        if (!enableEmissiveControl)
+        {
+            ModLogger.Debug("Emissive control disabled, skipping material search");
+            return;
+        }
+        
+        if (emissiveMaterial != null)
+        {
+            ModLogger.Debug($"Emissive material already cached: {emissiveMaterial.name}");
+            return;
+        }
+        
+        ModLogger.Info($"Searching for emissive material containing name: '{emissiveMaterialName}'");
+        
+        // Find all renderers in the jail hierarchy
+        Renderer[] renderers = GetComponentsInChildren<Renderer>();
+        ModLogger.Info($"Found {renderers.Length} renderers in jail hierarchy");
+        
+        int totalMaterials = 0;
+        List<string> allMaterialNames = new List<string>();
+        
+        foreach (var renderer in renderers)
+        {
+            if (renderer.materials != null)
+            {
+                totalMaterials += renderer.materials.Length;
+                foreach (var material in renderer.materials)
+                {
+                    if (material != null)
+                    {
+                        allMaterialNames.Add(material.name);
+                        
+                        // Check for exact match or contains
+                        if (material.name.Contains(emissiveMaterialName))
+                        {
+                            // Add to our collection of all emissive materials
+                            if (!allEmissiveMaterials.Contains(material))
+                            {
+                                allEmissiveMaterials.Add(material);
+                                ModLogger.Info($"✓ Found emissive material: '{material.name}' on renderer: {renderer.name}");
+                                
+                                // Test if material has emission properties
+                                TestEmissiveMaterialProperties(material);
+                                
+                                // Set the first one as the primary reference
+                                if (emissiveMaterial == null)
+                                {
+                                    emissiveMaterial = material;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Log results
+        if (allEmissiveMaterials.Count > 0)
+        {
+            ModLogger.Info($"✓ Found {allEmissiveMaterials.Count} emissive material instances total");
+        }
+        
+        if (allEmissiveMaterials.Count == 0)
+        {
+            ModLogger.Warn($"⚠️ Emissive material containing '{emissiveMaterialName}' not found in jail hierarchy");
+        }
+        
+        ModLogger.Info($"Searched {totalMaterials} materials across {renderers.Length} renderers");
+        
+        // Log first 10 material names for debugging
+        if (allMaterialNames.Count > 0)
+        {
+            ModLogger.Info("First 10 materials found:");
+            for (int i = 0; i < System.Math.Min(10, allMaterialNames.Count); i++)
+            {
+                ModLogger.Info($"  [{i}]: {allMaterialNames[i]}");
+            }
+        }
+    }
+    
+    void TestEmissiveMaterialProperties(Material material)
+    {
+        ModLogger.Debug($"Testing emission properties on material: {material.name}");
+        
+        bool hasEmissionColor = material.HasProperty("_EmissionColor");
+        bool hasEmission = material.HasProperty("_Emission");
+        bool hasEmissiveKeyword = material.IsKeywordEnabled("_EMISSION");
+        
+        ModLogger.Info($"Material properties: _EmissionColor={hasEmissionColor}, _Emission={hasEmission}, _EMISSION keyword={hasEmissiveKeyword}");
+        
+        if (hasEmissionColor)
+        {
+            Color currentEmission = material.GetColor("_EmissionColor");
+            ModLogger.Info($"Current _EmissionColor: {currentEmission}");
+        }
+        
+        if (hasEmission)
+        {
+            Color currentEmission = material.GetColor("_Emission");
+            ModLogger.Info($"Current _Emission: {currentEmission}");
+        }
+    }
+    
+    void SetEmissiveMaterial(LightingState state)
+    {
+        if (!enableEmissiveControl)
+        {
+            ModLogger.Debug($"Emissive control disabled, skipping material update for {state}");
+            return;
+        }
+        
+        if (emissiveMaterial == null)
+        {
+            ModLogger.Warn($"No emissive material cached, cannot update for {state}");
+            return;
+        }
+        
+        ModLogger.Info($"Updating emissive material '{emissiveMaterial.name}' for lighting state: {state}");
+        
+        Color targetColor;
+        float targetIntensity;
+        
+        switch (state)
+        {
+            case LightingState.Normal:
+                targetColor = emissiveNormalColor;
+                targetIntensity = emissiveNormalIntensity;
+                break;
+            case LightingState.Emergency:
+                targetColor = emissiveEmergencyColor;
+                targetIntensity = emissiveEmergencyIntensity;
+                break;
+            case LightingState.Blackout:
+                targetColor = emissiveBlackoutColor;
+                targetIntensity = emissiveBlackoutIntensity;
+                break;
+            default:
+                targetColor = emissiveNormalColor;
+                targetIntensity = emissiveNormalIntensity;
+                break;
+        }
+        
+        // Apply the emission color and intensity
+        Color finalEmissionColor = targetColor * targetIntensity;
+        
+        int updatedCount = 0;
+        int failedCount = 0;
+        
+        // Update ALL emissive material instances
+        foreach (var material in allEmissiveMaterials)
+        {
+            if (material == null) continue;
+            
+            bool materialUpdated = false;
+            
+            // Try different emission property names
+            if (material.HasProperty("_EmissionColor"))
+            {
+                material.SetColor("_EmissionColor", finalEmissionColor);
+                materialUpdated = true;
+                ModLogger.Debug($"Set _EmissionColor on '{material.name}' to: {finalEmissionColor}");
+            }
+            else if (material.HasProperty("_Emission"))
+            {
+                material.SetColor("_Emission", finalEmissionColor);
+                materialUpdated = true;
+                ModLogger.Debug($"Set _Emission on '{material.name}' to: {finalEmissionColor}");
+            }
+            else if (material.HasProperty("_EmissiveColor"))
+            {
+                material.SetColor("_EmissiveColor", finalEmissionColor);
+                materialUpdated = true;
+                ModLogger.Debug($"Set _EmissiveColor on '{material.name}' to: {finalEmissionColor}");
+            }
+            
+            if (materialUpdated)
+            {
+                // Enable/disable emission keyword for performance
+                if (targetIntensity > 0)
+                {
+                    material.EnableKeyword("_EMISSION");
+                }
+                else
+                {
+                    material.DisableKeyword("_EMISSION");
+                }
+                updatedCount++;
+            }
+            else
+            {
+                ModLogger.Warn($"Material '{material.name}' has no supported emission property!");
+                failedCount++;
+            }
+        }
+        
+        if (updatedCount > 0)
+        {
+            ModLogger.Info($"Successfully updated {updatedCount} emissive material instances to {state}: {finalEmissionColor} (intensity: {targetIntensity})");
+        }
+        
+        if (failedCount > 0)
+        {
+            ModLogger.Error($"Failed to update {failedCount} emissive material instances - no compatible emission properties found");
         }
     }
 

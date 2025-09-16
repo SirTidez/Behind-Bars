@@ -352,6 +352,10 @@ namespace Behind_Bars.Systems.NPCs
                             mb.enabled = false;
                             ModLogger.Warn($"⚠️  DISABLED avatar movement script: {component.GetType().Name} on {objectPath}");
                         }
+                        else if (component.GetType().Name.Contains("AvatarLookController"))
+                        {
+                            ModLogger.Info($"✓ KEEPING AvatarLookController enabled on {objectPath}");
+                        }
                     }
                     
                     ModLogger.Debug($"  Avatar child: {objectPath} -> {component.GetType().Name}{status}");
@@ -423,6 +427,12 @@ namespace Behind_Bars.Systems.NPCs
         
         private bool IsLikelyMovementScript(string typeName)
         {
+            // IMPORTANT: Don't disable AvatarLookController - we want to use it for natural facing behavior
+            if (typeName.Contains("AvatarLookController"))
+            {
+                return false;
+            }
+            
             // Common patterns for movement/AI scripts that might interfere
             string[] movementPatterns = {
                 "Movement", "Controller", "AI", "Brain", "Behavior", "Behaviour", 

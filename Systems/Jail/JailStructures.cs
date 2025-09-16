@@ -11,6 +11,7 @@ public class JailDoor
 
     public string doorName;
     public DoorType doorType;
+    public DoorInteractionType interactionType;
     public DoorState currentState = DoorState.Closed;
     public bool isLocked = false;
 
@@ -30,6 +31,12 @@ public class JailDoor
         EntryDoor,
         GuardDoor,
         AreaDoor
+    }
+
+    public enum DoorInteractionType
+    {
+        PassThrough,    // Guard moves through door (Inner, Entry, Guard doors)
+        OperationOnly   // Guard only opens/closes door (Cell, Holding doors)
     }
 
     public enum DoorState
@@ -167,6 +174,31 @@ public class JailDoor
             currentAngle = closedAngle;
             doorHinge.localEulerAngles = new Vector3(0, 0, currentAngle);
         }
+
+        // Auto-determine interaction type based on door type
+        SetInteractionTypeFromDoorType();
+    }
+
+    /// <summary>
+    /// Automatically set interaction type based on door type
+    /// </summary>
+    public void SetInteractionTypeFromDoorType()
+    {
+        switch (doorType)
+        {
+            case DoorType.CellDoor:
+            case DoorType.HoldingCellDoor:
+                interactionType = DoorInteractionType.OperationOnly;
+                break;
+            case DoorType.EntryDoor:
+            case DoorType.GuardDoor:
+            case DoorType.AreaDoor:
+                interactionType = DoorInteractionType.PassThrough;
+                break;
+            default:
+                interactionType = DoorInteractionType.OperationOnly;
+                break;
+        }
     }
 
     // Legacy method for compatibility
@@ -184,6 +216,11 @@ public class JailDoor
         {
             CloseDoor();
         }
+    }
+
+    public bool IsLocked()
+    {
+        return isLocked;
     }
 }
 

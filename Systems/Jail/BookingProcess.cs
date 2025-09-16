@@ -30,6 +30,7 @@ namespace Behind_Bars.Systems.Jail
         
         public bool mugshotComplete = false;
         public bool fingerprintComplete = false;
+        public bool inventoryDropOffComplete = false;
         public bool inventoryProcessed = false;
         
         public Texture2D mugshotImage;
@@ -38,6 +39,7 @@ namespace Behind_Bars.Systems.Jail
         
         public MugshotStation mugshotStation;
         public ScannerStation scannerStation;
+        public InventoryDropOffStation inventoryDropOffStation;
         public Transform inventoryDropOff;
         
         public bool requireBothStations = true;
@@ -45,9 +47,10 @@ namespace Behind_Bars.Systems.Jail
         public float notificationDuration = 4f;
         
         private Player currentPlayer;
-        private bool bookingInProgress = false;
+        public bool bookingInProgress = false;
         private bool escortRequested = false;
         private bool escortInProgress = false;
+        public bool storageInteractionAllowed = false;
         private static BookingProcess _instance;
         
         public static BookingProcess Instance
@@ -80,7 +83,7 @@ namespace Behind_Bars.Systems.Jail
             // Find booking stations if not assigned
             FindBookingStations();
             
-            ModLogger.Info($"BookingProcess initialized - Mugshot: {mugshotStation != null}, Scanner: {scannerStation != null}");
+            ModLogger.Info($"BookingProcess initialized - Mugshot: {mugshotStation != null}, Scanner: {scannerStation != null}, InventoryDropOff: {inventoryDropOffStation != null}");
         }
         
         void FindBookingStations()
@@ -90,6 +93,9 @@ namespace Behind_Bars.Systems.Jail
                 
             if (scannerStation == null)
                 scannerStation = FindObjectOfType<ScannerStation>();
+                
+            if (inventoryDropOffStation == null)
+                inventoryDropOffStation = FindObjectOfType<InventoryDropOffStation>();
                 
             // Find inventory drop-off point
             if (inventoryDropOff == null)
@@ -122,14 +128,8 @@ namespace Behind_Bars.Systems.Jail
             
             ModLogger.Info($"Starting booking process for player: {player.name}");
             
-            // Show initial instructions
-            if (BehindBarsUIManager.Instance != null)
-            {
-                BehindBarsUIManager.Instance.ShowNotification(
-                    "Complete mugshot and fingerprint scan", 
-                    NotificationType.Instruction
-                );
-            }
+            // Request guard escort immediately when booking starts
+            RequestGuardEscort();
             
             // Update UI with task list
             UpdateTaskListUI();
@@ -154,13 +154,12 @@ namespace Behind_Bars.Systems.Jail
             if (BehindBarsUIManager.Instance != null)
             {
                 BehindBarsUIManager.Instance.ShowNotification(
-                    "Booking complete! Wait for guard escort", 
-                    NotificationType.Direction
+                    "Booking complete! Guard will take you to storage", 
+                    NotificationType.Progress
                 );
             }
             
-            // Request guard escort instead of proceeding directly
-            RequestGuardEscort();
+            // Escort is already in progress, no need to request again
         }
 
 #if !MONO
@@ -271,9 +270,33 @@ namespace Behind_Bars.Systems.Jail
             // Show progress notification
             if (BehindBarsUIManager.Instance != null)
             {
-                string message = mugshotComplete ? "All stations complete!" : "Fingerprint complete - take mugshot next";
+                string message = mugshotComplete ? "Booking stations complete - proceed to storage!" : "Fingerprint complete - take mugshot next";
                 BehindBarsUIManager.Instance.ShowNotification(message, NotificationType.Progress);
             }
+            
+            CheckBookingCompletion();
+        }
+        
+        /// <summary>
+        /// Mark inventory drop-off as complete
+        /// </summary>
+        public void SetInventoryDropOffComplete()
+        {
+            inventoryDropOffComplete = true;
+            
+            ModLogger.Info("Inventory drop-off marked as complete");
+            
+            // Show progress notification
+            if (BehindBarsUIManager.Instance != null)
+            {
+                BehindBarsUIManager.Instance.ShowNotification(
+                    "Inventory secured - booking complete!", 
+                    NotificationType.Progress
+                );
+            }
+            
+            // Mark overall inventory as processed
+            inventoryProcessed = true;
             
             CheckBookingCompletion();
         }
@@ -297,11 +320,11 @@ namespace Behind_Bars.Systems.Jail
         {
             if (requireBothStations)
             {
-                return mugshotComplete && fingerprintComplete;
+                return mugshotComplete && fingerprintComplete && inventoryDropOffComplete;
             }
             else
             {
-                return mugshotComplete || fingerprintComplete;
+                return (mugshotComplete || fingerprintComplete) && inventoryDropOffComplete;
             }
         }
         
@@ -312,6 +335,7 @@ namespace Behind_Bars.Systems.Jail
         {
             mugshotComplete = false;
             fingerprintComplete = false;
+            inventoryDropOffComplete = false;
             inventoryProcessed = false;
             escortRequested = false;
             escortInProgress = false;
@@ -337,10 +361,10 @@ namespace Behind_Bars.Systems.Jail
             string fingerprintStatus = fingerprintComplete ? "✓" : "☐";
             tasks.Add($"{fingerprintStatus} Fingerprint Scan");
             
-            // Add inventory task if needed
-            if (IsBookingComplete())
+            // Add inventory drop-off task (always show if stations are complete)
+            if (mugshotComplete && fingerprintComplete)
             {
-                string inventoryStatus = inventoryProcessed ? "✓" : "☐";
+                string inventoryStatus = inventoryDropOffComplete ? "✓" : "☐";
                 tasks.Add($"{inventoryStatus} Inventory Drop-off");
             }
             
@@ -358,6 +382,7 @@ namespace Behind_Bars.Systems.Jail
                 playerName = currentPlayer?.name ?? "Unknown",
                 mugshotCaptured = mugshotComplete,
                 fingerprintScanned = fingerprintComplete,
+                inventoryDropOffComplete = inventoryDropOffComplete,
                 inventoryProcessed = inventoryProcessed,
                 completionTime = System.DateTime.Now,
                 confiscatedItems = new List<string>(confiscatedItems)
@@ -371,6 +396,7 @@ namespace Behind_Bars.Systems.Jail
         {
             mugshotComplete = true;
             fingerprintComplete = true;
+            inventoryDropOffComplete = true;
             
             if (mugshotImage == null)
             {
@@ -382,6 +408,10 @@ namespace Behind_Bars.Systems.Jail
             {
                 fingerprintData = "TEST_FINGERPRINT_" + System.DateTime.Now.Ticks;
             }
+            
+            // Add dummy confiscated items
+            confiscatedItems.Add("Test Item 1");
+            confiscatedItems.Add("Test Item 2");
             
             CompleteBooking();
             ModLogger.Info("Booking force-completed for testing");
@@ -589,14 +619,7 @@ namespace Behind_Bars.Systems.Jail
         // Debug/Testing methods
         void Update()
         {
-            // Check for booking completion and handle guard door control
-            if (IsBookingComplete() && !guardEscortTriggered)
-            {
-                guardEscortTriggered = true;
-                
-                // Delay guard action to make it feel more realistic
-                MelonCoroutines.Start(DelayedGuardEscort());
-            }
+            // Escort is now triggered immediately when booking starts, not on completion
             
             // Debug commands
             if (Input.GetKeyDown(KeyCode.F1) && Input.GetKey(KeyCode.LeftShift))
@@ -648,6 +671,7 @@ namespace Behind_Bars.Systems.Jail
         public string playerName;
         public bool mugshotCaptured;
         public bool fingerprintScanned;
+        public bool inventoryDropOffComplete;
         public bool inventoryProcessed;
         public System.DateTime completionTime;
         public List<string> confiscatedItems;

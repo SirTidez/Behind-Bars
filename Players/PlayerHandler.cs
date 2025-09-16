@@ -27,6 +27,9 @@ namespace Behind_Bars.Players
         public List<CriminalRecord> CriminalHistory { get; private set; } = new();
         public float TotalFinesPaid { get; private set; } = 0f;
         public float TotalJailTimeServed { get; private set; } = 0f;
+        
+        // Confiscated items tracking
+        public List<string> ConfiscatedItems { get; private set; } = new();
 
         public PlayerHandler(Player player)
         {
@@ -242,6 +245,33 @@ namespace Behind_Bars.Players
             }
             
             return score;
+        }
+        
+        // Confiscated items methods
+        public void AddConfiscatedItems(List<string> items)
+        {
+            if (items != null && items.Count > 0)
+            {
+                ConfiscatedItems.AddRange(items);
+                ModLogger.Info($"Added {items.Count} confiscated items for {Player?.name}");
+            }
+        }
+        
+        public List<string> GetConfiscatedItems()
+        {
+            return new List<string>(ConfiscatedItems);
+        }
+        
+        public void ClearConfiscatedItems()
+        {
+            int count = ConfiscatedItems.Count;
+            ConfiscatedItems.Clear();
+            ModLogger.Info($"Cleared {count} confiscated items for {Player?.name}");
+        }
+        
+        public bool HasConfiscatedItems()
+        {
+            return ConfiscatedItems.Count > 0;
         }
     }
 
