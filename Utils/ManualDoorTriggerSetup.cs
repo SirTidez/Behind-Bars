@@ -209,7 +209,7 @@ namespace Behind_Bars.Utils
         /// </summary>
         private static JailDoor FindDoorByName(string doorName)
         {
-            var jailController = Core.ActiveJailController;
+            var jailController = Core.JailController;
             if (jailController == null) return null;
             
             // Check booking doors

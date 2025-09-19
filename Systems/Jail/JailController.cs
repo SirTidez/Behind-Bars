@@ -13,6 +13,9 @@ using Behind_Bars.Utils;
 #if !MONO
 using Il2CppInterop.Runtime.Attributes;
 using Il2CppInterop.Runtime;
+using Il2CppScheduleOne.PlayerScripts;
+#else
+using ScheduleOne.PlayerScripts;
 #endif
 
 #if MONO
@@ -21,12 +24,12 @@ public sealed class JailController : MonoBehaviour
 public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
 #endif
 {
-    [Header("Core Components")]
+    public BookingProcess BookingProcessController { get; set; }
+
     public GameObject jailDoorPrefab;
     public GameObject steelDoorPrefab;
     public GameObject securityCameraPrefab;
 
-    [Header("Controllers")]
     public JailLightingController lightingController;
     public JailMonitorController monitorController;
     public JailDoorController doorController;
@@ -34,10 +37,8 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     public JailPatrolManager patrolManager;
     public JailAreaManager areaManager;
 
-    [Header("System Data")]
     public List<SecurityCamera> securityCameras = new List<SecurityCamera>();
 
-    [Header("Debug")]
     public bool showDebugInfo = false;
     public float cameraDownwardAngle = 15f;
 
@@ -128,6 +129,9 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
 
         // Setup security cameras
         SetupSecurityCameras();
+
+        // Setup door triggers for automatic door handling
+        SetupDoorTriggers();
 
         if (showDebugInfo)
         {
@@ -298,6 +302,10 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     public CellDetail GetAvailableHoldingCell() => cellManager?.GetAvailableHoldingCell();
     public CellDetail GetCellByIndex(int cellIndex) => cellManager?.GetCellByIndex(cellIndex);
     public CellDetail GetHoldingCellByIndex(int cellIndex) => cellManager?.GetHoldingCellByIndex(cellIndex);
+    public int FindPlayerHoldingCell(Player player) => cellManager?.FindPlayerHoldingCell(player) ?? -1;
+    public bool IsPlayerInHoldingCellBounds(Player player, int holdingCellIndex) => cellManager?.IsPlayerInHoldingCellBounds(player, holdingCellIndex) ?? false;
+    public bool HasPlayerExitedHoldingCell(Player player, int holdingCellIndex) => cellManager?.HasPlayerExitedHoldingCell(player, holdingCellIndex) ?? true;
+    public bool IsPlayerInJailCellBounds(Player player, int cellIndex) => cellManager?.IsPlayerInJailCellBounds(player, cellIndex) ?? false;
     public string GetPlayerCurrentArea(Vector3 playerPosition) => areaManager?.GetPlayerCurrentArea(playerPosition) ?? "Unknown";
     public List<Transform> GetPatrolPoints() => patrolManager?.GetPatrolPoints() ?? new List<Transform>();
     public void InitializePatrolPoints() => patrolManager?.Initialize(transform);
@@ -354,4 +362,174 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     }
 
     public void LogStatus() => LogJailStatus();
+
+    /// <summary>
+    /// Programmatically setup door triggers for automatic door handling during escort
+    ///
+    /// DOOR STRUCTURE (from Unity Hierarchy):
+    ///
+    /// Booking/
+    /// ├── Booking_GuardDoor/
+    /// │   ├── GuardRoomDoorTrigger_FromGuardRoom (→ BookingToHall direction)
+    /// │   ├── GuardRoomDoorTrigger_FromBooking (→ HallToBooking direction)
+    /// │   ├── DoorPoint_GuardRoom
+    /// │   └── DoorPoint_Booking
+    /// │
+    /// ├── Booking_InnerDoor/
+    /// │   ├── BookingDoorTrigger_FromBooking (→ BookingToHall direction)
+    /// │   ├── BookingDoorTrigger_FromHall (→ HallToBooking direction)
+    /// │   ├── DoorPoint_Booking
+    /// │   └── DoorPoint_Hall
+    /// │
+    /// Prison_EnterDoor/
+    /// ├── PrisonDoorTrigger_FromHall (→ HallToPrison direction)
+    /// ├── PrisonDoorTrigger_FromPrison (→ return direction)
+    /// ├── DoorPoint_Hall
+    /// └── DoorPoint_Prison
+    ///
+    /// ESCORT FLOW:
+    /// 1. Booking → Hall (BookingDoorTrigger_FromBooking)
+    /// 2. Hall → Prison (PrisonDoorTrigger_FromHall)
+    /// 3. Return: Prison → Hall → Booking
+    /// </summary>
+    private void SetupDoorTriggers()
+    {
+        try
+        {
+            ModLogger.Info("Setting up door triggers for escort system...");
+
+            // Debug: Find all objects with "Trigger" in their name
+            var allTriggers = FindObjectsOfType<GameObject>().Where(obj => obj.name.Contains("Trigger")).ToList();
+            ModLogger.Info($"Found {allTriggers.Count} objects with 'Trigger' in name:");
+            foreach (var trigger in allTriggers)
+            {
+                ModLogger.Info($"  - {trigger.name}");
+            }
+
+            // Find all door trigger GameObjects using EXACT names from Unity hierarchy
+            var doorTriggers = new Dictionary<string, GameObject>
+            {
+                // Booking_GuardDoor triggers
+                { "GuardRoomDoorTrigger_FromGuardRoom", GameObject.Find("GuardRoomDoorTrigger_FromGuardRoom") },
+                { "GuardRoomDoorTrigger_FromBooking", GameObject.Find("GuardRoomDoorTrigger_FromBooking") },
+
+                // Booking_InnerDoor triggers
+                { "BookingDoorTrigger_FromBooking", GameObject.Find("BookingDoorTrigger_FromBooking") },
+                { "BookingDoorTrigger_FromHall", GameObject.Find("BookingDoorTrigger_FromHall") },
+
+                // Prison_EnterDoor triggers
+                { "PrisonDoorTrigger_FromHall", GameObject.Find("PrisonDoorTrigger_FromHall") },
+                { "PrisonDoorTrigger_FromPrison", GameObject.Find("PrisonDoorTrigger_FromPrison") }
+            };
+
+            int triggersConfigured = 0;
+
+            foreach (var kvp in doorTriggers)
+            {
+                string triggerName = kvp.Key;
+                GameObject triggerObject = kvp.Value;
+
+                if (triggerObject == null)
+                {
+                    ModLogger.Debug($"Door trigger not found: {triggerName}");
+                    continue;
+                }
+
+                // Add DoorTriggerHandler component if not present - DISABLED FOR NOW
+                /*
+                var triggerHandler = triggerObject.GetComponent<Behind_Bars.Systems.NPCs.DoorTriggerHandler>();
+                if (triggerHandler == null)
+                {
+                    triggerHandler = triggerObject.AddComponent<Behind_Bars.Systems.NPCs.DoorTriggerHandler>();
+                    ModLogger.Debug($"Added DoorTriggerHandler to {triggerName}");
+                }
+
+                // Auto-detect and configure the associated door
+                JailDoor associatedDoor = FindAssociatedDoorForTrigger(triggerName);
+                if (associatedDoor != null)
+                {
+                    triggerHandler.associatedDoor = associatedDoor;
+                    triggerHandler.autoDetectDoor = false; // We've manually assigned it
+                    ModLogger.Info($"✓ Configured door trigger: {triggerName} → {associatedDoor.doorName}");
+                    triggersConfigured++;
+                }
+                else
+                {
+                    triggerHandler.autoDetectDoor = true; // Let it try auto-detection
+                    ModLogger.Warn($"Could not find associated door for trigger: {triggerName} - using auto-detection");
+                }
+
+                // Ensure the trigger has a collider set as trigger
+                var collider = triggerObject.GetComponent<Collider>();
+                if (collider != null && !collider.isTrigger)
+                {
+                    collider.isTrigger = true;
+                    ModLogger.Debug($"Set collider as trigger for {triggerName}");
+                }
+                */
+            }
+
+            ModLogger.Info($"Door trigger setup complete: {triggersConfigured}/6 triggers configured");
+        }
+        catch (System.Exception e)
+        {
+            ModLogger.Error($"Error setting up door triggers: {e.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Find the JailDoor associated with a specific door trigger
+    /// </summary>
+    private JailDoor FindAssociatedDoorForTrigger(string triggerName)
+    {
+        try
+        {
+            // Get booking area doors
+            var booking = areaManager?.GetBooking();
+
+            switch (triggerName)
+            {
+                case "GuardRoomDoorTrigger_FromGuardRoom":
+                case "GuardRoomDoorTrigger_FromBooking":
+                    return booking?.guardDoor;
+
+                case "BookingDoorTrigger_FromBooking":
+                case "BookingDoorTrigger_FromHall":
+                    return booking?.bookingInnerDoor;
+
+                case "PrisonDoorTrigger_FromHall":
+                case "PrisonDoorTrigger_FromPrison":
+                    // Prison entry door - find by checking the Prison_EnterDoor GameObject
+                    var prisonEnterDoor = GameObject.Find("Prison_EnterDoor");
+                    if (prisonEnterDoor != null)
+                    {
+                        var jailDoorComp = prisonEnterDoor.GetComponent<JailDoor>();
+                        if (jailDoorComp != null)
+                        {
+                            return jailDoorComp;
+                        }
+
+                        // Also check children for JailDoor component
+                        jailDoorComp = prisonEnterDoor.GetComponentInChildren<JailDoor>();
+                        if (jailDoorComp != null)
+                        {
+                            return jailDoorComp;
+                        }
+                    }
+
+                    // Fallback: try to find any door with EntryDoor type
+                    var allCells = cells?.Concat(holdingCells ?? new List<CellDetail>()) ?? new List<CellDetail>();
+                    return allCells.FirstOrDefault(c => c.cellDoor?.doorType == JailDoor.DoorType.EntryDoor)?.cellDoor;
+
+                default:
+                    ModLogger.Warn($"Unknown trigger name: {triggerName}");
+                    return null;
+            }
+        }
+        catch (System.Exception e)
+        {
+            ModLogger.Error($"Error finding door for trigger {triggerName}: {e.Message}");
+            return null;
+        }
+    }
 }

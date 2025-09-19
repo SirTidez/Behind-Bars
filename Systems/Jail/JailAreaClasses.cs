@@ -410,8 +410,14 @@ namespace BehindBars.Areas
                 prisonEntryDoor.doorName = "Prison Enter Door";
                 prisonEntryDoor.doorType = JailDoor.DoorType.EntryDoor;
                 prisonEntryDoor.currentState = JailDoor.DoorState.Closed;
+
+                // Find door points for SecurityDoor integration
+                prisonEntryDoor.doorPoint = prisonEnterTransform.Find("DoorPoint_Hall");
+                if (prisonEntryDoor.doorPoint == null)
+                    prisonEntryDoor.doorPoint = prisonEnterTransform.Find("DoorPoint_Prison");
+
                 doors.Add(prisonEntryDoor);
-                Debug.Log($"✓ Found Prison Enter Door at {prisonEnterTransform.name}");
+                Debug.Log($"✓ Found Prison Enter Door at {prisonEnterTransform.name} with doorPoint: {prisonEntryDoor.doorPoint?.name}");
             }
 
             Transform bookingInnerTransform = root.Find("Booking_InnerDoor");
@@ -422,8 +428,14 @@ namespace BehindBars.Areas
                 bookingInnerDoor.doorName = "Booking Inner Door";
                 bookingInnerDoor.doorType = JailDoor.DoorType.AreaDoor;
                 bookingInnerDoor.currentState = JailDoor.DoorState.Closed;
+
+                // Find door points for SecurityDoor integration
+                bookingInnerDoor.doorPoint = bookingInnerTransform.Find("DoorPoint_Booking");
+                if (bookingInnerDoor.doorPoint == null)
+                    bookingInnerDoor.doorPoint = bookingInnerTransform.Find("DoorPoint_Hall");
+
                 doors.Add(bookingInnerDoor);
-                Debug.Log($"✓ Found Booking Inner Door at {bookingInnerTransform.name}");
+                Debug.Log($"✓ Found Booking Inner Door at {bookingInnerTransform.name} with doorPoint: {bookingInnerDoor.doorPoint?.name}");
             }
 
             Transform guardDoorTransform = root.Find("Booking_GuardDoor");
@@ -434,8 +446,14 @@ namespace BehindBars.Areas
                 guardDoor.doorName = "Booking Guard Door";
                 guardDoor.doorType = JailDoor.DoorType.GuardDoor;
                 guardDoor.currentState = JailDoor.DoorState.Closed;
+
+                // Find door points for SecurityDoor integration
+                guardDoor.doorPoint = guardDoorTransform.Find("DoorPoint_GuardRoom");
+                if (guardDoor.doorPoint == null)
+                    guardDoor.doorPoint = guardDoorTransform.Find("DoorPoint_Booking");
+
                 doors.Add(guardDoor);
-                Debug.Log($"✓ Found Booking Guard Door at {guardDoorTransform.name}");
+                Debug.Log($"✓ Found Booking Guard Door at {guardDoorTransform.name} with doorPoint: {guardDoor.doorPoint?.name}");
             }
         }
 
@@ -504,6 +522,71 @@ namespace BehindBars.Areas
             return doorInstance.transform;
         }
 
+
+        /// <summary>
+        /// Get door by name for SecurityDoor integration - avoids discovery each time
+        /// </summary>
+        public JailDoor GetDoorByName(string doorName)
+        {
+            if (doorName.Contains("Prison_Enter") || doorName.Contains("Prison Enter") || doorName.Contains("Prison_EnterDoor"))
+                return prisonEntryDoor;
+            if (doorName.Contains("Booking_Inner") || doorName.Contains("Booking Inner") || doorName.Contains("Booking_InnerDoor"))
+                return bookingInnerDoor;
+            if (doorName.Contains("Booking_Guard") || doorName.Contains("Booking Guard") || doorName.Contains("Booking_GuardDoor"))
+                return guardDoor;
+
+            return null;
+        }
+
+        /// <summary>
+        /// Get door point by name for SecurityDoor integration - avoids discovery each time
+        /// </summary>
+        public Transform GetDoorPointByName(string pointName)
+        {
+            // Search all door points in this booking area
+            foreach (var door in doors)
+            {
+                if (door?.doorHolder != null)
+                {
+                    // Check all children for matching door point names
+                    Transform[] children = door.doorHolder.GetComponentsInChildren<Transform>();
+                    foreach (Transform child in children)
+                    {
+                        if (child.name.Equals(pointName, System.StringComparison.OrdinalIgnoreCase))
+                        {
+                            return child;
+                        }
+                    }
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Get all door points for SecurityDoor mapping
+        /// </summary>
+        public Dictionary<string, Transform> GetAllDoorPoints()
+        {
+            var doorPoints = new Dictionary<string, Transform>();
+
+            foreach (var door in doors)
+            {
+                if (door?.doorHolder != null)
+                {
+                    Transform[] children = door.doorHolder.GetComponentsInChildren<Transform>();
+                    foreach (Transform child in children)
+                    {
+                        if (child.name.StartsWith("DoorPoint_"))
+                        {
+                            doorPoints[child.name] = child;
+                        }
+                    }
+                }
+            }
+
+            return doorPoints;
+        }
 
         public override void SetAccessible(bool accessible)
         {

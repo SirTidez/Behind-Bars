@@ -31,8 +31,8 @@ namespace Behind_Bars.Systems.NPCs
         private List<PrisonInmate> activeInmates = new List<PrisonInmate>();
         
         // Guard coordination for IL2CPP-safe management
-        private List<JailGuardBehavior> registeredGuards = new List<JailGuardBehavior>();
-        private JailGuardBehavior intakeOfficer = null;
+        private List<GuardBehavior> registeredGuards = new List<GuardBehavior>();
+        private GuardBehavior intakeOfficer = null;
         private bool isPatrolInProgress = false;
         private float nextPatrolTime = 0f;
         private readonly float PATROL_COOLDOWN = 300f; // 5 minutes between coordinated patrols
@@ -46,11 +46,11 @@ namespace Behind_Bars.Systems.NPCs
         public Transform[] inmateSpawnPoints;
         
         // Guard assignment tracking
-        private readonly JailGuardBehavior.GuardAssignment[] guardAssignments = {
-            JailGuardBehavior.GuardAssignment.GuardRoom0,
-            JailGuardBehavior.GuardAssignment.GuardRoom1,
-            JailGuardBehavior.GuardAssignment.Booking0,
-            JailGuardBehavior.GuardAssignment.Booking1
+        private readonly GuardBehavior.GuardAssignment[] guardAssignments = {
+            GuardBehavior.GuardAssignment.GuardRoom0,
+            GuardBehavior.GuardAssignment.GuardRoom1,
+            GuardBehavior.GuardAssignment.Booking0,
+            GuardBehavior.GuardAssignment.Booking1
         };
         
         private void Awake()
@@ -70,9 +70,56 @@ namespace Behind_Bars.Systems.NPCs
         {
             // Initialize spawn points from JailController
             InitializeSpawnPoints();
-            
+
+            // TEST: Check for network prefabs before we try our old system
+            TestNetworkPrefabs();
+
             // Start NPC spawning process
             MelonCoroutines.Start(InitializeNPCs());
+        }
+
+        /// <summary>
+        /// Test method to check what NetworkObject prefabs are available
+        /// This will help us determine if there's a usable "BaseNPC" prefab
+        /// </summary>
+        private void TestNetworkPrefabs()
+        {
+            ModLogger.Info("🔍 Testing for available network prefabs...");
+
+            // Wait a frame to ensure FishNet is fully initialized
+            MelonCoroutines.Start(DelayedPrefabTest());
+        }
+
+        private IEnumerator DelayedPrefabTest()
+        {
+            // Wait a few seconds for everything to be initialized
+            yield return new WaitForSeconds(3f);
+
+            // Run the test
+            NetworkPrefabTester.TestFindNetworkPrefabs();
+
+            // Wait a bit more then test spawning the PoliceNPC prefab (ID 39)
+            yield return new WaitForSeconds(2f);
+            TestSpawnPoliceNPC();
+        }
+
+        /// <summary>
+        /// Test spawning the BaseNPC prefab we discovered
+        /// </summary>
+        private void TestSpawnPoliceNPC()
+        {
+            ModLogger.Info("🔬 Testing spawn of BaseNPC prefab (ID 182)...");
+            ModLogger.Info("This is the generic NPC template the community member mentioned!");
+
+            if (guardSpawnPoints != null && guardSpawnPoints.Length > 0)
+            {
+                Vector3 testPos = guardSpawnPoints[0].position + Vector3.right * 2f; // Offset so we don't collide
+                NetworkPrefabTester.TestSpawnPrefab(182, testPos); // BaseNPC is prefab ID 182
+            }
+            else
+            {
+                ModLogger.Error("No guard spawn points available for BaseNPC test!");
+            }
         }
 
         /// <summary>
@@ -80,7 +127,7 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private void InitializeSpawnPoints()
         {
-            var jailController = Core.ActiveJailController;
+            var jailController = Core.JailController;
             if (jailController == null)
             {
                 ModLogger.Error("JailController not found - cannot initialize spawn points");
@@ -168,7 +215,7 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private IEnumerator SpawnGuards()
         {
-            var jailController = Core.ActiveJailController;
+            var jailController = Core.JailController;
             if (jailController == null)
             {
                 ModLogger.Error("JailController not found - cannot spawn guards");
@@ -210,17 +257,17 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Get the spawn point for a specific guard assignment
         /// </summary>
-        private Transform GetSpawnPointForAssignment(JailGuardBehavior.GuardAssignment assignment, JailController jailController)
+        private Transform GetSpawnPointForAssignment(GuardBehavior.GuardAssignment assignment, JailController jailController)
         {
             switch (assignment)
             {
-                case JailGuardBehavior.GuardAssignment.GuardRoom0:
+                case GuardBehavior.GuardAssignment.GuardRoom0:
                     return jailController.guardRoom.guardSpawns.Count > 0 ? jailController.guardRoom.guardSpawns[0] : null;
-                case JailGuardBehavior.GuardAssignment.GuardRoom1:
+                case GuardBehavior.GuardAssignment.GuardRoom1:
                     return jailController.guardRoom.guardSpawns.Count > 1 ? jailController.guardRoom.guardSpawns[1] : null;
-                case JailGuardBehavior.GuardAssignment.Booking0:
+                case GuardBehavior.GuardAssignment.Booking0:
                     return jailController.booking.guardSpawns.Count > 0 ? jailController.booking.guardSpawns[0] : null;
-                case JailGuardBehavior.GuardAssignment.Booking1:
+                case GuardBehavior.GuardAssignment.Booking1:
                     return jailController.booking.guardSpawns.Count > 1 ? jailController.booking.guardSpawns[1] : null;
                 default:
                     return null;
@@ -272,7 +319,7 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Spawn a single guard with custom appearance and specific assignment
         /// </summary>
-        public PrisonGuard SpawnGuard(Vector3 position, string firstName = "Officer", string badgeNumber = "", JailGuardBehavior.GuardAssignment assignment = JailGuardBehavior.GuardAssignment.GuardRoom0)
+        public PrisonGuard SpawnGuard(Vector3 position, string firstName = "Officer", string badgeNumber = "", GuardBehavior.GuardAssignment assignment = GuardBehavior.GuardAssignment.GuardRoom0)
         {
             try
             {
@@ -438,19 +485,19 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Register a guard with the manager for coordination
         /// </summary>
-        public void RegisterGuard(JailGuardBehavior guard)
+        public void RegisterGuard(GuardBehavior guard)
         {
             if (!registeredGuards.Contains(guard))
             {
                 registeredGuards.Add(guard);
-                
+
                 // Track intake officer specifically
-                if (guard.IsIntakeOfficer())
+                if (guard.GetRole() == GuardBehavior.GuardRole.IntakeOfficer)
                 {
                     intakeOfficer = guard;
                     ModLogger.Info($"Registered intake officer: {guard.GetBadgeNumber()}");
                 }
-                
+
                 ModLogger.Debug($"Registered guard {guard.GetBadgeNumber()} with PrisonNPCManager");
             }
         }
@@ -458,18 +505,18 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Unregister a guard from the manager
         /// </summary>
-        public void UnregisterGuard(JailGuardBehavior guard)
+        public void UnregisterGuard(GuardBehavior guard)
         {
             if (registeredGuards.Contains(guard))
             {
                 registeredGuards.Remove(guard);
-                
+
                 if (guard == intakeOfficer)
                 {
                     intakeOfficer = null;
                     ModLogger.Info($"Unregistered intake officer: {guard.GetBadgeNumber()}");
                 }
-                
+
                 ModLogger.Debug($"Unregistered guard {guard.GetBadgeNumber()} from PrisonNPCManager");
             }
         }
@@ -477,49 +524,50 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Try to assign a coordinated patrol to guards
         /// </summary>
-        public IEnumerator TryAssignPatrol(JailGuardBehavior requestingGuard)
+        public IEnumerator TryAssignPatrol(GuardBehavior requestingGuard)
         {
             // Check if it's time for a patrol and no patrol is in progress
             if (Time.time < nextPatrolTime || isPatrolInProgress)
             {
                 yield break;
             }
-            
-            if (!requestingGuard.CanParticipateInPatrol())
+
+            if (requestingGuard.GetCurrentActivity() != GuardBehavior.GuardActivity.Idle)
             {
                 yield break;
             }
-            
+
             // Find a partner from the same area
             var partner = FindPatrolPartner(requestingGuard);
             if (partner != null)
             {
                 isPatrolInProgress = true;
                 nextPatrolTime = Time.time + PATROL_COOLDOWN;
-                
-                requestingGuard.StartCoordinatedPatrol(partner);
+
+                requestingGuard.StartPatrol();
+                partner.StartPatrol();
                 ModLogger.Info($"✓ Assigned coordinated patrol: {requestingGuard.GetBadgeNumber()} + {partner.GetBadgeNumber()}");
             }
-            
+
             yield break;
         }
         
         /// <summary>
         /// Find a suitable patrol partner for a guard
         /// </summary>
-        private JailGuardBehavior FindPatrolPartner(JailGuardBehavior requestingGuard)
+        private GuardBehavior FindPatrolPartner(GuardBehavior requestingGuard)
         {
             foreach (var guard in registeredGuards)
             {
-                if (guard == requestingGuard || !guard.CanParticipateInPatrol()) continue;
-                
+                if (guard == requestingGuard || guard.GetCurrentActivity() != GuardBehavior.GuardActivity.Idle) continue;
+
                 // Must be from same area (both guard room or both booking)
                 var requestingRole = requestingGuard.GetRole();
                 var guardRole = guard.GetRole();
-                
-                bool sameArea = (requestingRole == JailGuardBehavior.GuardRole.GuardRoomStationary && guardRole == JailGuardBehavior.GuardRole.GuardRoomStationary) ||
-                               (requestingRole == JailGuardBehavior.GuardRole.BookingStationary && guardRole == JailGuardBehavior.GuardRole.BookingStationary);
-                
+
+                bool sameArea = (requestingRole == GuardBehavior.GuardRole.GuardRoomStationary && guardRole == GuardBehavior.GuardRole.GuardRoomStationary) ||
+                               (requestingRole == GuardBehavior.GuardRole.BookingStationary && guardRole == GuardBehavior.GuardRole.BookingStationary);
+
                 if (sameArea)
                 {
                     return guard;
@@ -540,7 +588,7 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Get the intake officer for prisoner processing
         /// </summary>
-        public JailGuardBehavior GetIntakeOfficer()
+        public GuardBehavior GetIntakeOfficer()
         {
             return intakeOfficer;
         }
@@ -550,7 +598,7 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         public bool IsIntakeOfficerAvailable()
         {
-            return intakeOfficer != null && intakeOfficer.IsAvailableForIntake();
+            return intakeOfficer != null && !intakeOfficer.IsProcessingIntake();
         }
         
         /// <summary>
@@ -560,11 +608,26 @@ namespace Behind_Bars.Systems.NPCs
         {
             if (IsIntakeOfficerAvailable() && prisoner != null)
             {
-                intakeOfficer.StartPrisonerEscort(prisoner);
-                ModLogger.Info($"Requested prisoner escort for {prisoner.name} from intake officer");
-                return true;
+                // Convert GameObject to Player component
+#if !MONO
+                var playerComponent = prisoner.GetComponent<Il2CppScheduleOne.PlayerScripts.Player>();
+#else
+                var playerComponent = prisoner.GetComponent<ScheduleOne.PlayerScripts.Player>();
+#endif
+
+                if (playerComponent != null)
+                {
+                    intakeOfficer.StartIntakeProcess(playerComponent);
+                    ModLogger.Info($"Requested prisoner escort for {prisoner.name} from intake officer");
+                    return true;
+                }
+                else
+                {
+                    ModLogger.Error($"GameObject {prisoner.name} does not have a Player component");
+                    return false;
+                }
             }
-            
+
             ModLogger.Warn($"Cannot request prisoner escort - intake officer not available");
             return false;
         }
@@ -572,13 +635,44 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Get all registered guards
         /// </summary>
-        public List<JailGuardBehavior> GetRegisteredGuards()
+        public List<GuardBehavior> GetRegisteredGuards()
         {
             // Clean up null references
             registeredGuards.RemoveAll(g => g == null);
-            return new List<JailGuardBehavior>(registeredGuards);
+            return new List<GuardBehavior>(registeredGuards);
         }
         
+        #endregion
+
+        #region Network Prefab Testing Methods
+
+        /// <summary>
+        /// Public method to test spawning a network prefab by index
+        /// Call this from console or other testing methods
+        /// </summary>
+        /// <param name="prefabIndex">Index of the prefab to spawn</param>
+        public void TestSpawnNetworkPrefab(int prefabIndex)
+        {
+            if (guardSpawnPoints != null && guardSpawnPoints.Length > 0)
+            {
+                Vector3 spawnPos = guardSpawnPoints[0].position;
+                ModLogger.Info($"Testing spawn of prefab {prefabIndex} at {spawnPos}");
+                NetworkPrefabTester.TestSpawnPrefab(prefabIndex, spawnPos);
+            }
+            else
+            {
+                ModLogger.Error("No guard spawn points available for testing!");
+            }
+        }
+
+        /// <summary>
+        /// Re-run the prefab detection test
+        /// </summary>
+        public void RetestNetworkPrefabs()
+        {
+            NetworkPrefabTester.TestFindNetworkPrefabs();
+        }
+
         #endregion
     }
 
@@ -593,27 +687,51 @@ namespace Behind_Bars.Systems.NPCs
 
         public string badgeNumber;
         public string firstName;
-        public JailGuardBehavior.GuardAssignment assignment;
-        
-        private JailGuardBehavior guardBehavior;
+        public GuardBehavior.GuardAssignment assignment;
 
-        public void Initialize(string badge, string name, JailGuardBehavior.GuardAssignment guardAssignment = JailGuardBehavior.GuardAssignment.GuardRoom0)
+        private GuardBehavior guardBehavior;
+
+        public void Initialize(string badge, string name, GuardBehavior.GuardAssignment guardAssignment = GuardBehavior.GuardAssignment.GuardRoom0)
         {
             badgeNumber = badge;
             firstName = name;
             assignment = guardAssignment;
-            
-            // Get or add the jail guard behavior component
-            guardBehavior = GetComponent<JailGuardBehavior>();
+
+            // Get or add the guard behavior component
+            guardBehavior = GetComponent<GuardBehavior>();
+            if (guardBehavior == null)
+            {
+                guardBehavior = gameObject.AddComponent<GuardBehavior>();
+            }
+
             if (guardBehavior != null)
             {
-                guardBehavior.Initialize(assignment, badge);
+                ModLogger.Info($"About to initialize GuardBehavior for {name} with assignment {assignment}");
+                try
+                {
+                    guardBehavior.Initialize(assignment, badge);
+                    ModLogger.Info($"GuardBehavior initialization completed for {name}");
+
+                    // Force registration if it's an intake officer
+                    if (assignment == GuardBehavior.GuardAssignment.Booking0)
+                    {
+                        ModLogger.Info($"Manually registering intake officer {name}");
+                        if (PrisonNPCManager.Instance != null)
+                        {
+                            PrisonNPCManager.Instance.RegisterGuard(guardBehavior);
+                        }
+                    }
+                }
+                catch (System.Exception ex)
+                {
+                    ModLogger.Error($"Error initializing GuardBehavior for {name}: {ex.Message}");
+                }
             }
             else
             {
-                ModLogger.Error($"JailGuardBehavior component not found on guard {name}");
+                ModLogger.Error($"GuardBehavior component not found on guard {name}");
             }
-            
+
             ModLogger.Info($"Prison guard {name} initialized with badge {badge} and assignment {assignment}");
         }
 
@@ -622,8 +740,8 @@ namespace Behind_Bars.Systems.NPCs
             // Additional initialization if needed
         }
 
-        public JailGuardBehavior.GuardRole GetRole() => guardBehavior?.GetRole() ?? JailGuardBehavior.GuardRole.GuardRoomStationary;
-        public JailGuardBehavior.GuardAssignment GetAssignment() => assignment;
+        public GuardBehavior.GuardRole GetRole() => guardBehavior?.GetRole() ?? GuardBehavior.GuardRole.GuardRoomStationary;
+        public GuardBehavior.GuardAssignment GetAssignment() => assignment;
         public string GetBadgeNumber() => badgeNumber;
         public string GetFirstName() => firstName;
     }
@@ -641,23 +759,13 @@ namespace Behind_Bars.Systems.NPCs
         public string firstName;
         public string crimeType;
         public int sentenceDays = 30;
-        
-        private InmateStateMachine stateMachine;
 
         public void Initialize(string id, string name, string crime)
         {
             prisonerID = id;
             firstName = name;
             crimeType = crime;
-            
-            // Get or add the existing state machine
-            stateMachine = GetComponent<InmateStateMachine>();
-            if (stateMachine != null)
-            {
-                stateMachine.prisonerID = id;
-                stateMachine.crimeType = crime;
-            }
-            
+
             ModLogger.Debug($"Prison inmate {name} initialized with ID {id} for {crime}");
         }
 

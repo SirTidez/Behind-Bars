@@ -18,7 +18,7 @@ namespace Behind_Bars.Utils
         {
             ModLogger.Info("=== DOOR TRIGGER SETUP HELPER ===");
             
-            var jailController = Core.ActiveJailController;
+            var jailController = Core.JailController;
             if (jailController == null)
             {
                 ModLogger.Error("No active jail controller found!");
@@ -161,7 +161,7 @@ namespace Behind_Bars.Utils
         {
             ModLogger.Info("=== CREATING MISSING DOOR TRIGGERS ===");
             
-            var jailController = Core.ActiveJailController;
+            var jailController = Core.JailController;
             if (jailController == null)
             {
                 ModLogger.Error("No active jail controller found!");
@@ -241,7 +241,7 @@ namespace Behind_Bars.Utils
         {
             ModLogger.Info("=== DOOR TRIGGER STATUS REPORT ===");
             
-            var jailController = Core.ActiveJailController;
+            var jailController = Core.JailController;
             if (jailController == null)
             {
                 ModLogger.Error("No active jail controller found!");

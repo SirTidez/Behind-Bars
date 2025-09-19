@@ -61,7 +61,7 @@ namespace Behind_Bars
         private Dictionary<Player, PlayerHandler> _playerHandlers = new();
 
         // Jail management
-        public static JailController? ActiveJailController { get; private set; }
+        public static JailController? JailController { get; private set; }
         public static
 #if !MONO
             Il2CppAssetBundle
@@ -465,22 +465,22 @@ namespace Behind_Bars
                 if (existingController != null)
                 {
                     ModLogger.Info("Found existing JailController on jail prefab");
-                    ActiveJailController = existingController;
+                    JailController = existingController;
                 }
                 else
                 {
                     ModLogger.Info("Adding JailController component to jail");
-                    ActiveJailController = jail.AddComponent<JailController>();
+                    JailController = jail.AddComponent<JailController>();
                 }
 
                 // Load and assign prefabs from bundle, then trigger door setup
-                if (ActiveJailController != null)
+                if (JailController != null)
                 {
-                    LoadAndAssignJailPrefabs(ActiveJailController);
+                    LoadAndAssignJailPrefabs(JailController);
                     ModLogger.Info("✓ JailController prefabs loaded");
 
                     // Manually call SetupDoors after prefabs are loaded
-                    ActiveJailController.SetupDoors();
+                    JailController.SetupDoors();
                     ModLogger.Info("✓ Door setup completed after prefab loading");
 
                     // Log status after a frame to let everything complete
@@ -519,13 +519,13 @@ namespace Behind_Bars
             ModLogger.Info("Creating jail NPCs with custom appearances...");
 
             // Create PrisonNPCManager to handle all NPC spawning and management
-            if (ActiveJailController != null)
+            if (JailController != null)
             {
-                var npcManager = ActiveJailController.gameObject.AddComponent<PrisonNPCManager>();
+                var npcManager = JailController.gameObject.AddComponent<PrisonNPCManager>();
                 ModLogger.Info("✓ PrisonNPCManager added to JailController");
                 
                 // Add CellAssignmentManager for cell tracking
-                var cellManager = ActiveJailController.gameObject.AddComponent<CellAssignmentManager>();
+                var cellManager = JailController.gameObject.AddComponent<CellAssignmentManager>();
                 ModLogger.Info("✓ CellAssignmentManager added to JailController");
             }
             else
@@ -541,7 +541,7 @@ namespace Behind_Bars
             
             // Validate NavMesh before finishing
             yield return new WaitForSeconds(1f);
-            var jail = Core.ActiveJailController;
+            var jail = Core.JailController;
             if (jail != null)
             {
                 if (JailNavMeshSetup.HasValidNavMesh(jail.transform))
@@ -571,19 +571,19 @@ namespace Behind_Bars
             {
                 ModLogger.Info("Initializing booking system...");
                 
-                if (ActiveJailController == null)
+                if (JailController == null)
                 {
                     ModLogger.Error("Cannot initialize booking system - no active jail controller");
                     return;
                 }
                 
-                GameObject jailGameObject = ActiveJailController.gameObject;
-                
+                GameObject jailGameObject = JailController.gameObject;
+
                 // Add BookingProcess component if it doesn't exist
-                var bookingProcess = jailGameObject.GetComponent<Behind_Bars.Systems.Jail.BookingProcess>();
-                if (bookingProcess == null)
+                JailController.BookingProcessController = jailGameObject.GetComponent<Behind_Bars.Systems.Jail.BookingProcess>();
+                if (JailController.BookingProcessController == null)
                 {
-                    bookingProcess = jailGameObject.AddComponent<Behind_Bars.Systems.Jail.BookingProcess>();
+                    JailController.BookingProcessController = jailGameObject.AddComponent<Behind_Bars.Systems.Jail.BookingProcess>();
                     ModLogger.Info("✓ BookingProcess component added to jail");
                 }
                 else
@@ -712,102 +712,6 @@ namespace Behind_Bars
             }
         }
 
-        private static void CreateTestNPC()
-        {
-            try
-            {
-                var jailController = UnityEngine.Object.FindObjectOfType<JailController>();
-                if (jailController == null)
-                {
-                    ModLogger.Error("JailController not found for test NPC positioning");
-                    return;
-                }
-
-                // Position at jail center (relative to jail transform) - but find a valid NavMesh position first
-                Vector3 jailCenter = jailController.transform.position;
-                ModLogger.Info($"Jail center is at: {jailCenter}");
-                
-                // FORCE spawn at known ground-level patrol points - no searching!
-                Vector3[] knownGroundPositions = {
-                    new Vector3(54.72f, 9.31f, -232.63f), // Patrol_Upper_Right (from logs)
-                    new Vector3(52.53f, 9.31f, -204.89f), // Patrol_Upper_Left 
-                    new Vector3(52.53f, 9.31f, -205.00f), // Patrol_Lower_Left
-                    new Vector3(81.92f, 9.31f, -203.99f), // Patrol_Kitchen
-                    new Vector3(78.62f, 9.31f, -235.63f), // Patrol_Laundry
-                };
-                
-                Vector3 testNPCPosition = knownGroundPositions[0]; // Default to first patrol point
-                
-                // Try each known ground position until we find NavMesh
-                foreach (var groundPos in knownGroundPositions)
-                {
-                    if (UnityEngine.AI.NavMesh.SamplePosition(groundPos, out UnityEngine.AI.NavMeshHit hit, 2f, UnityEngine.AI.NavMesh.AllAreas))
-                    {
-                        testNPCPosition = hit.position;
-                        ModLogger.Info($"Using GROUND LEVEL NavMesh at: {testNPCPosition} (Y={testNPCPosition.y:F2})");
-                        
-                        // CRITICAL: Reject if Y position is too high (roof level)
-                        if (testNPCPosition.y > 11f)
-                        {
-                            ModLogger.Warn($"Rejected roof position Y={testNPCPosition.y:F2}, trying next...");
-                            continue;
-                        }
-                        break;
-                    }
-                }
-                
-                ModLogger.Info($"Final TestNPC position: {testNPCPosition} (Y={testNPCPosition.y:F2})");
-                
-                ModLogger.Info($"Creating test NPC at jail center: {testNPCPosition}");
-                
-                var testNPC = DirectNPCBuilder.CreateTestNPC("TestNPC", testNPCPosition);
-                if (testNPC == null)
-                {
-                    ModLogger.Error("DirectNPCBuilder.CreateTestNPC returned null!");
-                    return;
-                }
-                
-                ModLogger.Info($"✓ DirectNPCBuilder created GameObject: {testNPC.name} at {testNPC.transform.position}");
-                ModLogger.Info($"TestNPC components: {string.Join(", ", testNPC.GetComponents<Component>().Select(c => c.GetType().Name))}");
-                
-                // Verify the NPC is active and positioned correctly
-                if (!testNPC.activeSelf)
-                {
-                    testNPC.SetActive(true);
-                    ModLogger.Info("✓ Activated TestNPC GameObject");
-                }
-                
-                // Initialize patrol points in JailController first
-                jailController.InitializePatrolPoints();
-                
-                // Initialize patrol and debug systems
-                PatrolSystem.Initialize();
-                
-                // Add the test controller
-                try
-                {
-                    var testController = testNPC.AddComponent<TestNPCController>();
-                    ModLogger.Info($"✓ Added TestNPCController to test NPC");
-                }
-                catch (Exception ex)
-                {
-                    ModLogger.Error($"Failed to add TestNPCController: {ex.Message}");
-                }
-                
-                // Create debug targets for TestNPC and planned participants
-                //CreateDebugTargetsForParticipants(jailCenter);
-                
-                ModLogger.Info($"✓ Created test NPC at {testNPCPosition} for pathfinding debugging");
-                ModLogger.Info("Use Arrow Keys + Numpad 9/3 to move the red target cube, NPC should follow it");
-            }
-            catch (Exception e)
-            {
-                ModLogger.Error($"Error creating test NPC: {e.Message}");
-                ModLogger.Error($"Stack trace: {e.StackTrace}");
-            }
-        }
-
-
         private static void LoadAndAssignJailPrefabs(JailController controller)
         {
             try
@@ -888,7 +792,7 @@ namespace Behind_Bars
 
         private static void LogJailControllerStatus()
         {
-            if (ActiveJailController == null)
+            if (JailController == null)
             {
                 ModLogger.Warn("ActiveJailController is null");
                 return;
@@ -897,22 +801,22 @@ namespace Behind_Bars
             try
             {
                 ModLogger.Info("=== JAIL CONTROLLER STATUS ===");
-                ModLogger.Info($"Cells discovered: {ActiveJailController.cells?.Count ?? 0}");
-                ModLogger.Info($"Holding cells discovered: {ActiveJailController.holdingCells?.Count ?? 0}");
-                ModLogger.Info($"Security cameras: {ActiveJailController.securityCameras?.Count ?? 0}");
-                ModLogger.Info($"Area lights: {ActiveJailController.areaLights?.Count ?? 0}");
-                ModLogger.Info($"Door prefabs loaded: JailDoor={ActiveJailController.jailDoorPrefab != null}, SteelDoor={ActiveJailController.steelDoorPrefab != null}");
+                ModLogger.Info($"Cells discovered: {JailController.cells?.Count ?? 0}");
+                ModLogger.Info($"Holding cells discovered: {JailController.holdingCells?.Count ?? 0}");
+                ModLogger.Info($"Security cameras: {JailController.securityCameras?.Count ?? 0}");
+                ModLogger.Info($"Area lights: {JailController.areaLights?.Count ?? 0}");
+                ModLogger.Info($"Door prefabs loaded: JailDoor={JailController.jailDoorPrefab != null}, SteelDoor={JailController.steelDoorPrefab != null}");
 
                 // Check area initialization
                 var areas = new[]
                 {
-                    ("Kitchen", ActiveJailController.kitchen?.isInitialized ?? false),
-                    ("Laundry", ActiveJailController.laundry?.isInitialized ?? false),
-                    ("Phone Area", ActiveJailController.phoneArea?.isInitialized ?? false),
-                    ("Booking", ActiveJailController.booking?.isInitialized ?? false),
-                    ("Guard Room", ActiveJailController.guardRoom?.isInitialized ?? false),
-                    ("Main Rec", ActiveJailController.mainRec?.isInitialized ?? false),
-                    ("Showers", ActiveJailController.showers?.isInitialized ?? false)
+                    ("Kitchen", JailController.kitchen?.isInitialized ?? false),
+                    ("Laundry", JailController.laundry?.isInitialized ?? false),
+                    ("Phone Area", JailController.phoneArea?.isInitialized ?? false),
+                    ("Booking", JailController.booking?.isInitialized ?? false),
+                    ("Guard Room", JailController.guardRoom?.isInitialized ?? false),
+                    ("Main Rec", JailController.mainRec?.isInitialized ?? false),
+                    ("Showers", JailController.showers?.isInitialized ?? false)
                 };
 
                 ModLogger.Info("Area status:");
@@ -1004,13 +908,13 @@ namespace Behind_Bars
         }
 
         // Jail Controller convenience methods
-        public static bool IsJailControllerReady() => ActiveJailController != null;
+        public static bool IsJailControllerReady() => JailController != null;
 
         public static void TriggerEmergencyLockdown()
         {
-            if (ActiveJailController != null)
+            if (JailController != null)
             {
-                ActiveJailController.EmergencyLockdown();
+                JailController.EmergencyLockdown();
                 ModLogger.Info("Emergency lockdown triggered via mod system");
             }
             else
@@ -1021,9 +925,9 @@ namespace Behind_Bars
 
         public static void UnlockAllDoors()
         {
-            if (ActiveJailController != null)
+            if (JailController != null)
             {
-                ActiveJailController.UnlockAll();
+                JailController.UnlockAll();
                 ModLogger.Info("All doors unlocked via mod system");
             }
             else
@@ -1034,9 +938,9 @@ namespace Behind_Bars
 
         public static void SetJailLighting(JailLightingController.LightingState state)
         {
-            if (ActiveJailController != null)
+            if (JailController != null)
             {
-                ActiveJailController.SetJailLighting(state);
+                JailController.SetJailLighting(state);
                 ModLogger.Info($"Jail lighting set to {state} via mod system");
             }
             else
@@ -1047,9 +951,9 @@ namespace Behind_Bars
 
         public static string GetPlayerCurrentArea()
         {
-            if (ActiveJailController != null && Player.Local != null)
+            if (JailController != null && Player.Local != null)
             {
-                return ActiveJailController.GetPlayerCurrentArea(Player.Local.transform.position);
+                return JailController.GetPlayerCurrentArea(Player.Local.transform.position);
             }
             return "Unknown - JailController not available";
         }
@@ -1168,12 +1072,6 @@ namespace Behind_Bars
                 {
                     CrimeUIManager.Instance.ShowCrimeDetails();
                 }
-                
-                // Insert key - Test Jail UI (DISABLED - UI should only show when actually in jail)
-                // if (Input.GetKeyDown(KeyCode.Insert))
-                // {
-                //     TestJailUIHotkey();
-                // }
             }
             catch (Exception e)
             {
@@ -1236,36 +1134,6 @@ namespace Behind_Bars
             catch (Exception e)
             {
                 ModLogger.Error($"Error teleporting to Taco Ticklers: {e.Message}");
-            }
-        }
-        
-        /// <summary>
-        /// Test jail UI via hotkey (Insert key)
-        /// </summary>
-        private void TestJailUIHotkey()
-        {
-            try
-            {
-                ModLogger.Info("Testing jail UI via Insert key...");
-                
-                if (BehindBarsUIManager.Instance.IsUIVisible)
-                {
-                    // If UI is visible, hide it
-                    HideJailInfoUI();
-                }
-                else
-                {
-                    // If UI is not visible, show it with test data
-                    ShowJailInfoUI(
-                        crime: "Major Possession, Assaulting Officer, Resisting Arrest, Public Intoxication", 
-                        timeInfo: "5 days", 
-                        bailInfo: "$2,500"
-                    );
-                }
-            }
-            catch (Exception e)
-            {
-                ModLogger.Error($"Error testing jail UI via hotkey: {e.Message}");
             }
         }
 

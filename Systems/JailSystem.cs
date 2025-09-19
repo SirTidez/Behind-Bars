@@ -476,7 +476,7 @@ namespace Behind_Bars.Systems
             ModLogger.Info($"Sending player {player.name} to holding cell for {sentence.JailTime}s");
 
             // Get jail system and find available holding cell
-            var jailController = Core.ActiveJailController;
+            var jailController = Core.JailController;
             if (jailController == null)
             {
                 ModLogger.Error("No active jail controller found, using fallback jail method");
@@ -615,13 +615,9 @@ namespace Behind_Bars.Systems
                 }
             }
             
-            // Additional jail time after booking (if sentence is longer than booking process)
-            float remainingTime = sentence.JailTime - elapsed;
-            if (remainingTime > 0)
-            {
-                ModLogger.Info($"Serving additional {remainingTime}s jail time after booking");
-                yield return WaitWithControlMaintenance(remainingTime, player);
-            }
+            // Start actual jail time AFTER booking completion
+            ModLogger.Info($"Booking complete - now starting full jail sentence of {sentence.JailTime}s");
+            yield return WaitWithControlMaintenance(sentence.JailTime, player);
         }
 
         /// <summary>
@@ -642,7 +638,7 @@ namespace Behind_Bars.Systems
         {
             ModLogger.Info($"Sending player {player.name} to holding cell for processing");
 
-            var jailController = Core.ActiveJailController;
+            var jailController = Core.JailController;
             if (jailController == null)
             {
                 yield return FallbackJailMethod(player, sentence);
@@ -691,7 +687,7 @@ namespace Behind_Bars.Systems
         {
             ModLogger.Info($"Transferring player {player.name} to main jail cell");
 
-            var jailController = Core.ActiveJailController;
+            var jailController = Core.JailController;
             if (jailController == null)
             {
                 yield return FallbackJailMethod(player, sentence);

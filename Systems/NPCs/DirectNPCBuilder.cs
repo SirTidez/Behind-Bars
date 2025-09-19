@@ -151,37 +151,38 @@ namespace Behind_Bars.Systems.NPCs
                 // 12. Add jail-specific behavior components for guards
                 if (npcType == NPCType.JailGuard)
                 {                    
-                    // Add new JailGuardBehavior component instead of old GuardStateMachine
-                    var jailGuardBehavior = npcObject.AddComponent<JailGuardBehavior>();
+                    // Add new GuardBehavior component instead of old GuardStateMachine
+                    var guardBehavior = npcObject.AddComponent<GuardBehavior>();
                     // Note: Initialize method will be called by PrisonNPCManager with proper assignment
-                    
-                    ModLogger.Debug($"✓ JailGuardBehavior component added to {firstName} {lastName}");
+
+                    ModLogger.Debug($"✓ GuardBehavior component added to {firstName} {lastName}");
                 }
                 else if (npcType == NPCType.JailInmate)
                 {
-                    // Add state machine for inmate behavior
-                    var inmateStateMachine = npcObject.AddComponent<InmateStateMachine>();
-                    inmateStateMachine.prisonerID = $"{firstName}_{lastName}";
-                    inmateStateMachine.crimeType = lastName; // Use lastName as crime type for now
-                    
-                    ModLogger.Debug($"✓ Inmate state machine added to {firstName} {lastName}");
+                    // Add basic inmate behavior (using BaseJailNPC)
+                    var baseNPC = npcObject.GetComponent<BaseJailNPC>();
+                    if (baseNPC != null)
+                    {
+                        // Configure as inmate
+                        ModLogger.Debug($"✓ BaseJailNPC configured for inmate {firstName} {lastName}");
+                    }
                 }
                 else if (npcType == NPCType.TestNPC)
                 {
-                    // Test NPC gets NO state machines - only basic movement
-                    // Remove any existing state machine components that might have been added
-                    var existingGuardSM = npcObject.GetComponent<GuardStateMachine>();
-                    if (existingGuardSM != null) 
+                    // Test NPC gets NO specialized behaviors - only basic movement
+                    // Remove any existing behavior components that might have been added
+                    var existingGuardBehavior = npcObject.GetComponent<GuardBehavior>();
+                    if (existingGuardBehavior != null)
                     {
-                        GameObject.DestroyImmediate(existingGuardSM);
-                        ModLogger.Debug("Removed GuardStateMachine from TestNPC");
+                        GameObject.DestroyImmediate(existingGuardBehavior);
+                        ModLogger.Debug("Removed GuardBehavior from TestNPC");
                     }
-                    
-                    var existingInmateSM = npcObject.GetComponent<InmateStateMachine>();
-                    if (existingInmateSM != null) 
+
+                    // Keep BaseJailNPC for basic movement but disable complex behaviors
+                    var baseNPC = npcObject.GetComponent<BaseJailNPC>();
+                    if (baseNPC != null)
                     {
-                        GameObject.DestroyImmediate(existingInmateSM);
-                        ModLogger.Debug("Removed InmateStateMachine from TestNPC");
+                        ModLogger.Debug("TestNPC will use BaseJailNPC for basic movement only");
                     }
                     
                     ModLogger.Debug($"✓ Test NPC {firstName} ready for TestNPCController (clean of state machines)");
@@ -1412,14 +1413,14 @@ namespace Behind_Bars.Systems.NPCs
                     // Enable the NavMeshAgent
                     navAgent.enabled = true;
                     
-                    // Start basic patrol behavior (except for TestNPC and guards with JailGuardBehavior)
-                    if (!npc.name.Contains("TestNPC") && npc.GetComponent<JailGuardBehavior>() == null)
+                    // Start basic patrol behavior (except for TestNPC and guards with GuardBehavior)
+                    if (!npc.name.Contains("TestNPC") && npc.GetComponent<GuardBehavior>() == null)
                     {
                         MelonLoader.MelonCoroutines.Start(BasicPatrolBehavior(npc, navAgent));
                     }
-                    else if (npc.GetComponent<JailGuardBehavior>() != null)
+                    else if (npc.GetComponent<GuardBehavior>() != null)
                     {
-                        ModLogger.Info($"Skipped BasicPatrolBehavior for JailGuard with JailGuardBehavior: {npc.name}");
+                        ModLogger.Info($"Skipped BasicPatrolBehavior for JailGuard with GuardBehavior: {npc.name}");
                     }
                     else
                     {
@@ -1437,12 +1438,12 @@ namespace Behind_Bars.Systems.NPCs
                         navAgent.enabled = true;
                         ModLogger.Info($"✓ Positioned {npc.name} on distant NavMesh at {hit.position}");
                         
-                        // Start basic patrol behavior (except for TestNPC and guards with JailGuardBehavior)
-                        if (!npc.name.Contains("TestNPC") && npc.GetComponent<JailGuardBehavior>() == null)
+                        // Start basic patrol behavior (except for TestNPC and guards with GuardBehavior)
+                        if (!npc.name.Contains("TestNPC") && npc.GetComponent<GuardBehavior>() == null)
                         {
                             MelonLoader.MelonCoroutines.Start(BasicPatrolBehavior(npc, navAgent));
                         }
-                        else if (npc.GetComponent<JailGuardBehavior>() != null)
+                        else if (npc.GetComponent<GuardBehavior>() != null)
                         {
                             ModLogger.Info($"Skipped BasicPatrolBehavior for distant NavMesh JailGuard: {npc.name}");
                         }

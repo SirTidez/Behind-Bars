@@ -10,6 +10,7 @@ public class JailDoor
     public Transform doorHolder;
     public GameObject doorInstance;
     public Transform doorHinge;
+    public Transform doorPoint;  // Guard position point for safe door operation
 
     public string doorName;
     public DoorType doorType;

@@ -186,7 +186,7 @@ namespace Behind_Bars.Systems.NPCs
             patrolPoints = new System.Collections.Generic.List<UnityEngine.Vector3>();
             
             // Get patrol points directly from Core's ActiveJailController
-            var jailController = Core.ActiveJailController;
+            var jailController = Core.JailController;
             if (jailController != null)
             {
                 foreach (var point in jailController.patrolPoints)
@@ -206,22 +206,25 @@ namespace Behind_Bars.Systems.NPCs
         {
             ModLogger.Info("Disabling other behaviors that might interfere with TestNPC...");
             
-            // Find and disable GuardStateMachine more thoroughly
-            var guardSMs = GetComponents<GuardStateMachine>();
-            ModLogger.Info($"Found {guardSMs.Length} GuardStateMachine components");
-            foreach (var guardSM in guardSMs)
+            // Find and disable GuardBehavior more thoroughly
+            var guardBehaviors = GetComponents<GuardBehavior>();
+            ModLogger.Info($"Found {guardBehaviors.Length} GuardBehavior components");
+            foreach (var guardBehavior in guardBehaviors)
             {
-                guardSM.enabled = false;
-                ModLogger.Warn($"✓ DISABLED GuardStateMachine on TestNPC: {guardSM.GetType().Name}");
+                guardBehavior.enabled = false;
+                ModLogger.Warn($"✓ DISABLED GuardBehavior on TestNPC: {guardBehavior.GetType().Name}");
             }
-            
-            // Find and disable InmateStateMachine 
-            var inmateSMs = GetComponents<InmateStateMachine>();
-            ModLogger.Info($"Found {inmateSMs.Length} InmateStateMachine components");
-            foreach (var inmateSM in inmateSMs)
+
+            // Find and disable BaseJailNPC
+            var baseNPCs = GetComponents<BaseJailNPC>();
+            ModLogger.Info($"Found {baseNPCs.Length} BaseJailNPC components");
+            foreach (var baseNPC in baseNPCs)
             {
-                inmateSM.enabled = false;
-                ModLogger.Warn($"✓ DISABLED InmateStateMachine on TestNPC: {inmateSM.GetType().Name}");
+                if (baseNPC != this) // Don't disable ourselves if we inherit from BaseJailNPC
+                {
+                    baseNPC.enabled = false;
+                    ModLogger.Warn($"✓ DISABLED BaseJailNPC on TestNPC: {baseNPC.GetType().Name}");
+                }
             }
                         
             ModLogger.Info("✓ Finished disabling interfering behaviors on TestNPC");
@@ -315,17 +318,17 @@ namespace Behind_Bars.Systems.NPCs
                 {
                     status = $" (Enabled: {mb.enabled})";
                     
-                    // Double-check state machines are disabled
-                    if (component is GuardStateMachine guardSM && guardSM.enabled)
+                    // Double-check behaviors are disabled
+                    if (component is GuardBehavior guardBehavior && guardBehavior.enabled)
                     {
-                        guardSM.enabled = false;
-                        ModLogger.Error($"⚠️  RE-DISABLED GuardStateMachine that was still enabled!");
+                        guardBehavior.enabled = false;
+                        ModLogger.Error($"⚠️  RE-DISABLED GuardBehavior that was still enabled!");
                         status = " (Enabled: FALSE - FORCE DISABLED)";
                     }
-                    else if (component is InmateStateMachine inmateSM && inmateSM.enabled)
+                    else if (component is BaseJailNPC baseNPC && baseNPC.enabled && baseNPC != this)
                     {
-                        inmateSM.enabled = false;
-                        ModLogger.Error($"⚠️  RE-DISABLED InmateStateMachine that was still enabled!");
+                        baseNPC.enabled = false;
+                        ModLogger.Error($"⚠️  RE-DISABLED BaseJailNPC that was still enabled!");
                         status = " (Enabled: FALSE - FORCE DISABLED)";
                     }
                 }
@@ -382,15 +385,15 @@ namespace Behind_Bars.Systems.NPCs
                 }
             }
             
-            // Check PatrolSystem assignment and prevent it
-            try 
+            // Check GuardBehavior patrol assignment and prevent it
+            try
             {
-                var assignedPatrol = PatrolSystem.AssignPatrolPointToGuard(transform);
-                if (assignedPatrol != null)
+                var guardBehavior = GetComponent<GuardBehavior>();
+                if (guardBehavior != null && guardBehavior.GetCurrentActivity() == GuardBehavior.GuardActivity.Patrolling)
                 {
-                    ModLogger.Warn($"⚠️  TestNPC got assigned patrol point: {assignedPatrol.name} - this will conflict!");
-                    PatrolSystem.ReleasePatrolPointAssignment(transform);
-                    ModLogger.Info("✓ Released patrol point assignment from TestNPC");
+                    ModLogger.Warn($"⚠️  TestNPC has patrol activity - this will conflict!");
+                    guardBehavior.enabled = false;
+                    ModLogger.Info("✓ Disabled guard behavior with patrol activity on TestNPC");
                 }
             }
             catch (System.Exception e)

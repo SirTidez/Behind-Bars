@@ -7,6 +7,9 @@ using Behind_Bars.Helpers;
 #if !MONO
 using Il2CppInterop.Runtime.Attributes;
 using Il2CppInterop.Runtime;
+using Il2CppScheduleOne.PlayerScripts;
+#else
+using ScheduleOne.PlayerScripts;
 #endif
 
 namespace Behind_Bars.Systems.Jail
@@ -75,10 +78,11 @@ namespace Behind_Bars.Systems.Jail
 
                 cell.cellDoor = new JailDoor();
                 cell.cellDoor.doorHolder = FindDoorHolder(cellTransform, "DoorHolder");
+                cell.cellDoor.doorPoint = cell.cellDoor.doorHolder?.Find("DoorPoint");
                 cell.cellDoor.doorName = $"{cell.cellName} Door";
                 cell.cellDoor.doorType = JailDoor.DoorType.CellDoor;
 
-                cell.cellBounds = FindChildContaining(cellTransform, "Bounds");
+                cell.cellBounds = FindChildContaining(cellTransform, "CellBounds");
                 cell.cellBedBottom = FindChildContaining(cellTransform, "CellBedBottom");
                 cell.cellBedTop = FindChildContaining(cellTransform, "CellBedTop");
                 cell.spawnPoints = FindAllChildrenContaining(cellTransform, "Spawn");
@@ -130,10 +134,11 @@ namespace Behind_Bars.Systems.Jail
 
                 holdingCell.cellDoor = new JailDoor();
                 holdingCell.cellDoor.doorHolder = FindDoorHolder(holdingCellTransform, "DoorHolder");
+                holdingCell.cellDoor.doorPoint = holdingCell.cellDoor.doorHolder?.Find("DoorPoint");
                 holdingCell.cellDoor.doorName = $"{holdingCell.cellName} Door";
                 holdingCell.cellDoor.doorType = JailDoor.DoorType.HoldingCellDoor;
 
-                holdingCell.cellBounds = FindChildContaining(holdingCellTransform, "Bounds");
+                holdingCell.cellBounds = FindChildContaining(holdingCellTransform, "HoldingCellBounds");
 
                 holdingCell.spawnPoints.Clear();
                 for (int spawnIndex = 0; spawnIndex < 3; spawnIndex++)
@@ -477,6 +482,121 @@ namespace Behind_Bars.Systems.Jail
         public CellDetail GetHoldingCellByIndex(int cellIndex)
         {
             return holdingCells.FirstOrDefault(c => c.cellIndex == cellIndex);
+        }
+
+        /// <summary>
+        /// Find which holding cell contains the specified player
+        /// </summary>
+        /// <param name="player">Player to search for</param>
+        /// <returns>Holding cell index (0-based) or -1 if not found</returns>
+        public int FindPlayerHoldingCell(Player player)
+        {
+            if (player == null) return -1;
+
+            Vector3 playerPosition = player.transform.position;
+
+            // Check each holding cell bounds to see which contains the player
+            for (int i = 0; i < holdingCells.Count; i++)
+            {
+                var holdingCell = holdingCells[i];
+                if (IsPlayerInHoldingCellBounds(player, i))
+                {
+                    ModLogger.Info($"Player {player.name} found in holding cell {i}");
+                    return i;
+                }
+            }
+
+            ModLogger.Warn($"Player {player.name} not found in any holding cell bounds");
+            return -1;
+        }
+
+        /// <summary>
+        /// Check if player is currently in specified holding cell bounds
+        /// </summary>
+        /// <param name="player">Player to check</param>
+        /// <param name="holdingCellIndex">Index of holding cell to check (0-based)</param>
+        /// <returns>True if player is within the holding cell bounds</returns>
+        public bool IsPlayerInHoldingCellBounds(Player player, int holdingCellIndex)
+        {
+            if (player == null || holdingCellIndex < 0 || holdingCellIndex >= holdingCells.Count)
+            {
+                return false;
+            }
+
+            var holdingCell = holdingCells[holdingCellIndex];
+            if (holdingCell?.cellBounds == null)
+            {
+                return false;
+            }
+
+            var boundsCollider = holdingCell.cellBounds.GetComponent<BoxCollider>();
+            if (boundsCollider == null)
+            {
+                return false;
+            }
+
+            // Calculate world position of bounds manually
+            Vector3 playerPos = player.transform.position;
+            Transform boundsTransform = boundsCollider.transform;
+            Vector3 boundsWorldCenter = boundsTransform.TransformPoint(boundsCollider.center);
+            Vector3 boundsWorldSize = Vector3.Scale(boundsCollider.size, boundsTransform.lossyScale);
+
+            // Manual bounds checking
+            Vector3 min = boundsWorldCenter - boundsWorldSize * 0.5f;
+            Vector3 max = boundsWorldCenter + boundsWorldSize * 0.5f;
+
+            bool contains = (playerPos.x >= min.x && playerPos.x <= max.x) &&
+                           (playerPos.y >= min.y && playerPos.y <= max.y) &&
+                           (playerPos.z >= min.z && playerPos.z <= max.z);
+
+            return contains;
+        }
+
+        /// <summary>
+        /// Check if player has exited the specified holding cell bounds
+        /// </summary>
+        /// <param name="player">Player to check</param>
+        /// <param name="holdingCellIndex">Index of holding cell (0-based)</param>
+        /// <returns>True if player is outside the holding cell bounds</returns>
+        public bool HasPlayerExitedHoldingCell(Player player, int holdingCellIndex)
+        {
+            return !IsPlayerInHoldingCellBounds(player, holdingCellIndex);
+        }
+
+        /// <summary>
+        /// Check if player is currently in specified jail cell bounds
+        /// </summary>
+        /// <param name="player">Player to check</param>
+        /// <param name="cellIndex">Index of jail cell to check (0-based)</param>
+        /// <returns>True if player is within the jail cell bounds</returns>
+        public bool IsPlayerInJailCellBounds(Player player, int cellIndex)
+        {
+            if (player == null || cellIndex < 0 || cellIndex >= cells.Count)
+                return false;
+
+            var cell = cells[cellIndex];
+            if (cell?.cellBounds == null)
+                return false;
+
+            var boundsCollider = cell.cellBounds.GetComponent<BoxCollider>();
+            if (boundsCollider == null)
+                return false;
+
+            // Use same manual world-space calculation as holding cells to avoid Unity bounds issues
+            Vector3 playerPos = player.transform.position;
+            Transform boundsTransform = boundsCollider.transform;
+            Vector3 boundsWorldCenter = boundsTransform.TransformPoint(boundsCollider.center);
+            Vector3 boundsWorldSize = Vector3.Scale(boundsCollider.size, boundsTransform.lossyScale);
+
+            // Manual bounds checking
+            Vector3 min = boundsWorldCenter - boundsWorldSize * 0.5f;
+            Vector3 max = boundsWorldCenter + boundsWorldSize * 0.5f;
+
+            bool contains = (playerPos.x >= min.x && playerPos.x <= max.x) &&
+                           (playerPos.y >= min.y && playerPos.y <= max.y) &&
+                           (playerPos.z >= min.z && playerPos.z <= max.z);
+
+            return contains;
         }
 
         public void TestHoldingCellDiscovery()

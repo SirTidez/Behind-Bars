@@ -52,14 +52,21 @@ namespace Behind_Bars.Systems.Jail
         private bool escortInProgress = false;
         public bool storageInteractionAllowed = false;
         private static BookingProcess _instance;
-        
+
+        // Events for state machine integration
+        public System.Action<Player> OnMugshotCompleted;
+        public System.Action<Player> OnFingerprintCompleted;
+        public System.Action<Player> OnInventoryDropOffCompleted;
+        public System.Action<Player> OnBookingStarted;
+        public System.Action<Player> OnBookingCompleted;
+
         public static BookingProcess Instance
         {
             get
             {
                 if (_instance == null)
                 {
-                    _instance = FindObjectOfType<BookingProcess>();
+                    _instance = Core.JailController.BookingProcessController;
                 }
                 return _instance;
             }
@@ -127,7 +134,10 @@ namespace Behind_Bars.Systems.Jail
             ResetBookingStatus();
             
             ModLogger.Info($"Starting booking process for player: {player.name}");
-            
+
+            // Trigger booking started event for state machine
+            OnBookingStarted?.Invoke(player);
+
             // Request guard escort immediately when booking starts
             RequestGuardEscort();
             
@@ -149,16 +159,19 @@ namespace Behind_Bars.Systems.Jail
             }
             
             ModLogger.Info($"Booking completed for {currentPlayer?.name}");
-            
+
+            // Trigger booking completed event for state machine
+            OnBookingCompleted?.Invoke(currentPlayer);
+
             // Show completion notification
             if (BehindBarsUIManager.Instance != null)
             {
                 BehindBarsUIManager.Instance.ShowNotification(
-                    "Booking complete! Guard will take you to storage", 
+                    "Booking complete! Guard will take you to storage",
                     NotificationType.Progress
                 );
             }
-            
+
             // Escort is already in progress, no need to request again
         }
 
@@ -246,14 +259,17 @@ namespace Behind_Bars.Systems.Jail
             mugshotImage = mugshot;
             
             ModLogger.Info("Mugshot marked as complete");
-            
+
+            // Trigger mugshot completed event for state machine
+            OnMugshotCompleted?.Invoke(currentPlayer);
+
             // Show progress notification
             if (BehindBarsUIManager.Instance != null)
             {
                 string message = fingerprintComplete ? "All stations complete!" : "Mugshot complete - scan fingerprint next";
                 BehindBarsUIManager.Instance.ShowNotification(message, NotificationType.Progress);
             }
-            
+
             CheckBookingCompletion();
         }
         
@@ -266,14 +282,17 @@ namespace Behind_Bars.Systems.Jail
             fingerprintData = fingerprintId;
             
             ModLogger.Info("Fingerprint scan marked as complete");
-            
+
+            // Trigger fingerprint completed event for state machine
+            OnFingerprintCompleted?.Invoke(currentPlayer);
+
             // Show progress notification
             if (BehindBarsUIManager.Instance != null)
             {
                 string message = mugshotComplete ? "Booking stations complete - proceed to storage!" : "Fingerprint complete - take mugshot next";
                 BehindBarsUIManager.Instance.ShowNotification(message, NotificationType.Progress);
             }
-            
+
             CheckBookingCompletion();
         }
         
@@ -285,19 +304,22 @@ namespace Behind_Bars.Systems.Jail
             inventoryDropOffComplete = true;
             
             ModLogger.Info("Inventory drop-off marked as complete");
-            
+
+            // Trigger inventory drop-off completed event for state machine
+            OnInventoryDropOffCompleted?.Invoke(currentPlayer);
+
             // Show progress notification
             if (BehindBarsUIManager.Instance != null)
             {
                 BehindBarsUIManager.Instance.ShowNotification(
-                    "Inventory secured - booking complete!", 
+                    "Inventory secured - booking complete!",
                     NotificationType.Progress
                 );
             }
-            
+
             // Mark overall inventory as processed
             inventoryProcessed = true;
-            
+
             CheckBookingCompletion();
         }
         
@@ -634,6 +656,12 @@ namespace Behind_Bars.Systems.Jail
             {
                 ForceCompleteBooking();
             }
+
+            // Debug: Check intake officer status
+            if (Input.GetKeyDown(KeyCode.F3) && Input.GetKey(KeyCode.LeftShift))
+            {
+                DebugIntakeOfficerStatus();
+            }
         }
         
         /// <summary>
@@ -659,6 +687,92 @@ namespace Behind_Bars.Systems.Jail
         {
             // For now, simple time-based completion - can be enhanced
             return inventoryProcessed || !bookingInProgress;
+        }
+
+        /// <summary>
+        /// Get the current player being processed (for state machine)
+        /// </summary>
+        public Player GetCurrentPlayer()
+        {
+            return currentPlayer;
+        }
+
+        /// <summary>
+        /// Debug method to check intake officer status
+        /// </summary>
+        private void DebugIntakeOfficerStatus()
+        {
+            ModLogger.Info("=== INTAKE OFFICER DEBUG ===");
+
+            if (PrisonNPCManager.Instance == null)
+            {
+                ModLogger.Error("PrisonNPCManager.Instance is NULL!");
+                return;
+            }
+
+            var intakeOfficer = PrisonNPCManager.Instance.GetIntakeOfficer();
+            if (intakeOfficer == null)
+            {
+                ModLogger.Error("No intake officer found!");
+
+                // Check all registered guards
+                var guards = PrisonNPCManager.Instance.GetRegisteredGuards();
+                ModLogger.Info($"Total registered guards: {guards.Count}");
+
+                foreach (var guard in guards)
+                {
+                    if (guard != null)
+                    {
+                        ModLogger.Info($"  Guard: {guard.GetBadgeNumber()} - Role: {guard.GetRole()} - Assignment: {guard.GetAssignment()}");
+                    }
+                }
+            }
+            else
+            {
+                ModLogger.Info($"✓ Intake officer found: {intakeOfficer.GetBadgeNumber()}");
+                ModLogger.Info($"  Available: {PrisonNPCManager.Instance.IsIntakeOfficerAvailable()}");
+                ModLogger.Info($"  Processing: {intakeOfficer.IsProcessingIntake()}");
+            }
+        }
+
+        /// <summary>
+        /// Check if player is currently in holding cell bounds
+        /// </summary>
+        public bool IsPlayerInHoldingCell(Player player = null)
+        {
+            if (player == null) player = currentPlayer;
+            if (player == null) return false;
+
+            // Find holding cell bounds
+            GameObject holdingBounds = GameObject.Find("HoldingCell/Bounds");
+            if (holdingBounds == null)
+            {
+                // Try alternative naming
+                holdingBounds = GameObject.Find("HoldingCell_Bounds");
+            }
+
+            if (holdingBounds == null)
+            {
+                ModLogger.Warn("Could not find holding cell bounds for checking player position");
+                return false;
+            }
+
+            var collider = holdingBounds.GetComponent<BoxCollider>();
+            if (collider == null)
+            {
+                ModLogger.Warn("No BoxCollider found on holding cell bounds");
+                return false;
+            }
+
+            return collider.bounds.Contains(player.transform.position);
+        }
+
+        /// <summary>
+        /// Check if player has exited holding cell bounds
+        /// </summary>
+        public bool HasPlayerExitedHoldingCell(Player player = null)
+        {
+            return !IsPlayerInHoldingCell(player);
         }
     }
     

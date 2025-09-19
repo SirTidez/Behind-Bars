@@ -214,7 +214,7 @@ namespace Behind_Bars.Systems.Jail
 
                 Transform holdingCell1 = holdingCellsParent.Find("HoldingCell_01");
                 if (holdingCell1 != null)
-                    holdingCellDoor1 = holdingCell1.Find("HoldingDoorHolder[1]");
+                    holdingCellDoor1 = holdingCell1.Find("HoldingDoorHolder[0]");
             }
 
             ModLogger.Info($"Holding Cell Door 0: {(holdingCellDoor0 != null ? "✓ Found" : "✗ Missing")}");
@@ -412,6 +412,184 @@ namespace Behind_Bars.Systems.Jail
             }
 
             ModLogger.Info("Closed all cells");
+        }
+
+        // Programmatic door opening methods for IntakeOfficer escort system
+        public bool UnlockAndOpenHoldingCellDoor(int cellIndex)
+        {
+            if (cellIndex < 0 || cellIndex >= holdingCells.Count)
+            {
+                ModLogger.Error($"Invalid holding cell index: {cellIndex}");
+                return false;
+            }
+
+            var holdingCell = holdingCells[cellIndex];
+            if (holdingCell?.cellDoor != null && holdingCell.cellDoor.IsInstantiated())
+            {
+                // First unlock the door
+                holdingCell.LockCell(false);
+                ModLogger.Info($"Unlocked holding cell {cellIndex} door");
+
+                // Then open it
+                holdingCell.cellDoor.OpenDoor();
+                ModLogger.Info($"Opened holding cell {cellIndex} door");
+                return true;
+            }
+
+            ModLogger.Error($"Could not unlock and open holding cell {cellIndex} door - not instantiated");
+            return false;
+        }
+
+        public bool OpenHoldingCellDoor(int cellIndex)
+        {
+            if (cellIndex < 0 || cellIndex >= holdingCells.Count)
+            {
+                ModLogger.Error($"Invalid holding cell index: {cellIndex}");
+                return false;
+            }
+
+            var holdingCell = holdingCells[cellIndex];
+            if (holdingCell?.cellDoor != null && holdingCell.cellDoor.IsInstantiated())
+            {
+                holdingCell.cellDoor.OpenDoor();
+                ModLogger.Info($"Opened holding cell {cellIndex} door");
+                return true;
+            }
+
+            ModLogger.Error($"Could not open holding cell {cellIndex} door - not instantiated");
+            return false;
+        }
+
+        public bool CloseHoldingCellDoor(int cellIndex)
+        {
+            if (cellIndex < 0 || cellIndex >= holdingCells.Count)
+            {
+                ModLogger.Error($"Invalid holding cell index: {cellIndex}");
+                return false;
+            }
+
+            var holdingCell = holdingCells[cellIndex];
+            if (holdingCell?.cellDoor != null && holdingCell.cellDoor.IsInstantiated())
+            {
+                holdingCell.cellDoor.CloseDoor();
+                ModLogger.Info($"Closed holding cell {cellIndex} door");
+                return true;
+            }
+
+            ModLogger.Error($"Could not close holding cell {cellIndex} door - not instantiated");
+            return false;
+        }
+
+        public bool UnlockAndOpenBookingInnerDoor()
+        {
+            if (booking.bookingInnerDoor != null && booking.bookingInnerDoor.IsInstantiated())
+            {
+                // Unlock then open
+                booking.UnlockAllDoors();
+                booking.bookingInnerDoor.OpenDoor();
+                ModLogger.Info("Unlocked and opened booking inner door");
+                return true;
+            }
+
+            ModLogger.Error("Could not unlock and open booking inner door - not instantiated");
+            return false;
+        }
+
+        public bool OpenBookingInnerDoor()
+        {
+            if (booking.bookingInnerDoor != null && booking.bookingInnerDoor.IsInstantiated())
+            {
+                booking.bookingInnerDoor.OpenDoor();
+                ModLogger.Info("Opened booking inner door");
+                return true;
+            }
+
+            ModLogger.Error("Could not open booking inner door - not instantiated");
+            return false;
+        }
+
+        public bool CloseBookingInnerDoor()
+        {
+            if (booking.bookingInnerDoor != null && booking.bookingInnerDoor.IsInstantiated())
+            {
+                booking.bookingInnerDoor.CloseDoor();
+                ModLogger.Info("Closed booking inner door");
+                return true;
+            }
+
+            ModLogger.Error("Could not close booking inner door - not instantiated");
+            return false;
+        }
+
+        public bool OpenPrisonEntryDoor()
+        {
+            if (booking.prisonEntryDoor != null && booking.prisonEntryDoor.IsInstantiated())
+            {
+                booking.prisonEntryDoor.OpenDoor();
+                ModLogger.Info("Opened prison entry door");
+                return true;
+            }
+
+            ModLogger.Error("Could not open prison entry door - not instantiated");
+            return false;
+        }
+
+        public bool ClosePrisonEntryDoor()
+        {
+            if (booking.prisonEntryDoor != null && booking.prisonEntryDoor.IsInstantiated())
+            {
+                booking.prisonEntryDoor.CloseDoor();
+                ModLogger.Info("Closed prison entry door");
+                return true;
+            }
+
+            ModLogger.Error("Could not close prison entry door - not instantiated");
+            return false;
+        }
+
+        public bool OpenJailCellDoor(int cellIndex)
+        {
+            if (cellIndex < 0 || cellIndex >= cells.Count)
+            {
+                ModLogger.Error($"Invalid jail cell index: {cellIndex}");
+                return false;
+            }
+
+            var cell = cells[cellIndex];
+            if (cell?.cellDoor != null && cell.cellDoor.IsInstantiated())
+            {
+                // First unlock the door
+                cell.LockCell(false);
+                ModLogger.Info($"Unlocked jail cell {cellIndex} door");
+
+                // Then open it
+                cell.cellDoor.OpenDoor();
+                ModLogger.Info($"Opened jail cell {cellIndex} door");
+                return true;
+            }
+
+            ModLogger.Error($"Could not open jail cell {cellIndex} door - not instantiated");
+            return false;
+        }
+
+        public bool CloseJailCellDoor(int cellIndex)
+        {
+            if (cellIndex < 0 || cellIndex >= cells.Count)
+            {
+                ModLogger.Error($"Invalid jail cell index: {cellIndex}");
+                return false;
+            }
+
+            var cell = cells[cellIndex];
+            if (cell?.cellDoor != null && cell.cellDoor.IsInstantiated())
+            {
+                cell.cellDoor.CloseDoor();
+                ModLogger.Info($"Closed jail cell {cellIndex} door");
+                return true;
+            }
+
+            ModLogger.Error($"Could not close jail cell {cellIndex} door - not instantiated");
+            return false;
         }
     }
 }

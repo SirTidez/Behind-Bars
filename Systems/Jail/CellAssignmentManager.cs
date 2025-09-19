@@ -60,7 +60,7 @@ namespace Behind_Bars.Systems.Jail
             playerCellAssignments.Clear();
             npcCellAssignments.Clear();
 
-            var jailController = Core.ActiveJailController;
+            var jailController = Core.JailController;
             if (jailController == null)
             {
                 ModLogger.Error("JailController not found - using default cell count");
@@ -221,7 +221,7 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         public Vector3? GetCellPosition(int cellNumber)
         {
-            var jailController = Core.ActiveJailController;
+            var jailController = Core.JailController;
             if (jailController == null || cellNumber < 0 || cellNumber >= jailController.cells.Count)
             {
                 return null;
@@ -236,7 +236,7 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         public List<Transform> GetCellSpawnPoints(int cellNumber)
         {
-            var jailController = Core.ActiveJailController;
+            var jailController = Core.JailController;
             if (jailController == null || cellNumber < 0 || cellNumber >= jailController.cells.Count)
             {
                 return new List<Transform>();
@@ -284,6 +284,9 @@ namespace Behind_Bars.Systems.Jail
             cell.occupants.Add(occupantId);
             cell.occupantNames.Add(displayName);
             cell.isAvailable = cell.HasSpace();
+
+            // Close and lock the cell door for security
+            CloseCellDoor(cellNumber);
 
             ModLogger.Debug($"Added {displayName} to cell {cellNumber} ({cell.occupants.Count}/{cell.maxOccupants})");
             return true;
@@ -356,6 +359,35 @@ namespace Behind_Bars.Systems.Jail
                 var cell = kvp.Value;
                 string occupantList = string.Join(", ", cell.occupantNames);
                 ModLogger.Info($"Cell {cell.cellNumber}: {occupantList} ({cell.occupants.Count}/{cell.maxOccupants})");
+            }
+        }
+
+        /// <summary>
+        /// Close and lock the cell door for security
+        /// </summary>
+        private void CloseCellDoor(int cellNumber)
+        {
+            var jailController = Core.JailController;
+            if (jailController?.cellManager == null) return;
+
+            var cellDetail = jailController.GetCellByIndex(cellNumber);
+            if (cellDetail?.cellDoor == null)
+            {
+                ModLogger.Debug($"No door found for cell {cellNumber}");
+                return;
+            }
+
+            // Close and lock the door
+            if (!cellDetail.cellDoor.IsClosed())
+            {
+                cellDetail.cellDoor.CloseDoor();
+                ModLogger.Info($"Closed door for cell {cellNumber}");
+            }
+
+            if (!cellDetail.cellDoor.IsLocked())
+            {
+                cellDetail.cellDoor.LockDoor();
+                ModLogger.Debug($"Locked door for cell {cellNumber}");
             }
         }
     }
