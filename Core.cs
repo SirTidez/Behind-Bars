@@ -1072,6 +1072,12 @@ namespace Behind_Bars
                 {
                     CrimeUIManager.Instance.ShowCrimeDetails();
                 }
+
+                // F8 key - Trigger instant arrest for testing
+                if (Input.GetKeyDown(KeyCode.F8))
+                {
+                    TriggerTestArrest();
+                }
             }
             catch (Exception e)
             {
@@ -1134,6 +1140,45 @@ namespace Behind_Bars
             catch (Exception e)
             {
                 ModLogger.Error($"Error teleporting to Taco Ticklers: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Trigger an instant arrest for testing purposes
+        /// </summary>
+        private void TriggerTestArrest()
+        {
+            try
+            {
+#if !MONO
+                var player = Object.FindObjectOfType<Il2CppScheduleOne.PlayerScripts.Player>();
+#else
+                var player = Object.FindObjectOfType<ScheduleOne.PlayerScripts.Player>();
+#endif
+                if (player != null)
+                {
+                    ModLogger.Info("F8 pressed - Triggering test arrest!");
+
+                    // Start the arrest process through JailSystem
+                    if (JailSystem != null)
+                    {
+                        // Trigger immediate arrest using the existing system
+                        MelonCoroutines.Start(JailSystem.HandleImmediateArrest(player));
+                        ModLogger.Info("✓ Test arrest triggered - player will be processed through booking");
+                    }
+                    else
+                    {
+                        ModLogger.Error("JailSystem not available for arrest trigger");
+                    }
+                }
+                else
+                {
+                    ModLogger.Warn("No player found to arrest");
+                }
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error triggering test arrest: {e.Message}");
             }
         }
 

@@ -128,8 +128,27 @@ namespace Behind_Bars.Systems.NPCs
 
         protected override void InitializeNPC()
         {
+            // Ensure SecurityDoorBehavior component is attached
+            EnsureSecurityDoorComponent();
+
             // IntakeOfficer-specific initialization
             ChangeIntakeState(IntakeState.Idle);
+        }
+
+        private void EnsureSecurityDoorComponent()
+        {
+            // Check if SecurityDoorBehavior is already attached
+            var existingSecurityDoor = GetComponent<SecurityDoorBehavior>();
+            if (existingSecurityDoor == null)
+            {
+                // Add SecurityDoorBehavior component to this IntakeOfficer
+                var securityDoor = gameObject.AddComponent<SecurityDoorBehavior>();
+                ModLogger.Info("IntakeOfficer: Added SecurityDoorBehavior component for automated door operations");
+            }
+            else
+            {
+                ModLogger.Info("IntakeOfficer: SecurityDoorBehavior component already attached");
+            }
         }
 
         private void InitializeStations()
@@ -194,7 +213,18 @@ namespace Behind_Bars.Systems.NPCs
                 bookingProcess.OnInventoryDropOffCompleted += HandleInventoryCompleted;
             }
 
-            // Note: SecurityDoor integration will be implemented in future version
+            // Subscribe to SecurityDoor events
+            var securityDoor = GetSecurityDoor();
+            if (securityDoor != null)
+            {
+                securityDoor.OnDoorOperationComplete += HandleSecurityDoorOperationComplete;
+                securityDoor.OnDoorOperationFailed += HandleSecurityDoorOperationFailed;
+                ModLogger.Info("IntakeOfficer: Subscribed to SecurityDoor events");
+            }
+            else
+            {
+                ModLogger.Warn("IntakeOfficer: No SecurityDoor component found - will use fallback direct door control");
+            }
 
             // Subscribe to movement completion events
             OnDestinationReached += HandleDestinationReached;
@@ -651,6 +681,11 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private SecurityDoorBehavior GetSecurityDoor()
         {
+            // Try to get SecurityDoor component from this GameObject first
+            var securityDoor = GetComponent<SecurityDoorBehavior>();
+            if (securityDoor != null) return securityDoor;
+
+            // Fallback to JailController (centralized SecurityDoor)
             return Core.JailController?.GetComponent<SecurityDoorBehavior>();
         }
 
@@ -691,17 +726,16 @@ namespace Behind_Bars.Systems.NPCs
 
         private void CheckForDoorTriggers()
         {
-            // Check if guard is near doors that need to be opened during escort
-            Vector3 guardPosition = transform.position;
+            // SecurityDoor integration - trigger appropriate door operations based on escort state
+            // SecurityDoor will handle movement to door points, security delays, and door operations
 
-            // Only check doors during specific escort states
             if (currentState == IntakeState.EscortToStorage)
             {
-                CheckBookingInnerDoorTrigger(guardPosition);
+                TriggerBookingInnerDoorIfNeeded();
             }
             else if (currentState == IntakeState.EscortToCell)
             {
-                CheckPrisonEntryDoorTrigger(guardPosition);
+                TriggerPrisonEntryDoorIfNeeded();
             }
         }
 
@@ -717,66 +751,161 @@ namespace Behind_Bars.Systems.NPCs
             // Continue with current objective after door operation
         }
 
-        // Track which doors have been opened to prevent re-opening
-        private HashSet<string> openedDoors = new HashSet<string>();
-
-        private void CheckBookingInnerDoorTrigger(Vector3 guardPosition)
+        private void HandleSecurityDoorOperationComplete(string doorName)
         {
-            // Check if guard is near the booking inner door and hasn't opened it yet
-            if (openedDoors.Contains("BookingInnerDoor")) return;
+            ModLogger.Info($"IntakeOfficer: SecurityDoor operation completed for {doorName}");
 
-            var jailController = Core.JailController;
-            if (jailController?.areaManager?.booking?.bookingInnerDoor == null) return;
+            // SecurityDoor has completed its operation - clear the active flag
+            isSecurityDoorActive = false;
 
-            Vector3 doorPosition = jailController.areaManager.booking.bookingInnerDoor.doorInstance.transform.position;
-            float distance = Vector3.Distance(guardPosition, doorPosition);
+            // IMPORTANT: Give guard time to move away from door before resuming navigation
+            // SecurityDoor finishes but guard needs to clear the door area first
+            ModLogger.Info("IntakeOfficer: Waiting for guard to clear door area before resuming navigation");
+            MelonCoroutines.Start(DelayedNavigationResume());
+        }
 
-            // Open door when guard is within 3 meters
-            if (distance < 3.0f)
+        private IEnumerator DelayedNavigationResume()
+        {
+            // Wait for guard to move away from door area
+            yield return new WaitForSeconds(1.5f);
+
+            // Now safely resume navigation to the original target
+            if (currentState == IntakeState.EscortToStorage || currentState == IntakeState.WaitingForStorage)
             {
-                ModLogger.Info($"IntakeOfficer: Guard near booking inner door (distance: {distance:F2}m) - opening for storage access");
-                bool opened = jailController.doorController.UnlockAndOpenBookingInnerDoor();
-                if (opened)
-                {
-                    openedDoors.Add("BookingInnerDoor");
-                    ModLogger.Info("IntakeOfficer: Booking inner door opened for storage access");
-                }
+                ModLogger.Info("IntakeOfficer: Resuming navigation to Storage after door clearance delay");
+                NavigateToStation("Storage");
+            }
+            else if (currentState == IntakeState.EscortToCell || currentState == IntakeState.OpeningCellDoor)
+            {
+                ModLogger.Info("IntakeOfficer: Resuming navigation to Cell after door clearance delay");
+                NavigateToAssignedCell();
+            }
+
+            ModLogger.Info($"IntakeOfficer: Navigation resumed for state: {currentState}");
+        }
+
+        private void HandleSecurityDoorOperationFailed(string doorName)
+        {
+            ModLogger.Error($"IntakeOfficer: SecurityDoor operation FAILED for {doorName} - attempting fallback");
+
+            // If SecurityDoor fails, try fallback direct door control
+            if (doorName.Contains("Booking") || doorName.Contains("Inner"))
+            {
+                FallbackDirectDoorControl("BookingInnerDoor");
+            }
+            else if (doorName.Contains("Prison") || doorName.Contains("Enter"))
+            {
+                FallbackDirectDoorControl("PrisonEntryDoor");
             }
         }
 
-        private void CheckPrisonEntryDoorTrigger(Vector3 guardPosition)
+        // Track which SecurityDoor operations have been triggered to prevent re-triggering
+        private HashSet<string> triggeredDoorOperations = new HashSet<string>();
+
+        // Track when SecurityDoor is active to pause destination checking
+        private bool isSecurityDoorActive = false;
+
+        private void TriggerBookingInnerDoorIfNeeded()
         {
-            // Check if guard is near the prison entry door and hasn't opened it yet
-            if (openedDoors.Contains("PrisonEntryDoor")) return;
+            // Check if we've already triggered the booking inner door operation
+            if (triggeredDoorOperations.Contains("BookingInnerDoor")) return;
 
-            var jailController = Core.JailController;
-            if (jailController?.areaManager?.booking?.prisonEntryDoor == null) return;
-
-            Vector3 doorPosition = jailController.areaManager.booking.prisonEntryDoor.doorInstance.transform.position;
-            float distance = Vector3.Distance(guardPosition, doorPosition);
-
-            // Open door when guard is within 3 meters
-            if (distance < 3.0f)
+            var securityDoor = GetSecurityDoor();
+            if (securityDoor == null)
             {
-                ModLogger.Info($"IntakeOfficer: Guard near prison entry door (distance: {distance:F2}m) - opening for cell access");
+                ModLogger.Error("IntakeOfficer: No SecurityDoor component available - falling back to direct door control");
+                FallbackDirectDoorControl("BookingInnerDoor");
+                return;
+            }
+
+            // Trigger SecurityDoor operation for booking inner door
+            // SecurityDoor will handle: movement to door point → security delay → unlock → open
+            string triggerName = "BookingDoorTrigger_FromBooking"; // Guard moving from booking area to hall
+            bool triggered = securityDoor.HandleDoorTrigger(triggerName, true, currentPrisoner);
+
+            if (triggered)
+            {
+                triggeredDoorOperations.Add("BookingInnerDoor");
+                isSecurityDoorActive = true;
+                ModLogger.Info("IntakeOfficer: SecurityDoor operation triggered for booking inner door");
+            }
+            else
+            {
+                ModLogger.Warn("IntakeOfficer: Failed to trigger SecurityDoor for booking inner door");
+            }
+        }
+
+        private void TriggerPrisonEntryDoorIfNeeded()
+        {
+            // Check if we've already triggered the prison entry door operation
+            if (triggeredDoorOperations.Contains("PrisonEntryDoor")) return;
+
+            var securityDoor = GetSecurityDoor();
+            if (securityDoor == null)
+            {
+                ModLogger.Error("IntakeOfficer: No SecurityDoor component available - falling back to direct door control");
+                FallbackDirectDoorControl("PrisonEntryDoor");
+                return;
+            }
+
+            // Trigger SecurityDoor operation for prison entry door
+            // SecurityDoor will handle: movement to door point → security delay → unlock → open
+            string triggerName = "PrisonDoorTrigger_FromHall"; // Guard moving from hall to prison area
+            bool triggered = securityDoor.HandleDoorTrigger(triggerName, true, currentPrisoner);
+
+            if (triggered)
+            {
+                triggeredDoorOperations.Add("PrisonEntryDoor");
+                isSecurityDoorActive = true;
+                ModLogger.Info("IntakeOfficer: SecurityDoor operation triggered for prison entry door");
+            }
+            else
+            {
+                ModLogger.Warn("IntakeOfficer: Failed to trigger SecurityDoor for prison entry door");
+            }
+        }
+
+        private void FallbackDirectDoorControl(string doorType)
+        {
+            // Fallback to direct door control if SecurityDoor is not available
+            var jailController = Core.JailController;
+            if (jailController?.doorController == null) return;
+
+            if (doorType == "BookingInnerDoor")
+            {
+                bool opened = jailController.doorController.UnlockAndOpenBookingInnerDoor();
+                if (opened)
+                {
+                    triggeredDoorOperations.Add("BookingInnerDoor");
+                    ModLogger.Info("IntakeOfficer: Booking inner door opened via fallback direct control");
+                }
+            }
+            else if (doorType == "PrisonEntryDoor")
+            {
                 bool opened = jailController.doorController.OpenPrisonEntryDoor();
                 if (opened)
                 {
-                    openedDoors.Add("PrisonEntryDoor");
-                    ModLogger.Info("IntakeOfficer: Prison entry door opened for cell access");
+                    triggeredDoorOperations.Add("PrisonEntryDoor");
+                    ModLogger.Info("IntakeOfficer: Prison entry door opened via fallback direct control");
                 }
             }
         }
 
         private void ResetDoorTracking()
         {
-            // Clear opened doors when starting new intake process
-            openedDoors.Clear();
-            ModLogger.Debug("IntakeOfficer: Door tracking reset for new intake process");
+            // Clear triggered door operations when starting new intake process
+            triggeredDoorOperations.Clear();
+            ModLogger.Debug("IntakeOfficer: Door operation tracking reset for new intake process");
         }
 
         private void HandleDestinationReached(Vector3 destination)
         {
+            // Ignore destination events when SecurityDoor is actively controlling the guard
+            if (isSecurityDoorActive)
+            {
+                return; // No logging - SecurityDoor is handling movement
+            }
+
             ModLogger.Info($"IntakeOfficer: *** DESTINATION REACHED EVENT FIRED *** at {destination} during state {currentState}");
 
             // Handle state transitions based on current state
@@ -853,6 +982,9 @@ namespace Behind_Bars.Systems.NPCs
 
             // Reset door tracking for new intake process
             ResetDoorTracking();
+
+            // Reset SecurityDoor state
+            isSecurityDoorActive = false;
 
             // Determine which holding cell contains this player using JailController's centralized method
             var jailController = Core.JailController;
@@ -1154,7 +1286,13 @@ namespace Behind_Bars.Systems.NPCs
                 bookingProcess.OnInventoryDropOffCompleted -= HandleInventoryCompleted;
             }
 
-            // Note: SecurityDoor cleanup will be implemented in future version
+            // Unsubscribe from SecurityDoor events
+            var securityDoor = GetSecurityDoor();
+            if (securityDoor != null)
+            {
+                securityDoor.OnDoorOperationComplete -= HandleSecurityDoorOperationComplete;
+                securityDoor.OnDoorOperationFailed -= HandleSecurityDoorOperationFailed;
+            }
 
             OnDestinationReached -= HandleDestinationReached;
         }

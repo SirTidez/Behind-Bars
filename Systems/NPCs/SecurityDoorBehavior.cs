@@ -39,13 +39,13 @@ namespace Behind_Bars.Systems.NPCs
         [System.Serializable]
         public class SecurityTimingConfig
         {
-            public float approachSpeed = 2.0f;          // Slow, deliberate movement
-            public float doorPointWaitTime = 1.0f;      // Security check at door point
-            public float doorOpenAnimTime = 2.0f;       // Time for door to fully open
-            public float escortWaitTime = 8.0f;         // Max time to wait for inmate
-            public float doorCloseDelay = 1.5f;         // Time after passing through before closing
+            public float approachSpeed = 3.0f;          // Faster movement
+            public float doorPointWaitTime = 0.3f;      // Quick security check at door point
+            public float doorOpenAnimTime = 0.8f;       // Faster door opening
+            public float escortWaitTime = 4.0f;         // Reduced wait time for inmate
+            public float doorCloseDelay = 0.5f;         // Quick close after passing through
             public float positionTolerance = 0.8f;      // How close to get to door points
-            public float escortCheckDistance = 3.0f;    // Distance to check for inmate following
+            public float escortCheckDistance = 2.5f;    // Distance to check for inmate following
         }
 
         public SecurityTimingConfig timingConfig = new SecurityTimingConfig();
@@ -217,10 +217,21 @@ namespace Behind_Bars.Systems.NPCs
                 }
                 else if (jailController.booking != null)
                 {
-                    // Use centralized BookingArea methods for booking doors
-                    transition.entryPoint = jailController.booking.GetDoorPointByName(transition.entryPointName);
-                    transition.exitPoint = jailController.booking.GetDoorPointByName(transition.exitPointName);
+                    // First find the door by name
                     transition.door = jailController.booking.GetDoorByName(transition.doorName);
+
+                    // Then find entry/exit points within that specific door's hierarchy
+                    if (transition.door?.doorHolder != null)
+                    {
+                        transition.entryPoint = FindChildByName(transition.door.doorHolder, transition.entryPointName);
+                        transition.exitPoint = FindChildByName(transition.door.doorHolder, transition.exitPointName);
+                    }
+                    else
+                    {
+                        // Fallback to global search if door holder not found
+                        transition.entryPoint = jailController.booking.GetDoorPointByName(transition.entryPointName);
+                        transition.exitPoint = jailController.booking.GetDoorPointByName(transition.exitPointName);
+                    }
                 }
 
                 if (transition.entryPoint == null)
@@ -343,8 +354,10 @@ namespace Behind_Bars.Systems.NPCs
             ChangeState(DoorState.SecurityCheckAtExit);
             yield return new WaitForSeconds(timingConfig.doorPointWaitTime);
 
-            // 7. Close door after delay
+            // 7. Wait before closing door
             yield return new WaitForSeconds(timingConfig.doorCloseDelay);
+
+            // 8. Close door after ensuring clearance
             ChangeState(DoorState.ClosingDoor);
             CloseDoor();
 
@@ -385,6 +398,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+
         /// <summary>
         /// Wait for escorted inmate to follow through the door
         /// </summary>
@@ -403,12 +417,16 @@ namespace Behind_Bars.Systems.NPCs
 
             while (Time.time - waitStartTime < maxWaitTime)
             {
-                float distanceToInmate = Vector3.Distance(transform.position, escortedInmate.transform.position);
+                // Check if prisoner is close to the exit point (not just close to guard)
+                float distanceToExitPoint = Vector3.Distance(currentTransition.exitPoint.position, escortedInmate.transform.position);
+                float guardDistanceToExit = Vector3.Distance(currentTransition.exitPoint.position, transform.position);
 
-                if (distanceToInmate <= timingConfig.escortCheckDistance)
+                // Both guard and prisoner should be near the exit point
+                if (distanceToExitPoint <= timingConfig.escortCheckDistance && guardDistanceToExit <= timingConfig.escortCheckDistance)
                 {
-                    // Inmate is close, wait a bit more for them to pass through
-                    yield return new WaitForSeconds(2f);
+                    ModLogger.Debug($"SecurityDoor: Both guard and prisoner near exit point - closing door soon");
+                    // Both have passed through, wait a bit more for safety then close
+                    yield return new WaitForSeconds(timingConfig.doorCloseDelay);
                     break;
                 }
 
@@ -663,6 +681,38 @@ namespace Behind_Bars.Systems.NPCs
                 case DoorState.DoorOperationComplete: return Color.magenta;
                 default: return Color.gray;
             }
+        }
+
+        /// <summary>
+        /// Find child Transform by name within a specific parent hierarchy
+        /// This ensures we find the correct door point within the specific door object
+        /// </summary>
+        private Transform FindChildByName(Transform parent, string childName)
+        {
+            if (parent == null || string.IsNullOrEmpty(childName)) return null;
+
+            // Check direct children first
+            for (int i = 0; i < parent.childCount; i++)
+            {
+                Transform child = parent.GetChild(i);
+                if (child.name == childName)
+                {
+                    return child;
+                }
+            }
+
+            // If not found in direct children, search recursively
+            for (int i = 0; i < parent.childCount; i++)
+            {
+                Transform child = parent.GetChild(i);
+                Transform found = FindChildByName(child, childName);
+                if (found != null)
+                {
+                    return found;
+                }
+            }
+
+            return null;
         }
     }
 }
