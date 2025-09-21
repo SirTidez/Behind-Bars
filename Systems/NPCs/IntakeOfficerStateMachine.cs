@@ -88,6 +88,11 @@ namespace Behind_Bars.Systems.NPCs
         private Dictionary<string, IntakeStation> intakeStations;
         private string currentTargetStation = "";
 
+        // Dialogue system
+        private JailNPCDialogueController dialogueController;
+        private bool isEscorting = false;
+        private Vector3 destinationPosition;
+
         #endregion
 
         #region Events
@@ -122,6 +127,7 @@ namespace Behind_Bars.Systems.NPCs
             InitializeStations();
             FindGuardPost();
             SubscribeToEvents();
+            InitializeDialogueSystem();
 
             ModLogger.Info($"IntakeOfficerStateMachine initialized for {gameObject.name}");
         }
@@ -180,8 +186,8 @@ namespace Behind_Bars.Systems.NPCs
                 {
                     stationName = "Storage",
                     doorPointName = "Storage",
-                    guardMessage = "Drop your belongings and pick up prison items.",
-                    messageDuration = 4f
+                    guardMessage = "Follow me to storage.",
+                    messageDuration = 3f
                 }
             };
         }
@@ -228,6 +234,63 @@ namespace Behind_Bars.Systems.NPCs
 
             // Subscribe to movement completion events
             OnDestinationReached += HandleDestinationReached;
+        }
+
+        private void InitializeDialogueSystem()
+        {
+            // Get the dialogue controller that should have been added by DirectNPCBuilder
+            dialogueController = GetComponent<JailNPCDialogueController>();
+
+            if (dialogueController != null)
+            {
+                // Set up intake-specific dialogue states
+                dialogueController.AddStateDialogue("Idle", "I'm here to process inmates.",
+                    new[] { "Waiting for the next intake.", "Everything's running smoothly.", "Ready for processing." });
+
+                dialogueController.AddStateDialogue("Processing", "Time to process you.",
+                    new[] { "Follow me.", "This way.", "Stay close." });
+
+                // Escort states - show "Follow me" during movement
+                dialogueController.AddStateDialogue("EscortToHolding", "Follow me.",
+                    new[] { "This way.", "Keep moving.", "Stay close." });
+
+                dialogueController.AddStateDialogue("EscortToMugshot", "Follow me.",
+                    new[] { "This way.", "Keep moving.", "Stay close." });
+
+                dialogueController.AddStateDialogue("EscortToScanner", "Follow me.",
+                    new[] { "This way.", "Keep moving.", "Stay close." });
+
+                dialogueController.AddStateDialogue("EscortToStorage", "Follow me.",
+                    new[] { "This way.", "Keep moving.", "Stay close." });
+
+                dialogueController.AddStateDialogue("EscortToCell", "Follow me.",
+                    new[] { "This way.", "Keep moving.", "Stay close." });
+
+                // Action states - show specific instructions when at destination
+                dialogueController.AddStateDialogue("AtMugshot", "Go take your mugshot!",
+                    new[] { "Stand in front of the camera.", "Look straight ahead.", "Don't move." });
+
+                dialogueController.AddStateDialogue("AtScanner", "Place your hand on the scanner.",
+                    new[] { "Scan in.", "Press your palm down.", "Hold still." });
+
+                dialogueController.AddStateDialogue("AtStorage", "Drop your belongings and pick up prison items.",
+                    new[] { "Put your things in the box.", "Take the prison uniform.", "Change quickly." });
+
+                dialogueController.AddStateDialogue("AtCell", "This is your cell.",
+                    new[] { "Get in.", "This is where you'll be staying.", "Inside." });
+
+                dialogueController.AddStateDialogue("AtHolding", "Go through the door.",
+                    new[] { "Step inside.", "Move in.", "Enter the holding area." });
+
+                // Start with idle state
+                dialogueController.UpdateGreetingForState("Idle");
+
+                ModLogger.Info("IntakeOfficer: Dialogue system initialized with custom states");
+            }
+            else
+            {
+                ModLogger.Warn("IntakeOfficer: JailNPCDialogueController component not found");
+            }
         }
 
         #endregion
@@ -322,8 +385,79 @@ namespace Behind_Bars.Systems.NPCs
             OnStateChanged?.Invoke(newState);
             ModLogger.Info($"IntakeOfficer: {oldState} → {newState}");
 
+            // Update dialogue state
+            UpdateDialogueForState(newState);
+
             // Handle state entry logic
             OnStateEnter(newState);
+        }
+
+        private void UpdateDialogueForState(IntakeState state)
+        {
+            if (dialogueController == null) return;
+
+            // Check if we're currently escorting and far from destination
+            bool showEscortDialog = IsCurrentlyEscorting();
+
+            string dialogueState;
+
+            if (showEscortDialog)
+            {
+                // If we're escorting and far from destination, always show "Follow me"
+                dialogueState = "EscortToHolding"; // Use any escort state - they all show "Follow me"
+            }
+            else
+            {
+                // Use state-specific dialog when close to destination or not escorting
+                dialogueState = state switch
+                {
+                    IntakeState.Idle => "Idle",
+                    IntakeState.WaitingForBooking => "Idle",
+                    IntakeState.DelayBeforeFetch => "Processing",
+
+                    // During escort - show "Follow me"
+                    IntakeState.EscortToHolding => "EscortToHolding",
+                    IntakeState.EscortToMugshot => "EscortToMugshot",
+                    IntakeState.EscortToScanner => "EscortToScanner",
+                    IntakeState.EscortToStorage => "EscortToStorage",
+                    IntakeState.EscortToCell => "EscortToCell",
+
+                    // At destination - show specific action instructions
+                    IntakeState.OpeningHoldingDoor => "AtHolding",
+                    IntakeState.WaitingForPlayerExit => "AtHolding",
+                    IntakeState.ClosingHoldingDoor => "AtHolding",
+                    IntakeState.WaitingForMugshot => "AtMugshot",
+                    IntakeState.WaitingForScan => "AtScanner",
+                    IntakeState.WaitingForStorage => "AtStorage",
+                    IntakeState.OpeningCellDoor => "AtCell",
+                    IntakeState.WaitingForCellEntry => "AtCell",
+                    IntakeState.ClosingCellDoor => "AtCell",
+
+                    IntakeState.ReturningToPost => "Processing",
+                    _ => "Idle"
+                };
+            }
+
+            dialogueController.UpdateGreetingForState(dialogueState);
+        }
+
+        private bool IsCurrentlyEscorting()
+        {
+            // Check if we're in an escort state
+            bool isInEscortState = currentState == IntakeState.EscortToHolding ||
+                                   currentState == IntakeState.EscortToMugshot ||
+                                   currentState == IntakeState.EscortToScanner ||
+                                   currentState == IntakeState.EscortToStorage ||
+                                   currentState == IntakeState.EscortToCell ||
+                                   currentState == IntakeState.WaitingForMugshot ||
+                                   currentState == IntakeState.WaitingForScan ||
+                                   currentState == IntakeState.WaitingForStorage;
+
+            if (!isInEscortState) return false;
+
+            // Check distance to destination - if we're far away, show escort dialog
+            float distanceToDestination = Vector3.Distance(transform.position, destinationPosition);
+            return distanceToDestination > 3f; // If more than 3 units away, show "Follow me"
         }
 
         private void OnStateEnter(IntakeState state)
@@ -586,6 +720,9 @@ namespace Behind_Bars.Systems.NPCs
                 return;
             }
 
+            // Set destination for dialog distance checking
+            destinationPosition = doorPoint.position;
+
             // Navigate to station
             MoveTo(doorPoint.position);
 
@@ -637,6 +774,9 @@ namespace Behind_Bars.Systems.NPCs
                     return;
                 }
             }
+
+            // Set destination for dialog distance checking
+            destinationPosition = cell.cellDoor.doorPoint.position;
 
             MoveTo(cell.cellDoor.doorPoint.position);
             SendGuardMessage("Follow me to your cell.", 3f);
@@ -1219,7 +1359,14 @@ namespace Behind_Bars.Systems.NPCs
 
         private void SendGuardMessage(string message, float duration)
         {
+            // Use the enhanced message system that supports native dialog
             TrySendNPCMessage(message, duration);
+
+            // Also trigger contextual dialogue if available (for when player interacts with NPC)
+            if (dialogueController != null)
+            {
+                dialogueController.SendContextualMessage("interaction");
+            }
         }
 
 

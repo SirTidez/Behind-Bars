@@ -396,8 +396,19 @@ namespace Behind_Bars.Systems.NPCs
             {
                 if (npcComponent != null)
                 {
-                    // Use the game's NPC messaging system if available
-                    return true;
+                    // Cast to appropriate NPC type based on build configuration
+#if !MONO
+                    var npc = npcComponent as Il2CppScheduleOne.NPCs.NPC;
+#else
+                    var npc = npcComponent as ScheduleOne.NPCs.NPC;
+#endif
+                    if (npc != null)
+                    {
+                        // Use the game's native world space dialogue system
+                        npc.SendWorldSpaceDialogue(message, duration);
+                        ModLogger.Debug($"NPC {gameObject.name} sent message: {message}");
+                        return true;
+                    }
                 }
             }
             catch (System.Exception ex)

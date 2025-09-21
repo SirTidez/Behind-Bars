@@ -42,7 +42,6 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     public bool showDebugInfo = false;
     public float cameraDownwardAngle = 15f;
 
-    [Header("Key Bindings")]
     public KeyCode emergencyLockdownKey = KeyCode.L;
     public KeyCode unlockAllKey = KeyCode.U;
     public KeyCode openAllCellsKey = KeyCode.O;

@@ -139,7 +139,11 @@ namespace Behind_Bars.Systems.NPCs
                 // 5. Add Schedule One's health system (with proper component detection)
                 AddHealthSystem(npcObject, npcComponent);
 
-                // 6. Add basic interaction system only (skip complex networked components for now)
+                // 6. Add messaging and dialogue systems
+                AddMessagingSystem(npcObject, npcComponent);
+                AddDialogueSystem(npcObject, npcComponent, npcType);
+
+                // 7. Add basic interaction system only (skip complex networked components for now)
                 AddBasicInteractionSystem(npcObject, npcComponent);
 
                 // 10. Add jail-specific behavior LAST
@@ -597,6 +601,108 @@ namespace Behind_Bars.Systems.NPCs
             catch (Exception e)
             {
                 ModLogger.Error($"Error adding messaging system: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Adds DialogueHandler and DialogueController components for custom NPC conversations
+        /// </summary>
+        private static void AddDialogueSystem(GameObject npc, object npcComponent, NPCType npcType)
+        {
+            try
+            {
+#if !MONO
+                var npc_casted = npcComponent as Il2CppScheduleOne.NPCs.NPC;
+#else
+                var npc_casted = npcComponent as ScheduleOne.NPCs.NPC;
+#endif
+
+                if (npc_casted != null)
+                {
+                    // Add DialogueHandler component
+#if !MONO
+                    var dialogueHandler = npc.AddComponent<Il2CppScheduleOne.Dialogue.DialogueHandler>();
+#else
+                    var dialogueHandler = npc.AddComponent<ScheduleOne.Dialogue.DialogueHandler>();
+#endif
+
+                    // Add DialogueController component
+#if !MONO
+                    var dialogueController = npc.AddComponent<Il2CppScheduleOne.Dialogue.DialogueController>();
+#else
+                    var dialogueController = npc.AddComponent<ScheduleOne.Dialogue.DialogueController>();
+#endif
+
+                    // Configure basic dialogue settings
+                    dialogueController.DialogueEnabled = true;
+                    dialogueController.UseDialogueBehaviour = true;
+
+                    // Add our custom JailNPCDialogueController for enhanced functionality
+                    var jailDialogueController = npc.AddComponent<JailNPCDialogueController>();
+
+                    // Set up default greetings based on NPC type
+                    SetupNPCDialogueByType(jailDialogueController, npcType);
+
+                    ModLogger.Debug($"✓ Dialogue system added for {npcType} NPC");
+                }
+                else
+                {
+                    ModLogger.Error("Could not cast NPC component for dialogue system setup");
+                }
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error adding dialogue system: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Configure dialogue based on NPC type
+        /// </summary>
+        private static void SetupNPCDialogueByType(JailNPCDialogueController dialogueController, NPCType npcType)
+        {
+            try
+            {
+                switch (npcType)
+                {
+                    case NPCType.JailGuard:
+                        dialogueController.AddStateDialogue("Idle", "Everything's secure here.",
+                            new[] { "Move along.", "Keep it quiet.", "No trouble here." });
+                        dialogueController.AddStateDialogue("Patrolling", "I'm on patrol.",
+                            new[] { "Stay out of restricted areas.", "Keep moving.", "No loitering." });
+                        dialogueController.AddStateDialogue("Alert", "Something's not right.",
+                            new[] { "Stop right there!", "What are you doing?", "Explain yourself!" });
+                        dialogueController.AddStateDialogue("Processing", "Time to process you.",
+                            new[] { "Follow me to your cell.", "This way.", "Stay close." });
+                        dialogueController.AddStateDialogue("Escorting", "Follow me.",
+                            new[] { "Keep moving.", "Stay close.", "This way." });
+                        break;
+
+                    case NPCType.GenericJailStaff:
+                        dialogueController.AddStateDialogue("Idle", "I'm here to process inmates.",
+                            new[] { "What do you need?", "State your business.", "I'm busy with paperwork." });
+                        dialogueController.AddStateDialogue("Processing", "Time to process you.",
+                            new[] { "Follow me to your cell.", "This way.", "Stay close." });
+                        dialogueController.AddStateDialogue("Escorting", "Follow me.",
+                            new[] { "Keep moving.", "Stay close.", "This way." });
+                        break;
+
+                    case NPCType.TestNPC:
+                        dialogueController.AddStateDialogue("Idle", "Hello there.",
+                            new[] { "Nice weather today.", "How are you?", "Good to see you." });
+                        break;
+
+                    default:
+                        dialogueController.AddStateDialogue("Idle", "Hello.",
+                            new[] { "Hi there.", "Good day.", "What do you need?" });
+                        break;
+                }
+
+                ModLogger.Debug($"✓ Dialogue configured for {npcType} NPC");
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error setting up dialogue for {npcType}: {e.Message}");
             }
         }
 

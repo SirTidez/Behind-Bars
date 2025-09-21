@@ -412,7 +412,7 @@ namespace Behind_Bars.Systems.NPCs
             // Send message to inmate
             if (npcController != null)
             {
-                npcController.TrySendNPCMessage("Follow me through the door.", 3f);
+                npcController.TrySendNPCMessage("Go through the door.", 3f);
             }
 
             while (Time.time - waitStartTime < maxWaitTime)
@@ -435,7 +435,7 @@ namespace Behind_Bars.Systems.NPCs
                 {
                     if (npcController != null)
                     {
-                        npcController.TrySendNPCMessage("Please come through the door.", 2f);
+                        npcController.TrySendNPCMessage("Go through the door.", 2f);
                     }
                 }
 
