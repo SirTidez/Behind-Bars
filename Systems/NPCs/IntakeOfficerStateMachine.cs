@@ -93,6 +93,13 @@ namespace Behind_Bars.Systems.NPCs
         private bool isEscorting = false;
         private Vector3 destinationPosition;
 
+        // Continuous rotation system
+        private object continuousLookingCoroutine;
+
+        // Destination tracking to prevent duplicate events
+        private Dictionary<string, bool> stationDestinationProcessed = new Dictionary<string, bool>();
+        private float lastDoorOperationTime = 0f;
+
         #endregion
 
         #region Events
@@ -513,9 +520,11 @@ namespace Behind_Bars.Systems.NPCs
             if (guardPostTransform != null)
             {
                 float distanceToPost = Vector3.Distance(transform.position, guardPostTransform.position);
-                if (distanceToPost > 2f)
+                if (distanceToPost > 2f && navAgent != null && (!navAgent.hasPath || navAgent.remainingDistance < 0.5f))
                 {
+                    // Only move to guard post if not already moving there
                     MoveTo(guardPostTransform.position);
+                    ModLogger.Debug($"IntakeOfficer: Moving to guard post from distance {distanceToPost:F2}m");
                 }
             }
         }
@@ -683,7 +692,6 @@ namespace Behind_Bars.Systems.NPCs
                 // Check if we've reached destination manually (Unity precision issues)
                 if (distance < 2.0f || (navAgent != null && !navAgent.pathPending && navAgent.remainingDistance < 2.0f))
                 {
-                    ModLogger.Info($"IntakeOfficer: Reached destination during {currentState} (distance: {distance:F2}m)");
                     OnDestinationReached?.Invoke(currentDestination);
                     return;
                 }
@@ -691,7 +699,6 @@ namespace Behind_Bars.Systems.NPCs
                 // Check if we're stuck
                 if (Time.time - stateStartTime > 30f) // 30 second timeout
                 {
-                    ModLogger.Warn($"IntakeOfficer: {currentState} timeout after 30s - forcing destination reached");
                     OnDestinationReached?.Invoke(currentDestination);
                 }
             }
@@ -754,25 +761,9 @@ namespace Behind_Bars.Systems.NPCs
             var cell = jailController.GetCellByIndex(assignedCellNumber);
             if (cell?.cellDoor?.doorPoint == null)
             {
-                ModLogger.Error($"Cell {assignedCellNumber} door point not available - checking if door needs to be unlocked");
-
-                // Try to unlock and open the cell door first
-                bool doorOpened = jailController.doorController?.OpenJailCellDoor(assignedCellNumber) ?? false;
-                if (!doorOpened)
-                {
-                    ModLogger.Error($"Failed to open jail cell {assignedCellNumber} door");
-                    ChangeIntakeState(IntakeState.ReturningToPost);
-                    return;
-                }
-
-                // Retry getting the door point after opening
-                cell = jailController.GetCellByIndex(assignedCellNumber);
-                if (cell?.cellDoor?.doorPoint == null)
-                {
-                    ModLogger.Error($"Cell {assignedCellNumber} door point still not available after opening door");
-                    ChangeIntakeState(IntakeState.ReturningToPost);
-                    return;
-                }
+                ModLogger.Error($"Cell {assignedCellNumber} door point not available");
+                ChangeIntakeState(IntakeState.ReturningToPost);
+                return;
             }
 
             // Set destination for dialog distance checking
@@ -782,6 +773,8 @@ namespace Behind_Bars.Systems.NPCs
             SendGuardMessage("Follow me to your cell.", 3f);
 
             ModLogger.Info($"IntakeOfficer: Escorting to cell {assignedCellNumber} via doorPoint at {cell.cellDoor.doorPoint.position}");
+            ModLogger.Info($"IntakeOfficer: Current position: {transform.position}, Target position: {cell.cellDoor.doorPoint.position}");
+            ModLogger.Info($"IntakeOfficer: Distance to cell: {Vector3.Distance(transform.position, cell.cellDoor.doorPoint.position):F2}m");
         }
 
         private void ReturnToGuardPost()
@@ -898,6 +891,9 @@ namespace Behind_Bars.Systems.NPCs
             // SecurityDoor has completed its operation - clear the active flag
             isSecurityDoorActive = false;
 
+            // Record the time of door operation completion to prevent premature destination events
+            lastDoorOperationTime = Time.time;
+
             // IMPORTANT: Give guard time to move away from door before resuming navigation
             // SecurityDoor finishes but guard needs to clear the door area first
             ModLogger.Info("IntakeOfficer: Waiting for guard to clear door area before resuming navigation");
@@ -915,10 +911,15 @@ namespace Behind_Bars.Systems.NPCs
                 ModLogger.Info("IntakeOfficer: Resuming navigation to Storage after door clearance delay");
                 NavigateToStation("Storage");
             }
-            else if (currentState == IntakeState.EscortToCell || currentState == IntakeState.OpeningCellDoor)
+            else if (currentState == IntakeState.EscortToCell)
             {
                 ModLogger.Info("IntakeOfficer: Resuming navigation to Cell after door clearance delay");
                 NavigateToAssignedCell();
+            }
+            else if (currentState == IntakeState.OpeningCellDoor)
+            {
+                ModLogger.Info("IntakeOfficer: Already at cell, continuing with door opening");
+                // Don't re-navigate if we're already at the cell and opening the door
             }
 
             ModLogger.Info($"IntakeOfficer: Navigation resumed for state: {currentState}");
@@ -1035,7 +1036,8 @@ namespace Behind_Bars.Systems.NPCs
         {
             // Clear triggered door operations when starting new intake process
             triggeredDoorOperations.Clear();
-            ModLogger.Debug("IntakeOfficer: Door operation tracking reset for new intake process");
+            stationDestinationProcessed.Clear();
+            ModLogger.Debug("IntakeOfficer: Door operation and destination tracking reset for new intake process");
         }
 
         private void HandleDestinationReached(Vector3 destination)
@@ -1046,6 +1048,33 @@ namespace Behind_Bars.Systems.NPCs
                 return; // No logging - SecurityDoor is handling movement
             }
 
+            // IMPORTANT: Ignore all destination events during door clearance delay period
+            // This prevents premature destination triggers when guard is temporarily at wrong location
+            float timeSinceLastDoorOperation = Time.time - lastDoorOperationTime;
+            if (timeSinceLastDoorOperation < 3.0f) // Within 3 seconds of door operation
+            {
+                ModLogger.Debug($"IntakeOfficer: Ignoring destination reached - within door clearance delay period ({timeSinceLastDoorOperation:F1}s ago)");
+                return;
+            }
+
+            // Ignore if we're already in a waiting state (already processed this destination)
+            if (currentState == IntakeState.WaitingForMugshot ||
+                currentState == IntakeState.WaitingForScan ||
+                currentState == IntakeState.WaitingForStorage ||
+                currentState == IntakeState.WaitingForCellEntry ||
+                currentState == IntakeState.WaitingForPlayerExit)
+            {
+                ModLogger.Debug($"IntakeOfficer: Ignoring destination reached - already in waiting state {currentState}");
+                return;
+            }
+
+            // Also ignore if we're not at the correct target for our current state
+            if (!IsAtCorrectDestinationForState(destination))
+            {
+                ModLogger.Debug($"IntakeOfficer: Ignoring destination reached at {destination} - not the correct target for state {currentState}");
+                return;
+            }
+
             ModLogger.Info($"IntakeOfficer: *** DESTINATION REACHED EVENT FIRED *** at {destination} during state {currentState}");
 
             // Handle state transitions based on current state
@@ -1053,26 +1082,56 @@ namespace Behind_Bars.Systems.NPCs
             {
                 case IntakeState.EscortToHolding:
                     ModLogger.Info("IntakeOfficer: Transitioning from EscortToHolding to OpeningHoldingDoor");
+                    // Rotate to face the holding cell door
+                    RotateToFaceStationTarget("HoldingCell");
                     ChangeIntakeState(IntakeState.OpeningHoldingDoor);
                     break;
 
                 case IntakeState.EscortToMugshot:
+                    // Rotate to face the mugshot station
+                    RotateToFaceStationTarget("MugshotStation");
                     ChangeIntakeState(IntakeState.WaitingForMugshot);
                     break;
 
                 case IntakeState.EscortToScanner:
+                    // Rotate to face the scanner station
+                    RotateToFaceStationTarget("ScannerStation");
                     ChangeIntakeState(IntakeState.WaitingForScan);
                     break;
 
                 case IntakeState.EscortToStorage:
+                    // Rotate to face the storage station and send arrival message
+                    RotateToFaceStationTarget("Storage");
+                    SendGuardMessage("Pick up your prison gear.", 3f);
                     ChangeIntakeState(IntakeState.WaitingForStorage);
                     break;
 
                 case IntakeState.EscortToCell:
+                    ModLogger.Info($"IntakeOfficer: Destination reached for EscortToCell at {destination}");
+                    ModLogger.Info($"IntakeOfficer: Current position: {transform.position}");
+                    ModLogger.Info($"IntakeOfficer: Target cell door position should be: {(Core.JailController?.GetCellByIndex(assignedCellNumber)?.cellDoor?.doorPoint?.position.ToString() ?? "UNKNOWN")}");
+
+                    // Check if we're actually at the cell door
+                    var targetCell = Core.JailController?.GetCellByIndex(assignedCellNumber);
+                    if (targetCell?.cellDoor?.doorPoint != null)
+                    {
+                        float distanceToActualCell = Vector3.Distance(transform.position, targetCell.cellDoor.doorPoint.position);
+                        ModLogger.Info($"IntakeOfficer: Distance to actual cell door: {distanceToActualCell:F2}m");
+
+                        if (distanceToActualCell > 5.0f)
+                        {
+                            ModLogger.Warn($"IntakeOfficer: Guard stopped too far from cell door! Re-navigating to cell...");
+                            NavigateToAssignedCell(); // Try again
+                            return;
+                        }
+                    }
+
                     ChangeIntakeState(IntakeState.OpeningCellDoor);
                     break;
 
                 case IntakeState.ReturningToPost:
+                    // Start continuous rotation when back at post
+                    StartContinuousPlayerLooking();
                     ChangeIntakeState(IntakeState.Idle);
                     break;
 
@@ -1080,6 +1139,75 @@ namespace Behind_Bars.Systems.NPCs
                     ModLogger.Warn($"IntakeOfficer: HandleDestinationReached called during unexpected state: {currentState}");
                     break;
             }
+        }
+
+        private bool IsAtCorrectDestinationForState(Vector3 destination)
+        {
+            var jailController = Core.JailController;
+            if (jailController == null) return true; // Allow if no controller
+
+            float tolerance = 1.5f; // Tighter tolerance to prevent early rotation
+
+            // Get station name for current state
+            string stationName = GetStationNameForState(currentState);
+            if (!string.IsNullOrEmpty(stationName))
+            {
+                // Check if we've already processed this station destination
+                if (stationDestinationProcessed.ContainsKey(stationName) && stationDestinationProcessed[stationName])
+                {
+                    ModLogger.Debug($"IntakeOfficer: Already processed destination for {stationName} - ignoring duplicate");
+                    return false;
+                }
+
+                // Check if we're actually at the correct location
+                bool isAtCorrectLocation = IsNearDoorPoint(stationName, destination, tolerance);
+                if (isAtCorrectLocation)
+                {
+                    // Mark this station as processed
+                    stationDestinationProcessed[stationName] = true;
+                    ModLogger.Debug($"IntakeOfficer: Marking {stationName} destination as processed");
+                }
+                return isAtCorrectLocation;
+            }
+
+            // Handle cell state separately
+            if (currentState == IntakeState.EscortToCell)
+            {
+                if (assignedCellNumber >= 0)
+                {
+                    var cell = jailController.GetCellByIndex(assignedCellNumber);
+                    if (cell?.cellDoor?.doorPoint != null)
+                    {
+                        float distance = Vector3.Distance(destination, cell.cellDoor.doorPoint.position);
+                        return distance <= tolerance;
+                    }
+                }
+                return false;
+            }
+
+            return true; // Allow for other states
+        }
+
+        private string GetStationNameForState(IntakeState state)
+        {
+            switch (state)
+            {
+                case IntakeState.EscortToHolding: return "HoldingCell";
+                case IntakeState.EscortToMugshot: return "MugshotStation";
+                case IntakeState.EscortToScanner: return "ScannerStation";
+                case IntakeState.EscortToStorage: return "Storage";
+                default: return null;
+            }
+        }
+
+        private bool IsNearDoorPoint(string stationName, Vector3 destination, float tolerance)
+        {
+            var doorPoint = FindDoorPoint(stationName);
+            if (doorPoint == null) return true; // Allow if door point not found
+
+            float distance = Vector3.Distance(destination, doorPoint.position);
+            ModLogger.Debug($"IntakeOfficer: Checking distance to {stationName}: {distance:F2}m (tolerance: {tolerance:F2}m)");
+            return distance <= tolerance;
         }
 
         // Override base class movement handling to prevent NPCState.Idle interference
@@ -1163,6 +1291,10 @@ namespace Behind_Bars.Systems.NPCs
             if (currentState == IntakeState.WaitingForStorage)
             {
                 ModLogger.Info("IntakeOfficer: Inventory processing completed, proceeding to cell");
+                // Assign cell before escorting
+                AssignPrisonerCell();
+                // Actually transition to escorting to cell
+                ChangeIntakeState(IntakeState.EscortToCell);
             }
         }
 
@@ -1341,6 +1473,10 @@ namespace Behind_Bars.Systems.NPCs
             var jailController = Core.JailController;
             if (jailController?.doorController != null)
             {
+                // Start continuous rotation while at the cell
+                StartContinuousPlayerLooking();
+                ModLogger.Info($"IntakeOfficer: Started continuous player looking before opening cell {assignedCellNumber} door");
+
                 bool doorOpened = jailController.doorController.OpenJailCellDoor(assignedCellNumber);
                 if (doorOpened)
                 {
@@ -1416,6 +1552,203 @@ namespace Behind_Bars.Systems.NPCs
         {
             ModLogger.Info("IntakeOfficer: Emergency stop of intake process");
             ChangeIntakeState(IntakeState.ReturningToPost);
+        }
+
+        /// <summary>
+        /// Override base attack handling to interrupt intake process
+        /// </summary>
+        public override void OnAttackedByPlayer(Player attacker)
+        {
+            base.OnAttackedByPlayer(attacker);
+
+            if (attacker == null) return;
+
+            ModLogger.Warn($"IntakeOfficer: Attacked by {attacker.name} during {currentState}");
+
+            // Check if the attacker is our current prisoner
+            if (currentPrisoner != null && currentPrisoner == attacker)
+            {
+                // Prisoner attacked during intake - serious violation
+                TrySendNPCMessage("You just attacked a correctional officer! This is a serious offense!", 4f);
+
+                // Stop the intake process immediately
+                StopIntakeProcess();
+
+                // The GuardBehavior will handle the arrest
+                ModLogger.Error($"IntakeOfficer: Prisoner {attacker.name} attacked during intake process");
+            }
+            else if (attacker != currentPrisoner)
+            {
+                // Someone else attacked during intake
+                TrySendNPCMessage("Security breach! Intake process suspended!", 3f);
+                StopIntakeProcess();
+
+                ModLogger.Error($"IntakeOfficer: Attacked by non-prisoner {attacker.name} during intake");
+            }
+        }
+
+        #endregion
+
+        #region Utility Methods
+
+
+        private void StartContinuousPlayerLooking()
+        {
+            // Stop any existing continuous looking
+            StopContinuousPlayerLooking();
+
+            // Start new continuous looking coroutine
+            continuousLookingCoroutine = MelonCoroutines.Start(ContinuousPlayerLookingCoroutine());
+            ModLogger.Debug("IntakeOfficer: Started continuous player looking");
+        }
+
+        private void StopContinuousPlayerLooking()
+        {
+            if (continuousLookingCoroutine != null)
+            {
+                MelonCoroutines.Stop(continuousLookingCoroutine);
+                continuousLookingCoroutine = null;
+
+                // Re-enable NavMeshAgent rotation when stopping
+                if (navAgent != null && navAgent.enabled)
+                {
+                    navAgent.updateRotation = true;
+                }
+
+                ModLogger.Debug("IntakeOfficer: Stopped continuous player looking");
+            }
+        }
+
+        private System.Collections.IEnumerator ContinuousPlayerLookingCoroutine()
+        {
+            while (true)
+            {
+                // Apply rotation immediately, then wait
+                ApplyInstantPlayerRotation();
+
+                // Wait 2 seconds before reapplying
+                yield return new WaitForSeconds(2f);
+            }
+        }
+
+        private void ApplyInstantPlayerRotation()
+        {
+            try
+            {
+                // Get the current player from the booking process
+                var jailController = Core.JailController;
+                var currentPlayer = jailController?.BookingProcessController?.GetCurrentPlayer();
+                if (currentPlayer == null)
+                {
+                    return; // Silently skip if no player
+                }
+
+                Vector3 playerPosition = currentPlayer.transform.position;
+                Vector3 currentPos = transform.position;
+
+                // Calculate the look direction
+                Vector3 lookDirection = (playerPosition - currentPos).normalized;
+                lookDirection.y = 0; // Keep on horizontal plane
+
+                if (lookDirection != Vector3.zero)
+                {
+                    Quaternion targetRotation = Quaternion.LookRotation(lookDirection);
+
+                    // Start smooth rotation coroutine instead of instant
+                    MelonCoroutines.Start(SmoothRotateToTarget(targetRotation, 0.3f));
+
+                    ModLogger.Debug($"IntakeOfficer: Started smooth rotation to face player at {playerPosition}");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"IntakeOfficer: Error in continuous rotation: {ex.Message}");
+            }
+        }
+
+        private System.Collections.IEnumerator SmoothRotateToTarget(Quaternion targetRotation, float duration)
+        {
+            Quaternion startRotation = transform.rotation;
+            float elapsed = 0f;
+
+            // Disable NavMeshAgent rotation during smooth rotation
+            if (navAgent != null && navAgent.enabled)
+            {
+                navAgent.updateRotation = false;
+            }
+
+            while (elapsed < duration)
+            {
+                elapsed += Time.deltaTime;
+                float t = elapsed / duration;
+
+                // Smooth lerp with easing
+                t = Mathf.SmoothStep(0f, 1f, t);
+
+                Quaternion currentRotation = Quaternion.Lerp(startRotation, targetRotation, t);
+                transform.rotation = currentRotation;
+
+                if (navAgent != null && navAgent.enabled)
+                {
+                    navAgent.transform.rotation = currentRotation;
+                }
+
+                yield return null;
+            }
+
+            // Ensure final rotation is exact
+            transform.rotation = targetRotation;
+            if (navAgent != null && navAgent.enabled)
+            {
+                navAgent.transform.rotation = targetRotation;
+            }
+        }
+
+        /// <summary>
+        /// Override MoveTo to add debug logging
+        /// </summary>
+        /// <param name="destination">Target position</param>
+        /// <param name="tolerance">Distance tolerance</param>
+        /// <returns>True if navigation started successfully</returns>
+        public override bool MoveTo(Vector3 destination, float tolerance = -1f)
+        {
+            // Stop continuous looking when starting to move
+            StopContinuousPlayerLooking();
+
+            // Call base MoveTo with original destination
+            bool success = base.MoveTo(destination, tolerance);
+
+            if (success)
+            {
+                ModLogger.Debug($"IntakeOfficer: Navigation started to {destination}, stopped continuous looking");
+            }
+
+            return success;
+        }
+
+        /// <summary>
+        /// Rotates to face the guard point for a specific station using JailController direct references
+        /// </summary>
+        /// <param name="stationName">Name of the station to face</param>
+        private void RotateToFaceStationTarget(string stationName)
+        {
+            try
+            {
+                var jailController = Core.JailController;
+                if (jailController == null)
+                {
+                    ModLogger.Warn($"IntakeOfficer: No jail controller available for rotation to {stationName}");
+                    return;
+                }
+
+                // Start continuous rotation while at the station
+                StartContinuousPlayerLooking();
+                ModLogger.Info($"IntakeOfficer: Started continuous player looking at {stationName} station");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"IntakeOfficer: Error rotating to face station {stationName}: {ex.Message}");
+            }
         }
 
         #endregion

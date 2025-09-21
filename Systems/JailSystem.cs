@@ -3,6 +3,7 @@ using Behind_Bars.Helpers;
 using Behind_Bars.UI;
 using Behind_Bars.Harmony;
 using Behind_Bars.Systems.CrimeDetection;
+using Behind_Bars.Systems.Jail;
 using UnityEngine;
 using MelonLoader;
 
@@ -379,6 +380,40 @@ namespace Behind_Bars.Systems
 
 
         private Dictionary<string, Vector3> _lastKnownPlayerPosition = new();
+        private InventoryPickupStation _inventoryPickupStation;
+
+        /// <summary>
+        /// Initialize the JailSystem and find required components
+        /// </summary>
+        public void Initialize()
+        {
+            ModLogger.Info("Initializing JailSystem components");
+
+            // Find the inventory pickup station
+            _inventoryPickupStation = UnityEngine.Object.FindObjectOfType<InventoryPickupStation>();
+            if (_inventoryPickupStation != null)
+            {
+                ModLogger.Info("Found InventoryPickupStation reference");
+            }
+            else
+            {
+                ModLogger.Warn("InventoryPickupStation not found - will create one if needed");
+            }
+        }
+
+        /// <summary>
+        /// Get the stored exit position for a player
+        /// </summary>
+        public Vector3? GetPlayerExitPosition(string playerName)
+        {
+            if (_lastKnownPlayerPosition.ContainsKey(playerName))
+            {
+                var position = _lastKnownPlayerPosition[playerName];
+                _lastKnownPlayerPosition.Remove(playerName); // Remove after use
+                return position;
+            }
+            return null;
+        }
 
         /// <summary>
         /// Set player state for jail (enable/disable controls properly)
@@ -794,12 +829,13 @@ namespace Behind_Bars.Systems
         {
             ModLogger.Info($"Releasing player {player.name} from jail");
 
-            // Teleport player to jail exit location (outside the jail)
-            if (_lastKnownPlayerPosition.ContainsKey(player.name))
-            {
-                player.transform.position = _lastKnownPlayerPosition[player.name];
-                _lastKnownPlayerPosition.Remove(player.name);
-            }
+            // DON'T teleport immediately - let player collect belongings first
+            // Keep jail exit position for after pickup
+            // if (_lastKnownPlayerPosition.ContainsKey(player.name))
+            // {
+            //     player.transform.position = _lastKnownPlayerPosition[player.name];
+            //     _lastKnownPlayerPosition.Remove(player.name);
+            // }
 
             // Reset arrest state FIRST - this is critical for interaction to work
             player.IsArrested = false;
@@ -892,10 +928,25 @@ namespace Behind_Bars.Systems
                 PlayerSingleton<PlayerMovement>.Instance.enabled = true;
                 ModLogger.Debug("Re-enabled PlayerMovement");
 
-                // Enable inventory access
-                PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
-                PlayerSingleton<PlayerInventory>.Instance.enabled = true;
-                ModLogger.Debug("Re-enabled PlayerInventory");
+                // DON'T unlock inventory immediately - enable pickup station instead
+                // InventoryProcessor.UnlockPlayerInventory(player);
+                // PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
+                // PlayerSingleton<PlayerInventory>.Instance.enabled = true;
+                // ModLogger.Debug("Re-enabled PlayerInventory");
+
+                // Enable the inventory pickup station for item retrieval
+                if (_inventoryPickupStation != null)
+                {
+                    _inventoryPickupStation.EnableForRelease(player);
+                    ModLogger.Info("Enabled InventoryPickupStation for player to collect belongings");
+                }
+                else
+                {
+                    ModLogger.Warn("InventoryPickupStation reference not found - falling back to immediate inventory unlock");
+                    InventoryProcessor.UnlockPlayerInventory(player);
+                    PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
+                    PlayerSingleton<PlayerInventory>.Instance.enabled = true;
+                }
 
                 // Enable camera controls
                 PlayerSingleton<PlayerCamera>.Instance.SetCanLook(true);

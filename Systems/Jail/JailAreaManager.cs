@@ -22,6 +22,7 @@ namespace Behind_Bars.Systems.Jail
         public LaundryArea laundry = new LaundryArea();
         public PhoneArea phoneArea = new PhoneArea();
         public BookingArea booking = new BookingArea();
+        public StorageArea storage = new StorageArea();
         public GuardRoomArea guardRoom = new GuardRoomArea();
         public MainRecArea mainRec = new MainRecArea();
         public ShowerArea showers = new ShowerArea();
@@ -51,6 +52,7 @@ namespace Behind_Bars.Systems.Jail
             InitializeArea(laundry, jailRoot, "Laundry");
             InitializeArea(phoneArea, jailRoot, "Phone");
             InitializeArea(booking, jailRoot, "Booking");
+            InitializeArea(storage, jailRoot, "Storage");
             InitializeArea(guardRoom, jailRoot, "GuardRoom");
             InitializeArea(mainRec, jailRoot, "MainRec");
             InitializeArea(showers, jailRoot, "Showers");
@@ -252,6 +254,7 @@ namespace Behind_Bars.Systems.Jail
         public LaundryArea GetLaundry() => laundry;
         public PhoneArea GetPhoneArea() => phoneArea;
         public BookingArea GetBooking() => booking;
+        public StorageArea GetStorage() => storage;
         public GuardRoomArea GetGuardRoom() => guardRoom;
         public MainRecArea GetMainRec() => mainRec;
         public ShowerArea GetShowers() => showers;

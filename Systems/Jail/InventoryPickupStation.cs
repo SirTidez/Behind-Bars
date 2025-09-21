@@ -199,18 +199,28 @@ namespace Behind_Bars.Systems.Jail
             
             // Clear stored items from player record
             ClearStoredItemsForPlayer(currentPlayer);
-            
+
+            // NOW unlock the player's inventory after retrieving their items
+            InventoryProcessor.UnlockPlayerInventory(player);
+            ModLogger.Info("Player inventory fully unlocked after retrieving belongings");
+
             // Show completion notification
             if (BehindBarsUIManager.Instance != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
-                    $"{storedItems.Count} items returned", 
-                    NotificationType.Progress
-                );
+                string message = storedItems.Count > 0
+                    ? $"{storedItems.Count} items returned - you are free to go!"
+                    : "Pickup complete - you are free to go!";
+                BehindBarsUIManager.Instance.ShowNotification(message, NotificationType.Progress);
             }
-            
+
+            // Wait a moment for the notification
+            yield return new WaitForSeconds(2f);
+
+            // Now teleport player to freedom (jail exit location)
+            TeleportPlayerToFreedom(player);
+
             CompletePickup();
-            ModLogger.Info("Inventory pickup completed successfully");
+            ModLogger.Info("Inventory pickup completed successfully - player is free");
         }
         
         private List<string> GetStoredItemsForPlayer(Behind_Bars.Players.PlayerHandler playerHandler)
@@ -547,7 +557,65 @@ namespace Behind_Bars.Systems.Jail
             
             return false;
         }
-        
+
+        /// <summary>
+        /// Enable the pickup station when a player is being released
+        /// </summary>
+        public void EnableForRelease(Player player)
+        {
+            ModLogger.Info($"Enabling inventory pickup station for {player.name}");
+            gameObject.SetActive(true);
+
+            if (interactableObject != null)
+            {
+                interactableObject.SetMessage("Collect your belongings");
+                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+            }
+
+            if (BehindBarsUIManager.Instance != null)
+            {
+                BehindBarsUIManager.Instance.ShowNotification(
+                    "Visit the storage station to collect your belongings",
+                    NotificationType.Instruction
+                );
+            }
+        }
+
+        /// <summary>
+        /// Teleport the player to freedom (outside jail) after completing pickup
+        /// </summary>
+        private void TeleportPlayerToFreedom(Player player)
+        {
+            try
+            {
+                ModLogger.Info($"Teleporting {player.name} to freedom");
+
+                // Get the jail exit position from JailSystem
+                var core = Behind_Bars.Core.Instance;
+                if (core?.JailSystem != null)
+                {
+                    // Try to get the stored exit position
+                    var exitPosition = core.JailSystem.GetPlayerExitPosition(player.name);
+                    if (exitPosition.HasValue)
+                    {
+                        player.transform.position = exitPosition.Value;
+                        ModLogger.Info($"Teleported {player.name} to stored exit position");
+                        return;
+                    }
+                }
+
+                // Fallback: teleport to a safe location outside the jail
+                // This should be set to a proper exit location in your jail setup
+                Vector3 jailExitPosition = new Vector3(0, 1, 0); // Replace with actual exit coordinates
+                player.transform.position = jailExitPosition;
+                ModLogger.Info($"Teleported {player.name} to default jail exit position");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error teleporting player to freedom: {ex.Message}");
+            }
+        }
+
         void Update()
         {
             // Update interaction state based on whether player has items to retrieve

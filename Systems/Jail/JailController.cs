@@ -37,6 +37,13 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     public JailPatrolManager patrolManager;
     public JailAreaManager areaManager;
 
+    [Header("Guard Points - Direct References")]
+    public Transform mugshotStationGuardPoint;
+    public Transform scannerStationGuardPoint;
+    public Transform storageGuardPoint;
+    public Transform holdingCell00GuardPoint;
+    public Transform holdingCell01GuardPoint;
+
     public List<SecurityCamera> securityCameras = new List<SecurityCamera>();
 
     public bool showDebugInfo = false;
@@ -54,6 +61,7 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     public List<CellDetail> holdingCells => cellManager?.holdingCells ?? new List<CellDetail>();
     public List<Transform> patrolPoints => patrolManager?.GetPatrolPoints() ?? new List<Transform>();
     public BookingArea booking => areaManager?.GetBooking() ?? new BookingArea();
+    public StorageArea storage => areaManager?.GetStorage() ?? new StorageArea();
     public KitchenArea kitchen => areaManager?.GetKitchen() ?? new KitchenArea();
     public LaundryArea laundry => areaManager?.GetLaundry() ?? new LaundryArea();
     public PhoneArea phoneArea => areaManager?.GetPhoneArea() ?? new PhoneArea();
@@ -159,6 +167,9 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         areaManager.Initialize(transform);
         patrolManager.Initialize(transform);
 
+        // Initialize direct guard point references
+        InitializeGuardPointReferences();
+
         // Set prefab references before initializing door controller
         doorController.jailDoorPrefab = jailDoorPrefab;
         doorController.steelDoorPrefab = steelDoorPrefab;
@@ -167,6 +178,50 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         lightingController.Initialize(transform);
 
         ModLogger.Info("✓ All controllers initialized");
+    }
+
+    /// <summary>
+    /// Initialize direct references to all guard points from the documented jail structure
+    /// </summary>
+    void InitializeGuardPointReferences()
+    {
+        // Get direct references to guard points based on JAIL_STRUCTURE_DOCUMENTATION.md
+        mugshotStationGuardPoint = transform.Find("Booking/MugshotStation/GuardPoint");
+        scannerStationGuardPoint = transform.Find("Booking/ScannerStation/GuardPoint");
+        storageGuardPoint = transform.Find("Storage/GuardPoint");
+        holdingCell00GuardPoint = transform.Find("Cells/HoldingCells/HoldingCell_00/HoldingDoorHolder[0]/DoorPoint");
+        holdingCell01GuardPoint = transform.Find("Cells/HoldingCells/HoldingCell_01/HoldingDoorHolder[1]/DoorPoint");
+
+        // Log what we found
+        ModLogger.Info($"✓ Guard point references initialized:");
+        ModLogger.Info($"  MugshotStation GuardPoint: {(mugshotStationGuardPoint != null ? "FOUND" : "MISSING")}");
+        ModLogger.Info($"  ScannerStation GuardPoint: {(scannerStationGuardPoint != null ? "FOUND" : "MISSING")}");
+        ModLogger.Info($"  Storage GuardPoint: {(storageGuardPoint != null ? "FOUND" : "MISSING")}");
+        ModLogger.Info($"  HoldingCell_00 GuardPoint: {(holdingCell00GuardPoint != null ? "FOUND" : "MISSING")}");
+        ModLogger.Info($"  HoldingCell_01 GuardPoint: {(holdingCell01GuardPoint != null ? "FOUND" : "MISSING")}");
+    }
+
+    /// <summary>
+    /// Get guard point for a specific station - NO FINDS, direct references only
+    /// </summary>
+    public Transform GetGuardPoint(string stationName)
+    {
+        switch (stationName)
+        {
+            case "MugshotStation":
+                return mugshotStationGuardPoint;
+            case "ScannerStation":
+                return scannerStationGuardPoint;
+            case "Storage":
+                return storageGuardPoint;
+            case "HoldingCell_00":
+                return holdingCell00GuardPoint;
+            case "HoldingCell_01":
+                return holdingCell01GuardPoint;
+            default:
+                ModLogger.Warn($"Unknown guard point station: {stationName}");
+                return null;
+        }
     }
 
     void SetupSecurityCameras()

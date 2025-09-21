@@ -45,7 +45,7 @@ namespace Behind_Bars.Systems.NPCs
             public float escortWaitTime = 4.0f;         // Reduced wait time for inmate
             public float doorCloseDelay = 0.5f;         // Quick close after passing through
             public float positionTolerance = 0.8f;      // How close to get to door points
-            public float escortCheckDistance = 2.5f;    // Distance to check for inmate following
+            public float escortCheckDistance = 0.8f;    // Distance to check for inmate following
         }
 
         public SecurityTimingConfig timingConfig = new SecurityTimingConfig();
@@ -400,55 +400,70 @@ namespace Behind_Bars.Systems.NPCs
 
 
         /// <summary>
-        /// Wait for escorted inmate to follow through the door
+        /// Wait for escorted inmate to follow through the door - no timeout, only position checks
         /// </summary>
         private IEnumerator WaitForEscortedInmate()
         {
             if (escortedInmate == null) yield break;
 
-            float waitStartTime = Time.time;
-            float maxWaitTime = timingConfig.escortWaitTime;
+            float lastReminderTime = Time.time;
 
-            // Send message to inmate
+            // Send initial message to inmate
             if (npcController != null)
             {
                 npcController.TrySendNPCMessage("Go through the door.", 3f);
             }
 
-            while (Time.time - waitStartTime < maxWaitTime)
+            // Wait indefinitely until prisoner actually goes through the door
+            while (true)
             {
                 // Check if prisoner is close to the exit point (not just close to guard)
                 float distanceToExitPoint = Vector3.Distance(currentTransition.exitPoint.position, escortedInmate.transform.position);
                 float guardDistanceToExit = Vector3.Distance(currentTransition.exitPoint.position, transform.position);
 
-                // Both guard and prisoner should be near the exit point
-                if (distanceToExitPoint <= timingConfig.escortCheckDistance && guardDistanceToExit <= timingConfig.escortCheckDistance)
+                // Also check if player is behind/to the side of the exit point (indicating they've passed through)
+                Vector3 exitToPlayer = escortedInmate.transform.position - currentTransition.exitPoint.position;
+                Vector3 exitDirection = currentTransition.exitPoint.forward; // Direction the exit point faces
+                float exitDotProduct = Vector3.Dot(exitToPlayer.normalized, exitDirection.normalized);
+
+                // If dot product is <= 0, player is behind or to the side of exit point (within 180 degrees)
+                bool playerBehindExit = exitDotProduct <= 0f;
+
+                // ADDITIONAL: Check dot product relative to the actual door transform
+                Vector3 doorToPlayer = escortedInmate.transform.position - currentTransition.door.doorInstance.transform.position;
+                Vector3 doorDirection = currentTransition.door.doorInstance.transform.forward; // Direction the door faces
+                float doorDotProduct = Vector3.Dot(doorToPlayer.normalized, doorDirection.normalized);
+                bool playerBehindDoor = doorDotProduct <= 0f;
+
+                ModLogger.Debug($"SecurityDoor: Distance to exit: {distanceToExitPoint:F2}m");
+                ModLogger.Debug($"SecurityDoor: Exit point - Dot product: {exitDotProduct:F2}, Behind exit: {playerBehindExit}");
+                ModLogger.Debug($"SecurityDoor: Door transform - Dot product: {doorDotProduct:F2}, Behind door: {playerBehindDoor}");
+
+                // Guard should be through first, then prisoner follows closely
+                // Current logic: (distance OR behind exit point)
+                // Alternative: Could use door transform dot product for more accurate detection
+                bool passedThroughCondition = distanceToExitPoint <= 1.0f || playerBehindExit;
+                // TODO: Consider using door transform instead: distanceToExitPoint <= 1.0f || playerBehindDoor
+
+                if (passedThroughCondition)
                 {
-                    ModLogger.Debug($"SecurityDoor: Both guard and prisoner near exit point - closing door soon");
+                    ModLogger.Debug($"SecurityDoor: Prisoner through door - distance: {distanceToExitPoint:F2}m, behind exit: {playerBehindExit}, behind door: {playerBehindDoor}");
                     // Both have passed through, wait a bit more for safety then close
                     yield return new WaitForSeconds(timingConfig.doorCloseDelay);
                     break;
                 }
 
-                // Remind inmate every few seconds
-                if ((Time.time - waitStartTime) % 3f < 0.1f && Time.time - waitStartTime > 3f)
+                // Remind inmate every 5 seconds
+                if (Time.time - lastReminderTime >= 5f)
                 {
                     if (npcController != null)
                     {
                         npcController.TrySendNPCMessage("Go through the door.", 2f);
                     }
+                    lastReminderTime = Time.time;
                 }
 
                 yield return new WaitForSeconds(0.5f);
-            }
-
-            if (Time.time - waitStartTime >= maxWaitTime)
-            {
-                ModLogger.Warn($"SecurityDoorBehavior: Timeout waiting for inmate to follow through door");
-                if (npcController != null)
-                {
-                    npcController.TrySendNPCMessage("Proceeding without inmate.", 2f);
-                }
             }
         }
 

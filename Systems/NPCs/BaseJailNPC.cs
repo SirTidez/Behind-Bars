@@ -47,6 +47,13 @@ namespace Behind_Bars.Systems.NPCs
         protected bool isInitialized = false;
         protected float stateStartTime = 0f;
 
+        // Health and Combat
+#if !MONO
+        protected Il2CppScheduleOne.NPCs.NPCHealth npcHealth;
+#else
+        protected ScheduleOne.NPCs.NPCHealth npcHealth;
+#endif
+
         // Avatar and Animation Support
 #if !MONO
         protected Il2CppScheduleOne.AvatarFramework.Avatar npcAvatar;
@@ -77,6 +84,7 @@ namespace Behind_Bars.Systems.NPCs
         public System.Action<NPCState, NPCState> OnStateChanged;
         public System.Action<Vector3> OnDestinationReached;
         public System.Action OnStuck;
+        public System.Action<Player> OnAttacked;
 
         protected virtual void Awake()
         {
@@ -94,6 +102,7 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             InitializeAvatar();
+            SetupAttackDetection();
             InitializeNPC();
             isInitialized = true;
 
@@ -115,6 +124,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             navAgent = GetComponent<NavMeshAgent>();
             npcComponent = GetComponent<NPC>();
+            npcHealth = GetComponent<NPCHealth>();
             lastPosition = transform.position;
         }
 
@@ -154,6 +164,39 @@ namespace Behind_Bars.Systems.NPCs
             stateHandlers[NPCState.Waiting] = HandleWaitingState;
             stateHandlers[NPCState.Working] = HandleWorkingState;
             stateHandlers[NPCState.Error] = HandleErrorState;
+        }
+
+        protected virtual void SetupAttackDetection()
+        {
+            if (npcHealth != null)
+            {
+                try
+                {
+                    // Create a wrapper component to monitor health changes
+                    var attackMonitor = gameObject.GetComponent<NPCAttackMonitor>();
+                    if (attackMonitor == null)
+                    {
+                        attackMonitor = gameObject.AddComponent<NPCAttackMonitor>();
+                        attackMonitor.Initialize(this);
+                    }
+                    ModLogger.Info($"BaseJailNPC: Attack detection setup for {gameObject.name}");
+                }
+                catch (System.Exception ex)
+                {
+                    ModLogger.Warn($"BaseJailNPC: Could not setup attack detection for {gameObject.name}: {ex.Message}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Called when this NPC takes damage from a player attack
+        /// Override in derived classes for specific responses
+        /// </summary>
+        /// <param name="attacker">The player who attacked this NPC</param>
+        public virtual void OnAttackedByPlayer(Player attacker)
+        {
+            ModLogger.Info($"BaseJailNPC: {gameObject.name} was attacked by {attacker?.name}");
+            OnAttacked?.Invoke(attacker);
         }
 
         protected abstract void InitializeNPC();
@@ -376,6 +419,81 @@ namespace Behind_Bars.Systems.NPCs
         public bool IsIdle() => currentState == NPCState.Idle;
         public bool IsMoving() => currentState == NPCState.Moving;
         public NavMeshAgent GetNavAgent() => navAgent;
+
+        /// <summary>
+        /// Get the AvatarLookController component for proper NPC rotation control
+        /// </summary>
+#if !MONO
+        protected virtual Il2CppScheduleOne.AvatarFramework.Animation.AvatarLookController GetAvatarLookController()
+        {
+            if (npcComponent == null)
+            {
+                ModLogger.Debug($"BaseJailNPC: npcComponent is null for {gameObject.name}");
+                return null;
+            }
+
+            var npc = npcComponent as Il2CppScheduleOne.NPCs.NPC;
+            if (npc == null)
+            {
+                ModLogger.Debug($"BaseJailNPC: Failed to cast npcComponent to NPC for {gameObject.name}");
+                return null;
+            }
+
+            var avatar = npc.Avatar;
+            if (avatar == null)
+            {
+                ModLogger.Debug($"BaseJailNPC: Avatar is null for {gameObject.name}");
+                return null;
+            }
+
+            var lookController = avatar.LookController;
+            if (lookController == null)
+            {
+                ModLogger.Debug($"BaseJailNPC: LookController is null for {gameObject.name}");
+            }
+            else
+            {
+                ModLogger.Debug($"BaseJailNPC: Found AvatarLookController via NPC.Avatar.LookController for {gameObject.name}");
+            }
+
+            return lookController;
+        }
+#else
+        protected virtual ScheduleOne.AvatarFramework.Animation.AvatarLookController GetAvatarLookController()
+        {
+            if (npcComponent == null)
+            {
+                ModLogger.Debug($"BaseJailNPC: npcComponent is null for {gameObject.name}");
+                return null;
+            }
+
+            var npc = npcComponent as ScheduleOne.NPCs.NPC;
+            if (npc == null)
+            {
+                ModLogger.Debug($"BaseJailNPC: Failed to cast npcComponent to NPC for {gameObject.name}");
+                return null;
+            }
+
+            var avatar = npc.Avatar;
+            if (avatar == null)
+            {
+                ModLogger.Debug($"BaseJailNPC: Avatar is null for {gameObject.name}");
+                return null;
+            }
+
+            var lookController = avatar.LookController;
+            if (lookController == null)
+            {
+                ModLogger.Debug($"BaseJailNPC: LookController is null for {gameObject.name}");
+            }
+            else
+            {
+                ModLogger.Debug($"BaseJailNPC: Found AvatarLookController via NPC.Avatar.LookController for {gameObject.name}");
+            }
+
+            return lookController;
+        }
+#endif
 
         public virtual void SetEnabled(bool enabled)
         {

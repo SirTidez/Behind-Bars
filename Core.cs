@@ -94,15 +94,7 @@ namespace Behind_Bars
             ClassInjector.RegisterTypeInIl2Cpp<JailController>();
             ClassInjector.RegisterTypeInIl2Cpp<SecurityCamera>();
             ClassInjector.RegisterTypeInIl2Cpp<MonitorController>();
-
-            // Register NPC Behavior Components
-            ClassInjector.RegisterTypeInIl2Cpp<JailGuardBehavior>();
-            ClassInjector.RegisterTypeInIl2Cpp<JailInmateBehavior>();
-            
-            // Register State Machine Components (skip abstract base class)
-            ClassInjector.RegisterTypeInIl2Cpp<GuardStateMachine>();
-            ClassInjector.RegisterTypeInIl2Cpp<InmateStateMachine>();
-            
+                        
             // Register Prison NPC System Components
             ClassInjector.RegisterTypeInIl2Cpp<PrisonNPCManager>();
             ClassInjector.RegisterTypeInIl2Cpp<PrisonGuard>();
@@ -132,6 +124,7 @@ namespace Behind_Bars
             // Initialize core systems
             HarmonyPatches.Initialize(this);
             _jailSystem = new JailSystem();
+            _jailSystem.Initialize(); // Initialize JailSystem components
             _bailSystem = new BailSystem();
             
             // Initialize crime detection UI

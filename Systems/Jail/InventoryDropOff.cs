@@ -4,6 +4,7 @@ using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.UI;
+using Behind_Bars.Systems.Jail;
 
 
 #if !MONO
@@ -247,7 +248,25 @@ namespace Behind_Bars.Systems.Jail
                     );
                 }
 
-                ModLogger.Info("Jail gear issued successfully");
+                // RE-ENABLE INVENTORY after prison gear is issued
+                InventoryProcessor.UnlockPlayerInventory(player);
+
+                // Mark prison gear pickup as complete in booking process
+                ModLogger.Info("Attempting to find BookingProcess to mark gear pickup complete...");
+                var bookingProcess = FindObjectOfType<BookingProcess>();
+                if (bookingProcess != null)
+                {
+                    ModLogger.Info($"Found BookingProcess! Current state - Mugshot: {bookingProcess.mugshotComplete}, Fingerprint: {bookingProcess.fingerprintComplete}, Prison Gear: {bookingProcess.prisonGearPickupComplete}");
+                    bookingProcess.SetPrisonGearPickupComplete();
+                    ModLogger.Info($"Prison gear pickup marked as complete! New state - Mugshot: {bookingProcess.mugshotComplete}, Fingerprint: {bookingProcess.fingerprintComplete}, Prison Gear: {bookingProcess.prisonGearPickupComplete}");
+                    ModLogger.Info($"IsBookingComplete: {bookingProcess.IsBookingComplete()}");
+                }
+                else
+                {
+                    ModLogger.Error("BookingProcess not found! Cannot mark prison gear pickup as complete");
+                }
+
+                ModLogger.Info("Jail gear issued successfully - player inventory re-enabled");
             }
             catch (System.Exception ex)
             {

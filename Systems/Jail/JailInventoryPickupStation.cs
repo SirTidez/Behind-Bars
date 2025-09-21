@@ -231,6 +231,22 @@ namespace Behind_Bars.Systems.Jail
             }
             
             CompletePickup();
+
+            // Mark prison gear pickup as complete in booking process
+            ModLogger.Info("Attempting to find BookingProcess to mark gear pickup complete...");
+            var bookingProcess = FindObjectOfType<BookingProcess>();
+            if (bookingProcess != null)
+            {
+                ModLogger.Info($"Found BookingProcess! Current state - Mugshot: {bookingProcess.mugshotComplete}, Fingerprint: {bookingProcess.fingerprintComplete}, Prison Gear: {bookingProcess.prisonGearPickupComplete}");
+                bookingProcess.SetPrisonGearPickupComplete();
+                ModLogger.Info($"Prison gear pickup marked as complete! New state - Mugshot: {bookingProcess.mugshotComplete}, Fingerprint: {bookingProcess.fingerprintComplete}, Prison Gear: {bookingProcess.prisonGearPickupComplete}");
+                ModLogger.Info($"IsBookingComplete: {bookingProcess.IsBookingComplete()}");
+            }
+            else
+            {
+                ModLogger.Error("BookingProcess not found! Cannot mark prison gear pickup as complete");
+            }
+
             ModLogger.Info("Prison item pickup completed successfully");
         }
         

@@ -587,6 +587,66 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Override BaseJailNPC attack handling for guard-specific responses
+        /// </summary>
+        public override void OnAttackedByPlayer(Player attacker)
+        {
+            base.OnAttackedByPlayer(attacker);
+
+            if (attacker == null) return;
+
+            ModLogger.Info($"Guard {badgeNumber}: Attacked by player {attacker.name}");
+
+            // Guards have zero tolerance for being attacked
+            HandlePlayerAttack(attacker);
+        }
+
+        private void HandlePlayerAttack(Player attacker)
+        {
+            // Stop current activity
+            StopMovement();
+
+            // Send warning message
+            TrySendNPCMessage("You just assaulted a correctional officer! You're under arrest!", 4f);
+
+            // Initiate arrest procedure
+            try
+            {
+                // Use the jail system to arrest the player
+                var jailSystem = Behind_Bars.Core.Instance?.JailSystem;
+                if (jailSystem != null)
+                {
+                    // Trigger immediate arrest for assault
+                    ModLogger.Info($"Guard {badgeNumber}: Initiating immediate arrest for assault by {attacker.name}");
+
+                    // Use the immediate arrest system
+                    MelonCoroutines.Start(jailSystem.HandleImmediateArrest(attacker));
+
+                    ModLogger.Info($"Guard {badgeNumber}: Player {attacker.name} arrested for assault on officer");
+                }
+                else
+                {
+                    ModLogger.Error($"Guard {badgeNumber}: Could not access jail system for arrest");
+                }
+
+                // If intake officer, interrupt intake process
+                if (role == GuardRole.IntakeOfficer && intakeStateMachine != null)
+                {
+                    intakeStateMachine.StopIntakeProcess();
+                    ModLogger.Info($"Intake Officer {badgeNumber}: Intake process interrupted due to attack");
+                }
+
+                // Return to alert state
+                currentActivity = GuardActivity.RespondingToIncident;
+                guardPatience = 0f; // No patience left
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Guard {badgeNumber}: Error handling player attack: {ex.Message}");
+            }
+        }
+
         #endregion
 
         #region Debug and Visualization

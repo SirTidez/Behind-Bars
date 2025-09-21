@@ -30,7 +30,8 @@ namespace Behind_Bars.Systems.Jail
         
         public bool mugshotComplete = false;
         public bool fingerprintComplete = false;
-        public bool inventoryDropOffComplete = false;
+        public bool inventoryDropOffComplete = false; // Deprecated - kept for compatibility
+        public bool prisonGearPickupComplete = false; // NEW: Required step
         public bool inventoryProcessed = false;
         
         public Texture2D mugshotImage;
@@ -102,7 +103,16 @@ namespace Behind_Bars.Systems.Jail
                 scannerStation = FindObjectOfType<ScannerStation>();
                 
             if (inventoryDropOffStation == null)
+            {
                 inventoryDropOffStation = FindObjectOfType<InventoryDropOffStation>();
+
+                // Disable the InventoryDropOffStation - we're replacing it with prison gear pickup
+                if (inventoryDropOffStation != null)
+                {
+                    inventoryDropOffStation.gameObject.SetActive(false);
+                    ModLogger.Info("InventoryDropOffStation disabled - replaced by prison gear pickup system");
+                }
+            }
                 
             // Find inventory drop-off point
             if (inventoryDropOff == null)
@@ -322,15 +332,44 @@ namespace Behind_Bars.Systems.Jail
 
             CheckBookingCompletion();
         }
-        
+
+        /// <summary>
+        /// Mark prison gear pickup as complete
+        /// </summary>
+        public void SetPrisonGearPickupComplete()
+        {
+            ModLogger.Info("SetPrisonGearPickupComplete() called!");
+            prisonGearPickupComplete = true;
+
+            ModLogger.Info($"Prison gear pickup marked as complete! Booking complete check: {IsBookingComplete()}");
+
+            // Trigger completion event
+            OnInventoryDropOffCompleted?.Invoke(currentPlayer);
+
+            // Show progress notification
+            if (BehindBarsUIManager.Instance != null)
+            {
+                BehindBarsUIManager.Instance.ShowNotification(
+                    "Prison gear issued - booking complete!",
+                    NotificationType.Progress
+                );
+            }
+
+            ModLogger.Info("Calling CheckBookingCompletion()...");
+            CheckBookingCompletion();
+        }
+
         void CheckBookingCompletion()
         {
+            ModLogger.Info($"CheckBookingCompletion() - IsBookingComplete: {IsBookingComplete()}");
             if (IsBookingComplete())
             {
+                ModLogger.Info("Booking is complete! Calling CompleteBooking()");
                 CompleteBooking();
             }
             else
             {
+                ModLogger.Info($"Booking not complete - Mugshot: {mugshotComplete}, Fingerprint: {fingerprintComplete}, Prison Gear: {prisonGearPickupComplete}");
                 UpdateTaskListUI();
             }
         }
@@ -342,11 +381,13 @@ namespace Behind_Bars.Systems.Jail
         {
             if (requireBothStations)
             {
-                return mugshotComplete && fingerprintComplete && inventoryDropOffComplete;
+                // Require mugshot, fingerprint, AND prison gear pickup
+                return mugshotComplete && fingerprintComplete && prisonGearPickupComplete;
             }
             else
             {
-                return (mugshotComplete || fingerprintComplete) && inventoryDropOffComplete;
+                // Require either mugshot or fingerprint, AND prison gear pickup
+                return (mugshotComplete || fingerprintComplete) && prisonGearPickupComplete;
             }
         }
         
@@ -358,6 +399,7 @@ namespace Behind_Bars.Systems.Jail
             mugshotComplete = false;
             fingerprintComplete = false;
             inventoryDropOffComplete = false;
+            prisonGearPickupComplete = false; // Reset the new flag
             inventoryProcessed = false;
             escortRequested = false;
             escortInProgress = false;
@@ -383,11 +425,16 @@ namespace Behind_Bars.Systems.Jail
             string fingerprintStatus = fingerprintComplete ? "✓" : "☐";
             tasks.Add($"{fingerprintStatus} Fingerprint Scan");
             
-            // Add inventory drop-off task (always show if stations are complete)
+            // Add prison gear pickup task (required after other stations)
             if (mugshotComplete && fingerprintComplete)
             {
-                string inventoryStatus = inventoryDropOffComplete ? "✓" : "☐";
-                tasks.Add($"{inventoryStatus} Inventory Drop-off");
+                string gearStatus = prisonGearPickupComplete ? "✓" : "☐";
+                tasks.Add($"{gearStatus} Prison Gear Pickup");
+            }
+            else if (mugshotComplete || fingerprintComplete)
+            {
+                string gearStatus = prisonGearPickupComplete ? "✓" : "☐";
+                tasks.Add($"{gearStatus} Prison Gear Pickup");
             }
             
             // Show task list (would need to implement this in UI manager)
@@ -418,7 +465,8 @@ namespace Behind_Bars.Systems.Jail
         {
             mugshotComplete = true;
             fingerprintComplete = true;
-            inventoryDropOffComplete = true;
+            prisonGearPickupComplete = true; // Set the new required flag
+            // inventoryDropOffComplete = true; // No longer required
             
             if (mugshotImage == null)
             {

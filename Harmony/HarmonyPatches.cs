@@ -1,5 +1,6 @@
 ﻿using Behind_Bars.Helpers;
 using Behind_Bars.Systems.CrimeDetection;
+using Behind_Bars.Systems.Jail;
 using HarmonyLib;
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -84,17 +85,10 @@ namespace Behind_Bars.Harmony
                     ModLogger.Debug("HUD canvas re-enabled");
                 }
                 
-                // Re-enable inventory interactions
-#if !MONO
-                var playerInventory = Il2CppScheduleOne.PlayerScripts.PlayerInventory.Instance;
-#else
-                var playerInventory = ScheduleOne.PlayerScripts.PlayerInventory.Instance;
-#endif
-                if (playerInventory != null)
-                {
-                    playerInventory.SetInventoryEnabled(true);
-                    ModLogger.Debug("Player inventory re-enabled");
-                }
+                // Note: DO NOT re-enable inventory here during jail processing
+                // Individual slots are locked via InventoryProcessor and should remain locked
+                // Inventory will be properly unlocked when player is released from jail
+                ModLogger.Debug("Inventory remains locked during jail time (individual slots locked)");
                 
                 // Re-enable camera look controls
 #if !MONO
@@ -161,9 +155,21 @@ namespace Behind_Bars.Harmony
             if (__instance != Player.Local)
                 return;
                 
-            ModLogger.Info($"[ARREST] Player {__instance.name} arrested - performing contraband search and jail processing");
-            
-            // CONTRABAND DETECTION: Search for drugs/weapons during arrest
+            ModLogger.Info($"[ARREST] Player {__instance.name} arrested - performing inventory processing and jail processing");
+
+            // INVENTORY LOCKING: Lock inventory during jail time
+            try
+            {
+                ModLogger.Info($"[INVENTORY] Locking inventory for arrested player: {__instance.name}");
+                InventoryProcessor.LockPlayerInventory(__instance);
+                ModLogger.Info($"[INVENTORY] Inventory locked - player cannot access items during jail time");
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"[INVENTORY] Error locking inventory: {ex.Message}");
+            }
+
+            // CONTRABAND DETECTION: Additional crime detection for drugs/weapons
             if (_crimeDetectionSystem != null)
             {
                 try
@@ -180,7 +186,7 @@ namespace Behind_Bars.Harmony
             {
                 ModLogger.Error("[CONTRABAND] Crime detection system is null during arrest!");
             }
-            
+
             // Set flag to prevent default teleportation in Player.Free()
             _jailSystemHandlingArrest = true;
             

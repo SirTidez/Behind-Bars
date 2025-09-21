@@ -391,10 +391,28 @@ namespace BehindBars.Areas
         {
             processingStations.Clear();
 
-            // IL2CPP-safe recursive search for processing stations
-            FindTransformsRecursive(root,
-                name => name.Contains("Processing") || name.Contains("Desk"),
-                transform => processingStations.Add(transform));
+            // Find stations using exact names from JAIL_STRUCTURE_DOCUMENTATION.md
+            Transform mugshotStation = root.Find("MugshotStation");
+            if (mugshotStation != null)
+            {
+                processingStations.Add(mugshotStation);
+                Debug.Log($"✓ Found MugshotStation with GuardPoint: {mugshotStation.Find("GuardPoint") != null}");
+            }
+            else
+            {
+                Debug.LogWarning("⚠️ MugshotStation not found in Booking area");
+            }
+
+            Transform scannerStation = root.Find("ScannerStation");
+            if (scannerStation != null)
+            {
+                processingStations.Add(scannerStation);
+                Debug.Log($"✓ Found ScannerStation with GuardPoint: {scannerStation.Find("GuardPoint") != null}");
+            }
+            else
+            {
+                Debug.LogWarning("⚠️ ScannerStation not found in Booking area");
+            }
         }
 
         void FindBookingDoors(Transform root)
@@ -601,6 +619,133 @@ namespace BehindBars.Areas
             {
                 UnlockAllDoors();
                 Debug.Log("🔓 Booking area operational");
+            }
+        }
+
+        /// <summary>
+        /// Get the MugshotStation transform
+        /// </summary>
+        public Transform GetMugshotStation()
+        {
+            foreach (var station in processingStations)
+            {
+                if (station.name == "MugshotStation")
+                    return station;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Get the ScannerStation transform
+        /// </summary>
+        public Transform GetScannerStation()
+        {
+            foreach (var station in processingStations)
+            {
+                if (station.name == "ScannerStation")
+                    return station;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Get the GuardPoint for a specific station
+        /// </summary>
+        public Transform GetStationGuardPoint(string stationName)
+        {
+            Transform station = null;
+
+            switch (stationName)
+            {
+                case "MugshotStation":
+                    station = GetMugshotStation();
+                    break;
+                case "ScannerStation":
+                    station = GetScannerStation();
+                    break;
+                default:
+                    // Try to find by name in processing stations
+                    foreach (var s in processingStations)
+                    {
+                        if (s.name.Contains(stationName))
+                        {
+                            station = s;
+                            break;
+                        }
+                    }
+                    break;
+            }
+
+            return station?.Find("GuardPoint");
+        }
+    }
+
+    [System.Serializable]
+    public class StorageArea : JailAreaBase
+    {
+        public Transform inventoryDropOff;
+        public Transform inventoryPickup;
+        public Transform guardPoint;
+
+        public override void Initialize(Transform root)
+        {
+            areaRoot = root;
+            areaName = "Storage";
+            maxOccupancy = 2; // Limited processing capacity
+            requiresAuthorization = true; // Guards only
+
+            FindAreaBounds(root);
+            FindAreaLights(root);
+            FindStorageComponents(root);
+
+            isInitialized = true;
+            Debug.Log($"✓ Initialized Storage Area - GuardPoint: {guardPoint != null}, DropOff: {inventoryDropOff != null}, Pickup: {inventoryPickup != null}");
+        }
+
+        void FindStorageComponents(Transform root)
+        {
+            // Find the GuardPoint for supervision
+            guardPoint = root.Find("GuardPoint");
+            if (guardPoint == null)
+            {
+                Debug.LogWarning("⚠️ GuardPoint not found in Storage area");
+            }
+
+            // Find inventory stations
+            inventoryDropOff = root.Find("InventoryDropOff");
+            if (inventoryDropOff == null)
+            {
+                Debug.LogWarning("⚠️ InventoryDropOff not found in Storage area");
+            }
+
+            inventoryPickup = root.Find("InventoryPickup");
+            if (inventoryPickup == null)
+            {
+                Debug.LogWarning("⚠️ InventoryPickup not found in Storage area");
+            }
+        }
+
+        /// <summary>
+        /// Get the GuardPoint for Storage supervision
+        /// </summary>
+        public Transform GetGuardPoint()
+        {
+            return guardPoint;
+        }
+
+        public override void SetAccessible(bool accessible)
+        {
+            isAccessible = accessible;
+
+            if (!accessible)
+            {
+                LockAllDoors();
+                Debug.Log("🔒 Storage area secured");
+            }
+            else
+            {
+                UnlockAllDoors();
+                Debug.Log("🔓 Storage area operational");
             }
         }
     }
