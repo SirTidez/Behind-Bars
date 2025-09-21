@@ -428,6 +428,8 @@ namespace Behind_Bars.Systems
                 try
                 {
                     // Enable all controls - player should be able to move around in the cell
+                    PlayerSingleton<PlayerInventory>.Instance.enabled = true;
+                    PlayerSingleton<PlayerInventory>.Instance.enabled = true;
                     PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
                     PlayerSingleton<PlayerCamera>.Instance.SetCanLook(true);
                     PlayerSingleton<PlayerCamera>.Instance.LockMouse();
@@ -452,6 +454,7 @@ namespace Behind_Bars.Systems
                 try
                 {
                     PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+                    PlayerSingleton<PlayerInventory>.Instance.enabled = true;
                     PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
                     PlayerSingleton<PlayerCamera>.Instance.SetCanLook(true);
                     PlayerSingleton<PlayerCamera>.Instance.LockMouse();
@@ -487,6 +490,7 @@ namespace Behind_Bars.Systems
                 // Ensure controls are still enabled
                 try
                 {
+                    PlayerSingleton<PlayerInventory>.Instance.enabled = true;
                     PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
                     PlayerSingleton<PlayerCamera>.Instance.SetCanLook(true);
                     PlayerSingleton<PlayerCamera>.Instance.LockMouse();
@@ -564,6 +568,10 @@ namespace Behind_Bars.Systems
             yield return StartBookingProcess(player, sentence, holdingCell);
 
             ModLogger.Info($"Player {player.name} has completed booking process");
+
+            // Start actual jail time AFTER booking completion
+            ModLogger.Info($"Booking complete - now starting full jail sentence of {sentence.JailTime}s");
+            yield return WaitWithControlMaintenance(sentence.JailTime, player);
 
             // Release from holding cell
             holdingCell.ReleasePlayerFromSpawnPoint(player.name);
@@ -944,6 +952,7 @@ namespace Behind_Bars.Systems
                 {
                     ModLogger.Warn("InventoryPickupStation reference not found - falling back to immediate inventory unlock");
                     InventoryProcessor.UnlockPlayerInventory(player);
+                    PlayerSingleton<PlayerInventory>.Instance.enabled = true;
                     PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
                     PlayerSingleton<PlayerInventory>.Instance.enabled = true;
                 }

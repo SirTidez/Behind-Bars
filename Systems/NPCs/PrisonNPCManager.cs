@@ -76,74 +76,8 @@ namespace Behind_Bars.Systems.NPCs
             // Initialize spawn points from JailController
             InitializeSpawnPoints();
 
-            // TEST: Check for network prefabs before we try our old system
-            TestNetworkPrefabs();
-
             // Start NPC spawning process
             MelonCoroutines.Start(InitializeNPCs());
-        }
-
-        /// <summary>
-        /// Test method to check what NetworkObject prefabs are available
-        /// This will help us determine if there's a usable "BaseNPC" prefab
-        /// </summary>
-        private void TestNetworkPrefabs()
-        {
-            ModLogger.Info("🔍 Testing for available network prefabs...");
-
-            // Wait a frame to ensure FishNet is fully initialized
-            MelonCoroutines.Start(DelayedPrefabTest());
-        }
-
-        private IEnumerator DelayedPrefabTest()
-        {
-            // Wait a few seconds for everything to be initialized
-            yield return new WaitForSeconds(3f);
-
-            // Run the test
-            NetworkPrefabTester.TestFindNetworkPrefabs();
-
-            // Wait a bit more then test spawning the PoliceNPC prefab (ID 39)
-            yield return new WaitForSeconds(2f);
-            TestSpawnPoliceNPC();
-
-            // BaseNPC spawning is now integrated into regular spawn methods
-            ModLogger.Info("BaseNPC spawning integrated into SpawnGuard and SpawnInmate methods");
-        }
-
-        /// <summary>
-        /// Test spawning the BaseNPC prefab we discovered
-        /// </summary>
-        private void TestSpawnPoliceNPC()
-        {
-            ModLogger.Info("🔬 Testing spawn of BaseNPC prefab (ID 182)...");
-            ModLogger.Info("This is the generic NPC template the community member mentioned!");
-
-            if (guardSpawnPoints != null && guardSpawnPoints.Length > 0)
-            {
-                Vector3 testPos = guardSpawnPoints[0].position + Vector3.right * 2f; // Offset so we don't collide
-
-                // Test both old and new methods
-                ModLogger.Info("Testing original NetworkPrefabTester method...");
-                NetworkPrefabTester.TestSpawnPrefab(182, testPos); // BaseNPC is prefab ID 182
-
-                // Test new BaseNPCSpawner method
-                ModLogger.Info("Testing new BaseNPCSpawner method...");
-                Vector3 newTestPos = testPos + Vector3.right * 3f; // Further offset
-                var testNPC = BaseNPCSpawner.TestSpawnBaseNPC(newTestPos);
-                if (testNPC != null)
-                {
-                    ModLogger.Info($"🎉 BaseNPCSpawner test successful! Spawned: {testNPC.name}");
-                }
-                else
-                {
-                    ModLogger.Error("❌ BaseNPCSpawner test failed!");
-                }
-            }
-            else
-            {
-                ModLogger.Error("No guard spawn points available for BaseNPC test!");
-            }
         }
 
         /// <summary>

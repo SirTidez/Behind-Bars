@@ -249,7 +249,10 @@ namespace Behind_Bars.Systems.Jail
                 }
 
                 // RE-ENABLE INVENTORY after prison gear is issued
-                InventoryProcessor.UnlockPlayerInventory(player);
+                PlayerSingleton<PlayerInventory>.Instance.enabled = true;
+                PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
+                PlayerSingleton<PlayerInventory>.Instance.SetEquippingEnabled(true);
+                ModLogger.Info("Prison gear pickup: Re-enabled inventory component, inventory access, and equipping");
 
                 // Mark prison gear pickup as complete in booking process
                 ModLogger.Info("Attempting to find BookingProcess to mark gear pickup complete...");
