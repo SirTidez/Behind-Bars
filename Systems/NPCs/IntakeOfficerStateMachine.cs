@@ -245,59 +245,76 @@ namespace Behind_Bars.Systems.NPCs
 
         private void InitializeDialogueSystem()
         {
-            // Get the dialogue controller that should have been added by DirectNPCBuilder
-            dialogueController = GetComponent<JailNPCDialogueController>();
+            // Use a coroutine to retry getting the dialogue controller
+            MelonLoader.MelonCoroutines.Start(WaitForDialogueController());
+        }
 
-            if (dialogueController != null)
+        private System.Collections.IEnumerator WaitForDialogueController()
+        {
+            int retryCount = 0;
+            const int maxRetries = 10;
+
+            while (retryCount < maxRetries)
             {
-                // Set up intake-specific dialogue states
-                dialogueController.AddStateDialogue("Idle", "I'm here to process inmates.",
-                    new[] { "Waiting for the next intake.", "Everything's running smoothly.", "Ready for processing." });
+                // Try to get the dialogue controller that should have been added by PrisonNPCManager
+                dialogueController = GetComponent<JailNPCDialogueController>();
 
-                dialogueController.AddStateDialogue("Processing", "Time to process you.",
-                    new[] { "Follow me.", "This way.", "Stay close." });
+                if (dialogueController != null)
+                {
+                    // Set up intake-specific dialogue states
+                    dialogueController.AddStateDialogue("Idle", "I'm here to process inmates.",
+                        new[] { "Waiting for the next intake.", "Everything's running smoothly.", "Ready for processing." });
 
-                // Escort states - show "Follow me" during movement
-                dialogueController.AddStateDialogue("EscortToHolding", "Follow me.",
-                    new[] { "This way.", "Keep moving.", "Stay close." });
+                    dialogueController.AddStateDialogue("Processing", "Time to process you.",
+                        new[] { "Follow me.", "This way.", "Stay close." });
 
-                dialogueController.AddStateDialogue("EscortToMugshot", "Follow me.",
-                    new[] { "This way.", "Keep moving.", "Stay close." });
+                    // Escort states - show "Follow me" during movement
+                    dialogueController.AddStateDialogue("EscortToHolding", "Follow me.",
+                        new[] { "This way.", "Keep moving.", "Stay close." });
 
-                dialogueController.AddStateDialogue("EscortToScanner", "Follow me.",
-                    new[] { "This way.", "Keep moving.", "Stay close." });
+                    dialogueController.AddStateDialogue("EscortToMugshot", "Follow me.",
+                        new[] { "This way.", "Keep moving.", "Stay close." });
 
-                dialogueController.AddStateDialogue("EscortToStorage", "Follow me.",
-                    new[] { "This way.", "Keep moving.", "Stay close." });
+                    dialogueController.AddStateDialogue("EscortToScanner", "Follow me.",
+                        new[] { "This way.", "Keep moving.", "Stay close." });
 
-                dialogueController.AddStateDialogue("EscortToCell", "Follow me.",
-                    new[] { "This way.", "Keep moving.", "Stay close." });
+                    dialogueController.AddStateDialogue("EscortToStorage", "Follow me.",
+                        new[] { "This way.", "Keep moving.", "Stay close." });
 
-                // Action states - show specific instructions when at destination
-                dialogueController.AddStateDialogue("AtMugshot", "Go take your mugshot!",
-                    new[] { "Stand in front of the camera.", "Look straight ahead.", "Don't move." });
+                    dialogueController.AddStateDialogue("EscortToCell", "Follow me.",
+                        new[] { "This way.", "Keep moving.", "Stay close." });
 
-                dialogueController.AddStateDialogue("AtScanner", "Place your hand on the scanner.",
-                    new[] { "Scan in.", "Press your palm down.", "Hold still." });
+                    // Action states - show specific instructions when at destination
+                    dialogueController.AddStateDialogue("AtMugshot", "Go take your mugshot!",
+                        new[] { "Stand in front of the camera.", "Look straight ahead.", "Don't move." });
 
-                dialogueController.AddStateDialogue("AtStorage", "Drop your belongings and pick up prison items.",
-                    new[] { "Put your things in the box.", "Take the prison uniform.", "Change quickly." });
+                    dialogueController.AddStateDialogue("AtScanner", "Place your hand on the scanner.",
+                        new[] { "Scan in.", "Press your palm down.", "Hold still." });
 
-                dialogueController.AddStateDialogue("AtCell", "This is your cell.",
-                    new[] { "Get in.", "This is where you'll be staying.", "Inside." });
+                    dialogueController.AddStateDialogue("AtStorage", "Drop your belongings and pick up prison items.",
+                        new[] { "Put your things in the box.", "Take the prison uniform.", "Change quickly." });
 
-                dialogueController.AddStateDialogue("AtHolding", "Go through the door.",
-                    new[] { "Step inside.", "Move in.", "Enter the holding area." });
+                    dialogueController.AddStateDialogue("AtCell", "This is your cell.",
+                        new[] { "Get in.", "This is where you'll be staying.", "Inside." });
 
-                // Start with idle state
-                dialogueController.UpdateGreetingForState("Idle");
+                    dialogueController.AddStateDialogue("AtHolding", "Go through the door.",
+                        new[] { "Step inside.", "Move in.", "Enter the holding area." });
 
-                ModLogger.Info("IntakeOfficer: Dialogue system initialized with custom states");
+                    // Start with idle state
+                    dialogueController.UpdateGreetingForState("Idle");
+
+                    ModLogger.Info("IntakeOfficer: Dialogue system initialized with custom states");
+                    yield break; // Success - exit the coroutine
+                }
+                else
+                {
+                    retryCount++;
+                    ModLogger.Debug($"IntakeOfficer: JailNPCDialogueController not found yet, retry {retryCount}/{maxRetries}");
+                    yield return new UnityEngine.WaitForSeconds(0.1f); // Wait 100ms before retrying
+                }
             }
-            else
-            {
-                ModLogger.Warn("IntakeOfficer: JailNPCDialogueController component not found");
-            }
+
+            ModLogger.Error("IntakeOfficer: Failed to find JailNPCDialogueController component after maximum retries - dialogue system not initialized");
         }
 
         #endregion
@@ -393,6 +410,7 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Info($"IntakeOfficer: {oldState} → {newState}");
 
             // Update dialogue state
+            ModLogger.Debug($"IntakeOfficer: Calling UpdateDialogueForState({newState}) - dialogueController is {(dialogueController != null ? "available" : "null")}");
             UpdateDialogueForState(newState);
 
             // Handle state entry logic
@@ -401,7 +419,11 @@ namespace Behind_Bars.Systems.NPCs
 
         private void UpdateDialogueForState(IntakeState state)
         {
-            if (dialogueController == null) return;
+            if (dialogueController == null)
+            {
+                ModLogger.Debug($"IntakeOfficer: UpdateDialogueForState called but dialogueController is null");
+                return;
+            }
 
             // Check if we're currently escorting and far from destination
             bool showEscortDialog = IsCurrentlyEscorting();
@@ -445,6 +467,7 @@ namespace Behind_Bars.Systems.NPCs
                 };
             }
 
+            ModLogger.Debug($"IntakeOfficer: UpdateDialogueForState - setting dialogue state to '{dialogueState}' for intake state {state}");
             dialogueController.UpdateGreetingForState(dialogueState);
         }
 

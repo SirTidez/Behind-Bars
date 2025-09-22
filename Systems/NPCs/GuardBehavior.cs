@@ -93,6 +93,8 @@ namespace Behind_Bars.Systems.NPCs
         // Runtime state
         private GuardActivity currentActivity = GuardActivity.Idle;
         private SecurityDoorBehavior doorBehavior;
+        private JailNPCAudioController audioController;
+        private JailNPCDialogueController dialogueController;
         private Transform assignedSpawnPoint;
         private int currentPatrolIndex = 0;
         private float lastPatrolTime = 0f;
@@ -183,6 +185,97 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             SetAssignedSpawnPoint();
+            InitializeAudioComponents();
+        }
+
+        /// <summary>
+        /// Initialize audio and dialogue components for voice commands
+        /// </summary>
+        private void InitializeAudioComponents()
+        {
+            try
+            {
+                // Get audio controller (should be added by DirectNPCBuilder)
+                audioController = GetComponent<JailNPCAudioController>();
+                if (audioController == null)
+                {
+                    ModLogger.Warn($"Guard {badgeNumber}: No JailNPCAudioController found");
+                }
+
+                // Get dialogue controller
+                dialogueController = GetComponent<JailNPCDialogueController>();
+                if (dialogueController == null)
+                {
+                    ModLogger.Warn($"Guard {badgeNumber}: No JailNPCDialogueController found");
+                }
+
+                ModLogger.Debug($"Guard {badgeNumber}: Audio components initialized");
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error initializing audio components for guard {badgeNumber}: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Helper method to play guard voice commands during various activities
+        /// </summary>
+        /// <param name="commandType">Type of command to play</param>
+        /// <param name="textMessage">Optional text message to display</param>
+        /// <param name="useRadio">Whether to use radio effect</param>
+        public void PlayGuardVoiceCommand(JailNPCAudioController.GuardCommandType commandType, string textMessage = null, bool useRadio = true)
+        {
+            try
+            {
+                if (dialogueController != null)
+                {
+                    dialogueController.SendGuardCommand(commandType, textMessage, useRadio);
+                }
+                else if (!string.IsNullOrEmpty(textMessage))
+                {
+                    // Fallback to text message only
+                    TrySendNPCMessage(textMessage, 3f);
+                }
+
+                ModLogger.Debug($"Guard {badgeNumber}: Played voice command {commandType}");
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error playing voice command for guard {badgeNumber}: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Play appropriate voice command based on guard activity
+        /// </summary>
+        public void PlayActivityVoiceCommand()
+        {
+            switch (currentActivity)
+            {
+                case GuardActivity.Patrolling:
+                    PlayGuardVoiceCommand(JailNPCAudioController.GuardCommandType.CellCheck, "Cell check in progress.");
+                    break;
+
+                case GuardActivity.ProcessingIntake:
+                    PlayGuardVoiceCommand(JailNPCAudioController.GuardCommandType.Follow, "Follow me for processing.");
+                    break;
+
+                case GuardActivity.EscortingPrisoner:
+                    PlayGuardVoiceCommand(JailNPCAudioController.GuardCommandType.Move, "Keep moving.");
+                    break;
+
+                case GuardActivity.RespondingToIncident:
+                    PlayGuardVoiceCommand(JailNPCAudioController.GuardCommandType.Alert, "Responding to incident.");
+                    break;
+
+                case GuardActivity.MonitoringArea:
+                    PlayGuardVoiceCommand(JailNPCAudioController.GuardCommandType.AllClear, "Area secure.");
+                    break;
+
+                default:
+                    PlayGuardVoiceCommand(JailNPCAudioController.GuardCommandType.Greeting, "Guard on duty.");
+                    break;
+            }
         }
 
         private void SetupGuardRole()
@@ -322,6 +415,14 @@ namespace Behind_Bars.Systems.NPCs
 
             currentActivity = GuardActivity.Patrolling;
             currentPatrolIndex = 0;
+
+            // Play patrol start announcement
+            if (dialogueController != null)
+            {
+                dialogueController.SendGuardCommand(JailNPCAudioController.GuardCommandType.CellCheck,
+                    "Beginning patrol.", true);
+            }
+
             MoveToNextPatrolPoint();
         }
 
@@ -359,6 +460,13 @@ namespace Behind_Bars.Systems.NPCs
             {
                 ModLogger.Warn($"Guard {badgeNumber} is not an intake officer");
                 return;
+            }
+
+            // Play intake command
+            if (dialogueController != null)
+            {
+                dialogueController.SendGuardCommand(JailNPCAudioController.GuardCommandType.Follow,
+                    "Follow me for processing.", true);
             }
 
             // Initialize intake state machine if not already present
@@ -584,6 +692,13 @@ namespace Behind_Bars.Systems.NPCs
                 currentActivity = GuardActivity.RespondingToIncident;
                 MoveTo(location);
                 TrySendNPCMessage("Responding to incident.", 2f);
+
+                // Play alert voice command
+                if (dialogueController != null)
+                {
+                    dialogueController.SendGuardCommand(JailNPCAudioController.GuardCommandType.Alert,
+                        "Responding to incident.", true);
+                }
             }
         }
 
@@ -607,8 +722,15 @@ namespace Behind_Bars.Systems.NPCs
             // Stop current activity
             StopMovement();
 
-            // Send warning message
+            // Send warning message with voice command
             TrySendNPCMessage("You just assaulted a correctional officer! You're under arrest!", 4f);
+
+            // Play arrest command with voice
+            if (dialogueController != null)
+            {
+                dialogueController.SendGuardCommand(JailNPCAudioController.GuardCommandType.Stop,
+                    "You're under arrest!", true);
+            }
 
             // Initiate arrest procedure
             try

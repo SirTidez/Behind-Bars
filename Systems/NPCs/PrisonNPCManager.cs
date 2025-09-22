@@ -323,6 +323,9 @@ namespace Behind_Bars.Systems.NPCs
                 // Add GuardBehavior component
                 var guardBehavior = guardObject.AddComponent<GuardBehavior>();
 
+                // Add audio system components for voice commands
+                AddAudioSystemToGuard(guardObject, npcComponent);
+
                 // Add PrisonGuard wrapper component
                 var prisonGuard = guardObject.AddComponent<PrisonGuard>();
                 prisonGuard.Initialize(badgeNumber, firstName, assignment);
@@ -1603,6 +1606,63 @@ namespace Behind_Bars.Systems.NPCs
             NetworkPrefabTester.TestFindNetworkPrefabs();
         }
 
+        /// <summary>
+        /// Add audio system components to a guard for voice commands
+        /// </summary>
+        private void AddAudioSystemToGuard(GameObject guardObject, object npcComponent)
+        {
+            try
+            {
+                ModLogger.Debug($"Adding audio system to guard: {guardObject.name}");
+
+                // Add AudioSourceController for managing audio playback
+#if !MONO
+                var audioSourceController = guardObject.AddComponent<Il2CppScheduleOne.Audio.AudioSourceController>();
+#else
+                var audioSourceController = guardObject.AddComponent<ScheduleOne.Audio.AudioSourceController>();
+#endif
+
+                if (audioSourceController != null)
+                {
+                    // Configure audio settings
+                    audioSourceController.DefaultVolume = 0.8f;
+                    audioSourceController.RandomizePitch = true;
+                    audioSourceController.MinPitch = 0.9f;
+                    audioSourceController.MaxPitch = 1.1f;
+
+                    // Set audio type for guards
+#if !MONO
+                    audioSourceController.AudioType = Il2CppScheduleOne.Audio.EAudioType.FX;
+#else
+                    audioSourceController.AudioType = ScheduleOne.Audio.EAudioType.FX;
+#endif
+
+                    ModLogger.Debug($"✓ AudioSourceController added to guard {guardObject.name}");
+                }
+
+                // Add JailNPCAudioController for guard voice management
+                var jailAudioController = guardObject.AddComponent<JailNPCAudioController>();
+                ModLogger.Debug($"✓ JailNPCAudioController added to guard {guardObject.name}");
+
+                // Add base DialogueController (required by JailNPCDialogueController)
+#if !MONO
+                var baseDialogueController = guardObject.AddComponent<Il2CppScheduleOne.Dialogue.DialogueController>();
+#else
+                var baseDialogueController = guardObject.AddComponent<ScheduleOne.Dialogue.DialogueController>();
+#endif
+                ModLogger.Debug($"✓ Base DialogueController added to guard {guardObject.name}");
+
+                // Add JailNPCDialogueController for dialogue integration
+                var dialogueController = guardObject.AddComponent<JailNPCDialogueController>();
+                ModLogger.Debug($"✓ JailNPCDialogueController added to guard {guardObject.name}");
+
+                ModLogger.Info($"✓ Audio system configured for guard: {guardObject.name}");
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error adding audio system to guard {guardObject.name}: {e.Message}");
+            }
+        }
 
         #endregion
     }

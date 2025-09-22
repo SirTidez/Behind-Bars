@@ -143,6 +143,9 @@ namespace Behind_Bars.Systems.NPCs
                 AddMessagingSystem(npcObject, npcComponent);
                 AddDialogueSystem(npcObject, npcComponent, npcType);
 
+                // 6.5. Add voice and audio system
+                AddAudioSystem(npcObject, npcComponent, npcType);
+
                 // 7. Add basic interaction system only (skip complex networked components for now)
                 AddBasicInteractionSystem(npcObject, npcComponent);
 
@@ -1884,6 +1887,78 @@ namespace Behind_Bars.Systems.NPCs
             catch (Exception e)
             {
                 ModLogger.Error($"Error initializing animation system for {npc.name}: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Adds voice over and audio system for NPCs to support guard voice commands
+        /// </summary>
+        private static void AddAudioSystem(GameObject npc, object npcComponent, NPCType npcType)
+        {
+            try
+            {
+                // Add AudioSourceController for managing audio playback
+#if !MONO
+                var audioSourceController = npc.AddComponent<Il2CppScheduleOne.Audio.AudioSourceController>();
+#else
+                var audioSourceController = npc.AddComponent<ScheduleOne.Audio.AudioSourceController>();
+#endif
+
+                if (audioSourceController != null)
+                {
+                    // Configure audio settings
+                    audioSourceController.DefaultVolume = 0.8f;
+                    audioSourceController.RandomizePitch = true;
+                    audioSourceController.MinPitch = 0.9f;
+                    audioSourceController.MaxPitch = 1.1f;
+
+                    // Set audio type based on NPC type
+                    if (npcType == NPCType.JailGuard)
+                    {
+#if !MONO
+                        audioSourceController.AudioType = Il2CppScheduleOne.Audio.EAudioType.FX;
+#else
+                        audioSourceController.AudioType = ScheduleOne.Audio.EAudioType.FX;
+#endif
+                    }
+                    else
+                    {
+#if !MONO
+                        audioSourceController.AudioType = Il2CppScheduleOne.Audio.EAudioType.FX;
+#else
+                        audioSourceController.AudioType = ScheduleOne.Audio.EAudioType.FX;
+#endif
+                    }
+
+                    ModLogger.Debug($"✓ AudioSourceController added to {npc.name}");
+                }
+
+                // Add VOEmitter for voice over playback on the head bone (like police do)
+#if !MONO
+                var npc_casted = npcComponent as Il2CppScheduleOne.NPCs.NPC;
+#else
+                var npc_casted = npcComponent as ScheduleOne.NPCs.NPC;
+#endif
+
+                if (npc_casted != null)
+                {
+                    // We'll add the VOEmitter later when the avatar head bone is available
+                    // For now, just mark that this NPC should have voice support
+                    ModLogger.Debug($"✓ NPC {npc.name} marked for voice support - VOEmitter will be added when avatar is ready");
+                }
+
+                // For guards, add our custom JailNPCAudioController
+                if (npcType == NPCType.JailGuard)
+                {
+                    var jailAudioController = npc.AddComponent<JailNPCAudioController>();
+                    ModLogger.Debug($"✓ JailNPCAudioController added to guard {npc.name}");
+                }
+
+                ModLogger.Debug($"✓ Audio system configured for {npcType} NPC: {npc.name}");
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error adding audio system to {npc.name}: {e.Message}");
             }
         }
 
