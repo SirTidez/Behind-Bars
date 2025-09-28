@@ -1,6 +1,7 @@
 using UnityEngine;
 using Behind_Bars.Helpers;
 using Behind_Bars.Utils;
+using Behind_Bars.Systems.Jail;
 using System;
 using System.Collections;
 using System.Linq;
@@ -46,6 +47,7 @@ namespace Behind_Bars.UI
         private float _currentBailAmount = 0f;
         private bool _isUpdating = false;
         private string _crimeText = "";
+        private bool _earlyReleaseTriggered = false; // Track if early release has been triggered for this sentence
         
         // Game time scaling constants
         private const float REAL_SECONDS_PER_GAME_MINUTE = 1f; // 1 real second = 1 game minute in Schedule I
@@ -257,6 +259,10 @@ namespace Behind_Bars.UI
             if (!_isUpdating && _remainingJailTime > 0)
             {
                 _isUpdating = true;
+
+                // Reset early release flag for new sentence
+                ResetEarlyReleaseFlag();
+
                 MelonCoroutines.Start(UpdateLoop());
                 // ModLogger.Debug($"Started dynamic updates: Original sentence {jailTimeSeconds}s ({jailTimeSeconds/60f:F1} real minutes) -> {_remainingJailTime}s game time ({gameHours:F1} game hours), ${_currentBailAmount} bail");
             }
@@ -272,6 +278,17 @@ namespace Behind_Bars.UI
         {
             _isUpdating = false;
             // ModLogger.Debug("Stopped dynamic updates");
+        }
+
+        /// <summary>
+        /// Reset the early release flag for a new sentence
+        /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void ResetEarlyReleaseFlag()
+        {
+            _earlyReleaseTriggered = false;
         }
 
         /// <summary>
@@ -309,10 +326,41 @@ namespace Behind_Bars.UI
                 // Update the UI display every second for smooth countdown
                 UpdateDisplayedValues();
                 
-                // If jail time is up, hide the UI
+                // Optimistic release: Start the release process 15 seconds early to reduce wait time
+                const float EARLY_RELEASE_BUFFER = 15f * GAME_SECONDS_PER_GAME_MINUTE; // 15 game minutes = 900 game seconds
+
+                if (_remainingJailTime <= EARLY_RELEASE_BUFFER && _remainingJailTime > 0 && !_earlyReleaseTriggered)
+                {
+                    ModLogger.Info($"Starting optimistic release with {_remainingJailTime / GAME_SECONDS_PER_GAME_MINUTE:F1} game minutes remaining - timer continues running");
+
+                    // Trigger the enhanced release system early for optimistic processing
+                    var jailSystem = Core.Instance?.JailSystem;
+                    if (jailSystem != null)
+                    {
+                        jailSystem.InitiateEnhancedRelease(Player.Local, ReleaseManager.ReleaseType.TimeServed);
+                        ModLogger.Info("Optimistic enhanced release triggered - guard dispatched early, timer continues");
+                    }
+                    else
+                    {
+                        ModLogger.Error("JailSystem not available - cannot trigger enhanced release");
+                    }
+
+                    _earlyReleaseTriggered = true; // Prevent multiple early releases
+                    // Don't hide UI or stop updates - let timer continue normally
+                }
+
+                // Legacy fallback: If somehow we reach exactly 0 time without early release
                 if (_remainingJailTime <= 0)
                 {
-                    ModLogger.Info("Jail time completed - hiding UI");
+                    ModLogger.Info("Jail time completed - fallback release trigger");
+
+                    var jailSystem = Core.Instance?.JailSystem;
+                    if (jailSystem != null)
+                    {
+                        jailSystem.InitiateEnhancedRelease(Player.Local, ReleaseManager.ReleaseType.TimeServed);
+                        ModLogger.Info("Fallback enhanced release triggered");
+                    }
+
                     Hide();
                     _isUpdating = false;
                     yield break;

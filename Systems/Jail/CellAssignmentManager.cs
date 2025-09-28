@@ -30,8 +30,10 @@ namespace Behind_Bars.Systems.Jail
         private Dictionary<string, int> npcCellAssignments = new Dictionary<string, int>(); // npcId -> cellNumber
 
         // Configuration
-        public int totalCells = 12; // Cells 0-11
-        public int maxOccupantsPerCell = 2; // Most cells have 2 bunks
+        public int totalCells = 36; // Total cells available (0-35)
+        public int maxOccupantsPerCell = 1; // NPCs should have individual cells since there are plenty
+        private const int MAX_PLAYER_CELLS = 12; // Players restricted to cells 0-11
+        private const int MAX_USABLE_CELLS = 36; // NPCs can use all cells 0-35
 
         private void Awake()
         {
@@ -67,18 +69,24 @@ namespace Behind_Bars.Systems.Jail
             }
             else
             {
-                totalCells = jailController.cells.Count;
-                ModLogger.Info($"Found {totalCells} cells in jail structure");
+                int detectedCells = jailController.cells.Count;
+                // Use all available cells up to 36
+                totalCells = Math.Min(detectedCells, MAX_USABLE_CELLS);
+                ModLogger.Info($"Found {detectedCells} cells in jail structure, using {totalCells} (0-{totalCells-1}) total cells");
+                ModLogger.Info($"Players restricted to cells 0-{MAX_PLAYER_CELLS-1}, NPCs can use all cells 0-{totalCells-1}");
             }
 
             // Initialize all cells as empty
             for (int i = 0; i < totalCells; i++)
             {
+                // Player cells (0-11) can have 2 occupants, NPC cells (12+) should be individual
+                int maxOccupants = (i <= 11) ? 2 : 1;
+
                 cellOccupancy[i] = new CellOccupancy
                 {
                     cellNumber = i,
                     occupants = new List<string>(),
-                    maxOccupants = maxOccupantsPerCell,
+                    maxOccupants = maxOccupants,
                     isAvailable = true
                 };
             }
@@ -87,7 +95,7 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Assign a cell to a player
+        /// Assign a cell to a player (restricted to cells 0-11)
         /// </summary>
         public int AssignPlayerToCell(Player player)
         {
@@ -107,11 +115,11 @@ namespace Behind_Bars.Systems.Jail
                 return existingCell;
             }
 
-            // Find available cell
-            int cellNumber = FindAvailableCell();
+            // Find available cell in player range (0-11)
+            int cellNumber = FindAvailablePlayerCell();
             if (cellNumber == -1)
             {
-                ModLogger.Error($"No available cells for player {player.name}");
+                ModLogger.Error($"No available cells for player {player.name} in range 0-11");
                 return -1;
             }
 
@@ -127,7 +135,7 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Assign a cell to an NPC
+        /// Assign a cell to an NPC (can use any available cell)
         /// </summary>
         public int AssignNPCToCell(string npcId, string npcName)
         {
@@ -145,8 +153,8 @@ namespace Behind_Bars.Systems.Jail
                 return existingCell;
             }
 
-            // Find available cell
-            int cellNumber = FindAvailableCell();
+            // Find available cell (NPCs can use any cell)
+            int cellNumber = FindAvailableNPCCell();
             if (cellNumber == -1)
             {
                 ModLogger.Error($"No available cells for NPC {npcName}");
@@ -247,21 +255,75 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Find an available cell
+        /// Find an available cell for players (restricted to cells 0-11)
         /// </summary>
-        private int FindAvailableCell()
+        private int FindAvailablePlayerCell()
         {
-            // Find cell with space
+            var availableCells = new List<int>();
+
+            // Only check cells 0-11 for players
+            for (int i = 0; i < MAX_PLAYER_CELLS; i++)
+            {
+                if (cellOccupancy.ContainsKey(i) && cellOccupancy[i].HasSpace())
+                {
+                    availableCells.Add(i);
+                }
+            }
+
+            if (availableCells.Count == 0)
+            {
+                return -1; // No available player cells
+            }
+
+            // Random selection from available player cells
+            int selectedCell = availableCells[UnityEngine.Random.Range(0, availableCells.Count)];
+            ModLogger.Debug($"Selected player cell {selectedCell} from {availableCells.Count} available player cells (0-11)");
+
+            return selectedCell;
+        }
+
+        /// <summary>
+        /// Find an available cell for NPCs (can use cells 0-35, preferring empty cells)
+        /// </summary>
+        private int FindAvailableNPCCell()
+        {
+            var availableCells = new List<int>();
+            var emptyCells = new List<int>();
+
+            // Check all available cells (0-35)
             for (int i = 0; i < totalCells; i++)
             {
                 if (cellOccupancy.ContainsKey(i) && cellOccupancy[i].HasSpace())
                 {
-                    return i;
+                    availableCells.Add(i);
+
+                    // Track completely empty cells for preference
+                    if (cellOccupancy[i].IsEmpty())
+                    {
+                        emptyCells.Add(i);
+                    }
                 }
             }
 
-            return -1; // No available cells
+            if (availableCells.Count == 0)
+            {
+                return -1; // No available cells
+            }
+
+            // Prefer empty cells first (since we have plenty of cells for few inmates)
+            if (emptyCells.Count > 0)
+            {
+                int selectedCell = emptyCells[UnityEngine.Random.Range(0, emptyCells.Count)];
+                ModLogger.Debug($"Selected empty NPC cell {selectedCell} from {emptyCells.Count} empty cells");
+                return selectedCell;
+            }
+
+            // Fallback to any available cell if no empty ones
+            int fallbackCell = availableCells[UnityEngine.Random.Range(0, availableCells.Count)];
+            ModLogger.Debug($"Selected shared NPC cell {fallbackCell} from {availableCells.Count} available cells");
+            return fallbackCell;
         }
+
 
         /// <summary>
         /// Assign an occupant to a specific cell
@@ -348,17 +410,25 @@ namespace Behind_Bars.Systems.Jail
         public void LogCellAssignments()
         {
             ModLogger.Info("=== CURRENT CELL ASSIGNMENTS ===");
-            
+
             int occupiedCells = cellOccupancy.Values.Count(c => c.occupants.Count > 0);
             int totalOccupants = cellOccupancy.Values.Sum(c => c.occupants.Count);
-            
+
+            // Count assignments by category
+            int playerCellsUsed = cellOccupancy.Where(c => c.Key <= 11 && c.Value.occupants.Count > 0).Count();
+            int npcCellsUsed = cellOccupancy.Where(c => c.Key > 11 && c.Value.occupants.Count > 0).Count();
+            int floorLevelCellsUsed = cellOccupancy.Where(c => c.Key >= 18 && c.Value.occupants.Count > 0).Count();
+
             ModLogger.Info($"Occupied cells: {occupiedCells}/{totalCells}, Total occupants: {totalOccupants}");
-            
+            ModLogger.Info($"Player cells (0-11) used: {playerCellsUsed}, NPC cells (12+) used: {npcCellsUsed}");
+            ModLogger.Info($"Floor-level cells (18+) used: {floorLevelCellsUsed}");
+
             foreach (var kvp in cellOccupancy.Where(c => c.Value.occupants.Count > 0))
             {
                 var cell = kvp.Value;
                 string occupantList = string.Join(", ", cell.occupantNames);
-                ModLogger.Info($"Cell {cell.cellNumber}: {occupantList} ({cell.occupants.Count}/{cell.maxOccupants})");
+                string cellType = cell.cellNumber <= 11 ? "[PLAYER]" : (cell.cellNumber >= 18 ? "[FLOOR]" : "[MID]");
+                ModLogger.Info($"Cell {cell.cellNumber} {cellType}: {occupantList} ({cell.occupants.Count}/{cell.maxOccupants})");
             }
         }
 

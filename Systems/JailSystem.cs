@@ -4,6 +4,7 @@ using Behind_Bars.UI;
 using Behind_Bars.Harmony;
 using Behind_Bars.Systems.CrimeDetection;
 using Behind_Bars.Systems.Jail;
+using Behind_Bars.Systems.Data;
 using UnityEngine;
 using MelonLoader;
 
@@ -24,8 +25,8 @@ namespace Behind_Bars.Systems
 {
     public class JailSystem
     {
-        private const float MIN_JAIL_TIME = 30f; // 30 seconds minimum
-        private const float MAX_JAIL_TIME = 300f; // 7200f|2hours maximum
+        private const float MIN_JAIL_TIME = Constants.DEFAULT_MIN_JAIL_TIME;
+        private const float MAX_JAIL_TIME = Constants.DEFAULT_MAX_JAIL_TIME;
 
         public enum JailSeverity
         {
@@ -51,6 +52,9 @@ namespace Behind_Bars.Systems
         {
             ModLogger.Info($"Processing IMMEDIATE arrest for player: {player.name}");
 
+            // Inventory capture now handled in Harmony patch before any clearing happens
+            // CreateInventorySnapshotIfNeeded(player); // MOVED TO HARMONY PATCH
+
             // Immediately take control of player state to prevent game systems from interfering
             SetPlayerJailState(player, true);
 
@@ -64,6 +68,9 @@ namespace Behind_Bars.Systems
             var sentence = AssessCrimeSeverity(player);
 
             ModLogger.Info($"Crime assessment: {sentence.Severity}, Time: {sentence.JailTime}s, Fine: ${sentence.FineAmount}");
+
+            // Inventory capture already done at start of arrest process
+            // CreateInventorySnapshotIfNeeded(player); // REMOVED - now done at start of HandleImmediateArrest
 
             // Determine jail time threshold for holding vs main cell
             // 1 game day = 24 real-world minutes (from TimeManager CYCLE_DURATION_MINS)
@@ -338,19 +345,19 @@ namespace Behind_Bars.Systems
             switch (sentence.Severity)
             {
                 case JailSeverity.Minor:
-                    baseJailTime = Mathf.Max(baseJailTime, 120f);  // At least 2 minutes
+                    baseJailTime = Mathf.Max(baseJailTime, MIN_JAIL_TIME);  // Use constants
                     sentence.Description = $"Minor offenses (${actualFine} in fines)";
                     break;
                 case JailSeverity.Moderate:
-                    baseJailTime = Mathf.Max(baseJailTime, 300f);  // At least 5 minutes  
+                    baseJailTime = Mathf.Max(baseJailTime, MIN_JAIL_TIME * 2f);  // Double minimum
                     sentence.Description = $"Moderate offenses (${actualFine} in fines)";
                     break;
                 case JailSeverity.Major:
-                    baseJailTime = Mathf.Max(baseJailTime, 600f);  // At least 10 minutes
+                    baseJailTime = Mathf.Max(baseJailTime, MIN_JAIL_TIME * 3f);  // Triple minimum
                     sentence.Description = $"Major offenses (${actualFine} in fines)";
                     break;
                 case JailSeverity.Severe:
-                    baseJailTime = Mathf.Max(baseJailTime, 1200f); // At least 20 minutes
+                    baseJailTime = Mathf.Max(baseJailTime, MAX_JAIL_TIME);  // Use max time
                     sentence.Description = $"Severe offenses (${actualFine} in fines)";
                     break;
             }
@@ -393,11 +400,23 @@ namespace Behind_Bars.Systems
             _inventoryPickupStation = UnityEngine.Object.FindObjectOfType<InventoryPickupStation>();
             if (_inventoryPickupStation != null)
             {
-                ModLogger.Info("Found InventoryPickupStation reference");
+                ModLogger.Info("Found existing InventoryPickupStation reference");
             }
             else
             {
-                ModLogger.Warn("InventoryPickupStation not found - will create one if needed");
+                ModLogger.Warn("InventoryPickupStation not found - creating one now");
+                CreateInventoryPickupStation();
+
+                // Verify it was created
+                _inventoryPickupStation = UnityEngine.Object.FindObjectOfType<InventoryPickupStation>();
+                if (_inventoryPickupStation != null)
+                {
+                    ModLogger.Info("InventoryPickupStation successfully created and found");
+                }
+                else
+                {
+                    ModLogger.Error("Failed to create or find InventoryPickupStation after creation attempt");
+                }
             }
         }
 
@@ -413,6 +432,46 @@ namespace Behind_Bars.Systems
                 return position;
             }
             return null;
+        }
+
+        /// <summary>
+        /// Create an InventoryPickupStation for the jail
+        /// </summary>
+        private void CreateInventoryPickupStation()
+        {
+            try
+            {
+                // Position pickup station at inventoryDropOff location (repurposing for returns)
+                var jailController = Core.JailController;
+                Vector3 stationPosition = new Vector3(0, 1, 0); // Default position
+
+                if (jailController?.storage?.inventoryDropOff != null)
+                {
+                    // Use the inventoryDropOff location for both intake drops and release pickups
+                    stationPosition = jailController.storage.inventoryDropOff.position;
+                    ModLogger.Info($"Positioning InventoryPickupStation at inventoryDropOff: {stationPosition}");
+                }
+                else if (jailController?.booking?.guardSpawns != null && jailController.booking.guardSpawns.Count > 0)
+                {
+                    // Fallback to booking area if storage not available
+                    var bookingArea = jailController.booking.guardSpawns[0];
+                    stationPosition = bookingArea.position + new Vector3(2, 0, 0);
+                    ModLogger.Warn("Storage inventoryDropOff not found - using booking area fallback");
+                }
+
+                // Create GameObject for the pickup station
+                var stationObject = new GameObject("InventoryPickupStation");
+                stationObject.transform.position = stationPosition;
+
+                // Add the InventoryPickupStation component
+                _inventoryPickupStation = stationObject.AddComponent<InventoryPickupStation>();
+
+                ModLogger.Info($"Created InventoryPickupStation at position {stationPosition}");
+            }
+            catch (System.Exception e)
+            {
+                ModLogger.Error($"Failed to create InventoryPickupStation: {e.Message}");
+            }
         }
 
         /// <summary>
@@ -525,7 +584,7 @@ namespace Behind_Bars.Systems
 
             // Store current position before jailing
             if (_lastKnownPlayerPosition.ContainsKey(player.name))
-                _lastKnownPlayerPosition[player.name] = player.transform.position;
+                _lastKnownPlayerPosition[player.name] = new Vector3(14.2921f, 1.9777f, 37.8714f); // Police station exit
             else
                 _lastKnownPlayerPosition.Add(player.name, player.transform.position);
 
@@ -577,7 +636,8 @@ namespace Behind_Bars.Systems
             holdingCell.ReleasePlayerFromSpawnPoint(player.name);
             holdingCell.cellDoor.UnlockDoor();
 
-            ReleasePlayerFromJail(player);
+            // Use enhanced release system for time served
+            SafeInitiateEnhancedRelease(player, ReleaseManager.ReleaseType.TimeServed);
         }
         
         /// <summary>
@@ -593,6 +653,8 @@ namespace Behind_Bars.Systems
             {
                 ModLogger.Warn("No BookingProcess found - using traditional jail time");
                 yield return WaitWithControlMaintenance(sentence.JailTime, player);
+                ModLogger.Info($"Player {player.name} has served their jail time (no booking process) - initiating release");
+                SafeInitiateEnhancedRelease(player, ReleaseManager.ReleaseType.TimeServed);
                 yield break;
             }
             
@@ -600,7 +662,7 @@ namespace Behind_Bars.Systems
             try
             {
                 // Start the booking process
-                bookingProcess.StartBooking(player);
+                bookingProcess.StartBooking(player, sentence);
                 bookingStarted = true;
                 ModLogger.Info("Booking process started successfully");
             }
@@ -613,6 +675,8 @@ namespace Behind_Bars.Systems
             if (!bookingStarted)
             {
                 yield return WaitWithControlMaintenance(sentence.JailTime, player);
+                ModLogger.Info($"Player {player.name} has served their jail time (booking failed to start) - initiating release");
+                SafeInitiateEnhancedRelease(player, ReleaseManager.ReleaseType.TimeServed);
                 yield break;
             }
             
@@ -661,6 +725,10 @@ namespace Behind_Bars.Systems
             // Start actual jail time AFTER booking completion
             ModLogger.Info($"Booking complete - now starting full jail sentence of {sentence.JailTime}s");
             yield return WaitWithControlMaintenance(sentence.JailTime, player);
+
+            // Release the player after serving time
+            ModLogger.Info($"Player {player.name} has served their jail time after booking - initiating release");
+            SafeInitiateEnhancedRelease(player, ReleaseManager.ReleaseType.TimeServed);
         }
 
         /// <summary>
@@ -690,7 +758,7 @@ namespace Behind_Bars.Systems
 
             // Store current position
             if (_lastKnownPlayerPosition.ContainsKey(player.name))
-                _lastKnownPlayerPosition[player.name] = player.transform.position;
+                _lastKnownPlayerPosition[player.name] = new Vector3(14.2921f, 1.9777f, 37.8714f); // Police station exit
             else
                 _lastKnownPlayerPosition.Add(player.name, player.transform.position);
 
@@ -754,7 +822,8 @@ namespace Behind_Bars.Systems
                         yield return WaitWithControlMaintenance(sentence.JailTime - 60f, player); // Subtract processing time
                         holdingCell.ReleasePlayerFromSpawnPoint(player.name);
                         holdingCell.cellDoor.UnlockDoor();
-                        ReleasePlayerFromJail(player);
+                        // Use enhanced release system for time served
+                        SafeInitiateEnhancedRelease(player, ReleaseManager.ReleaseType.TimeServed);
                     }
                 }
                 yield break;
@@ -786,7 +855,8 @@ namespace Behind_Bars.Systems
             mainCell.ReleasePlayerFromSpawnPoint(player.name);
             mainCell.cellDoor.UnlockDoor();
 
-            ReleasePlayerFromJail(player);
+            // Use enhanced release system for time served
+            SafeInitiateEnhancedRelease(player, ReleaseManager.ReleaseType.TimeServed);
         }
 
         private CellDetail GetAvailableHoldingCell(JailController jailController)
@@ -830,9 +900,183 @@ namespace Behind_Bars.Systems
             yield return WaitWithControlMaintenance(sentence.JailTime, player);
 
             ModLogger.Info($"Player {player.name} has served their jail time (fallback method)");
-            ReleasePlayerFromJail(player);
+            // Use enhanced release system for time served
+            SafeInitiateEnhancedRelease(player, ReleaseManager.ReleaseType.TimeServed);
         }
 
+        /// <summary>
+        /// New enhanced release method that integrates with ReleaseManager
+        /// </summary>
+        public void InitiateEnhancedRelease(Player player, ReleaseManager.ReleaseType releaseType, float bailAmount = 0f)
+        {
+            if (player == null)
+            {
+                ModLogger.Error("Cannot initiate release for null player");
+                return;
+            }
+
+            try
+            {
+                ModLogger.Info($"Initiating enhanced {releaseType} release for {player.name}");
+
+                // DON'T create inventory snapshot during release - should have been done during arrest
+                // CreateInventorySnapshotIfNeeded(player); // MOVED TO ARREST PROCESS
+
+                // Store exit position
+                StorePlayerExitPosition(player);
+
+                // Use ReleaseManager for coordinated release
+                if (ReleaseManager.Instance != null)
+                {
+                    string reason = releaseType switch
+                    {
+                        ReleaseManager.ReleaseType.TimeServed => "Time served",
+                        ReleaseManager.ReleaseType.BailPayment => $"Bail paid: ${bailAmount:F0}",
+                        ReleaseManager.ReleaseType.CourtOrder => "Court order",
+                        ReleaseManager.ReleaseType.Emergency => "Emergency release",
+                        _ => "Release ordered"
+                    };
+
+                    bool releaseStarted = ReleaseManager.Instance.InitiateRelease(player, releaseType, bailAmount, reason);
+                    if (releaseStarted)
+                    {
+                        ModLogger.Info($"Enhanced release started for {player.name}");
+                    }
+                    else
+                    {
+                        ModLogger.Warn($"Failed to start enhanced release for {player.name} - falling back to direct release");
+                        ReleasePlayerFromJail(player);
+                    }
+                }
+                else
+                {
+                    ModLogger.Warn("ReleaseManager not available - using legacy release");
+                    ReleasePlayerFromJail(player);
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error initiating enhanced release: {ex.Message}");
+                // Fallback to legacy release
+                ReleasePlayerFromJail(player);
+            }
+        }
+
+        /// <summary>
+        /// Safely initiate enhanced release, checking for existing releases first
+        /// </summary>
+        private void SafeInitiateEnhancedRelease(Player player, ReleaseManager.ReleaseType releaseType)
+        {
+            var releaseManager = ReleaseManager.Instance;
+            if (releaseManager != null && releaseManager.IsReleaseInProgress(player))
+            {
+                ModLogger.Info($"Player {player.name} release skipped - release already in progress (early release system handling it)");
+                // Don't trigger another release - early release system is handling it
+            }
+            else
+            {
+                ModLogger.Info($"Initiating {releaseType} release for {player.name}");
+                InitiateEnhancedRelease(player, releaseType);
+            }
+        }
+
+        /// <summary>
+        /// Start jail time after booking process completes
+        /// </summary>
+        public IEnumerator StartJailTimeAfterBooking(Player player, JailSentence sentence)
+        {
+            ModLogger.Info($"Starting jail time for {player.name} after booking completion - {sentence.JailTime}s");
+
+            // Wait for the jail time with control maintenance
+            yield return WaitWithControlMaintenance(sentence.JailTime, player);
+
+            // After jail time completes, safely trigger release (checks for existing releases)
+            SafeInitiateEnhancedRelease(player, ReleaseManager.ReleaseType.TimeServed);
+        }
+
+        /// <summary>
+        /// Create inventory snapshot for persistent storage
+        /// </summary>
+        private void CreateInventorySnapshotIfNeeded(Player player)
+        {
+            try
+            {
+                var persistentData = PersistentPlayerData.Instance;
+                if (persistentData != null)
+                {
+                    string arrestId = persistentData.CreateInventorySnapshot(player);
+                    if (!string.IsNullOrEmpty(arrestId))
+                    {
+                        ModLogger.Info($"Created inventory snapshot for {player.name} (ID: {arrestId})");
+                    }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error creating inventory snapshot: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Store player's current position as exit position
+        /// </summary>
+        private void StorePlayerExitPosition(Player player)
+        {
+            try
+            {
+                // Always use the police station exit coordinates
+                Vector3 exitPosition = new Vector3(14.2921f, 1.9777f, 37.8714f);
+                ModLogger.Info($"Storing police station exit position for {player.name}: {exitPosition}");
+
+                // Store in persistent data for cross-session support
+                var persistentData = PersistentPlayerData.Instance;
+                if (persistentData != null)
+                {
+                    persistentData.StorePlayerExitPosition(player.name, exitPosition);
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error storing exit position: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Clear player's jail status (called by ReleaseManager after release completion)
+        /// </summary>
+        public void ClearPlayerJailStatus(Player player)
+        {
+            try
+            {
+                ModLogger.Info($"Clearing jail status for {player.name}");
+
+                // Clear stored exit position
+                if (_lastKnownPlayerPosition.ContainsKey(player.name))
+                {
+                    _lastKnownPlayerPosition.Remove(player.name);
+                }
+
+                // Update UI
+                try
+                {
+                    BehindBarsUIManager.Instance?.DestroyJailInfoUI();
+                }
+                catch (System.Exception ex)
+                {
+                    ModLogger.Debug($"Error clearing jail UI: {ex.Message}");
+                }
+
+                ModLogger.Info($"Jail status cleared for {player.name}");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error clearing jail status: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Legacy release method - still used as fallback
+        /// </summary>
         private void ReleasePlayerFromJail(Player player)
         {
             ModLogger.Info($"Releasing player {player.name} from jail");
@@ -986,13 +1230,13 @@ namespace Behind_Bars.Systems
                 float bailAmount = CalculateBailAmount(sentence.FineAmount, sentence.Severity);
                 string bailInfo = FormatBailAmount(bailAmount);
 
-                // Show the UI using the BehindBarsUIManager with dynamic updates
+                // Show the UI using the BehindBarsUIManager WITHOUT starting timer (timer starts after booking)
                 BehindBarsUIManager.Instance.ShowJailInfoUI(
                     crimeInfo,
                     timeInfo,
                     bailInfo,
-                    sentence.JailTime,  // Pass actual jail time in seconds for dynamic updates
-                    bailAmount // Pass calculated bail amount for dynamic updates
+                    0f,  // Don't start timer yet - timer starts after booking completion
+                    bailAmount // Pass bail amount for display
                 );
 
                 ModLogger.Info($"Jail info UI displayed with dynamic updates: Crime={crimeInfo}, Time={timeInfo}, Bail={bailInfo}");
@@ -1123,7 +1367,7 @@ namespace Behind_Bars.Systems
         /// Calculate bail amount based on fine amount and crime severity
         /// Bail should be significantly higher than the fine for serious crimes
         /// </summary>
-        private float CalculateBailAmount(float fineAmount, JailSeverity severity)
+        public float CalculateBailAmount(float fineAmount, JailSeverity severity)
         {
             if (fineAmount <= 0)
                 return 0f;

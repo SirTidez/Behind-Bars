@@ -40,6 +40,7 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     [Header("Guard Points - Direct References")]
     public Transform mugshotStationGuardPoint;
     public Transform scannerStationGuardPoint;
+    public Transform exitScannerStationGuardPoint;
     public Transform storageGuardPoint;
     public Transform holdingCell00GuardPoint;
     public Transform holdingCell01GuardPoint;
@@ -62,6 +63,7 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     public List<Transform> patrolPoints => patrolManager?.GetPatrolPoints() ?? new List<Transform>();
     public BookingArea booking => areaManager?.GetBooking() ?? new BookingArea();
     public StorageArea storage => areaManager?.GetStorage() ?? new StorageArea();
+    public ExitScannerArea exitScanner => areaManager?.GetExitScanner() ?? new ExitScannerArea();
     public KitchenArea kitchen => areaManager?.GetKitchen() ?? new KitchenArea();
     public LaundryArea laundry => areaManager?.GetLaundry() ?? new LaundryArea();
     public PhoneArea phoneArea => areaManager?.GetPhoneArea() ?? new PhoneArea();
@@ -188,6 +190,7 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         // Get direct references to guard points based on JAIL_STRUCTURE_DOCUMENTATION.md
         mugshotStationGuardPoint = transform.Find("Booking/MugshotStation/GuardPoint");
         scannerStationGuardPoint = transform.Find("Booking/ScannerStation/GuardPoint");
+        exitScannerStationGuardPoint = transform.Find("ExitScannerStation/GuardPoint");
         storageGuardPoint = transform.Find("Storage/GuardPoint");
         holdingCell00GuardPoint = transform.Find("Cells/HoldingCells/HoldingCell_00/HoldingDoorHolder[0]/DoorPoint");
         holdingCell01GuardPoint = transform.Find("Cells/HoldingCells/HoldingCell_01/HoldingDoorHolder[1]/DoorPoint");
@@ -196,6 +199,7 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         ModLogger.Info($"✓ Guard point references initialized:");
         ModLogger.Info($"  MugshotStation GuardPoint: {(mugshotStationGuardPoint != null ? "FOUND" : "MISSING")}");
         ModLogger.Info($"  ScannerStation GuardPoint: {(scannerStationGuardPoint != null ? "FOUND" : "MISSING")}");
+        ModLogger.Info($"  ExitScannerStation GuardPoint: {(exitScannerStationGuardPoint != null ? "FOUND" : "MISSING")}");
         ModLogger.Info($"  Storage GuardPoint: {(storageGuardPoint != null ? "FOUND" : "MISSING")}");
         ModLogger.Info($"  HoldingCell_00 GuardPoint: {(holdingCell00GuardPoint != null ? "FOUND" : "MISSING")}");
         ModLogger.Info($"  HoldingCell_01 GuardPoint: {(holdingCell01GuardPoint != null ? "FOUND" : "MISSING")}");
@@ -212,6 +216,8 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
                 return mugshotStationGuardPoint;
             case "ScannerStation":
                 return scannerStationGuardPoint;
+            case "ExitScannerStation":
+                return exitScannerStationGuardPoint;
             case "Storage":
                 return storageGuardPoint;
             case "HoldingCell_00":

@@ -19,8 +19,8 @@ namespace Behind_Bars.Helpers
         /// <summary>
         /// Jail system constants
         /// </summary>
-        public const float DEFAULT_MIN_JAIL_TIME = 30f;
-        public const float DEFAULT_MAX_JAIL_TIME = 300f;
+        public const float DEFAULT_MIN_JAIL_TIME = 5f;  // 5 seconds for testing
+        public const float DEFAULT_MAX_JAIL_TIME = 30f; // 30 seconds max for testing
         public const float DEFAULT_JAIL_TIME_MULTIPLIER = 1.0f;
         
         /// <summary>

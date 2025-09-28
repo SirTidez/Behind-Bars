@@ -157,6 +157,22 @@ namespace Behind_Bars.Harmony
                 
             ModLogger.Info($"[ARREST] Player {__instance.name} arrested - performing inventory processing and jail processing");
 
+            // CRITICAL: Capture player's inventory BEFORE any locking/clearing happens
+            try
+            {
+                ModLogger.Info($"[ARREST] Capturing {__instance.name}'s inventory before arrest processing");
+                var persistentData = Behind_Bars.Systems.Data.PersistentPlayerData.Instance;
+                if (persistentData != null)
+                {
+                    string snapshotId = persistentData.CreateInventorySnapshot(__instance);
+                    ModLogger.Info($"[ARREST] Inventory snapshot created: {snapshotId}");
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"[ARREST] Error capturing inventory: {ex.Message}");
+            }
+
             // INVENTORY LOCKING: Lock inventory during jail time
             try
             {

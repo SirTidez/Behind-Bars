@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
+using Behind_Bars.Systems.Jail;
 
 namespace BehindBars.Areas
 {
@@ -912,6 +913,201 @@ namespace BehindBars.Areas
                 UnlockAllDoors();
                 Debug.Log("🔓 Showers operational");
             }
+        }
+    }
+
+    [System.Serializable]
+    public class ExitScannerArea : JailAreaBase
+    {
+        public Transform scannerStation;
+        public Transform guardPoint;
+        public Transform exitTrigger;
+        public JailDoor exitDoor;
+        public bool scannerOperational = true;
+
+        public override void Initialize(Transform root)
+        {
+            areaRoot = root;
+            areaName = "ExitScanner";
+            maxOccupancy = 2; // Guard + prisoner
+            requiresAuthorization = true; // Requires guard supervision
+
+            FindAreaBounds(root);
+            FindAreaLights(root);
+            FindExitScannerComponents(root);
+
+            isInitialized = true;
+            Debug.Log($"✓ Initialized ExitScanner Area - Scanner: {scannerStation != null}, GuardPoint: {guardPoint != null}, ExitTrigger: {exitTrigger != null}");
+        }
+
+        void FindExitScannerComponents(Transform root)
+        {
+            // Find the scanner station itself
+            scannerStation = root;
+
+            // Find the GuardPoint for supervision
+            guardPoint = root.Find("GuardPoint");
+            if (guardPoint == null)
+            {
+                Debug.LogWarning("⚠️ GuardPoint not found in ExitScanner area");
+            }
+
+            // Find the exit trigger
+            var triggerTransform = root.Find("ExitTrigger");
+            if (triggerTransform == null)
+            {
+                // Try looking for it as a sibling (outside the scanner station)
+                triggerTransform = root.parent?.Find("ExitTrigger");
+            }
+            exitTrigger = triggerTransform;
+
+            if (exitTrigger == null)
+            {
+                Debug.LogWarning("⚠️ ExitTrigger not found in ExitScanner area");
+            }
+
+            // Find exit door and create JailDoor structure (like BookingArea does)
+            // Based on Unity hierarchy: ExitDoor is a sibling of ExitScannerStation in Hallway
+            var doorTransform = root.parent?.Find("ExitDoor");
+            if (doorTransform == null)
+            {
+                // Fallback: try as direct child (shouldn't happen based on hierarchy)
+                doorTransform = root.Find("ExitDoor");
+            }
+
+            if (doorTransform != null)
+            {
+                // Create new JailDoor structure during initialization
+                exitDoor = new JailDoor();
+                exitDoor.doorHolder = doorTransform;
+                exitDoor.doorName = "Exit Door";
+                exitDoor.doorType = JailDoor.DoorType.GuardDoor; // Uses same prefab as other guard doors
+                exitDoor.currentState = JailDoor.DoorState.Closed;
+                exitDoor.reverseDirection = true; // Exit door opens in opposite direction
+
+                // Add to doors list for area management
+                doors.Add(exitDoor);
+
+                Debug.Log($"✓ Created ExitDoor JailDoor structure at {doorTransform.name} with reversed direction");
+            }
+            else
+            {
+                Debug.LogWarning("⚠️ ExitDoor GameObject not found in ExitScanner area");
+            }
+        }
+
+        public override void SetAccessible(bool accessible)
+        {
+            isAccessible = accessible;
+            scannerOperational = accessible;
+
+            if (!accessible)
+            {
+                LockAllDoors();
+                if (exitDoor != null && exitDoor.IsValid())
+                {
+                    exitDoor.LockDoor();
+                }
+                Debug.Log("🔒 Exit scanner area locked - no exits allowed");
+            }
+            else
+            {
+                UnlockAllDoors();
+                if (exitDoor != null && exitDoor.IsValid())
+                {
+                    exitDoor.UnlockDoor();
+                }
+                Debug.Log("🔓 Exit scanner area accessible");
+            }
+        }
+
+        public void OpenExitDoor()
+        {
+            if (exitDoor != null && exitDoor.IsValid() && scannerOperational)
+            {
+                exitDoor.OpenDoor();
+                Debug.Log("🚪 Exit door opened after successful scan");
+            }
+        }
+
+        public void CloseExitDoor()
+        {
+            if (exitDoor != null && exitDoor.IsValid())
+            {
+                exitDoor.CloseDoor();
+                Debug.Log("🚪 Exit door closed");
+            }
+        }
+
+        public bool IsExitDoorOpen()
+        {
+            return exitDoor != null && exitDoor.IsValid() && exitDoor.IsOpen();
+        }
+
+        /// <summary>
+        /// Instantiate the exit door using the provided prefab (same as BookingArea)
+        /// </summary>
+        public void InstantiateDoors(GameObject steelDoorPrefab)
+        {
+            if (steelDoorPrefab == null)
+            {
+                Debug.LogError("ExitScannerArea: No steel door prefab provided for door instantiation");
+                return;
+            }
+
+            if (exitDoor != null && exitDoor.IsValid() && !exitDoor.IsInstantiated())
+            {
+                InstantiateSingleDoor(exitDoor, steelDoorPrefab);
+                Debug.Log("✓ ExitScannerArea: Exit door instantiated successfully");
+            }
+            else
+            {
+                Debug.LogWarning($"ExitScannerArea: Cannot instantiate exit door - Valid: {exitDoor?.IsValid()}, Already instantiated: {exitDoor?.IsInstantiated()}");
+            }
+        }
+
+        void InstantiateSingleDoor(JailDoor door, GameObject doorPrefab)
+        {
+            if (door.doorHolder == null) return;
+
+            // Clear existing door
+            if (door.doorInstance != null)
+            {
+                UnityEngine.Object.DestroyImmediate(door.doorInstance);
+            }
+
+            // Instantiate new door
+            door.doorInstance = UnityEngine.Object.Instantiate(doorPrefab, door.doorHolder);
+            door.doorInstance.transform.localPosition = Vector3.zero;
+            door.doorInstance.transform.localRotation = Quaternion.identity;
+
+            // Find the hinge (look for a child transform that could be the hinge)
+            door.doorHinge = FindDoorHinge(door.doorInstance);
+
+            // Initialize the door animation system
+            door.InitializeDoor();
+
+            Debug.Log($"✓ Instantiated {door.doorName} with hinge: {door.doorHinge?.name ?? "None"}");
+        }
+
+        Transform FindDoorHinge(GameObject doorInstance)
+        {
+            // Look for common hinge names
+            string[] hingeNames = { "Hinge", "Pivot", "Door", "DoorMesh", "Model", "HingePoint" };
+
+            foreach (string hingeName in hingeNames)
+            {
+                Transform hinge = doorInstance.transform.Find(hingeName);
+                if (hinge != null) return hinge;
+            }
+
+            // Fallback: use the first child if any
+            if (doorInstance.transform.childCount > 0)
+            {
+                return doorInstance.transform.GetChild(0);
+            }
+
+            return doorInstance.transform;
         }
     }
 }

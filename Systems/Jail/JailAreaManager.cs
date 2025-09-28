@@ -23,6 +23,7 @@ namespace Behind_Bars.Systems.Jail
         public PhoneArea phoneArea = new PhoneArea();
         public BookingArea booking = new BookingArea();
         public StorageArea storage = new StorageArea();
+        public ExitScannerArea exitScanner = new ExitScannerArea();
         public GuardRoomArea guardRoom = new GuardRoomArea();
         public MainRecArea mainRec = new MainRecArea();
         public ShowerArea showers = new ShowerArea();
@@ -53,6 +54,26 @@ namespace Behind_Bars.Systems.Jail
             InitializeArea(phoneArea, jailRoot, "Phone");
             InitializeArea(booking, jailRoot, "Booking");
             InitializeArea(storage, jailRoot, "Storage");
+            // ExitScannerStation is in Hallway, find it properly
+            var hallway = jailRoot.Find("Hallway");
+            if (hallway != null)
+            {
+                var exitScannerTransform = hallway.Find("ExitScannerStation");
+                if (exitScannerTransform != null)
+                {
+                    exitScanner.Initialize(exitScannerTransform);
+                    allAreas.Add(exitScanner);
+                    ModLogger.Info($"✓ Initialized ExitScanner area in Hallway");
+                }
+                else
+                {
+                    ModLogger.Warn($"⚠️ ExitScannerStation not found in Hallway");
+                }
+            }
+            else
+            {
+                ModLogger.Warn($"⚠️ Hallway not found in jail structure");
+            }
             InitializeArea(guardRoom, jailRoot, "GuardRoom");
             InitializeArea(mainRec, jailRoot, "MainRec");
             InitializeArea(showers, jailRoot, "Showers");
@@ -255,6 +276,7 @@ namespace Behind_Bars.Systems.Jail
         public PhoneArea GetPhoneArea() => phoneArea;
         public BookingArea GetBooking() => booking;
         public StorageArea GetStorage() => storage;
+        public ExitScannerArea GetExitScanner() => exitScanner;
         public GuardRoomArea GetGuardRoom() => guardRoom;
         public MainRecArea GetMainRec() => mainRec;
         public ShowerArea GetShowers() => showers;

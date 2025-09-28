@@ -21,6 +21,7 @@ public class JailDoor
     public float openAngle = -135f;  // Door opens to -135 degrees on Z axis
     public float closedAngle = 0f;
     public float animationSpeed = 2f;
+    public bool reverseDirection = false;  // If true, flips the open angle direction
 
     // Private animation state
     private float targetAngle;
@@ -82,10 +83,10 @@ public class JailDoor
             return;
 
         currentState = DoorState.Opening;
-        targetAngle = openAngle;
+        targetAngle = reverseDirection ? -openAngle : openAngle;
         isAnimating = true;
 
-        Debug.Log($"{doorName}: Opening door");
+        Debug.Log($"{doorName}: Opening door (direction: {(reverseDirection ? "reversed" : "normal")})");
     }
 
     public void CloseDoor()

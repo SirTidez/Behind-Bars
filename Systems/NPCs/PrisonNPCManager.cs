@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using Behind_Bars.Helpers;
+using Behind_Bars.Systems.Jail;
 using MelonLoader;
 using FishNet;
 using FishNet.Managing;
@@ -233,45 +234,282 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Spawn prison inmates at designated points
+        /// Spawn prison inmates in random cells using CellAssignmentManager
         /// </summary>
         private IEnumerator SpawnInmates()
         {
-            if (inmateSpawnPoints == null || inmateSpawnPoints.Length == 0)
+            var cellManager = CellAssignmentManager.Instance;
+            if (cellManager == null)
             {
-                ModLogger.Warn("No inmate spawn points available");
+                ModLogger.Error("CellAssignmentManager not available - cannot spawn inmates in cells");
                 yield break;
             }
 
-            ModLogger.Info($"Spawning up to {maxInmates} inmates...");
-            
-            int inmatesToSpawn = Mathf.Min(maxInmates, inmateSpawnPoints.Length);
-            
-            for (int i = 0; i < inmatesToSpawn; i++)
+            ModLogger.Info($"Spawning up to {maxInmates} inmates in random cells...");
+
+            int inmatesSpawned = 0;
+            int maxAttempts = maxInmates * 3; // Allow some failed attempts
+            int attempts = 0;
+
+            while (inmatesSpawned < maxInmates && attempts < maxAttempts)
             {
-                var spawnPoint = inmateSpawnPoints[i];
-                if (spawnPoint == null) continue;
-                
+                attempts++;
+
                 // Random inmate details
                 string firstName = GetRandomInmateFirstName();
                 string crimeType = GetRandomCrimeType();
-                
-                var inmate = SpawnInmate(spawnPoint.position, firstName, $"Prisoner_{i+1:D3}", crimeType);
+                string inmateId = $"Prisoner_{inmatesSpawned+1:D3}";
+
+                // Try to assign inmate to a random available cell
+                int assignedCell = cellManager.AssignNPCToCell(inmateId, firstName);
+                if (assignedCell == -1)
+                {
+                    ModLogger.Warn($"No available cell for inmate {firstName} - attempt {attempts}");
+                    yield return new WaitForSeconds(0.1f);
+                    continue;
+                }
+
+                // Get the actual cell transform directly from JailController
+                Vector3 spawnPosition = GetCellSpawnPosition(assignedCell);
+                if (spawnPosition == Vector3.zero)
+                {
+                    ModLogger.Error($"Could not get valid spawn position for cell {assignedCell}");
+                    // Release the cell assignment since spawning failed
+                    cellManager.ReleaseNPCFromCell(inmateId, firstName);
+                    continue;
+                }
+
+                // Validate spawn position is not at jail center (common failure point)
+                var jailCenter = Core.JailController?.transform.position ?? Vector3.zero;
+                float distanceFromJailCenter = Vector3.Distance(spawnPosition, jailCenter);
+                if (distanceFromJailCenter < 2f)
+                {
+                    ModLogger.Warn($"Spawn position for {firstName} is too close to jail center ({distanceFromJailCenter:F2}m) - may indicate spawn failure");
+                }
+
+                ModLogger.Info($"Spawning {firstName} in cell {assignedCell} at position {spawnPosition} (distance from jail center: {distanceFromJailCenter:F2}m)");
+
+                // Spawn the inmate
+                var inmate = SpawnInmate(spawnPosition, firstName, inmateId, crimeType);
                 if (inmate != null)
                 {
                     activeInmates.Add(inmate);
-                    ModLogger.Info($"✓ Spawned inmate {inmate.prisonerID} ({crimeType}) at position {i}");
+                    inmate.assignedCell = assignedCell; // Store cell assignment
+
+                    // Add InmateBehavior for random cell movement
+                    var inmateBehavior = inmate.gameObject.AddComponent<InmateBehavior>();
+                    if (inmateBehavior != null)
+                    {
+                        inmateBehavior.SetCellNumber(assignedCell);
+
+                        // Vary behavior based on crime type
+                        switch (crimeType?.ToLower())
+                        {
+                            case "assault":
+                            case "battery":
+                            case "violent":
+                                // Violent criminals pace more aggressively
+                                inmateBehavior.SetPacingBehavior(true);
+                                inmateBehavior.SetMovementSpeed(2.0f);
+                                break;
+
+                            case "fraud":
+                            case "theft":
+                                // White collar/theft criminals are calmer
+                                inmateBehavior.SetPacingBehavior(false);
+                                inmateBehavior.SetMovementSpeed(1.2f);
+                                break;
+
+                            case "drug possession":
+                            case "dui":
+                                // Drug-related inmates are erratic
+                                inmateBehavior.SetPacingBehavior(UnityEngine.Random.Range(0f, 1f) > 0.5f);
+                                inmateBehavior.SetMovementSpeed(UnityEngine.Random.Range(1.0f, 2.5f));
+                                break;
+
+                            default:
+                                // Random behavior for others
+                                break;
+                        }
+
+                        ModLogger.Debug($"Added InmateBehavior to {inmateId} for cell {assignedCell}");
+                    }
+
+                    ModLogger.Info($"✓ Spawned inmate {inmateId} ({crimeType}) in cell {assignedCell}");
+                    inmatesSpawned++;
                 }
                 else
                 {
-                    ModLogger.Error($"Failed to spawn inmate {i+1}");
+                    ModLogger.Error($"Failed to spawn inmate {firstName} in cell {assignedCell}");
+                    // Release the cell assignment since spawning failed
+                    cellManager.ReleaseNPCFromCell(inmateId, firstName);
                 }
-                
+
                 // Small delay between spawns
                 yield return new WaitForSeconds(0.5f);
             }
-            
-            ModLogger.Info($"✓ Spawned {activeInmates.Count} inmates");
+
+            ModLogger.Info($"✓ Spawned {inmatesSpawned} inmates in cells randomly");
+
+            // Log cell assignment distribution for debugging
+            if (cellManager != null)
+            {
+                cellManager.LogCellAssignments();
+            }
+        }
+
+        /// <summary>
+        /// Get count of inmates currently in a cell
+        /// </summary>
+        private int GetInmatesInCellCount(int cellNumber)
+        {
+            int count = 0;
+            foreach (var inmate in activeInmates)
+            {
+                if (inmate != null && inmate.assignedCell == cellNumber)
+                {
+                    count++;
+                }
+            }
+            return count;
+        }
+
+        /// <summary>
+        /// Get proper spawn position for a specific cell using bounds calculation
+        /// </summary>
+        private Vector3 GetCellSpawnPosition(int cellNumber)
+        {
+            try
+            {
+                var jailController = Core.JailController;
+                if (jailController == null)
+                {
+                    ModLogger.Error("JailController not available for cell positioning");
+                    return Vector3.zero;
+                }
+
+                if (cellNumber < 0 || cellNumber >= jailController.cells.Count)
+                {
+                    ModLogger.Error($"Invalid cell number: {cellNumber} (total cells: {jailController.cells.Count})");
+                    return Vector3.zero;
+                }
+
+                var cell = jailController.cells[cellNumber];
+                if (cell == null)
+                {
+                    ModLogger.Error($"Cell {cellNumber} is null");
+                    return Vector3.zero;
+                }
+
+                // First priority: Use cell spawn points if available
+                if (cell.spawnPoints != null && cell.spawnPoints.Count > 0)
+                {
+                    int spawnIndex = UnityEngine.Random.Range(0, cell.spawnPoints.Count);
+                    var spawnPoint = cell.spawnPoints[spawnIndex];
+                    if (spawnPoint != null)
+                    {
+                        ModLogger.Debug($"Using spawn point {spawnIndex} in cell {cellNumber}: {spawnPoint.position}");
+                        return spawnPoint.position;
+                    }
+                }
+
+                // Second priority: Use cell bounds for proper positioning within cell
+                if (cell.cellBounds != null)
+                {
+                    var boxCollider = cell.cellBounds.GetComponent<BoxCollider>();
+                    if (boxCollider != null)
+                    {
+                        var bounds = boxCollider.bounds;
+                        Vector3 boundsCenter = bounds.center;
+                        Vector3 boundsSize = bounds.size;
+
+                        // Get number of inmates already in cell to add offset
+                        int inmatesInCell = GetInmatesInCellCount(cellNumber);
+
+                        // Calculate offset based on how many are already there
+                        float offsetX = 0f;
+                        float offsetZ = 0f;
+                        if (inmatesInCell > 0)
+                        {
+                            // Spread inmates around the cell
+                            float angle = (inmatesInCell * 120f) % 360f; // 120 degree separation
+                            offsetX = Mathf.Cos(angle * Mathf.Deg2Rad) * 1.0f;
+                            offsetZ = Mathf.Sin(angle * Mathf.Deg2Rad) * 1.0f;
+                        }
+
+                        // Calculate position within cell bounds with offset
+                        Vector3 spawnPos = new Vector3(
+                            boundsCenter.x + offsetX + UnityEngine.Random.Range(-0.2f, 0.2f),
+                            boundsCenter.y + 0.1f, // Slight elevation above floor
+                            boundsCenter.z + offsetZ + UnityEngine.Random.Range(-0.2f, 0.2f)
+                        );
+
+                        ModLogger.Debug($"Using cell bounds for cell {cellNumber}: {spawnPos} (bounds: {bounds})");
+                        return spawnPos;
+                    }
+                }
+
+                // Third priority: Use cell transform with BoxCollider bounds
+                if (cell.cellTransform != null)
+                {
+                    var boxCollider = cell.cellTransform.GetComponent<BoxCollider>();
+                    if (boxCollider != null)
+                    {
+                        var bounds = boxCollider.bounds;
+                        Vector3 boundsCenter = bounds.center;
+                        Vector3 boundsSize = bounds.size;
+
+                        // Get number of inmates already in cell to add offset
+                        int inmatesInCell = GetInmatesInCellCount(cellNumber);
+
+                        // Calculate offset based on how many are already there
+                        float offsetX = 0f;
+                        float offsetZ = 0f;
+                        if (inmatesInCell > 0)
+                        {
+                            float angle = (inmatesInCell * 120f) % 360f;
+                            offsetX = Mathf.Cos(angle * Mathf.Deg2Rad) * 1.0f;
+                            offsetZ = Mathf.Sin(angle * Mathf.Deg2Rad) * 1.0f;
+                        }
+
+                        Vector3 spawnPos = new Vector3(
+                            boundsCenter.x + offsetX + UnityEngine.Random.Range(-0.2f, 0.2f),
+                            boundsCenter.y + 0.1f,
+                            boundsCenter.z + offsetZ + UnityEngine.Random.Range(-0.2f, 0.2f)
+                        );
+
+                        ModLogger.Debug($"Using cell transform bounds for cell {cellNumber}: {spawnPos}");
+                        return spawnPos;
+                    }
+                    else
+                    {
+                        // Fallback to cell transform position with offset for multiple inmates
+                        Vector3 cellPos = cell.cellTransform.position;
+
+                        // Get number of inmates already in cell
+                        int inmatesInCell = GetInmatesInCellCount(cellNumber);
+                        float angle = (inmatesInCell * 120f) % 360f;
+                        float offsetX = inmatesInCell > 0 ? Mathf.Cos(angle * Mathf.Deg2Rad) * 0.8f : 0f;
+                        float offsetZ = inmatesInCell > 0 ? Mathf.Sin(angle * Mathf.Deg2Rad) * 0.8f : 0f;
+
+                        cellPos += new Vector3(
+                            offsetX + UnityEngine.Random.Range(-0.2f, 0.2f),
+                            0.1f,
+                            offsetZ + UnityEngine.Random.Range(-0.2f, 0.2f)
+                        );
+                        ModLogger.Debug($"Using cell transform position for cell {cellNumber}: {cellPos}");
+                        return cellPos;
+                    }
+                }
+
+                ModLogger.Error($"Could not determine position for cell {cellNumber} - no valid transform or bounds found");
+                return Vector3.zero;
+            }
+            catch (System.Exception e)
+            {
+                ModLogger.Error($"Error getting cell spawn position for cell {cellNumber}: {e.Message}");
+                return Vector3.zero;
+            }
         }
 
         /// <summary>
@@ -347,29 +585,13 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Spawn a single inmate using BaseNPC prefab (ID 182)
+        /// Spawn a single inmate using BaseNPCSpawner with working avatar system
         /// </summary>
         public PrisonInmate SpawnInmate(Vector3 position, string firstName = "Inmate", string prisonerID = "", string crimeType = "Unknown")
         {
             try
             {
-                ModLogger.Info($"🎯 Spawning inmate using BaseNPC: {firstName}");
-
-                // Get BaseNPC prefab directly
-                var baseNPCPrefab = GetBaseNPCPrefab();
-                if (baseNPCPrefab == null)
-                {
-                    ModLogger.Error("❌ Failed to get BaseNPC prefab for inmate");
-                    return null;
-                }
-
-                // Instantiate BaseNPC
-                var inmateObject = UnityEngine.Object.Instantiate(baseNPCPrefab, position, Quaternion.identity);
-                if (inmateObject == null)
-                {
-                    ModLogger.Error("❌ Failed to instantiate BaseNPC for inmate");
-                    return null;
-                }
+                ModLogger.Info($"🎯 Spawning inmate using BaseNPCSpawner: {firstName} (Crime: {crimeType})");
 
                 // Generate prisoner ID if needed
                 if (string.IsNullOrEmpty(prisonerID))
@@ -377,30 +599,20 @@ namespace Behind_Bars.Systems.NPCs
                     prisonerID = GeneratePrisonerID();
                 }
 
-                // Set name and configure basic properties
-                inmateObject.name = $"PrisonInmate_{firstName}_{prisonerID}";
-
-                // Get the NPC component and configure it
-                var npcComponent = inmateObject.GetComponent<NPC>();
-                if (npcComponent != null)
+                // Use BaseNPCSpawner to spawn with proper avatar/appearance
+                var inmateObject = BaseNPCSpawner.SpawnInmate(position, firstName, prisonerID);
+                if (inmateObject == null)
                 {
-                    npcComponent.FirstName = firstName;
-                    npcComponent.LastName = "Prisoner";
-                    npcComponent.ID = $"inmate_{System.Guid.NewGuid().ToString().Substring(0, 8)}";
+                    ModLogger.Error("❌ BaseNPCSpawner failed to spawn inmate");
+                    return null;
                 }
 
-                // Create completely custom inmate appearance
-                CreateCustomInmateAppearance(inmateObject, firstName, crimeType);
-
-                // Add PrisonInmate component
+                // The NPC component is already configured by BaseNPCSpawner
+                // Just add our PrisonInmate component for jail-specific behavior
                 var prisonInmate = inmateObject.AddComponent<PrisonInmate>();
                 prisonInmate.Initialize(prisonerID, firstName, crimeType);
 
-                // Spawn on network if we're server
-                SpawnOnNetworkIfServer(inmateObject);
-
-                // Position on NavMesh
-                PositionOnNavMesh(inmateObject, position);
+                // BaseNPCSpawner already handles network spawning and NavMesh positioning
 
                 ModLogger.Info($"✓ BaseNPC inmate spawned: {firstName} (ID: {prisonerID}, Crime: {crimeType})");
                 return prisonInmate;
@@ -1389,15 +1601,49 @@ namespace Behind_Bars.Systems.NPCs
             return $"P{UnityEngine.Random.Range(10000, 99999)}";
         }
 
+        // Track used names to avoid duplicates
+        private static HashSet<string> usedInmateNames = new HashSet<string>();
+
         private string GetRandomInmateFirstName()
         {
-            var names = new string[]
+            // Custom names have priority
+            var customNames = new List<string> { "Tidez", "Spec", "Dre" };
+            var regularNames = new List<string>
             {
                 "Mike", "Tony", "Steve", "Dave", "Chris", "Mark", "Paul", "Jake",
                 "Ryan", "Brad", "Kyle", "Sean", "Matt", "Dan", "Nick", "Alex",
                 "Carlos", "Marcus", "Derek", "Tyler", "Jason", "Kevin", "Brian"
             };
-            return names[UnityEngine.Random.Range(0, names.Length)];
+
+            // First try to use custom names if not already used
+            foreach (var customName in customNames)
+            {
+                if (!usedInmateNames.Contains(customName))
+                {
+                    usedInmateNames.Add(customName);
+                    return customName;
+                }
+            }
+
+            // Then try regular names
+            var availableNames = regularNames.Where(n => !usedInmateNames.Contains(n)).ToList();
+
+            // If all names are used, clear and start over (but keep custom names used)
+            if (availableNames.Count == 0)
+            {
+                usedInmateNames.RemoveWhere(n => !customNames.Contains(n));
+                availableNames = regularNames.Where(n => !usedInmateNames.Contains(n)).ToList();
+            }
+
+            if (availableNames.Count > 0)
+            {
+                var selectedName = availableNames[UnityEngine.Random.Range(0, availableNames.Count)];
+                usedInmateNames.Add(selectedName);
+                return selectedName;
+            }
+
+            // Fallback
+            return "Prisoner";
         }
 
         private string GetRandomCrimeType()
@@ -1750,6 +1996,7 @@ namespace Behind_Bars.Systems.NPCs
         public string firstName;
         public string crimeType;
         public int sentenceDays = 30;
+        public int assignedCell = -1; // Cell number assigned by CellAssignmentManager
 
         public void Initialize(string id, string name, string crime)
         {

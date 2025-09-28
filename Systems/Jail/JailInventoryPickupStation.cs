@@ -4,6 +4,7 @@ using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.UI;
+using Behind_Bars.Systems.NPCs;
 
 #if !MONO
 using Il2CppInterop.Runtime.Attributes;
@@ -11,11 +12,15 @@ using Il2CppScheduleOne.PlayerScripts;
 using Il2CppScheduleOne.Interaction;
 using Il2CppScheduleOne.DevUtilities;
 using Il2CppScheduleOne.UI;
+using Il2CppScheduleOne.AvatarFramework;
+using Il2CppScheduleOne.Clothing;
 #else
 using ScheduleOne.PlayerScripts;
 using ScheduleOne.Interaction;
 using ScheduleOne.DevUtilities;
 using ScheduleOne.UI;
+using ScheduleOne.AvatarFramework;
+using ScheduleOne.Clothing;
 #endif
 
 namespace Behind_Bars.Systems.Jail
@@ -38,6 +43,9 @@ namespace Behind_Bars.Systems.Jail
         private bool isProcessing = false;
         private Player currentPlayer;
         private bool itemsCurrentlyTaken = false; // Track if items are visually taken
+
+        // Store player's original clothing
+        private Dictionary<string, object> originalPlayerClothing = new Dictionary<string, object>();
         
         // Prison starter items that inmates receive (using registered item IDs)
         private List<string> prisonStarterItems = new List<string>
@@ -50,10 +58,17 @@ namespace Behind_Bars.Systems.Jail
         
         void Start()
         {
+            // Ensure this GameObject has the correct name to avoid conflicts
+            if (gameObject.name != "JailInventoryPickup")
+            {
+                gameObject.name = "JailInventoryPickup";
+                ModLogger.Info("Renamed GameObject to 'JailInventoryPickup' to avoid conflicts with InventoryPickup");
+            }
+
             // Set up InteractableObject component for IL2CPP compatibility
             SetupInteractableComponent();
             ModLogger.Info("JailInventoryPickupStation interaction setup completed");
-            
+
             // Find storage location if not assigned
             if (storageLocation == null)
             {
@@ -68,6 +83,9 @@ namespace Behind_Bars.Systems.Jail
                     ModLogger.Info("Created default StorageLocation for prison items");
                 }
             }
+
+            // Disable conflicting InventoryDropOff GameObject if it exists
+            DisableConflictingInventoryDropOff();
         }
         
         private void SetupInteractableComponent()
@@ -109,7 +127,7 @@ namespace Behind_Bars.Systems.Jail
                 interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
                 return;
             }
-            
+
             // Get player first
             currentPlayer = Player.Local;
             if (currentPlayer == null)
@@ -117,7 +135,28 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Error("No local player found for jail item pickup!");
                 return;
             }
-            
+
+            var releaseManager = ReleaseManager.Instance;
+            bool isDuringRelease = false;
+
+            // Check if this is during a release process
+            if (releaseManager != null)
+            {
+                var releaseStatus = releaseManager.GetReleaseStatus(currentPlayer);
+                isDuringRelease = releaseStatus != ReleaseManager.ReleaseStatus.NotStarted &&
+                                 releaseStatus != ReleaseManager.ReleaseStatus.Completed &&
+                                 releaseStatus != ReleaseManager.ReleaseStatus.Failed;
+            }
+
+            if (isDuringRelease)
+            {
+                ModLogger.Info($"JailInventoryPickupStation: Release mode interaction for {currentPlayer.name}");
+                // During release: Process item exchange (remove prison items, give back personal items)
+                MelonCoroutines.Start(ProcessReleaseItemExchange(currentPlayer));
+                return;
+            }
+
+            // ORIGINAL BOOKING LOGIC BELOW
             // Check if player is in jail/booking process
             var playerHandler = Behind_Bars.Core.GetPlayerHandler(currentPlayer);
             if (playerHandler == null)
@@ -125,28 +164,216 @@ namespace Behind_Bars.Systems.Jail
                 if (BehindBarsUIManager.Instance != null)
                 {
                     BehindBarsUIManager.Instance.ShowNotification(
-                        "No player record found", 
+                        "No player record found",
                         NotificationType.Warning
                     );
                 }
                 return;
             }
-            
+
             // Check if player already received prison items
             if (HasReceivedPrisonItems(playerHandler))
             {
                 if (BehindBarsUIManager.Instance != null)
                 {
                     BehindBarsUIManager.Instance.ShowNotification(
-                        "Prison items already received", 
+                        "Prison items already received",
                         NotificationType.Progress
                     );
                 }
                 return;
             }
-            
+
             // Start prison item pickup process
             MelonCoroutines.Start(ProcessJailItemPickup(currentPlayer));
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private IEnumerator ProcessReleaseItemExchange(Player player)
+        {
+            isProcessing = true;
+            if (interactableObject != null)
+            {
+                interactableObject.SetMessage("Exchanging items...");
+                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+            }
+
+            ModLogger.Info($"Starting release item exchange for {player.name}");
+
+            // Show initial notification
+            if (BehindBarsUIManager.Instance != null)
+            {
+                BehindBarsUIManager.Instance.ShowNotification(
+                    "Returning prison items and retrieving personal belongings...",
+                    NotificationType.Instruction
+                );
+            }
+
+            // Get player inventory
+            var inventory = PlayerSingleton<PlayerInventory>.Instance;
+            if (inventory == null)
+            {
+                ModLogger.Error("PlayerInventory instance not found!");
+                CompletePickup();
+                yield break;
+            }
+
+            // Phase 1: Remove prison items from player inventory
+            var prisonItemsToRemove = new List<string> { "Prison Uniform", "Prison Shoes", "Prison Socks" };
+            int itemsRemoved = 0;
+
+            foreach (var itemName in prisonItemsToRemove)
+            {
+                bool itemRemoved = false;
+                try
+                {
+                    var removeMethod = inventory.GetType().GetMethod("RemoveItem");
+                    if (removeMethod != null)
+                    {
+                        removeMethod.Invoke(inventory, new object[] { itemName });
+                        itemsRemoved++;
+                        itemRemoved = true;
+                        ModLogger.Info($"Removed prison item: {itemName}");
+                    }
+                }
+                catch (System.Exception ex)
+                {
+                    ModLogger.Debug($"Could not remove {itemName}: {ex.Message}");
+                }
+
+                if (itemRemoved && BehindBarsUIManager.Instance != null)
+                {
+                    BehindBarsUIManager.Instance.ShowNotification(
+                        $"Returned: {itemName}",
+                        NotificationType.Progress
+                    );
+                    yield return new WaitForSeconds(0.3f);
+                }
+            }
+
+            yield return new WaitForSeconds(1f);
+
+            // Phase 2: Give back personal items using PersistentPlayerData
+            var persistentData = Behind_Bars.Systems.Data.PersistentPlayerData.Instance;
+            if (persistentData != null)
+            {
+                var legalItems = persistentData.GetLegalItemsForPlayer(player);
+                var contrabandItems = persistentData.GetContrabandItemsForPlayer(player);
+
+                ModLogger.Info($"Found {legalItems.Count} legal items and {contrabandItems.Count} contraband items for {player.name}");
+
+                // Return legal items
+                foreach (var item in legalItems)
+                {
+                    bool itemGiven = false;
+                    try
+                    {
+                        // Since stored items have "unknown" IDs, use direct inventory methods instead of registry lookup
+                        // Try multiple approaches to add the item back
+                        ModLogger.Info($"Attempting to return: {item.itemName} (ID: {item.itemId})");
+
+                        // Try multiple inventory addition approaches
+                        bool addSuccess = false;
+
+                        // Approach 1: Try AddItem with string parameter
+                        try
+                        {
+                            var methods = inventory.GetType().GetMethods();
+                            foreach (var method in methods)
+                            {
+                                if (method.Name == "AddItem" && method.GetParameters().Length == 1)
+                                {
+                                    var paramType = method.GetParameters()[0].ParameterType;
+                                    if (paramType == typeof(string))
+                                    {
+                                        for (int i = 0; i < item.stackCount; i++)
+                                        {
+                                            method.Invoke(inventory, new object[] { item.itemName });
+                                        }
+                                        addSuccess = true;
+                                        ModLogger.Info($"Successfully returned {item.itemName} using AddItem(string)");
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        catch (System.Exception ex)
+                        {
+                            ModLogger.Debug($"AddItem(string) failed for {item.itemName}: {ex.Message}");
+                        }
+
+                        // Approach 2: Try GiveItem methods
+                        if (!addSuccess)
+                        {
+                            try
+                            {
+                                var giveItemMethod = inventory.GetType().GetMethod("GiveItem");
+                                if (giveItemMethod != null)
+                                {
+                                    for (int i = 0; i < item.stackCount; i++)
+                                    {
+                                        giveItemMethod.Invoke(inventory, new object[] { item.itemName });
+                                    }
+                                    addSuccess = true;
+                                    ModLogger.Info($"Successfully returned {item.itemName} using GiveItem");
+                                }
+                            }
+                            catch (System.Exception ex)
+                            {
+                                ModLogger.Debug($"GiveItem failed for {item.itemName}: {ex.Message}");
+                            }
+                        }
+
+                        // Approach 3: Try to use the same method that gives prison items but with civilian items
+                        if (!addSuccess)
+                        {
+                            try
+                            {
+                                // Try to add using registry lookup with item name as ID
+                                GivePrisonItem(inventory, item.itemName.ToLower().Replace(" ", ""));
+                                addSuccess = true;
+                                ModLogger.Info($"Successfully returned {item.itemName} using GivePrisonItem fallback");
+                            }
+                            catch (System.Exception ex)
+                            {
+                                ModLogger.Debug($"GivePrisonItem fallback failed for {item.itemName}: {ex.Message}");
+                            }
+                        }
+
+                        if (addSuccess)
+                        {
+                            itemGiven = true;
+                        }
+                        else
+                        {
+                            ModLogger.Warn($"All methods failed to return {item.itemName} - item not added to inventory");
+                        }
+                    }
+                    catch (System.Exception ex)
+                    {
+                        ModLogger.Error($"Error returning item {item.itemName}: {ex.Message}");
+                    }
+
+                    if (itemGiven && BehindBarsUIManager.Instance != null)
+                    {
+                        BehindBarsUIManager.Instance.ShowNotification(
+                            $"Returned: {item.itemName}",
+                            NotificationType.Progress
+                        );
+                        yield return new WaitForSeconds(0.3f);
+                    }
+                }
+
+                // Clear stored items
+                persistentData.ClearPlayerSnapshot(player);
+                ModLogger.Info($"Cleared stored items for {player.name}");
+            }
+
+            // Complete the exchange
+            CompletePickup();
+            ModLogger.Info($"Release item exchange completed for {player.name}");
         }
 
 #if !MONO
@@ -181,6 +408,11 @@ namespace Behind_Bars.Systems.Jail
                 yield break;
             }
             
+            // First, change player to prison clothing
+            ChangePlayerToPrisonClothing(player);
+
+            yield return new WaitForSeconds(1f);
+
             // Give all prison items at once
             List<string> itemNames = new List<string>();
             
@@ -326,21 +558,315 @@ namespace Behind_Bars.Systems.Jail
             }
         }
         
+        /// <summary>
+        /// Change player's appearance to prison attire
+        /// </summary>
+        private void ChangePlayerToPrisonClothing(Player player)
+        {
+            try
+            {
+                ModLogger.Info($"Changing {player.name} to prison clothing...");
+
+                // Get player's avatar component
+#if !MONO
+                var playerAvatar = player.GetComponentInChildren<Il2CppScheduleOne.AvatarFramework.Avatar>();
+#else
+                var playerAvatar = player.GetComponentInChildren<ScheduleOne.AvatarFramework.Avatar>();
+#endif
+                if (playerAvatar == null)
+                {
+                    ModLogger.Error("Could not find player's Avatar component");
+                    return;
+                }
+
+                // Get current avatar settings
+                var currentSettings = playerAvatar.CurrentSettings;
+                if (currentSettings == null)
+                {
+                    ModLogger.Error("Could not get player's current avatar settings");
+                    return;
+                }
+
+                // Save original clothing (body layers and accessories)
+                SaveOriginalClothing(currentSettings);
+
+                // Clear current clothing
+                currentSettings.BodyLayerSettings.Clear();
+                currentSettings.AccessorySettings.Clear();
+
+                // Apply prison uniform (similar to inmates)
+                bool isMale = currentSettings.Gender < 0.5f;
+
+                // Add underwear first
+                string underwearPath = isMale ? "Avatar/Layers/Bottom/MaleUnderwear" : "Avatar/Layers/Bottom/FemaleUnderwear";
+                currentSettings.BodyLayerSettings.Add(new
+#if !MONO
+                    Il2CppScheduleOne.AvatarFramework.AvatarSettings.LayerSetting
+#else
+                    ScheduleOne.AvatarFramework.AvatarSettings.LayerSetting
+#endif
+                {
+                    layerPath = underwearPath,
+                    layerTint = Color.white
+                });
+
+                // Add orange jumpsuit top
+                currentSettings.BodyLayerSettings.Add(new
+#if !MONO
+                    Il2CppScheduleOne.AvatarFramework.AvatarSettings.LayerSetting
+#else
+                    ScheduleOne.AvatarFramework.AvatarSettings.LayerSetting
+#endif
+                {
+                    layerPath = AvatarResourcePaths.Tops.TShirt,
+                    layerTint = new Color(1f, 0.5f, 0f) // Orange
+                });
+
+                // Add orange jumpsuit pants
+                currentSettings.BodyLayerSettings.Add(new
+#if !MONO
+                    Il2CppScheduleOne.AvatarFramework.AvatarSettings.LayerSetting
+#else
+                    ScheduleOne.AvatarFramework.AvatarSettings.LayerSetting
+#endif
+                {
+                    layerPath = AvatarResourcePaths.Bottoms.Jeans,
+                    layerTint = new Color(1f, 0.5f, 0f) // Orange
+                });
+
+                // Add prison sandals/flip-flops
+                currentSettings.AccessorySettings.Clear();
+                currentSettings.AccessorySettings.Add(new
+#if !MONO
+                    Il2CppScheduleOne.AvatarFramework.AvatarSettings.AccessorySetting
+#else
+                    ScheduleOne.AvatarFramework.AvatarSettings.AccessorySetting
+#endif
+                {
+                    path = AvatarResourcePaths.Footwear.Sandals,
+                    color = new Color(0.3f, 0.3f, 0.3f) // Gray sandals
+                });
+
+                // Apply the changes
+                playerAvatar.LoadAvatarSettings(currentSettings);
+
+                ModLogger.Info($"✓ Changed {player.name} to prison attire");
+
+                // Show notification
+                if (BehindBarsUIManager.Instance != null)
+                {
+                    BehindBarsUIManager.Instance.ShowNotification(
+                        "Changed into prison uniform",
+                        NotificationType.Progress
+                    );
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error changing player to prison clothing: {ex.Message}");
+                ModLogger.Error($"Stack trace: {ex.StackTrace}");
+            }
+        }
+
+        /// <summary>
+        /// Save player's original clothing for later restoration
+        /// </summary>
+        private void SaveOriginalClothing(AvatarSettings settings)
+        {
+            try
+            {
+                ModLogger.Info("Saving player's original clothing...");
+
+                // Clear any existing saved clothing
+                originalPlayerClothing.Clear();
+
+                // Save body layers
+                var bodyLayers = new List<object>();
+                foreach (var layer in settings.BodyLayerSettings)
+                {
+                    bodyLayers.Add(new Dictionary<string, object>
+                    {
+                        { "path", layer.layerPath },
+                        { "tint", layer.layerTint }
+                    });
+                }
+                originalPlayerClothing["BodyLayers"] = bodyLayers;
+
+                // Save accessories
+                var accessories = new List<object>();
+                foreach (var accessory in settings.AccessorySettings)
+                {
+                    accessories.Add(new Dictionary<string, object>
+                    {
+                        { "path", accessory.path },
+                        { "color", accessory.color }
+                    });
+                }
+                originalPlayerClothing["Accessories"] = accessories;
+
+                ModLogger.Info($"Saved {bodyLayers.Count} body layers and {accessories.Count} accessories");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error saving original clothing: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Restore player's original clothing (for when they're released)
+        /// </summary>
+        public void RestoreOriginalClothing(Player player)
+        {
+            try
+            {
+                if (originalPlayerClothing.Count == 0)
+                {
+                    ModLogger.Warn("No original clothing saved to restore");
+                    return;
+                }
+
+                ModLogger.Info($"Restoring {player.name}'s original clothing...");
+
+#if !MONO
+                var playerAvatar = player.GetComponentInChildren<Il2CppScheduleOne.AvatarFramework.Avatar>();
+#else
+                var playerAvatar = player.GetComponentInChildren<ScheduleOne.AvatarFramework.Avatar>();
+#endif
+                if (playerAvatar == null)
+                {
+                    ModLogger.Error("Could not find player's Avatar component for restoration");
+                    return;
+                }
+
+                var currentSettings = playerAvatar.CurrentSettings;
+                if (currentSettings == null)
+                {
+                    ModLogger.Error("Could not get player's current avatar settings for restoration");
+                    return;
+                }
+
+                // Clear prison clothing
+                currentSettings.BodyLayerSettings.Clear();
+                currentSettings.AccessorySettings.Clear();
+
+                // Restore body layers
+                if (originalPlayerClothing.ContainsKey("BodyLayers"))
+                {
+                    var bodyLayers = originalPlayerClothing["BodyLayers"] as List<object>;
+                    foreach (var layerObj in bodyLayers)
+                    {
+                        var layer = layerObj as Dictionary<string, object>;
+                        if (layer != null)
+                        {
+                            currentSettings.BodyLayerSettings.Add(new
+#if !MONO
+                                Il2CppScheduleOne.AvatarFramework.AvatarSettings.LayerSetting
+#else
+                                ScheduleOne.AvatarFramework.AvatarSettings.LayerSetting
+#endif
+                            {
+                                layerPath = layer["path"] as string,
+                                layerTint = (Color)layer["tint"]
+                            });
+                        }
+                    }
+                }
+
+                // Restore accessories
+                if (originalPlayerClothing.ContainsKey("Accessories"))
+                {
+                    var accessories = originalPlayerClothing["Accessories"] as List<object>;
+                    foreach (var accessoryObj in accessories)
+                    {
+                        var accessory = accessoryObj as Dictionary<string, object>;
+                        if (accessory != null)
+                        {
+                            currentSettings.AccessorySettings.Add(new
+#if !MONO
+                                Il2CppScheduleOne.AvatarFramework.AvatarSettings.AccessorySetting
+#else
+                                ScheduleOne.AvatarFramework.AvatarSettings.AccessorySetting
+#endif
+                            {
+                                path = accessory["path"] as string,
+                                color = (Color)accessory["color"]
+                            });
+                        }
+                    }
+                }
+
+                // Apply the restored settings
+                playerAvatar.LoadAvatarSettings(currentSettings);
+
+                ModLogger.Info($"✓ Restored {player.name}'s original clothing");
+
+                // Clear saved clothing
+                originalPlayerClothing.Clear();
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error restoring original clothing: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Disable conflicting InventoryDropOff GameObject to prevent duplicate interactions
+        /// </summary>
+        private void DisableConflictingInventoryDropOff()
+        {
+            try
+            {
+                // Look for InventoryDropOff in the parent storage area
+                var jailController = Core.JailController;
+                if (jailController?.storage?.inventoryDropOff != null)
+                {
+                    var dropOffObj = jailController.storage.inventoryDropOff.gameObject;
+                    if (dropOffObj.activeSelf)
+                    {
+                        dropOffObj.SetActive(false);
+                        ModLogger.Info("Disabled conflicting InventoryDropOff GameObject to prevent duplicate interactions");
+                    }
+                }
+
+                // Also look for any GameObject named "InventoryDropOff" in the scene
+                var dropOffObjects = FindObjectsOfType<GameObject>();
+                foreach (var obj in dropOffObjects)
+                {
+                    if (obj.name == "InventoryDropOff" && obj.activeSelf)
+                    {
+                        obj.SetActive(false);
+                        ModLogger.Info($"Disabled conflicting GameObject: {obj.name}");
+                    }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Debug($"Could not disable InventoryDropOff objects: {ex.Message}");
+            }
+        }
+
         private void CompletePickup()
         {
             isProcessing = false;
+
+            // Notify the ReleaseManager that inventory processing is complete
+            if (currentPlayer != null && ReleaseManager.Instance != null)
+            {
+                ReleaseManager.Instance.OnInventoryProcessingComplete(currentPlayer);
+                ModLogger.Info($"JailInventoryPickupStation: Notified ReleaseManager that inventory pickup is complete for {currentPlayer.name}");
+            }
             itemsCurrentlyTaken = true;
-            
+
             // Disable the visual item prefabs
             DisableItemPrefabs();
-            
+
             // Update interaction state to show items are taken
             if (interactableObject != null)
             {
                 interactableObject.SetMessage("Items taken");
                 interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
             }
-            
+
             ModLogger.Info("Prison item pickup station disabled - items have been taken and prefabs hidden");
         }
 
@@ -434,11 +960,30 @@ namespace Behind_Bars.Systems.Jail
         
         void Update()
         {
-            // Update interaction state based on whether player needs prison items
+            // Update interaction state based on whether player needs prison items or is being released
             if (!isProcessing && interactableObject != null)
             {
                 var localPlayer = Player.Local;
-                if (localPlayer != null && NeedsPrisonItems(localPlayer))
+                var releaseManager = ReleaseManager.Instance;
+
+                // Check if this is during a release process
+                bool isDuringRelease = false;
+                if (releaseManager != null && localPlayer != null)
+                {
+                    var releaseStatus = releaseManager.GetReleaseStatus(localPlayer);
+                    isDuringRelease = releaseStatus != ReleaseManager.ReleaseStatus.NotStarted &&
+                                     releaseStatus != ReleaseManager.ReleaseStatus.Completed &&
+                                     releaseStatus != ReleaseManager.ReleaseStatus.Failed;
+                }
+
+                if (isDuringRelease)
+                {
+                    // During release: Allow interaction to exchange prison items for personal belongings
+                    interactableObject.SetMessage("Exchange prison items for personal belongings");
+                    interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                    // Removed spam debug log: ModLogger.Debug("JailInventoryPickupStation: Release mode - allowing interaction");
+                }
+                else if (localPlayer != null && NeedsPrisonItems(localPlayer))
                 {
                     // New inmate needs items - enable interaction and show items
                     if (itemsCurrentlyTaken)
@@ -448,7 +993,7 @@ namespace Behind_Bars.Systems.Jail
                         itemsCurrentlyTaken = false;
                         ModLogger.Info("New inmate detected - re-enabled prison item station");
                     }
-                    
+
                     interactableObject.SetMessage("Collect prison items");
                     interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
                 }

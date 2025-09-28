@@ -279,9 +279,9 @@ namespace Behind_Bars.Systems.Jail
         private void StartCameraView()
         {
             if (mugshotCamera == null) return;
-            
+
             inMugshotView = true;
-            
+
             // Use player camera with ViewAvatar functionality to see the player
             var playerCamera = PlayerSingleton<PlayerCamera>.Instance;
             if (playerCamera != null && currentPlayer != null)
@@ -290,22 +290,22 @@ namespace Behind_Bars.Systems.Jail
                 PlayerSingleton<PlayerMovement>.Instance.canMove = false;
                 PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(false);
                 PlayerSingleton<PlayerInventory>.Instance.SetEquippingEnabled(false);
-                
+
                 // Enable mugshot mode to override player visibility
                 Behind_Bars.Harmony.HarmonyPatches.SetMugshotInProgress(true);
                 currentPlayer.SetVisibleToLocalPlayer(true);
-                
+
                 // Override camera position to mugshot camera position and rotation
                 playerCamera.OverrideTransform(
-                    mugshotCamera.transform.position, 
-                    mugshotCamera.transform.rotation, 
+                    mugshotCamera.transform.position,
+                    mugshotCamera.transform.rotation,
                     0.3f
                 );
-                
+
                 // Free mouse and hide crosshair for photo session
                 playerCamera.FreeMouse();
                 Singleton<HUD>.Instance.SetCrosshairVisible(false);
-                
+
                 ModLogger.Info("Switched to mugshot camera view with player visible");
             }
         }
@@ -324,18 +324,18 @@ namespace Behind_Bars.Systems.Jail
                 playerCamera.StopTransformOverride(0.3f);
                 playerCamera.LockMouse();
                 Singleton<HUD>.Instance.SetCrosshairVisible(true);
-                
+
                 // Disable mugshot mode and switch player avatar back to "Invisible" layer
                 Behind_Bars.Harmony.HarmonyPatches.SetMugshotInProgress(false);
                 currentPlayer.SetVisibleToLocalPlayer(false);
-                
+
                 // Restore player controls
                 PlayerSingleton<PlayerMovement>.Instance.canMove = true;
                 PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
                 PlayerSingleton<PlayerInventory>.Instance.SetEquippingEnabled(true);
-                
+
                 // No extra avatar cleanup needed
-                
+
                 ModLogger.Info("Restored main camera view and player visibility");
             }
             
@@ -375,7 +375,7 @@ namespace Behind_Bars.Systems.Jail
             
             // Wait for positioning
             yield return new WaitForSeconds(positioningDuration);
-            
+
             // Flash effect before capture
             if (BehindBarsUIManager.Instance != null)
             {
@@ -454,52 +454,81 @@ namespace Behind_Bars.Systems.Jail
         
         private Texture2D CapturePhoto()
         {
-            // Use the MugshotCamera - don't touch V camera at all
-            if (mugshotCamera == null)
-            {
-                ModLogger.Error("MugshotCamera reference is null!");
-                return null;
-            }
-            
             try
             {
-                ModLogger.Info("Using MugshotCamera for photo capture");
-                
-                // Set up render texture
-                RenderTexture renderTexture = new RenderTexture(512, 512, 24);
-                
-                // Store original settings
-                RenderTexture originalTarget = mugshotCamera.targetTexture;
-                RenderTexture originalActive = RenderTexture.active;
-                
-                // Configure MugshotCamera
-                mugshotCamera.targetTexture = renderTexture;
-                
-                // Render using the MugshotCamera
-                mugshotCamera.Render();
-                ModLogger.Info("Photo captured using MugshotCamera");
-                
-                // Read pixels into texture2D
-                RenderTexture.active = renderTexture;
-                Texture2D photo = new Texture2D(512, 512, TextureFormat.RGB24, false);
-                photo.ReadPixels(new Rect(0, 0, 512, 512), 0, 0);
-                photo.Apply();
-                
-                // Restore MugshotCamera settings
-                mugshotCamera.targetTexture = originalTarget;
-                RenderTexture.active = originalActive;
-                
-                if (renderTexture != null)
+                ModLogger.Info("Capturing photo using direct screen capture of 3rd person view");
+
+                // Hide UI elements during capture to avoid text overlays
+                bool hudWasVisible = false;
+                try
                 {
-                    renderTexture.Release();
+                    var hud = Singleton<HUD>.Instance;
+                    if (hud != null)
+                    {
+                        hudWasVisible = hud.gameObject.activeInHierarchy;
+                        hud.gameObject.SetActive(false);
+                        ModLogger.Info("Hidden HUD for clean screen capture");
+                    }
                 }
-                
-                ModLogger.Info($"Third-person camera restored - Photo captured: {photo.width}x{photo.height}");
-                return photo;
+                catch (System.Exception ex)
+                {
+                    ModLogger.Debug($"Could not hide HUD: {ex.Message}");
+                }
+
+                // SCREEN CAPTURE APPROACH: Capture exactly what's displayed on screen (like V key 3rd person)
+                // Small delay to ensure UI changes take effect
+                System.Threading.Thread.Sleep(100);
+
+                // Capture the current screen
+                Texture2D screenCapture = ScreenCapture.CaptureScreenshotAsTexture();
+
+                // Restore HUD immediately after capture
+                try
+                {
+                    var hud = Singleton<HUD>.Instance;
+                    if (hud != null && hudWasVisible)
+                    {
+                        hud.gameObject.SetActive(true);
+                        ModLogger.Info("Restored HUD after screen capture");
+                    }
+                }
+                catch (System.Exception ex)
+                {
+                    ModLogger.Debug($"Could not restore HUD: {ex.Message}");
+                }
+
+                if (screenCapture != null)
+                {
+                    // Crop to the center portion (where the player would be in 3rd person view)
+                    int cropSize = 512;
+                    int centerX = screenCapture.width / 2 - cropSize / 2;
+                    int centerY = screenCapture.height / 2 - cropSize / 2;
+
+                    // Make sure crop coordinates are valid
+                    centerX = Mathf.Clamp(centerX, 0, screenCapture.width - cropSize);
+                    centerY = Mathf.Clamp(centerY, 0, screenCapture.height - cropSize);
+
+                    // Create cropped texture
+                    Texture2D photo = new Texture2D(cropSize, cropSize, TextureFormat.RGB24, false);
+                    Color[] pixels = screenCapture.GetPixels(centerX, centerY, cropSize, cropSize);
+                    photo.SetPixels(pixels);
+                    photo.Apply();
+
+                    // Clean up screen capture
+                    UnityEngine.Object.Destroy(screenCapture);
+
+                    ModLogger.Info($"Screen capture mugshot created: {photo.width}x{photo.height}");
+                    return photo;
+                }
+                else
+                {
+                    ModLogger.Error("Screen capture returned null");
+                    return null;
+                }
             }
             catch (System.Exception ex)
             {
-                ModLogger.Error($"Error moving third-person camera for photo: {ex.Message}");
+                ModLogger.Error($"Error during screen capture mugshot: {ex.Message}");
                 ModLogger.Error($"Stack trace: {ex.StackTrace}");
                 return null;
             }

@@ -120,11 +120,25 @@ namespace Behind_Bars
             
             // Register Jail Inventory System
             ClassInjector.RegisterTypeInIl2Cpp<JailInventoryPickupStation>();
+            ClassInjector.RegisterTypeInIl2Cpp<InventoryPickupStation>();
+            ClassInjector.RegisterTypeInIl2Cpp<PrisonStorageEntity>();
+            ClassInjector.RegisterTypeInIl2Cpp<ExitScannerStation>();
+            ClassInjector.RegisterTypeInIl2Cpp<SimpleExitDoor>();
+
+            // Register Release System
+            ClassInjector.RegisterTypeInIl2Cpp<ReleaseManager>();
+            ClassInjector.RegisterTypeInIl2Cpp<ReleaseOfficerBehavior>();
 #endif
             // Initialize core systems
             HarmonyPatches.Initialize(this);
             _jailSystem = new JailSystem();
             _jailSystem.Initialize(); // Initialize JailSystem components
+
+            // Initialize ReleaseManager for coordinated prisoner releases
+            MelonLogger.Msg("[Core] Initializing ReleaseManager from Core.cs");
+            var releaseManager = ReleaseManager.Instance; // This will create the singleton
+            ModLogger.Info("ReleaseManager initialized and ready for coordinated releases");
+
             _bailSystem = new BailSystem();
             
             // Initialize crime detection UI
@@ -476,6 +490,10 @@ namespace Behind_Bars
                     JailController.SetupDoors();
                     ModLogger.Info("✓ Door setup completed after prefab loading");
 
+                    // Setup exit door specifically
+                    SetupExitDoor(JailController);
+                    ModLogger.Info("✓ Exit door setup completed");
+
                     // Log status after a frame to let everything complete
                     MelonCoroutines.Start(LogStatusAfterFrame());
 
@@ -647,7 +665,76 @@ namespace Behind_Bars
                 {
                     ModLogger.Warn("ScannerStation not found in booking area");
                 }
-                
+
+                // Set up Exit Scanner Station - SINGLE COMPONENT ONLY
+                ModLogger.Info("Searching for ExitScannerStation...");
+                Transform hallway = jailTransform.Find("Hallway");
+                Transform exitScannerStation = null;
+
+                if (hallway != null)
+                {
+                    ModLogger.Info($"Found Hallway at {hallway.name}");
+                    exitScannerStation = hallway.Find("ExitScannerStation");
+                    if (exitScannerStation != null)
+                    {
+                        ModLogger.Info($"Found ExitScannerStation in Hallway: {exitScannerStation.name}");
+                    }
+                    else
+                    {
+                        ModLogger.Warn("ExitScannerStation not found in Hallway");
+                    }
+                }
+                else
+                {
+                    ModLogger.Warn("Hallway not found in jail");
+                }
+
+                if (exitScannerStation == null)
+                {
+                    exitScannerStation = jailTransform.Find("ExitScannerStation");
+                    if (exitScannerStation != null)
+                    {
+                        ModLogger.Info($"Found ExitScannerStation directly in jail: {exitScannerStation.name}");
+                    }
+                }
+
+                if (exitScannerStation != null)
+                {
+                    var exitScannerComponent = exitScannerStation.GetComponent<Behind_Bars.Systems.Jail.ExitScannerStation>();
+                    if (exitScannerComponent == null)
+                    {
+                        exitScannerComponent = exitScannerStation.gameObject.AddComponent<Behind_Bars.Systems.Jail.ExitScannerStation>();
+                        ModLogger.Info("✓ ExitScannerStation component added to GameObject at " + exitScannerStation.name);
+                    }
+                    else
+                    {
+                        ModLogger.Info("ExitScannerStation component already exists");
+                    }
+
+                    ModLogger.Info("ExitScannerStation setup complete - found at " + exitScannerStation.name);
+                }
+                else
+                {
+                    ModLogger.Warn("ExitScannerStation not found in jail area or Hallway - searching all children");
+
+                    // Debug: List all children of jailTransform
+                    for (int i = 0; i < jailTransform.childCount; i++)
+                    {
+                        var child = jailTransform.GetChild(i);
+                        ModLogger.Info($"Jail child {i}: {child.name}");
+
+                        if (child.name == "Hallway")
+                        {
+                            ModLogger.Info($"Found Hallway, checking its children:");
+                            for (int j = 0; j < child.childCount; j++)
+                            {
+                                var grandchild = child.GetChild(j);
+                                ModLogger.Info($"  Hallway child {j}: {grandchild.name}");
+                            }
+                        }
+                    }
+                }
+
                 // Set up Inventory Drop-off Station
                 // Based on Unity hierarchy, look for Storage/InventoryDropOff
                 Transform storageArea = jailTransform.Find("Storage");
@@ -1053,13 +1140,13 @@ namespace Behind_Bars
                 {
                     TeleportToJail();
                 }
-                
+
                 // End key - Teleport to Taco Ticklers
                 if (Input.GetKeyDown(KeyCode.End))
                 {
                     TeleportToTacoTicklers();
                 }
-                
+
                 // F9 key - Show crime details (debug)
                 if (Input.GetKeyDown(KeyCode.F9))
                 {
@@ -1071,10 +1158,71 @@ namespace Behind_Bars
                 {
                     TriggerTestArrest();
                 }
+
+                // F12 key - Test spawn NPC with new avatar system
+                if (Input.GetKeyDown(KeyCode.F12))
+                {
+                    TestSpawnNPCWithAvatar();
+                }
             }
             catch (Exception e)
             {
                 // Silently ignore input errors to avoid spam
+            }
+        }
+
+        /// <summary>
+        /// Test spawn an NPC with the new avatar system
+        /// </summary>
+        private void TestSpawnNPCWithAvatar()
+        {
+            try
+            {
+#if !MONO
+                var player = Object.FindObjectOfType<Il2CppScheduleOne.PlayerScripts.Player>();
+#else
+                var player = Object.FindObjectOfType<ScheduleOne.PlayerScripts.Player>();
+#endif
+                if (player != null)
+                {
+                    ModLogger.Info("F12 pressed - Testing NPC spawn with working avatar system");
+
+                    // Spawn in front of player
+                    var spawnPos = player.transform.position + (player.transform.forward * 3f);
+
+                    // Randomly choose between guard and inmate
+                    GameObject testNPC = null;
+                    bool spawnGuard = UnityEngine.Random.Range(0f, 1f) > 0.5f;
+
+                    if (spawnGuard)
+                    {
+                        ModLogger.Info("Spawning test GUARD with proper uniform...");
+                        testNPC = BaseNPCSpawner.SpawnGuard(spawnPos, "Officer", "Test", $"G{UnityEngine.Random.Range(1000, 9999)}");
+                    }
+                    else
+                    {
+                        ModLogger.Info("Spawning test INMATE with orange jumpsuit...");
+                        testNPC = BaseNPCSpawner.SpawnInmate(spawnPos, "Inmate", $"Test{UnityEngine.Random.Range(100, 999)}");
+                    }
+
+                    if (testNPC != null)
+                    {
+                        ModLogger.Info($"✅ Test {(spawnGuard ? "GUARD" : "INMATE")} spawned successfully: {testNPC.name}");
+                        ModLogger.Info($"Appearance: {(spawnGuard ? "Blue uniform with police cap and combat boots" : "Orange jumpsuit with sandals")}");
+                    }
+                    else
+                    {
+                        ModLogger.Error("❌ Failed to spawn test NPC");
+                    }
+                }
+                else
+                {
+                    ModLogger.Warn("Player not found for NPC spawn location");
+                }
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error testing NPC spawn: {e.Message}");
             }
         }
 
@@ -1229,6 +1377,66 @@ namespace Behind_Bars
             catch (Exception e)
             {
                 ModLogger.Error($"Error during Behind Bars cleanup: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Setup exit door using GuardDoor prefab like other doors
+        /// </summary>
+        private static void SetupExitDoor(JailController jailController)
+        {
+            try
+            {
+                ModLogger.Info("Setting up exit door...");
+
+                // Get the ExitScannerArea
+                if (jailController.exitScanner?.exitDoor != null)
+                {
+                    var exitDoor = jailController.exitScanner.exitDoor;
+                    ModLogger.Info($"Found exitDoor in ExitScannerArea: {exitDoor.doorName}");
+
+                    // Instantiate using steelDoorPrefab (GuardDoor)
+                    if (jailController.doorController?.steelDoorPrefab != null && exitDoor.doorHolder != null)
+                    {
+                        if (!exitDoor.IsInstantiated())
+                        {
+                            exitDoor.doorInstance = UnityEngine.Object.Instantiate(jailController.doorController.steelDoorPrefab, exitDoor.doorHolder);
+                            ModLogger.Info("✓ Exit door instantiated using steelDoorPrefab");
+
+                            // Enable SecuritySlots for visual difference
+                            var hingePoint = exitDoor.doorInstance.transform.Find("HingePoint");
+                            if (hingePoint != null)
+                            {
+                                var securitySlots = hingePoint.Find("SecuritySlots");
+                                if (securitySlots != null)
+                                {
+                                    securitySlots.gameObject.SetActive(true);
+                                    ModLogger.Info("✓ SecuritySlots enabled on exit door");
+                                }
+                            }
+
+                            // Lock the door initially
+                            exitDoor.LockDoor();
+                            ModLogger.Info("✓ Exit door locked initially");
+                        }
+                        else
+                        {
+                            ModLogger.Info("Exit door already instantiated");
+                        }
+                    }
+                    else
+                    {
+                        ModLogger.Warn($"Cannot instantiate exit door - steelDoorPrefab: {jailController.doorController?.steelDoorPrefab != null}, doorHolder: {exitDoor.doorHolder != null}");
+                    }
+                }
+                else
+                {
+                    ModLogger.Warn("No exitScanner or exitDoor found in JailController for setup");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error setting up exit door: {ex.Message}");
             }
         }
     }

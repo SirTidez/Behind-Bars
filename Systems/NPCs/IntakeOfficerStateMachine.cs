@@ -604,11 +604,27 @@ namespace Behind_Bars.Systems.NPCs
 
         private void HandleWaitingForStorageState()
         {
-            if (bookingProcess != null && bookingProcess.inventoryDropOffComplete)
+            if (bookingProcess != null)
             {
-                // Assign cell before escorting
-                AssignPrisonerCell();
-                ChangeIntakeState(IntakeState.EscortToCell);
+                if (bookingProcess.prisonGearPickupComplete)
+                {
+                    ModLogger.Info("IntakeOfficer: Prison gear pickup detected as complete, proceeding to cell assignment");
+                    // Assign cell before escorting
+                    AssignPrisonerCell();
+                    ChangeIntakeState(IntakeState.EscortToCell);
+                }
+                else
+                {
+                    // Add periodic logging to see what's happening
+                    if (Time.time % 5f < Time.deltaTime) // Every 5 seconds
+                    {
+                        ModLogger.Debug($"IntakeOfficer: Still waiting for prison gear pickup - prisonGearPickupComplete: {bookingProcess.prisonGearPickupComplete}");
+                    }
+                }
+            }
+            else
+            {
+                ModLogger.Error("IntakeOfficer: BookingProcess is null in HandleWaitingForStorageState");
             }
         }
 
@@ -784,9 +800,40 @@ namespace Behind_Bars.Systems.NPCs
             var cell = jailController.GetCellByIndex(assignedCellNumber);
             if (cell?.cellDoor?.doorPoint == null)
             {
-                ModLogger.Error($"Cell {assignedCellNumber} door point not available");
-                ChangeIntakeState(IntakeState.ReturningToPost);
-                return;
+                ModLogger.Error($"Cell {assignedCellNumber} door point not available - checking if door needs to be unlocked");
+
+                // Try to unlock and open the cell door first
+                bool doorOpened = jailController.doorController?.OpenJailCellDoor(assignedCellNumber) ?? false;
+                if (!doorOpened)
+                {
+                    ModLogger.Error($"Failed to open jail cell {assignedCellNumber} door");
+                    ChangeIntakeState(IntakeState.ReturningToPost);
+                    return;
+                }
+
+                // Retry getting the door point after opening
+                cell = jailController.GetCellByIndex(assignedCellNumber);
+                if (cell?.cellDoor?.doorPoint == null)
+                {
+                    ModLogger.Warn($"Cell {assignedCellNumber} door point still not available - trying alternative positioning");
+
+                    // Try to use cell transform position as fallback
+                    if (cell?.cellTransform != null)
+                    {
+                        ModLogger.Info($"Using cell transform position for cell {assignedCellNumber}: {cell.cellTransform.position}");
+                        destinationPosition = cell.cellTransform.position;
+                        MoveTo(cell.cellTransform.position);
+                        SendGuardMessage("Follow me to your cell.", 3f);
+                        ModLogger.Info($"IntakeOfficer: Escorting to cell {assignedCellNumber} via cellTransform at {cell.cellTransform.position}");
+                        return;
+                    }
+                    else
+                    {
+                        ModLogger.Error($"Cell {assignedCellNumber} has no cellTransform either - cannot escort to cell");
+                        ChangeIntakeState(IntakeState.ReturningToPost);
+                        return;
+                    }
+                }
             }
 
             // Set destination for dialog distance checking
@@ -1265,6 +1312,15 @@ namespace Behind_Bars.Systems.NPCs
                 return;
             }
 
+            // Check for officer coordination conflicts
+            if (!OfficerCoordinator.Instance.RegisterEscort(this, OfficerCoordinator.EscortType.Intake, player))
+            {
+                ModLogger.Info($"IntakeOfficer: Intake delayed due to coordination conflict - will retry");
+                // Retry after a short delay
+                MelonCoroutines.Start(RetryIntakeAfterDelay(player, 5f));
+                return;
+            }
+
             currentPrisoner = player;
 
             // Reset state tracking flags for new intake
@@ -1293,6 +1349,21 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Info($"IntakeOfficer: Starting intake process for {player.name}");
         }
 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private IEnumerator RetryIntakeAfterDelay(Player player, float delay)
+        {
+            yield return new WaitForSeconds(delay);
+
+            // Try again if still idle and player is still valid
+            if (currentState == IntakeState.Idle && player != null)
+            {
+                ModLogger.Info($"IntakeOfficer: Retrying intake for {player?.name} after coordination delay");
+                HandleBookingStarted(player);
+            }
+        }
+
         private void HandleMugshotCompleted(Player player)
         {
             if (currentState == IntakeState.WaitingForMugshot)
@@ -1311,6 +1382,8 @@ namespace Behind_Bars.Systems.NPCs
 
         private void HandleInventoryCompleted(Player player)
         {
+            ModLogger.Info($"HandleInventoryCompleted called for {player?.name} while in state {currentState}");
+
             if (currentState == IntakeState.WaitingForStorage)
             {
                 ModLogger.Info("IntakeOfficer: Inventory processing completed, proceeding to cell");
@@ -1318,6 +1391,10 @@ namespace Behind_Bars.Systems.NPCs
                 AssignPrisonerCell();
                 // Actually transition to escorting to cell
                 ChangeIntakeState(IntakeState.EscortToCell);
+            }
+            else
+            {
+                ModLogger.Warn($"IntakeOfficer: HandleInventoryCompleted called but guard is in {currentState} state, not WaitingForStorage");
             }
         }
 
@@ -1346,6 +1423,8 @@ namespace Behind_Bars.Systems.NPCs
             switch (stationName)
             {
                 case "HoldingCell":
+                    //jailController.holdingCell00GuardPoint;
+
                     // Look for HoldingCell_00/HoldingDoorHolder[0]/DoorPoint
                     foreach (Transform t in allTransforms)
                     {
@@ -1360,42 +1439,45 @@ namespace Behind_Bars.Systems.NPCs
                     break;
 
                 case "MugshotStation":
-                    // Look for MugshotStation/GuardPoint
-                    foreach (Transform t in allTransforms)
+                    // Use JailController's statically assigned guard point
+                    if (jailController != null)
                     {
-                        if ((t.name == "GuardPoint" || t.name == "DoorPoint") &&
-                            t.parent?.name.Contains("Mugshot") == true)
+                        var guardPoint = jailController.GetGuardPoint("MugshotStation");
+                        if (guardPoint != null)
                         {
-                            ModLogger.Info($"Found mugshot station point: {t.name} under {t.parent.name}");
-                            return t;
+                            ModLogger.Info($"Using JailController assigned MugshotStation guard point");
+                            return guardPoint;
                         }
                     }
+                    ModLogger.Warn("MugshotStation guard point not found in JailController");
                     break;
 
                 case "ScannerStation":
-                    // Look for ScannerStation/GuardPoint
-                    foreach (Transform t in allTransforms)
+                    // Use JailController's statically assigned guard point
+                    if (jailController != null)
                     {
-                        if ((t.name == "GuardPoint" || t.name == "DoorPoint") &&
-                            t.parent?.name.Contains("Scanner") == true)
+                        var guardPoint = jailController.GetGuardPoint("ScannerStation");
+                        if (guardPoint != null)
                         {
-                            ModLogger.Info($"Found scanner station point: {t.name} under {t.parent.name}");
-                            return t;
+                            ModLogger.Info($"Using JailController assigned ScannerStation guard point");
+                            return guardPoint;
                         }
                     }
+                    ModLogger.Warn("ScannerStation guard point not found in JailController");
                     break;
 
                 case "Storage":
-                    // Look for Storage/GuardPoint
-                    foreach (Transform t in allTransforms)
+                    // Use JailController's statically assigned guard point
+                    if (jailController != null)
                     {
-                        if ((t.name == "GuardPoint" || t.name == "DoorPoint") &&
-                            t.parent?.name.Contains("Storage") == true)
+                        var guardPoint = jailController.GetGuardPoint("Storage");
+                        if (guardPoint != null)
                         {
-                            ModLogger.Info($"Found storage point: {t.name} under {t.parent.name}");
-                            return t;
+                            ModLogger.Info($"Using JailController assigned Storage guard point");
+                            return guardPoint;
                         }
                     }
+                    ModLogger.Warn("Storage guard point not found in JailController");
                     break;
 
                 default:
@@ -1533,6 +1615,9 @@ namespace Behind_Bars.Systems.NPCs
         {
             OnIntakeCompleted?.Invoke(currentPrisoner);
 
+            // Unregister from officer coordination
+            OfficerCoordinator.Instance.UnregisterEscort(this);
+
             // Reset state
             currentPrisoner = null;
             assignedCellNumber = -1;
@@ -1579,9 +1664,15 @@ namespace Behind_Bars.Systems.NPCs
 
         /// <summary>
         /// Override base attack handling to interrupt intake process
+        /// TEMPORARILY DISABLED FOR TESTING
         /// </summary>
         public override void OnAttackedByPlayer(Player attacker)
         {
+            // DISABLED FOR TESTING - no more annoying arrest on accidental punch
+            ModLogger.Debug($"IntakeOfficer: Attack by {attacker?.name} ignored during testing");
+            return;
+
+            /*
             base.OnAttackedByPlayer(attacker);
 
             if (attacker == null) return;
@@ -1608,6 +1699,7 @@ namespace Behind_Bars.Systems.NPCs
 
                 ModLogger.Error($"IntakeOfficer: Attacked by non-prisoner {attacker.name} during intake");
             }
+            */
         }
 
         #endregion

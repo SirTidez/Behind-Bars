@@ -258,6 +258,12 @@ namespace Behind_Bars.Systems.Jail
                     door.UpdateDoorAnimation(deltaTime);
                 }
             }
+
+            // Update exit door animation (MISSING!)
+            if (jailController?.exitScanner?.exitDoor != null && jailController.exitScanner.exitDoor.IsInstantiated())
+            {
+                jailController.exitScanner.exitDoor.UpdateDoorAnimation(deltaTime);
+            }
         }
 
         public void SetupDoors()
@@ -300,6 +306,17 @@ namespace Behind_Bars.Systems.Jail
             else
             {
                 ModLogger.Warn("Booking area not initialized - cannot setup doors");
+            }
+
+            // MISSING: Setup ExitScannerArea doors the same way!
+            if (jailController?.exitScanner?.isInitialized == true)
+            {
+                jailController.exitScanner.InstantiateDoors(steelDoorPrefab ?? jailDoorPrefab);
+                ModLogger.Info("✓ Setup exit scanner area doors using steelDoorPrefab");
+            }
+            else
+            {
+                ModLogger.Warn("Exit scanner area not initialized - cannot setup doors");
             }
         }
 
@@ -589,6 +606,34 @@ namespace Behind_Bars.Systems.Jail
             }
 
             ModLogger.Error($"Could not close jail cell {cellIndex} door - not instantiated");
+            return false;
+        }
+
+        public bool OpenExitDoor()
+        {
+            if (jailController?.exitScanner?.exitDoor != null && jailController.exitScanner.exitDoor.IsInstantiated())
+            {
+                jailController.exitScanner.exitDoor.UnlockDoor();
+                jailController.exitScanner.exitDoor.OpenDoor();
+                ModLogger.Info("Opened exit door via JailDoorController");
+                return true;
+            }
+
+            ModLogger.Error("Could not open exit door - not instantiated or not found");
+            return false;
+        }
+
+        public bool CloseExitDoor()
+        {
+            if (jailController?.exitScanner?.exitDoor != null && jailController.exitScanner.exitDoor.IsInstantiated())
+            {
+                jailController.exitScanner.exitDoor.CloseDoor();
+                jailController.exitScanner.exitDoor.LockDoor();
+                ModLogger.Info("Closed and locked exit door via JailDoorController");
+                return true;
+            }
+
+            ModLogger.Error("Could not close exit door - not instantiated or not found");
             return false;
         }
     }

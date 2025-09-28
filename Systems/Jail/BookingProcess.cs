@@ -5,6 +5,7 @@ using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.UI;
 using Behind_Bars.Systems.NPCs;
+using Behind_Bars.Systems;
 
 
 
@@ -33,6 +34,8 @@ namespace Behind_Bars.Systems.Jail
         public bool inventoryDropOffComplete = false; // Deprecated - kept for compatibility
         public bool prisonGearPickupComplete = false; // NEW: Required step
         public bool inventoryProcessed = false;
+
+        private bool prisonGearEventFired = false; // Prevent duplicate event firing
         
         public Texture2D mugshotImage;
         public string fingerprintData;
@@ -48,6 +51,7 @@ namespace Behind_Bars.Systems.Jail
         public float notificationDuration = 4f;
         
         private Player currentPlayer;
+        private JailSystem.JailSentence currentSentence;
         public bool bookingInProgress = false;
         private bool escortRequested = false;
         private bool escortInProgress = false;
@@ -129,15 +133,16 @@ namespace Behind_Bars.Systems.Jail
         /// <summary>
         /// Start booking process for a player
         /// </summary>
-        public void StartBooking(Player player)
+        public void StartBooking(Player player, JailSystem.JailSentence sentence = null)
         {
             if (bookingInProgress)
             {
                 ModLogger.Warn($"Booking already in progress for {currentPlayer?.name}");
                 return;
             }
-            
+
             currentPlayer = player;
+            currentSentence = sentence;
             bookingInProgress = true;
             
             // Reset booking status
@@ -218,12 +223,26 @@ namespace Behind_Bars.Systems.Jail
             // Clear booking state
             bookingInProgress = false;
             
-            // Notify jail system that booking is complete
+            // Notify jail system that booking is complete and start jail time
             var jailSystem = Core.Instance?.JailSystem;
-            if (jailSystem != null)
+            if (jailSystem != null && currentSentence != null)
             {
-                // TODO: Add method to JailSystem to handle booking completion
-                ModLogger.Info("Notifying JailSystem of booking completion");
+                ModLogger.Info("Booking complete - starting UI timer countdown and jail time");
+
+                // Start the UI timer countdown now that booking is complete
+                if (BehindBarsUIManager.Instance != null && BehindBarsUIManager.Instance.GetUIWrapper() != null)
+                {
+                    float bailAmount = jailSystem.CalculateBailAmount(currentSentence.FineAmount, currentSentence.Severity);
+                    BehindBarsUIManager.Instance.GetUIWrapper().StartDynamicUpdates(currentSentence.JailTime, bailAmount);
+                    ModLogger.Info($"UI timer started: {currentSentence.JailTime}s jail time, ${bailAmount} bail");
+                }
+
+                // No longer need the separate jail time coroutine since UI timer will handle it
+                // MelonCoroutines.Start(jailSystem.StartJailTimeAfterBooking(currentPlayer, currentSentence));
+            }
+            else if (currentSentence == null)
+            {
+                ModLogger.Warn("No jail sentence available - cannot start jail time");
             }
             
             // Show final notification
@@ -236,6 +255,7 @@ namespace Behind_Bars.Systems.Jail
             }
             
             currentPlayer = null;
+            currentSentence = null;
         }
 
 #if !MONO
@@ -341,10 +361,19 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info("SetPrisonGearPickupComplete() called!");
             prisonGearPickupComplete = true;
 
-            ModLogger.Info($"Prison gear pickup marked as complete! Booking complete check: {IsBookingComplete()}");
+            ModLogger.Info($"Prison gear pickup marked as complete! New state - Mugshot: {mugshotComplete}, Fingerprint: {fingerprintComplete}, Prison Gear: {prisonGearPickupComplete}");
 
-            // Trigger completion event
-            OnInventoryDropOffCompleted?.Invoke(currentPlayer);
+            // Fire event only once to prevent duplicate handling
+            if (!prisonGearEventFired)
+            {
+                prisonGearEventFired = true;
+                OnInventoryDropOffCompleted?.Invoke(currentPlayer);
+                ModLogger.Info("IntakeOfficer: Fired OnInventoryDropOffCompleted event for prison gear completion");
+            }
+            else
+            {
+                ModLogger.Debug("IntakeOfficer: Prison gear event already fired, skipping duplicate");
+            }
 
             // Show progress notification
             if (BehindBarsUIManager.Instance != null)
@@ -403,6 +432,7 @@ namespace Behind_Bars.Systems.Jail
             inventoryProcessed = false;
             escortRequested = false;
             escortInProgress = false;
+            prisonGearEventFired = false; // Reset event flag
             mugshotImage = null;
             fingerprintData = null;
             confiscatedItems.Clear();
@@ -733,8 +763,29 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         public bool IsEscortComplete()
         {
-            // For now, simple time-based completion - can be enhanced
-            return inventoryProcessed || !bookingInProgress;
+            // Escort is only complete when player is actually assigned to a cell AND in that cell
+            if (currentPlayer == null) return true;
+
+            // Check if player is properly assigned to a cell
+            var cellManager = CellAssignmentManager.Instance;
+            if (cellManager != null)
+            {
+                int assignedCell = cellManager.GetPlayerCellNumber(currentPlayer);
+                if (assignedCell >= 0)
+                {
+                    // Check if player is actually IN the assigned cell
+                    var jailController = Core.JailController;
+                    if (jailController != null)
+                    {
+                        bool isInCell = jailController.IsPlayerInJailCellBounds(currentPlayer, assignedCell);
+                        ModLogger.Debug($"IsEscortComplete: Player assigned to cell {assignedCell}, in cell: {isInCell}");
+                        return isInCell;
+                    }
+                }
+            }
+
+            // Not assigned to cell or not in cell = escort not complete
+            return false;
         }
 
         /// <summary>
