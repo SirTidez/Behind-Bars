@@ -135,30 +135,122 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         public void StartBooking(Player player, JailSystem.JailSentence sentence = null)
         {
-            if (bookingInProgress)
+            // CRITICAL: Clean up any previous booking state first
+            if (bookingInProgress && currentPlayer != null)
             {
-                ModLogger.Warn($"Booking already in progress for {currentPlayer?.name}");
-                return;
+                ModLogger.Warn($"Booking already in progress for {currentPlayer?.name} - forcing cleanup of old booking");
+
+                // Clear old player's cell assignment BEFORE setting new player
+                var cellManager = CellAssignmentManager.Instance;
+                if (cellManager != null)
+                {
+                    cellManager.ReleasePlayerFromCell(currentPlayer);
+                    ModLogger.Info($"Cleared cell assignment for previous player: {currentPlayer.name}");
+                }
+
+                // Force cancel old booking
+                bookingInProgress = false;
             }
 
+            // Reset booking flags FIRST (before setting currentPlayer)
+            mugshotComplete = false;
+            fingerprintComplete = false;
+            inventoryDropOffComplete = false;
+            prisonGearPickupComplete = false;
+            inventoryProcessed = false;
+            escortRequested = false;
+            escortInProgress = false;
+            prisonGearEventFired = false;
+            mugshotImage = null;
+            fingerprintData = null;
+            confiscatedItems.Clear();
+
+            // NOW set the new player and sentence
             currentPlayer = player;
             currentSentence = sentence;
             bookingInProgress = true;
-            
-            // Reset booking status
-            ResetBookingStatus();
-            
-            ModLogger.Info($"Starting booking process for player: {player.name}");
+
+            // IMPORTANT: Completely reset any previous jail timer from a prior arrest
+            if (BehindBarsUIManager.Instance != null && BehindBarsUIManager.Instance.GetUIWrapper() != null)
+            {
+                BehindBarsUIManager.Instance.GetUIWrapper().ResetTimer();
+                ModLogger.Info("Reset jail timer completely - new booking starting");
+            }
+
+            // Clear the NEW player's prison items flag (from previous arrest if any)
+            var playerHandler = Behind_Bars.Core.GetPlayerHandler(currentPlayer);
+            if (playerHandler != null)
+            {
+                var items = playerHandler.GetConfiscatedItems();
+                if (items != null && items.Contains("PRISON_ITEMS_RECEIVED"))
+                {
+                    items.Remove("PRISON_ITEMS_RECEIVED");
+                    ModLogger.Info("Cleared PRISON_ITEMS_RECEIVED flag for new booking");
+                }
+            }
+
+            // NOTE: Do NOT clear persistent storage here - it contains the items we just confiscated!
+            // Persistent storage is cleared AFTER successful release in ReleaseOfficer.FinalizeInventoryPickup()
+
+            // CRITICAL: Reset the JailInventoryPickupStation for repeat arrests
+            var jailController = Core.JailController;
+            if (jailController != null)
+            {
+                // Find JailInventoryPickup GameObject and get its component
+                var jailInventoryPickupTransform = jailController.transform.Find("Storage/JailInventoryPickup");
+                if (jailInventoryPickupTransform != null)
+                {
+                    var jailInventoryStation = jailInventoryPickupTransform.GetComponent<JailInventoryPickupStation>();
+                    if (jailInventoryStation != null)
+                    {
+                        jailInventoryStation.ResetForNewInmate();
+                        ModLogger.Info("Reset JailInventoryPickupStation for new inmate");
+                    }
+                    else
+                    {
+                        ModLogger.Warn("JailInventoryPickupStation component not found");
+                    }
+                }
+                else
+                {
+                    ModLogger.Warn("JailInventoryPickup GameObject not found for reset");
+                }
+            }
+
+            // CRITICAL: Cancel any active intake officer escort for previous arrest
+            if (PrisonNPCManager.Instance != null)
+            {
+                var intakeOfficerBehavior = PrisonNPCManager.Instance.GetIntakeOfficer();
+                if (intakeOfficerBehavior != null && intakeOfficerBehavior.IsProcessingIntake())
+                {
+                    ModLogger.Warn("Intake officer still processing from previous arrest - canceling old intake");
+
+                    // Get the IntakeOfficerStateMachine component
+                    var intakeOfficerStateMachine = intakeOfficerBehavior.GetComponent<IntakeOfficerStateMachine>();
+                    if (intakeOfficerStateMachine != null)
+                    {
+                        intakeOfficerStateMachine.CancelIntake();
+                        ModLogger.Info("Canceled old intake officer process");
+                    }
+                    else
+                    {
+                        ModLogger.Warn("IntakeOfficerStateMachine component not found on intake officer");
+                    }
+                }
+            }
+
+            ModLogger.Info($"=== STARTING BOOKING PROCESS for {player.name} ===");
 
             // Trigger booking started event for state machine
             OnBookingStarted?.Invoke(player);
 
-            // Request guard escort immediately when booking starts
-            RequestGuardEscort();
-            
+            // The OnBookingStarted event triggers IntakeOfficer.HandleBookingStarted which starts the escort
+            // We need to verify the officer actually started processing before proceeding
+            MelonCoroutines.Start(VerifyAndMonitorEscort());
+
             // Update UI with task list
             UpdateTaskListUI();
-            
+
             MelonCoroutines.Start(MonitorBookingProgress());
         }
         
@@ -436,6 +528,29 @@ namespace Behind_Bars.Systems.Jail
             mugshotImage = null;
             fingerprintData = null;
             confiscatedItems.Clear();
+
+            // CRITICAL: Clear prison items received flag for repeat arrests
+            if (currentPlayer != null)
+            {
+                var playerHandler = Behind_Bars.Core.GetPlayerHandler(currentPlayer);
+                if (playerHandler != null)
+                {
+                    var items = playerHandler.GetConfiscatedItems();
+                    if (items != null && items.Contains("PRISON_ITEMS_RECEIVED"))
+                    {
+                        items.Remove("PRISON_ITEMS_RECEIVED");
+                        ModLogger.Info("Cleared PRISON_ITEMS_RECEIVED flag for repeat arrest");
+                    }
+                }
+
+                // CRITICAL: Clear cell assignment from previous arrest to prevent early escort completion
+                var cellManager = CellAssignmentManager.Instance;
+                if (cellManager != null)
+                {
+                    cellManager.ReleasePlayerFromCell(currentPlayer);
+                    ModLogger.Info("Cleared cell assignment from previous arrest");
+                }
+            }
         }
         
         /// <summary>
@@ -577,45 +692,157 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         private void RequestGuardEscort()
         {
-            if (escortRequested || currentPlayer == null)
+            if (currentPlayer == null)
             {
+                ModLogger.Error("RequestGuardEscort: currentPlayer is null!");
                 return;
             }
-            
+
+            if (escortRequested)
+            {
+                ModLogger.Warn($"Escort already requested for {currentPlayer.name} - skipping duplicate request");
+                return;
+            }
+
             escortRequested = true;
-            
+
+            ModLogger.Info($"=== REQUESTING GUARD ESCORT for {currentPlayer.name} ===");
+
             // Request escort from PrisonNPCManager
             if (PrisonNPCManager.Instance != null)
             {
+                ModLogger.Info($"PrisonNPCManager found - checking if intake officer is available...");
+                bool isAvailable = PrisonNPCManager.Instance.IsIntakeOfficerAvailable();
+                ModLogger.Info($"Intake officer available: {isAvailable}");
+
                 bool escortAssigned = PrisonNPCManager.Instance.RequestPrisonerEscort(currentPlayer.gameObject);
                 if (escortAssigned)
                 {
                     escortInProgress = true;
-                    ModLogger.Info($"Guard escort requested for {currentPlayer.name}");
-                    
+                    ModLogger.Info($"✓ Guard escort SUCCESSFULLY assigned for {currentPlayer.name}");
+
                     if (BehindBarsUIManager.Instance != null)
                     {
                         BehindBarsUIManager.Instance.ShowNotification(
-                            "Guard is coming to escort you", 
+                            "Guard is coming to escort you",
                             NotificationType.Progress
                         );
                     }
-                    
+
                     // Start monitoring escort progress
                     MelonCoroutines.Start(MonitorEscortProgress());
                 }
                 else
                 {
-                    // Fallback to old system if no guard available
-                    ModLogger.Warn("No guard available for escort - using fallback");
-                    MelonCoroutines.Start(StartInventoryPhase());
+                    // Retry after a short delay
+                    ModLogger.Warn("⚠ No guard available for escort - retrying in 2 seconds");
+                    MelonCoroutines.Start(RetryEscortRequest());
                 }
             }
             else
             {
                 // Fallback to old system
-                ModLogger.Warn("PrisonNPCManager not available - using fallback escort");
+                ModLogger.Error("PrisonNPCManager not available - using fallback escort");
                 MelonCoroutines.Start(StartInventoryPhase());
+            }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private IEnumerator VerifyAndMonitorEscort()
+        {
+            // Wait one frame for OnBookingStarted event handlers to complete
+            yield return null;
+
+            // Check if IntakeOfficer is now processing this player
+            if (PrisonNPCManager.Instance != null)
+            {
+                var intakeOfficer = PrisonNPCManager.Instance.GetIntakeOfficer();
+                if (intakeOfficer != null && intakeOfficer.IsProcessingIntake())
+                {
+                    // Officer is processing! Start monitoring
+                    escortInProgress = true;
+                    escortRequested = true;
+                    ModLogger.Info($"✓ IntakeOfficer already processing via event system - starting escort monitoring");
+
+                    if (BehindBarsUIManager.Instance != null)
+                    {
+                        BehindBarsUIManager.Instance.ShowNotification(
+                            "Guard is escorting you through booking",
+                            NotificationType.Progress
+                        );
+                    }
+
+                    MelonCoroutines.Start(MonitorEscortProgress());
+                }
+                else
+                {
+                    // Officer didn't start - need to request escort manually
+                    ModLogger.Warn("IntakeOfficer didn't respond to event - manually requesting escort");
+                    RequestGuardEscort();
+                }
+            }
+            else
+            {
+                // No NPC manager - use fallback
+                ModLogger.Warn("PrisonNPCManager not available - using fallback");
+                MelonCoroutines.Start(StartInventoryPhase());
+            }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private IEnumerator RetryEscortRequest()
+        {
+            int retryCount = 0;
+            int maxRetries = 5; // Try 5 times over 10 seconds
+
+            while (retryCount < maxRetries && currentPlayer != null)
+            {
+                yield return new WaitForSeconds(2f);
+                retryCount++;
+
+                ModLogger.Info($"Retrying guard escort request (attempt {retryCount}/{maxRetries})...");
+
+                if (PrisonNPCManager.Instance != null)
+                {
+                    bool escortAssigned = PrisonNPCManager.Instance.RequestPrisonerEscort(currentPlayer.gameObject);
+                    if (escortAssigned)
+                    {
+                        escortInProgress = true;
+                        ModLogger.Info($"✓ Guard escort assigned on retry {retryCount} for {currentPlayer.name}");
+
+                        if (BehindBarsUIManager.Instance != null)
+                        {
+                            BehindBarsUIManager.Instance.ShowNotification(
+                                "Guard is coming to escort you",
+                                NotificationType.Progress
+                            );
+                        }
+
+                        MelonCoroutines.Start(MonitorEscortProgress());
+                        yield break; // Success - exit retry loop
+                    }
+                    else
+                    {
+                        ModLogger.Warn($"⚠ Retry {retryCount} failed - officer still busy");
+                    }
+                }
+            }
+
+            // All retries failed - DO NOT use fallback for re-arrests, player should be stuck waiting
+            // This prevents timer from starting prematurely
+            ModLogger.Error($"⚠ Guard escort failed after {maxRetries} retries - player will wait for officer to become available");
+
+            // Keep booking in progress but show message to player
+            if (BehindBarsUIManager.Instance != null)
+            {
+                BehindBarsUIManager.Instance.ShowNotification(
+                    "Waiting for guard to become available...",
+                    NotificationType.Instruction
+                );
             }
         }
         
@@ -624,10 +851,8 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         private IEnumerator MonitorEscortProgress()
         {
-            float escortStartTime = Time.time;
-            float maxEscortTime = 300f; // 5 minutes maximum
-            
-            while (escortInProgress && Time.time - escortStartTime < maxEscortTime)
+            // Monitor indefinitely until escort is complete - no timeout
+            while (escortInProgress)
             {
                 // Check if escort is complete
                 if (IsEscortComplete())
@@ -635,15 +860,8 @@ namespace Behind_Bars.Systems.Jail
                     CompleteEscortProcess();
                     yield break;
                 }
-                
+
                 yield return new WaitForSeconds(2f);
-            }
-            
-            // Timeout - complete anyway
-            if (escortInProgress)
-            {
-                ModLogger.Warn($"Escort timed out for {currentPlayer?.name}");
-                CompleteEscortProcess();
             }
         }
         
@@ -743,6 +961,14 @@ namespace Behind_Bars.Systems.Jail
         }
         
         /// <summary>
+        /// Check if booking is currently in progress (for timer checks)
+        /// </summary>
+        public bool IsBookingInProgress()
+        {
+            return bookingInProgress;
+        }
+
+        /// <summary>
         /// Check if prisoner needs escort (for guards to query)
         /// </summary>
         public bool NeedsPrisonerEscort()
@@ -763,6 +989,14 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         public bool IsEscortComplete()
         {
+            // CRITICAL: Escort cannot be complete if booking isn't complete yet!
+            // This prevents timer from starting before booking is done on repeat arrests
+            if (!IsBookingComplete())
+            {
+                ModLogger.Debug("IsEscortComplete: Booking not complete yet, escort cannot be complete");
+                return false;
+            }
+
             // Escort is only complete when player is actually assigned to a cell AND in that cell
             if (currentPlayer == null) return true;
 

@@ -281,6 +281,49 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
+        /// Completely reset the timer for a new arrest (not just stop it)
+        /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        public void ResetTimer()
+        {
+            // CRITICAL: Stop updating FIRST to prevent race condition with UpdateLoop
+            _isUpdating = false;
+
+            // Small delay to ensure UpdateLoop has stopped
+            MelonCoroutines.Start(CompleteTimerReset());
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private IEnumerator CompleteTimerReset()
+        {
+            // Wait one frame to ensure UpdateLoop has exited
+            yield return null;
+
+            // Now safe to reset all values
+            _remainingJailTime = 0f;
+            _originalJailTime = 0f;
+            _currentBailAmount = 0f;
+            _originalBailAmount = 0f;
+            _earlyReleaseTriggered = false;
+
+            // Update UI to show reset state
+            if (txtTime != null)
+            {
+                txtTime.text = "Booking in progress...";
+            }
+            if (txtBail != null)
+            {
+                txtBail.text = "Calculating...";
+            }
+
+            ModLogger.Info("Timer completely reset for new booking");
+        }
+
+        /// <summary>
         /// Reset the early release flag for a new sentence
         /// </summary>
 #if !MONO
@@ -331,6 +374,15 @@ namespace Behind_Bars.UI
 
                 if (_remainingJailTime <= EARLY_RELEASE_BUFFER && _remainingJailTime > 0 && !_earlyReleaseTriggered)
                 {
+                    // CRITICAL: Don't trigger release if booking is still in progress
+                    var bookingProcess = Core.JailController?.BookingProcessController;
+                    if (bookingProcess != null && bookingProcess.IsBookingInProgress())
+                    {
+                        ModLogger.Debug("Optimistic release window reached but booking in progress - waiting for booking to complete");
+                        yield return null; // Continue loop, don't trigger release yet
+                        continue;
+                    }
+
                     ModLogger.Info($"Starting optimistic release with {_remainingJailTime / GAME_SECONDS_PER_GAME_MINUTE:F1} game minutes remaining - timer continues running");
 
                     // Trigger the enhanced release system early for optimistic processing
@@ -352,6 +404,15 @@ namespace Behind_Bars.UI
                 // Legacy fallback: If somehow we reach exactly 0 time without early release
                 if (_remainingJailTime <= 0)
                 {
+                    // CRITICAL: Don't trigger release if booking is still in progress
+                    var bookingProcess = Core.JailController?.BookingProcessController;
+                    if (bookingProcess != null && bookingProcess.IsBookingInProgress())
+                    {
+                        ModLogger.Warn("Jail time hit 0 but booking still in progress - NOT triggering release");
+                        _isUpdating = false; // Stop the update loop
+                        yield break;
+                    }
+
                     ModLogger.Info("Jail time completed - fallback release trigger");
 
                     var jailSystem = Core.Instance?.JailSystem;

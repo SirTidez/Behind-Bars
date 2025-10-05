@@ -59,7 +59,8 @@ namespace Behind_Bars.Systems.Jail
         public AudioClip errorSound;
 
         // Release teleport position (police station exit)
-        public Vector3 releasePosition = new Vector3(14.2921f, 1.9777f, 37.8714f); // Police station exit coordinates
+        public Vector3 releasePosition = new Vector3(13.7402f, 1.4857f, 38.1558f); // Police station exit coordinates
+        public Vector3 releaseRotation = new Vector3(0f, 80.1529f, 0f); // Release rotation (facing away from wall)
 
         private bool isScanning = false;
         private bool isDragging = false;
@@ -140,6 +141,9 @@ namespace Behind_Bars.Systems.Jail
                     ModLogger.Error("Draggable not found!");
                 }
             }
+
+            // ALWAYS enable SecuritySlots on exit door at startup for visual consistency
+            EnableExitDoorSlots();
         }
 
         private void SetupInteractableComponent()
@@ -151,10 +155,10 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Info("Added InteractableObject component to ExitScannerStation");
             }
 
-            // Configure the interaction
-            interactableObject.SetMessage("Scan fingerprint to complete release");
+            // Configure the interaction - DISABLED by default, only enabled during release
+            interactableObject.SetMessage("Exit scanner (not available)");
             interactableObject.SetInteractionType(InteractableObject.EInteractionType.Key_Press);
-            interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+            interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid); // Disabled until release process
 
             // Set up event listeners with IL2CPP-safe casting
 #if !MONO
@@ -830,6 +834,7 @@ namespace Behind_Bars.Systems.Jail
                 // Fallback: Do the teleportation ourselves if no ReleaseManager
                 ModLogger.Warn("ExitScannerStation: No ReleaseManager found, doing direct teleportation");
                 currentPlayer.transform.position = releasePosition;
+                currentPlayer.transform.rotation = Quaternion.Euler(releaseRotation);
 
                 // Final notification
                 if (BehindBarsUIManager.Instance != null)
@@ -946,6 +951,56 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Enable exit door slats at startup for visual consistency
+        /// </summary>
+        private void EnableExitDoorSlots()
+        {
+            try
+            {
+                var jailController = Core.JailController;
+                if (jailController?.exitScanner?.exitDoor != null)
+                {
+                    EnableSecuritySlots(jailController.exitScanner.exitDoor);
+                    ModLogger.Info("Enabled exit door security slats at startup");
+                }
+                else
+                {
+                    ModLogger.Debug("Exit door not yet available - will enable slats when door opens");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Debug($"Error enabling exit door slats at startup: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Enable the scanner for use during release process (called by ReleaseOfficer)
+        /// </summary>
+        public void EnableForRelease()
+        {
+            if (interactableObject != null)
+            {
+                interactableObject.SetMessage("Scan fingerprint to complete release");
+                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                ModLogger.Info("Exit scanner enabled for release process");
+            }
+        }
+
+        /// <summary>
+        /// Disable the scanner after release or when not in release process
+        /// </summary>
+        public void DisableScanner()
+        {
+            if (interactableObject != null)
+            {
+                interactableObject.SetMessage("Exit scanner (not available)");
+                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                ModLogger.Info("Exit scanner disabled");
+            }
+        }
+
 
 
 
@@ -995,19 +1050,11 @@ namespace Behind_Bars.Systems.Jail
                 TestDoorToggle();
             }
 
-            // Update interaction state
-            if (interactableObject != null && !isScanning)
+            // Update interaction state ONLY if completed (don't re-enable automatically)
+            if (interactableObject != null && !isScanning && isCompleted)
             {
-                if (isCompleted)
-                {
-                    interactableObject.SetMessage("Release completed");
-                    interactableObject.SetInteractableState(InteractableObject.EInteractableState.Label);
-                }
-                else
-                {
-                    interactableObject.SetMessage("Scan fingerprint to complete release");
-                    interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
-                }
+                interactableObject.SetMessage("Release completed");
+                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Label);
             }
 
             // Handle escape key to exit scanner view

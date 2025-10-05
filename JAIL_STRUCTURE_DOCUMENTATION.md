@@ -64,20 +64,19 @@ Jail
 │   ├── Booking_StorageDoor
 │   ├── Booking_StorageDoor
 │   ├── Cubbies
-│   ├── InventoryPickup
+│   ├── JailInventoryPickup
 │   │   ├── Interaction
+│   │   ├── ClothingPile (1)
 │   │   ├── PillowAndSheets
 │   │   ├── BedRoll
 │   │   ├── JailCup
 │   │   └── JailToothBrush
 │   ├── InventoryDropOff
 │   │   ├── Interaction
-│   │   ├── PossesionCubby
-│   │   │   ├── CubbyTray
-│   │   │   └── CubbyTrayLid
-│   │   ├── Bounds
-│   │   └── Desktop
+│   │   └── PossesionCubby
 │   ├── InventoryPickup
+│   │   ├── Interaction
+│   │   └── PossesionCubby
 │   ├── Bounds
 │   ├── Desktop
 │   ├── EquipJailSuit
@@ -186,11 +185,11 @@ Based on sentence length:
    **Inventory Drop-Off**:
    - Prisoner interacts with `InventoryDropOff/Interaction`
    - Personal items placed in `PossesionCubby`
-   - Items stored in `CubbyTray` with `CubbyTrayLid`
 
    **Inventory Pick-Up**:
-   - Prisoner interacts with `InventoryPickup/Interaction`
+   - Prisoner interacts with `JailInventoryPickup/Interaction`
    - Receives prison items:
+     - `ClothingPile (1)`
      - `PillowAndSheets`
      - `BedRoll`
      - `JailCup`
@@ -217,7 +216,6 @@ Based on sentence length:
    **Inventory Pick-Up**:
    - Prisoner interacts with `InventoryPickup/Interaction`
    - Legal personal items returned from `PossesionCubby`
-   - Items retrieved from `CubbyTray`
    - Contraband items remain confiscated
 
 ### Phase 3: Exit Scanner Station
@@ -271,11 +269,13 @@ Based on sentence length:
 ### Storage Area Components
 - **InventoryDropOff**: Confiscation station
   - Personal belongings storage system
-  - CubbyTray system for item organization
-- **InventoryPickup**: Prison item distribution
+  - Contains `PossesionCubby` for item storage
+- **JailInventoryPickup**: Prison item distribution
   - Automated item addition to player inventory
-  - Standard prison issue items
-- **GuardPoint**: Supervision position for both interactions
+  - Standard prison issue items including `ClothingPile (1)`
+- **InventoryPickup**: Personal belongings return station
+  - Contains `PossesionCubby` for stored personal items
+- **GuardPoint**: Supervision position for all interactions
 
 ### ExitScannerStation Components
 - **ScanTarget**: Surface where palm is scanned (identical to booking scanner)

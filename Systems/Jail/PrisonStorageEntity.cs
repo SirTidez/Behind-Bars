@@ -3,6 +3,7 @@ using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.Data;
+using System;
 
 #if !MONO
 using Il2CppInterop.Runtime.Attributes;
@@ -10,11 +11,17 @@ using Il2CppScheduleOne.Storage;
 using Il2CppScheduleOne.ItemFramework;
 using Il2CppScheduleOne.PlayerScripts;
 using Il2CppScheduleOne.DevUtilities;
+using Registry = Il2CppScheduleOne.Registry;
+using Il2CppFishNet.Connection;
+using Il2CppFishNet.Object;
 #else
 using ScheduleOne.Storage;
 using ScheduleOne.ItemFramework;
 using ScheduleOne.PlayerScripts;
 using ScheduleOne.DevUtilities;
+using Registry = ScheduleOne.Registry;
+using FishNet.Connection;
+using FishNet.Object;
 #endif
 
 namespace Behind_Bars.Systems.Jail
@@ -32,6 +39,7 @@ namespace Behind_Bars.Systems.Jail
         private Player targetPlayer;
         private List<PersistentPlayerData.StoredItem> playerLegalItems;
         private bool isPopulated = false;
+        private HashSet<string> failedItemsCache = new HashSet<string>(); // Cache failed items to prevent log spam
 
         public override void Awake()
         {
@@ -44,6 +52,26 @@ namespace Behind_Bars.Systems.Jail
             DisplayRowCount = 2; // Show in 2 rows (4x2 grid)
 
             base.Awake();
+
+            // CRITICAL: Add NetworkObject component for StorageEntity.Open() to work
+            // StorageEntity expects a NetworkObject for network RPCs
+            var networkObject = GetComponent<NetworkObject>();
+            if (networkObject == null)
+            {
+                networkObject = gameObject.AddComponent<NetworkObject>();
+                ModLogger.Info("Added NetworkObject component to PrisonStorageEntity");
+            }
+
+            // Set as local-only (no actual networking)
+            try
+            {
+                networkObject.enabled = true;
+                ModLogger.Info("NetworkObject configured for local-only storage");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Debug($"NetworkObject setup: {ex.Message}");
+            }
 
             // Ensure ItemSlots list is properly initialized
             if (ItemSlots == null)
@@ -60,14 +88,63 @@ namespace Behind_Bars.Systems.Jail
                 ItemSlots.Add(itemSlot);
             }
 
-            ModLogger.Info($"PrisonStorageEntity initialized with {ItemSlots.Count} slots");
+            // Subscribe to onClosed event
+            if (onClosed != null)
+            {
+                onClosed.AddListener(HandleStorageClosed);
+            }
+
+            ModLogger.Info($"PrisonStorageEntity initialized with {ItemSlots.Count} slots (local-only mode)");
+        }
+
+        private void HandleStorageClosed()
+        {
+            ModLogger.Info("Storage closed by player");
+
+            var pickupStation = GetComponentInParent<InventoryPickupStation>();
+            if (pickupStation != null)
+            {
+                pickupStation.OnStorageSessionComplete();
+            }
         }
 
         /// <summary>
         /// Populate storage with player's legal items for retrieval
         /// </summary>
+        /// <summary>
+        /// Reset storage for a new release (clear all items and flags)
+        /// </summary>
+        public void ResetForNewRelease()
+        {
+            ModLogger.Info("PrisonStorageEntity: Resetting for new release");
+
+            // Clear all contents
+            ClearContents();
+
+            // Reset all flags
+            isPopulated = false;
+            targetPlayer = null;
+            playerLegalItems = new List<PersistentPlayerData.StoredItem>();
+            failedItemsCache.Clear();
+
+            // Close storage if it's open
+            if (IsOpened)
+            {
+                Close();
+            }
+
+            ModLogger.Info("PrisonStorageEntity: Reset complete");
+        }
+
         public void PopulateWithPlayerItems(Player player)
         {
+            // Prevent repeated population for the same player
+            if (isPopulated && targetPlayer == player)
+            {
+                ModLogger.Debug($"Storage already populated for {player.name}, skipping redundant population");
+                return;
+            }
+
             if (isPopulated)
             {
                 ModLogger.Debug("Storage already populated, clearing first");
@@ -119,19 +196,24 @@ namespace Behind_Bars.Systems.Jail
                     break;
                 }
 
-                try
+                var itemInstance = CreateItemInstanceFromStoredItem(storedItem);
+                if (itemInstance != null)
                 {
-                    var itemInstance = CreateItemInstanceFromStoredItem(storedItem);
-                    if (itemInstance != null)
+                    try
                     {
-                        ItemSlots[slotIndex].SetStoredItem(itemInstance, false);
-                        ModLogger.Debug($"Populated slot {slotIndex} with {storedItem.itemName} x{storedItem.stackCount}");
+                        // Use the game's InsertItem method instead of directly setting slots
+                        InsertItem(itemInstance, false);
+                        ModLogger.Info($"✓ Inserted {storedItem.itemName} x{storedItem.stackCount} into storage");
                         slotIndex++;
                     }
+                    catch (System.Exception ex)
+                    {
+                        ModLogger.Error($"Error inserting {storedItem.itemName} into storage: {ex.Message}\n{ex.StackTrace}");
+                    }
                 }
-                catch (System.Exception ex)
+                else
                 {
-                    ModLogger.Error($"Error creating item instance for {storedItem.itemName}: {ex.Message}");
+                    ModLogger.Warn($"CreateItemInstanceFromStoredItem returned null for {storedItem.itemName}");
                 }
             }
 
@@ -151,74 +233,63 @@ namespace Behind_Bars.Systems.Jail
                 {
                     ModLogger.Debug($"Trying registry lookup for item ID: {storedItem.itemId}");
 
-                    // Try to get item from registry using stored ID
+                    // Use static Registry.GetItem() directly - NO REFLECTION (same as working GivePrisonItem)
 #if !MONO
-                    var registry = Il2CppScheduleOne.Registry.Instance;
+                    var itemDef = Il2CppScheduleOne.Registry.GetItem(storedItem.itemId);
 #else
-                    var registry = ScheduleOne.Registry.Instance;
+                    var itemDef = ScheduleOne.Registry.GetItem(storedItem.itemId);
 #endif
-                    if (registry != null)
+
+                    if (itemDef != null)
                     {
-                        var getItemMethod = registry.GetType().GetMethod("GetItem");
-                        if (getItemMethod != null)
+                        ModLogger.Debug($"Found item definition for {storedItem.itemId}");
+
+                        // Create ItemInstance using GetDefaultInstance - NO REFLECTION
+                        var itemInstance = itemDef.GetDefaultInstance(storedItem.stackCount);
+                        if (itemInstance != null)
                         {
-                            var itemDef = getItemMethod.Invoke(registry, new object[] { storedItem.itemId });
-                            if (itemDef != null)
+                            // Special handling for CashInstance - restore the Balance
+                            if (storedItem.itemType == "CashInstance" && storedItem.cashBalance > 0f)
                             {
-                                ModLogger.Debug($"Found item definition for {storedItem.itemId}");
-
-                                var getDefaultInstanceMethod = itemDef.GetType().GetMethod("GetDefaultInstance");
-                                if (getDefaultInstanceMethod != null)
+#if !MONO
+                                var cashInstance = itemInstance as Il2CppScheduleOne.ItemFramework.CashInstance;
+#else
+                                var cashInstance = itemInstance as ScheduleOne.ItemFramework.CashInstance;
+#endif
+                                if (cashInstance != null)
                                 {
-                                    var itemInstance = getDefaultInstanceMethod.Invoke(itemDef, null) as ItemInstance;
-                                    if (itemInstance != null)
-                                    {
-                                        ModLogger.Debug($"Created ItemInstance for {storedItem.itemName}");
-
-                                        // Set quantity if greater than 1
-                                        if (storedItem.stackCount > 1)
-                                        {
-                                            try
-                                            {
-                                                var quantityProperty = itemInstance.GetType().GetProperty("Quantity");
-                                                if (quantityProperty != null)
-                                                {
-                                                    quantityProperty.SetValue(itemInstance, storedItem.stackCount);
-                                                    ModLogger.Debug($"Set quantity to {storedItem.stackCount}");
-                                                }
-                                            }
-                                            catch (System.Exception qex)
-                                            {
-                                                ModLogger.Debug($"Could not set quantity: {qex.Message}");
-                                            }
-                                        }
-
-                                        ModLogger.Info($"Successfully created ItemInstance for {storedItem.itemName}");
-                                        return itemInstance;
-                                    }
-                                    else
-                                    {
-                                        ModLogger.Warn($"GetDefaultInstance returned null for {storedItem.itemId}");
-                                    }
-                                }
-                                else
-                                {
-                                    ModLogger.Warn($"No GetDefaultInstance method found for {storedItem.itemId}");
+                                    cashInstance.SetBalance(storedItem.cashBalance);
+                                    ModLogger.Info($"✓ Set cash balance to ${storedItem.cashBalance:N2}");
                                 }
                             }
-                            else
+
+                            // CRITICAL: Weapons should always be returned EMPTY (Value = 0)
+                            // IntegerItemInstance stores gun ammo in the Value field
+                            if (storedItem.itemType == "IntegerItemInstance")
                             {
-                                ModLogger.Warn($"No item definition found for ID: {storedItem.itemId}");
+#if !MONO
+                                var integerInstance = itemInstance as Il2CppScheduleOne.ItemFramework.IntegerItemInstance;
+#else
+                                var integerInstance = itemInstance as ScheduleOne.ItemFramework.IntegerItemInstance;
+#endif
+                                if (integerInstance != null)
+                                {
+                                    integerInstance.SetValue(0); // Empty the gun
+                                    ModLogger.Info($"✓ Set weapon Value to 0 (empty gun)");
+                                }
                             }
+
+                            ModLogger.Info($"✓ Successfully created ItemInstance for {storedItem.itemName} in storage");
+                            return itemInstance;
                         }
                         else
                         {
-                            ModLogger.Warn("No GetItem method found on Registry");
+                            ModLogger.Warn($"GetDefaultInstance returned null for {storedItem.itemId}");
                         }
                     }
                     else
                     {
-                        ModLogger.Warn("Registry instance is null");
+                        ModLogger.Warn($"Registry.GetItem() returned null for ID: {storedItem.itemId}");
                     }
                 }
                 else
@@ -226,10 +297,18 @@ namespace Behind_Bars.Systems.Jail
                     ModLogger.Warn($"Invalid item ID for {storedItem.itemName}: '{storedItem.itemId}' - trying name-based lookup");
                 }
 
-                // Fallback: Try to find item by name pattern matching
+                // Fallback: Search all items in Registry by matching name
+                ModLogger.Info($"Attempting name-based Registry search for '{storedItem.itemName}'");
+                if (TryFindItemInRegistryByName(storedItem.itemName, storedItem.stackCount, out ItemInstance registryItem))
+                {
+                    ModLogger.Info($"Successfully created {storedItem.itemName} via Registry name search");
+                    return registryItem;
+                }
+
+                // Last resort: Try old name pattern matching
                 if (TryCreateItemByName(storedItem, out ItemInstance fallbackItem))
                 {
-                    ModLogger.Info($"Successfully created {storedItem.itemName} using name-based fallback");
+                    ModLogger.Info($"Successfully created {storedItem.itemName} using legacy name-based fallback");
                     return fallbackItem;
                 }
             }
@@ -238,8 +317,105 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Error($"Exception creating item instance for {storedItem.itemName}: {ex.Message}");
             }
 
-            ModLogger.Warn($"Failed to create ItemInstance for {storedItem.itemName}");
+            // Only log the first failure for each item to prevent spam
+            if (!failedItemsCache.Contains(storedItem.itemName))
+            {
+                failedItemsCache.Add(storedItem.itemName);
+                ModLogger.Warn($"Failed to create ItemInstance for {storedItem.itemName}");
+            }
             return null;
+        }
+
+        /// <summary>
+        /// Search the entire Registry by item name to find matching ItemDefinition
+        /// </summary>
+        private bool TryFindItemInRegistryByName(string itemName, int quantity, out ItemInstance itemInstance)
+        {
+            itemInstance = null;
+
+            try
+            {
+                // Try direct static call with lowercase name (common pattern)
+#if !MONO
+                var itemDef = Il2CppScheduleOne.Registry.GetItem(itemName.ToLower().Replace(" ", ""));
+#else
+                var itemDef = ScheduleOne.Registry.GetItem(itemName.ToLower().Replace(" ", ""));
+#endif
+                if (itemDef != null)
+                {
+                    itemInstance = itemDef.GetDefaultInstance(quantity);
+                    if (itemInstance != null)
+                    {
+                        ModLogger.Info($"Created ItemInstance for '{itemName}' using direct Registry call");
+                        return true;
+                    }
+                }
+
+                // Manual search of ItemRegistry as fallback
+#if !MONO
+                var registry = Il2CppScheduleOne.Registry.Instance;
+#else
+                var registry = ScheduleOne.Registry.Instance;
+#endif
+                if (registry == null)
+                {
+                    ModLogger.Error("Registry instance is null");
+                    return false;
+                }
+
+                // If that didn't work, try searching ItemRegistry field manually
+                var itemRegistryField = registry.GetType().GetField("ItemRegistry", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                if (itemRegistryField != null)
+                {
+                    var itemRegistry = itemRegistryField.GetValue(registry) as System.Collections.IList;
+                    if (itemRegistry != null)
+                    {
+                        ModLogger.Info($"Searching {itemRegistry.Count} items in Registry for '{itemName}'");
+
+                        // Search through all registered items
+                        foreach (var itemRegister in itemRegistry)
+                        {
+                            if (itemRegister == null) continue;
+
+                            var definitionField = itemRegister.GetType().GetField("Definition");
+                            if (definitionField == null) continue;
+
+                            var definition = definitionField.GetValue(itemRegister);
+                            if (definition == null) continue;
+
+                            var nameProperty = definition.GetType().GetProperty("Name");
+                            if (nameProperty == null) continue;
+
+                            var defName = nameProperty.GetValue(definition)?.ToString();
+                            if (string.IsNullOrEmpty(defName)) continue;
+
+                            if (defName.Equals(itemName, StringComparison.OrdinalIgnoreCase))
+                            {
+                                ModLogger.Info($"Found matching item: {defName}");
+
+                                var getDefaultInstanceMethod = definition.GetType().GetMethod("GetDefaultInstance", new System.Type[] { typeof(int) });
+                                if (getDefaultInstanceMethod != null)
+                                {
+                                    itemInstance = getDefaultInstanceMethod.Invoke(definition, new object[] { quantity }) as ItemInstance;
+                                    if (itemInstance != null)
+                                    {
+                                        ModLogger.Info($"Created ItemInstance for '{itemName}' via manual Registry search");
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                ModLogger.Warn($"No matching item found in Registry for '{itemName}'");
+                return false;
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error searching Registry by name: {ex.Message}");
+                return false;
+            }
         }
 
         /// <summary>
@@ -310,7 +486,12 @@ namespace Behind_Bars.Systems.Jail
             }
             catch (System.Exception ex)
             {
-                ModLogger.Debug($"Name-based fallback failed for {storedItem.itemName}: {ex.Message}");
+                // Only log the first failure for each item to prevent spam
+                if (!failedItemsCache.Contains(storedItem.itemName))
+                {
+                    failedItemsCache.Add(storedItem.itemName);
+                    ModLogger.Debug($"Name-based fallback failed for {storedItem.itemName}: {ex.Message}");
+                }
             }
 
             return false;

@@ -33,6 +33,7 @@ namespace Behind_Bars.Systems.Data
             public string itemType;
             public DateTime confiscationTime;
             public string specialHandling; // For special processing like empty weapons
+            public float cashBalance; // For CashInstance - stores dollar amount
 
             public StoredItem(string id, string name, int count, bool contraband, string type)
             {
@@ -43,6 +44,7 @@ namespace Behind_Bars.Systems.Data
                 itemType = type;
                 confiscationTime = DateTime.Now;
                 specialHandling = "";
+                cashBalance = 0f;
             }
         }
 
@@ -57,6 +59,7 @@ namespace Behind_Bars.Systems.Data
             public string arrestId;
             public object crimeData; // Serialized crime data
             public bool isActive; // Whether this data is still relevant
+            public List<ClothingLayer> originalClothing = new List<ClothingLayer>(); // Player's civilian clothing
 
             public PlayerInventorySnapshot(string id, string name, string arrestGuid)
             {
@@ -65,6 +68,24 @@ namespace Behind_Bars.Systems.Data
                 arrestTime = DateTime.Now;
                 arrestId = arrestGuid;
                 isActive = true;
+            }
+        }
+
+        [System.Serializable]
+        public class ClothingLayer
+        {
+            public string layerPath;
+            public float[] colorRGBA; // Color as array for JSON serialization
+
+            public ClothingLayer(string path, Color color)
+            {
+                layerPath = path;
+                colorRGBA = new float[] { color.r, color.g, color.b, color.a };
+            }
+
+            public Color GetColor()
+            {
+                return new Color(colorRGBA[0], colorRGBA[1], colorRGBA[2], colorRGBA[3]);
             }
         }
 
@@ -142,6 +163,11 @@ namespace Behind_Bars.Systems.Data
                 // Capture all inventory items
                 var items = CapturePlayerInventory(player);
                 snapshot.items.AddRange(items);
+
+                // Capture player's original clothing
+                var clothing = CapturePlayerClothing(player);
+                snapshot.originalClothing.AddRange(clothing);
+                ModLogger.Info($"Captured {clothing.Count} clothing layers for {player.name}");
 
                 // Remove any existing active snapshots for this player
                 gameData.playerSnapshots.RemoveAll(s => s.playerId == playerId && s.isActive);
@@ -376,12 +402,24 @@ namespace Behind_Bars.Systems.Data
         {
             try
             {
+                ModLogger.Debug($"ProcessInventorySlot: Processing slot of type {slot.GetType().Name}");
+
                 // Get the ItemInstance from the slot
                 var itemInstanceProperty = slot.GetType().GetProperty("ItemInstance");
-                if (itemInstanceProperty == null) return null;
+                if (itemInstanceProperty == null)
+                {
+                    ModLogger.Debug("ProcessInventorySlot: No ItemInstance property found");
+                    return null;
+                }
 
                 var itemInstance = itemInstanceProperty.GetValue(slot);
-                if (itemInstance == null) return null;
+                if (itemInstance == null)
+                {
+                    ModLogger.Debug("ProcessInventorySlot: ItemInstance is null (empty slot)");
+                    return null;
+                }
+
+                ModLogger.Debug($"ProcessInventorySlot: Got ItemInstance of type {itemInstance.GetType().Name}");
 
                 // Get item details
                 string itemId = GetItemId(itemInstance);
@@ -389,6 +427,15 @@ namespace Behind_Bars.Systems.Data
                 int stackCount = GetItemStackCount(itemInstance);
                 bool isContraband = IsItemContraband(itemInstance);
                 string itemType = GetItemType(itemInstance);
+
+                ModLogger.Info($"ProcessInventorySlot: Extracted - Name: '{itemName}', ID: '{itemId}', Stack: {stackCount}, Type: {itemType}");
+
+                // Skip cash entirely - don't confiscate money
+                if (itemType == "CashInstance" || itemName.Contains("Cash", StringComparison.OrdinalIgnoreCase))
+                {
+                    ModLogger.Info($"Skipping cash - money is not confiscated during arrest");
+                    return null; // Don't store cash
+                }
 
                 // Special handling for weapons and ammo
                 if (IsWeaponItem(itemName, itemType))
@@ -553,16 +600,56 @@ namespace Behind_Bars.Systems.Data
         {
             try
             {
+                // ItemInstance has a public field "ID" (not property)
+                var idField = itemInstance.GetType().GetField("ID");
+                if (idField != null)
+                {
+                    var idValue = idField.GetValue(itemInstance)?.ToString();
+                    if (!string.IsNullOrEmpty(idValue))
+                    {
+                        ModLogger.Debug($"Got item ID via field: {idValue}");
+                        return idValue;
+                    }
+                }
+
+                // Fallback: Try property
                 var idProperty = itemInstance.GetType().GetProperty("ID");
                 if (idProperty != null)
                 {
-                    return idProperty.GetValue(itemInstance)?.ToString() ?? "unknown";
+                    var idValue = idProperty.GetValue(itemInstance)?.ToString();
+                    if (!string.IsNullOrEmpty(idValue))
+                    {
+                        ModLogger.Debug($"Got item ID via property: {idValue}");
+                        return idValue;
+                    }
                 }
 
+                // Last resort: Get ID from Definition
+                var definitionProperty = itemInstance.GetType().GetProperty("Definition");
+                if (definitionProperty != null)
+                {
+                    var definition = definitionProperty.GetValue(itemInstance);
+                    if (definition != null)
+                    {
+                        var defIdProperty = definition.GetType().GetProperty("ID");
+                        if (defIdProperty != null)
+                        {
+                            var idValue = defIdProperty.GetValue(definition)?.ToString();
+                            if (!string.IsNullOrEmpty(idValue))
+                            {
+                                ModLogger.Debug($"Got item ID via Definition.ID: {idValue}");
+                                return idValue;
+                            }
+                        }
+                    }
+                }
+
+                ModLogger.Warn($"Could not extract ID from ItemInstance - all methods failed");
                 return "unknown";
             }
-            catch
+            catch (System.Exception ex)
             {
+                ModLogger.Error($"Exception in GetItemId: {ex.Message}");
                 return "unknown";
             }
         }
@@ -832,15 +919,126 @@ namespace Behind_Bars.Systems.Data
             string name = itemName.ToLower();
             string type = itemType?.ToLower() ?? "";
 
-            // Common ammo patterns
+            // Common ammo patterns - INCLUDING MAGAZINES!
             return name.Contains("ammo") ||
                    name.Contains("ammunition") ||
                    name.Contains("bullet") ||
                    name.Contains("round") ||
                    name.Contains("cartridge") ||
                    name.Contains("shell") ||
+                   name.Contains("magazine") ||
+                   name.Contains("mag") ||
+                   name.Contains("clip") ||
                    type.Contains("ammo") ||
-                   type.Contains("ammunition");
+                   type.Contains("ammunition") ||
+                   type.Contains("magazine");
+        }
+
+        #endregion
+
+        #region Clothing Capture and Restoration
+
+        private List<ClothingLayer> CapturePlayerClothing(Player player)
+        {
+            var clothingLayers = new List<ClothingLayer>();
+
+            try
+            {
+#if !MONO
+                var playerAvatar = player.GetComponentInChildren<Il2CppScheduleOne.AvatarFramework.Avatar>();
+#else
+                var playerAvatar = player.GetComponentInChildren<ScheduleOne.AvatarFramework.Avatar>();
+#endif
+
+                if (playerAvatar == null)
+                {
+                    ModLogger.Warn("Could not find player Avatar for clothing capture");
+                    return clothingLayers;
+                }
+
+                var settings = playerAvatar.CurrentSettings;
+                if (settings == null || settings.BodyLayerSettings == null)
+                {
+                    ModLogger.Warn("Player avatar settings are null");
+                    return clothingLayers;
+                }
+
+                // Capture all body layers (clothing)
+                foreach (var layer in settings.BodyLayerSettings)
+                {
+                    clothingLayers.Add(new ClothingLayer(layer.layerPath, layer.layerTint));
+                }
+
+                ModLogger.Info($"Captured {clothingLayers.Count} clothing layers from player");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error capturing player clothing: {ex.Message}");
+            }
+
+            return clothingLayers;
+        }
+
+        public void RestorePlayerClothing(Player player)
+        {
+            try
+            {
+                // Find the player's active snapshot using player ID
+                string playerId = GetPlayerUniqueId(player);
+                var snapshot = GetActiveSnapshotForPlayer(playerId);
+                if (snapshot == null || snapshot.originalClothing == null || snapshot.originalClothing.Count == 0)
+                {
+                    ModLogger.Warn("No clothing data saved for player");
+                    return;
+                }
+
+                ModLogger.Info($"Restoring {snapshot.originalClothing.Count} clothing layers for {player.name}");
+
+#if !MONO
+                var playerAvatar = player.GetComponentInChildren<Il2CppScheduleOne.AvatarFramework.Avatar>();
+#else
+                var playerAvatar = player.GetComponentInChildren<ScheduleOne.AvatarFramework.Avatar>();
+#endif
+
+                if (playerAvatar == null)
+                {
+                    ModLogger.Error("Could not find player Avatar for clothing restoration");
+                    return;
+                }
+
+                var settings = playerAvatar.CurrentSettings;
+                if (settings == null)
+                {
+                    ModLogger.Error("Player avatar settings are null");
+                    return;
+                }
+
+                // Clear prison clothing
+                settings.BodyLayerSettings.Clear();
+
+                // Restore original clothing layers
+                foreach (var clothingLayer in snapshot.originalClothing)
+                {
+                    settings.BodyLayerSettings.Add(new
+#if !MONO
+                        Il2CppScheduleOne.AvatarFramework.AvatarSettings.LayerSetting
+#else
+                        ScheduleOne.AvatarFramework.AvatarSettings.LayerSetting
+#endif
+                    {
+                        layerPath = clothingLayer.layerPath,
+                        layerTint = clothingLayer.GetColor()
+                    });
+                }
+
+                // Apply the clothing changes
+                playerAvatar.ApplyBodyLayerSettings(settings);
+                ModLogger.Info($"✓ Restored original clothing for {player.name} - changed back from prison attire");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error restoring player clothing: {ex.Message}");
+            }
         }
 
         #endregion

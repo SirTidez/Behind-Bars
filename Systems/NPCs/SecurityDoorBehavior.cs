@@ -41,7 +41,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             public float approachSpeed = 3.0f;          // Faster movement
             public float doorPointWaitTime = 0.3f;      // Quick security check at door point
-            public float doorOpenAnimTime = 0.8f;       // Faster door opening
+            public float doorOpenAnimTime = 0.3f;       // Quick door opening - walk right through
             public float escortWaitTime = 4.0f;         // Reduced wait time for inmate
             public float doorCloseDelay = 0.5f;         // Quick close after passing through
             public float positionTolerance = 0.8f;      // How close to get to door points
@@ -373,8 +373,9 @@ namespace Behind_Bars.Systems.NPCs
         {
             if (navAgent == null || targetPoint == null) yield break;
 
-            // Set destination
-            navAgent.SetDestination(targetPoint.position);
+            // Only use X and Z from door point - let NavMesh control Y position
+            Vector3 destination = new Vector3(targetPoint.position.x, transform.position.y, targetPoint.position.z);
+            navAgent.SetDestination(destination);
 
             // Wait until we reach the point
             float timeout = 15f; // Max 15 seconds to reach door point
@@ -382,7 +383,11 @@ namespace Behind_Bars.Systems.NPCs
 
             while (Time.time - startTime < timeout)
             {
-                float distance = Vector3.Distance(transform.position, targetPoint.position);
+                // Calculate distance ignoring Y axis
+                Vector3 npcPos2D = new Vector3(transform.position.x, 0, transform.position.z);
+                Vector3 targetPos2D = new Vector3(targetPoint.position.x, 0, targetPoint.position.z);
+                float distance = Vector3.Distance(npcPos2D, targetPos2D);
+
                 if (distance <= timingConfig.positionTolerance)
                 {
                     break;
@@ -390,8 +395,11 @@ namespace Behind_Bars.Systems.NPCs
                 yield return new WaitForSeconds(0.1f);
             }
 
-            // Face the door point properly
-            Vector3 directionToPoint = (targetPoint.position - transform.position).normalized;
+            // Face the door point properly (only horizontal rotation)
+            Vector3 directionToPoint = (targetPoint.position - transform.position);
+            directionToPoint.y = 0; // Keep rotation horizontal only
+            directionToPoint.Normalize();
+
             if (directionToPoint != Vector3.zero)
             {
                 transform.rotation = Quaternion.LookRotation(directionToPoint);

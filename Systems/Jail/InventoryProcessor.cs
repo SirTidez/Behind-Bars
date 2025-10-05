@@ -398,7 +398,7 @@ namespace Behind_Bars.Systems.Jail
         {
             try
             {
-                ModLogger.Info("[INVENTORY] COMPLETELY DISABLING inventory for jail time - no item access allowed");
+                ModLogger.Info("[INVENTORY] Processing inventory for arrest - removing ammo and locking access");
 
                 var playerInventory = player.GetComponent<PlayerInventory>();
                 if (playerInventory == null)
@@ -415,6 +415,10 @@ namespace Behind_Bars.Systems.Jail
                     ModLogger.Error("[INVENTORY] PlayerInventory not found!");
                     return;
                 }
+
+                // STEP 0: Remove ALL ammo from inventory (safety - prevent incidents in prison)
+                // Note: This also runs in Harmony patch BEFORE snapshot, but we call again here as safety
+                RemoveAllAmmo(playerInventory);
 
                 // STEP 1: FIRST unequip any currently held item using multiple approaches
                 try
@@ -727,6 +731,121 @@ namespace Behind_Bars.Systems.Jail
             catch (System.Exception ex)
             {
                 ModLogger.Error($"[INVENTORY] Error in fallback slot unlocking: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Remove ALL ammunition from player inventory for safety
+        /// Prevents weapons from being loaded/fired in prison
+        /// Public so it can be called from Harmony patch BEFORE inventory snapshot
+        /// </summary>
+        public static void RemoveAllAmmo(PlayerInventory inventory)
+        {
+            try
+            {
+                ModLogger.Info("[INVENTORY] Removing all ammunition and unloading weapons for safety");
+
+                var allSlots = GetAllInventorySlots(inventory);
+                int ammoRemoved = 0;
+                int weaponsUnloaded = 0;
+
+                foreach (var slot in allSlots)
+                {
+                    try
+                    {
+                        var itemInstanceProperty = slot.GetType().GetProperty("ItemInstance");
+                        if (itemInstanceProperty == null) continue;
+
+                        var itemInstance = itemInstanceProperty.GetValue(slot);
+                        if (itemInstance == null) continue;
+
+                        // Check if this is ammo
+                        var itemType = itemInstance.GetType().Name;
+                        var itemName = itemInstance.GetType().GetProperty("Name")?.GetValue(itemInstance)?.ToString() ?? "";
+
+                        bool isAmmo = itemType.Contains("Ammo", StringComparison.OrdinalIgnoreCase) ||
+                                     itemType.Contains("Magazine", StringComparison.OrdinalIgnoreCase) ||
+                                     itemName.Contains("Magazine", StringComparison.OrdinalIgnoreCase) ||
+                                     itemName.Contains("Ammo", StringComparison.OrdinalIgnoreCase) ||
+                                     itemName.Contains("Round", StringComparison.OrdinalIgnoreCase) ||
+                                     itemName.Contains("Cartridge", StringComparison.OrdinalIgnoreCase);
+
+                        // Check if this is a weapon - IntegerItemInstance that's NOT ammo is usually a gun
+                        bool isWeapon = (itemType == "IntegerItemInstance" && !isAmmo) ||
+                                       itemType.Contains("Weapon", StringComparison.OrdinalIgnoreCase) ||
+                                       itemType.Contains("Gun", StringComparison.OrdinalIgnoreCase) ||
+                                       itemName.Contains("Pistol", StringComparison.OrdinalIgnoreCase) ||
+                                       itemName.Contains("Rifle", StringComparison.OrdinalIgnoreCase) ||
+                                       itemName.Contains("Shotgun", StringComparison.OrdinalIgnoreCase) ||
+                                       itemName.Contains("M1911", StringComparison.OrdinalIgnoreCase);
+
+                        if (isAmmo)
+                        {
+                            // Clear ammo/magazine slots completely
+                            var clearMethod = slot.GetType().GetMethod("ClearStoredInstance");
+                            if (clearMethod != null)
+                            {
+                                clearMethod.Invoke(slot, new object[] { true }); // true = internal
+                                ammoRemoved++;
+                                ModLogger.Info($"[INVENTORY] Confiscated ammo: {itemName}");
+                            }
+                        }
+                        else if (isWeapon)
+                        {
+                            // Unload the weapon - set internal ammo to 0
+                            UnloadWeapon(itemInstance);
+                            weaponsUnloaded++;
+                            ModLogger.Info($"[INVENTORY] Unloaded weapon: {itemName}");
+                        }
+                    }
+                    catch (System.Exception ex)
+                    {
+                        ModLogger.Debug($"[INVENTORY] Error checking slot: {ex.Message}");
+                    }
+                }
+
+                ModLogger.Info($"[INVENTORY] Removed {ammoRemoved} ammunition items, unloaded {weaponsUnloaded} weapons");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"[INVENTORY] Error removing ammo: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Empty a weapon's loaded ammo
+        /// IntegerItemInstance uses the "Value" field to store loaded ammo count
+        /// </summary>
+        private static void UnloadWeapon(object weaponInstance)
+        {
+            try
+            {
+                var weaponType = weaponInstance.GetType().Name;
+
+                // IntegerItemInstance stores ammo in the "Value" field
+                if (weaponType.Contains("Integer", StringComparison.OrdinalIgnoreCase))
+                {
+                    var valueField = weaponInstance.GetType().GetField("Value");
+                    if (valueField != null)
+                    {
+                        int currentValue = (int)valueField.GetValue(weaponInstance);
+                        valueField.SetValue(weaponInstance, 0);
+                        ModLogger.Info($"[INVENTORY] Unloaded weapon - removed {currentValue} rounds");
+                        return;
+                    }
+                }
+
+                // Fallback: Try SetValue method if it exists
+                var setValueMethod = weaponInstance.GetType().GetMethod("SetValue");
+                if (setValueMethod != null)
+                {
+                    setValueMethod.Invoke(weaponInstance, new object[] { 0 });
+                    ModLogger.Info($"[INVENTORY] Unloaded weapon via SetValue(0)");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Debug($"[INVENTORY] Could not unload weapon: {ex.Message}");
             }
         }
     }

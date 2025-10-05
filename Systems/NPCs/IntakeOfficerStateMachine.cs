@@ -735,11 +735,7 @@ namespace Behind_Bars.Systems.NPCs
                     return;
                 }
 
-                // Check if we're stuck
-                if (Time.time - stateStartTime > 30f) // 30 second timeout
-                {
-                    OnDestinationReached?.Invoke(currentDestination);
-                }
+                // NO TIMEOUT - let officer take as long as needed from far cells
             }
         }
 
@@ -1177,25 +1173,7 @@ namespace Behind_Bars.Systems.NPCs
                     break;
 
                 case IntakeState.EscortToCell:
-                    ModLogger.Info($"IntakeOfficer: Destination reached for EscortToCell at {destination}");
-                    ModLogger.Info($"IntakeOfficer: Current position: {transform.position}");
-                    ModLogger.Info($"IntakeOfficer: Target cell door position should be: {(Core.JailController?.GetCellByIndex(assignedCellNumber)?.cellDoor?.doorPoint?.position.ToString() ?? "UNKNOWN")}");
-
-                    // Check if we're actually at the cell door
-                    var targetCell = Core.JailController?.GetCellByIndex(assignedCellNumber);
-                    if (targetCell?.cellDoor?.doorPoint != null)
-                    {
-                        float distanceToActualCell = Vector3.Distance(transform.position, targetCell.cellDoor.doorPoint.position);
-                        ModLogger.Info($"IntakeOfficer: Distance to actual cell door: {distanceToActualCell:F2}m");
-
-                        if (distanceToActualCell > 5.0f)
-                        {
-                            ModLogger.Warn($"IntakeOfficer: Guard stopped too far from cell door! Re-navigating to cell...");
-                            NavigateToAssignedCell(); // Try again
-                            return;
-                        }
-                    }
-
+                    // Just proceed - NavAgent destination reached means we're close enough
                     ChangeIntakeState(IntakeState.OpeningCellDoor);
                     break;
 
@@ -1660,6 +1638,30 @@ namespace Behind_Bars.Systems.NPCs
         {
             ModLogger.Info("IntakeOfficer: Emergency stop of intake process");
             ChangeIntakeState(IntakeState.ReturningToPost);
+        }
+
+        /// <summary>
+        /// Cancel active intake process for new arrest (clears state completely)
+        /// </summary>
+        public void CancelIntake()
+        {
+            ModLogger.Info($"IntakeOfficer: Canceling active intake for {currentPrisoner?.name}");
+
+            // Unregister from officer coordination
+            OfficerCoordinator.Instance.UnregisterEscort(this);
+
+            // Reset all state
+            currentPrisoner = null;
+            assignedCellNumber = -1;
+            currentTargetStation = "";
+            currentHoldingCellIndex = -1;
+            playerExitDetected = false;
+            doorCloseInitiated = false;
+
+            // Return to idle immediately
+            ChangeIntakeState(IntakeState.Idle);
+
+            ModLogger.Info("IntakeOfficer: Intake canceled - now available for new prisoner");
         }
 
         /// <summary>

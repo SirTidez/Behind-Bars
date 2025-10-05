@@ -43,6 +43,8 @@ namespace Behind_Bars.Systems.Jail
         private bool isProcessing = false;
         private Player currentPlayer;
         private bool itemsCurrentlyTaken = false; // Track if items are visually taken
+        private bool forceEnabledForNewInmate = false; // Force enabled state after reset, bypass Update checks
+        private float resetTime = 0f; // Time when reset occurred
 
         // Store player's original clothing
         private Dictionary<string, object> originalPlayerClothing = new Dictionary<string, object>();
@@ -58,13 +60,6 @@ namespace Behind_Bars.Systems.Jail
         
         void Start()
         {
-            // Ensure this GameObject has the correct name to avoid conflicts
-            if (gameObject.name != "JailInventoryPickup")
-            {
-                gameObject.name = "JailInventoryPickup";
-                ModLogger.Info("Renamed GameObject to 'JailInventoryPickup' to avoid conflicts with InventoryPickup");
-            }
-
             // Set up InteractableObject component for IL2CPP compatibility
             SetupInteractableComponent();
             ModLogger.Info("JailInventoryPickupStation interaction setup completed");
@@ -171,8 +166,8 @@ namespace Behind_Bars.Systems.Jail
                 return;
             }
 
-            // Check if player already received prison items
-            if (HasReceivedPrisonItems(playerHandler))
+            // Check if player already received prison items (SKIP if force-enabled for new inmate)
+            if (!forceEnabledForNewInmate && HasReceivedPrisonItems(playerHandler))
             {
                 if (BehindBarsUIManager.Instance != null)
                 {
@@ -181,7 +176,14 @@ namespace Behind_Bars.Systems.Jail
                         NotificationType.Progress
                     );
                 }
+                ModLogger.Info("JailInventoryPickupStation: Player already has prison items");
                 return;
+            }
+
+            // If force-enabled, log that we're bypassing the check
+            if (forceEnabledForNewInmate)
+            {
+                ModLogger.Info("JailInventoryPickupStation: Force-enabled for new arrest - bypassing 'already received' check");
             }
 
             // Start prison item pickup process
@@ -381,13 +383,17 @@ namespace Behind_Bars.Systems.Jail
 #endif
         private IEnumerator ProcessJailItemPickup(Player player)
         {
+            // Clear force-enabled flag now that player is interacting
+            forceEnabledForNewInmate = false;
+            ModLogger.Info($"JailInventoryPickupStation: Cleared force-enabled flag - player interacting");
+
             isProcessing = true;
             if (interactableObject != null)
             {
                 interactableObject.SetMessage("Collecting prison items...");
                 interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
             }
-            
+
             ModLogger.Info($"Starting prison item pickup for {player.name}");
             
             // Show initial notification
@@ -881,7 +887,7 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Info("Disabling prison item prefabs");
                 
                 // Find and disable all item prefabs under this pickup station
-                var itemNames = new string[] { "ClothingPile", "PillowAndSheets", "BedRoll", "JailCup", "JailToothBrush" };
+                var itemNames = new string[] { "ClothingPile (1)", "PillowAndSheets", "BedRoll", "JailCup", "JailToothBrush" };
                 
                 foreach (string itemName in itemNames)
                 {
@@ -915,7 +921,7 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Info("Enabling prison item prefabs");
                 
                 // Find and enable all item prefabs under this pickup station
-                var itemNames = new string[] { "ClothingPile", "PillowAndSheets", "BedRoll", "JailCup", "JailToothBrush" };
+                var itemNames = new string[] { "ClothingPile (1)", "PillowAndSheets", "BedRoll", "JailCup", "JailToothBrush" };
                 
                 foreach (string itemName in itemNames)
                 {
@@ -958,8 +964,59 @@ namespace Behind_Bars.Systems.Jail
             return false;
         }
         
+        /// <summary>
+        /// Reset the station for a new inmate (called from BookingProcess on re-arrest)
+        /// </summary>
+        public void ResetForNewInmate()
+        {
+            ModLogger.Info("JailInventoryPickupStation: Resetting for new inmate");
+
+            // CRITICAL: Re-enable the GameObject itself (it gets disabled during release)
+            if (!gameObject.activeSelf)
+            {
+                gameObject.SetActive(true);
+                ModLogger.Info("JailInventoryPickupStation: Re-enabled GameObject");
+            }
+
+            // Re-enable all item prefabs
+            EnableItemPrefabs();
+            itemsCurrentlyTaken = false;
+            isProcessing = false;
+            currentPlayer = null;
+
+            // CRITICAL: Force enabled state and prevent Update() from disabling it
+            forceEnabledForNewInmate = true;
+            resetTime = Time.time;
+
+            // Reset interaction state
+            if (interactableObject != null)
+            {
+                interactableObject.SetMessage("Collect prison items");
+                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                ModLogger.Info("JailInventoryPickupStation: Interaction FORCED to enabled for new inmate");
+            }
+
+            ModLogger.Info("JailInventoryPickupStation: Reset complete and ready for new inmate");
+        }
+
         void Update()
         {
+            // PRIORITY: Check force-enabled flag first (overrides all other logic)
+            if (forceEnabledForNewInmate && interactableObject != null)
+            {
+                // Keep enabled state for new inmate, don't let Update() disable it
+                interactableObject.SetMessage("Collect prison items");
+                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+
+                // Log once per second to debug
+                if (Time.frameCount % 60 == 0)
+                {
+                    ModLogger.Debug($"JailInventoryPickupStation: FORCE ENABLED for new inmate (time since reset: {Time.time - resetTime:F1}s)");
+                }
+
+                return; // Skip normal Update logic while force-enabled
+            }
+
             // Update interaction state based on whether player needs prison items or is being released
             if (!isProcessing && interactableObject != null)
             {
@@ -996,12 +1053,26 @@ namespace Behind_Bars.Systems.Jail
 
                     interactableObject.SetMessage("Collect prison items");
                     interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+
+                    // Debug logging for interaction state
+                    if (Time.frameCount % 300 == 0) // Log every ~5 seconds
+                    {
+                        ModLogger.Debug($"JailInventoryPickupStation: Enabled for {localPlayer.name} - NeedsPrisonItems=true, State=Default");
+                    }
                 }
                 else
                 {
                     // Items have been taken or player doesn't need them
                     interactableObject.SetMessage("Items taken");
                     interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+
+                    // Debug why not enabled
+                    if (localPlayer != null && Time.frameCount % 300 == 0)
+                    {
+                        var playerHandler = Behind_Bars.Core.GetPlayerHandler(localPlayer);
+                        bool hasReceived = playerHandler != null && HasReceivedPrisonItems(playerHandler);
+                        ModLogger.Debug($"JailInventoryPickupStation: Disabled - Player exists: true, NeedsPrisonItems: false, HasReceivedPrisonItems: {hasReceived}");
+                    }
                 }
             }
         }

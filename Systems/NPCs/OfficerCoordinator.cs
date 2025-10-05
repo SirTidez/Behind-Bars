@@ -232,16 +232,7 @@ namespace Behind_Bars.Systems.NPCs
 
         void Update()
         {
-            // Clean up old escorts (timeout after 5 minutes)
-            for (int i = activeEscorts.Count - 1; i >= 0; i--)
-            {
-                var escort = activeEscorts[i];
-                if (Time.time - escort.startTime > 300f) // 5 minutes
-                {
-                    ModLogger.Warn($"OfficerCoordinator: Cleaning up timed-out {escort.type} escort for {escort.player?.name}");
-                    activeEscorts.RemoveAt(i);
-                }
-            }
+            // NO TIMEOUT - escorts can take as long as needed for player to complete booking/release
 
             // Clean up old door reservations
             var expiredDoors = new List<string>();

@@ -157,10 +157,34 @@ namespace Behind_Bars.Harmony
                 
             ModLogger.Info($"[ARREST] Player {__instance.name} arrested - performing inventory processing and jail processing");
 
-            // CRITICAL: Capture player's inventory BEFORE any locking/clearing happens
+            // STEP 1: Remove ALL ammo BEFORE capturing inventory (ammo is never returned)
             try
             {
-                ModLogger.Info($"[ARREST] Capturing {__instance.name}'s inventory before arrest processing");
+                ModLogger.Info($"[ARREST] Removing ammunition before inventory capture");
+                var playerInventory = __instance.GetComponent<PlayerInventory>();
+                if (playerInventory == null)
+                {
+#if !MONO
+                    playerInventory = Il2CppScheduleOne.PlayerScripts.PlayerInventory.Instance;
+#else
+                    playerInventory = ScheduleOne.PlayerScripts.PlayerInventory.Instance;
+#endif
+                }
+
+                if (playerInventory != null)
+                {
+                    InventoryProcessor.RemoveAllAmmo(playerInventory);
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"[ARREST] Error removing ammo: {ex.Message}");
+            }
+
+            // STEP 2: Capture player's inventory AFTER ammo removal
+            try
+            {
+                ModLogger.Info($"[ARREST] Capturing {__instance.name}'s inventory after ammo removal");
                 var persistentData = Behind_Bars.Systems.Data.PersistentPlayerData.Instance;
                 if (persistentData != null)
                 {

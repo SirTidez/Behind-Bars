@@ -341,7 +341,9 @@ namespace Behind_Bars.Systems.Jail
 
             // Skip escort process and teleport directly
             var exitPosition = GetPlayerExitPosition(player);
+            var exitRotation = GetPlayerExitRotation();
             player.transform.position = exitPosition;
+            player.transform.rotation = Quaternion.Euler(exitRotation);
 
             // Restore inventory and clear jail status
             CompletePlayerRelease(player, ReleaseType.Emergency);
@@ -530,7 +532,9 @@ namespace Behind_Bars.Systems.Jail
             OfficerCoordinator.Instance.UnregisterAllEscortsForPlayer(request.player);
 
             // Teleport player to freedom
+            var exitRotation = GetPlayerExitRotation();
             request.player.transform.position = request.exitPosition;
+            request.player.transform.rotation = Quaternion.Euler(exitRotation);
 
             // Complete player release (restore systems, clear flags)
             CompletePlayerRelease(request.player, request.releaseType);
@@ -616,7 +620,12 @@ namespace Behind_Bars.Systems.Jail
         private Vector3 GetPlayerExitPosition(Player player)
         {
             // Use specific prison exit coordinates
-            return new Vector3(14.2921f, 1.9777f, 37.8714f);
+            return new Vector3(13.7402f, 1.4857f, 38.1558f);
+        }
+
+        private Vector3 GetPlayerExitRotation()
+        {
+            return new Vector3(0f, 80.1529f, 0f); // Facing away from wall/pillar
         }
 
         private Vector3 GetStorageLocationForWaiting()
@@ -734,6 +743,14 @@ namespace Behind_Bars.Systems.Jail
                     }
                 }
 
+                // CRITICAL: Clear persistent storage snapshot AFTER successful release (not during storage phase)
+                var persistentData = Behind_Bars.Systems.Data.PersistentPlayerData.Instance;
+                if (persistentData != null)
+                {
+                    persistentData.ClearPlayerSnapshot(player);
+                    ModLogger.Info($"Cleared persistent storage snapshot after successful release for {player.name}");
+                }
+
                 ModLogger.Info($"Player release completed for {player.name} via {releaseType} - all systems cleared");
 
             }
@@ -772,6 +789,40 @@ namespace Behind_Bars.Systems.Jail
             {
                 availableOfficers.Remove(officer);
                 ModLogger.Info($"Unregistered release officer: {officer.GetBadgeNumber()}");
+            }
+        }
+
+        /// <summary>
+        /// Cancel any active release process for a player (used during new arrest)
+        /// </summary>
+        public void CancelPlayerRelease(Player player)
+        {
+            try
+            {
+                if (activeReleases.ContainsKey(player))
+                {
+                    var request = activeReleases[player];
+                    ModLogger.Info($"Cancelling active release for {player.name} (Status: {request.status})");
+
+                    // Free up the assigned officer
+                    if (request.assignedOfficer != null)
+                    {
+                        request.assignedOfficer.SetAvailable(true);
+                        ModLogger.Info($"Freed officer {request.assignedOfficer.GetBadgeNumber()} from cancelled release");
+                    }
+
+                    // Remove from active releases
+                    activeReleases.Remove(player);
+                    ModLogger.Info($"Removed {player.name} from active releases");
+                }
+                else
+                {
+                    ModLogger.Debug($"No active release found for {player.name} - nothing to cancel");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error cancelling release for {player.name}: {ex.Message}");
             }
         }
 

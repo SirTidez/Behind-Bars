@@ -761,23 +761,46 @@ namespace Behind_Bars
                     ModLogger.Warn("Storage/InventoryDropOff not found in jail hierarchy");
                 }
                 
-                // Set up Inventory Pickup Station
+                // Set up Jail Inventory Pickup Station (for prison items)
+                Transform jailInventoryPickup = null;
+                if (storageArea != null)
+                {
+                    jailInventoryPickup = storageArea.Find("JailInventoryPickup");
+                }
+
+                if (jailInventoryPickup != null)
+                {
+                    var jailPickupComponent = jailInventoryPickup.GetComponent<Behind_Bars.Systems.Jail.JailInventoryPickupStation>();
+                    if (jailPickupComponent == null)
+                    {
+                        jailPickupComponent = jailInventoryPickup.gameObject.AddComponent<Behind_Bars.Systems.Jail.JailInventoryPickupStation>();
+                        ModLogger.Info("✓ JailInventoryPickupStation component added to JailInventoryPickup GameObject");
+                    }
+
+                    ModLogger.Info("JailInventoryPickupStation setup complete");
+                }
+                else
+                {
+                    ModLogger.Warn("Storage/JailInventoryPickup not found in jail hierarchy");
+                }
+
+                // Set up Inventory Pickup Station (for personal belongings return)
                 Transform inventoryPickup = null;
                 if (storageArea != null)
                 {
                     inventoryPickup = storageArea.Find("InventoryPickup");
                 }
-                
+
                 if (inventoryPickup != null)
                 {
-                    var pickupComponent = inventoryPickup.GetComponent<Behind_Bars.Systems.Jail.JailInventoryPickupStation>();
+                    var pickupComponent = inventoryPickup.GetComponent<Behind_Bars.Systems.Jail.InventoryPickupStation>();
                     if (pickupComponent == null)
                     {
-                        pickupComponent = inventoryPickup.gameObject.AddComponent<Behind_Bars.Systems.Jail.JailInventoryPickupStation>();
-                        ModLogger.Info("✓ JailInventoryPickupStation component added to InventoryPickup GameObject");
+                        pickupComponent = inventoryPickup.gameObject.AddComponent<Behind_Bars.Systems.Jail.InventoryPickupStation>();
+                        ModLogger.Info("✓ InventoryPickupStation component added to InventoryPickup GameObject");
                     }
-                    
-                    ModLogger.Info("JailInventoryPickupStation setup complete");
+
+                    ModLogger.Info("InventoryPickupStation setup complete");
                 }
                 else
                 {
@@ -1153,6 +1176,12 @@ namespace Behind_Bars
                     CrimeUIManager.Instance.ShowCrimeDetails();
                 }
 
+                // F6 key - Quick 10-second jail sentence for release testing
+                if (Input.GetKeyDown(KeyCode.F6))
+                {
+                    QuickJailForReleaseTesting();
+                }
+
                 // F8 key - Trigger instant arrest for testing
                 if (Input.GetKeyDown(KeyCode.F8))
                 {
@@ -1281,6 +1310,102 @@ namespace Behind_Bars
             catch (Exception e)
             {
                 ModLogger.Error($"Error teleporting to Taco Ticklers: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Quick 10-second jail sentence for release testing - skips full booking process
+        /// </summary>
+        private void QuickJailForReleaseTesting()
+        {
+            try
+            {
+#if !MONO
+                var player = Object.FindObjectOfType<Il2CppScheduleOne.PlayerScripts.Player>();
+#else
+                var player = Object.FindObjectOfType<ScheduleOne.PlayerScripts.Player>();
+#endif
+                if (player != null)
+                {
+                    ModLogger.Info("F6 pressed - Quick 10-second jail for release testing!");
+
+                    if (JailSystem != null && JailController != null)
+                    {
+                        // Create a minimal 10-second sentence
+                        var testSentence = new JailSystem.JailSentence
+                        {
+                            JailTime = 10f, // 10 seconds
+                            FineAmount = 100f,
+                            Severity = JailSystem.JailSeverity.Minor,
+                            Description = "Quick Test Sentence",
+                            CanPayFine = true
+                        };
+
+                        // Skip booking stations - go straight to cell assignment
+                        ModLogger.Info("Skipping booking process for quick test...");
+
+                        // Assign player to a cell
+                        var cellManager = Behind_Bars.Systems.Jail.CellAssignmentManager.Instance;
+                        if (cellManager != null)
+                        {
+                            int cellNumber = cellManager.AssignPlayerToCell(player);
+                            if (cellNumber >= 0)
+                            {
+                                ModLogger.Info($"✓ Player assigned to cell {cellNumber}");
+
+                                // Teleport player to the cell
+                                var cell = JailController.GetCellByIndex(cellNumber);
+                                if (cell?.cellTransform != null)
+                                {
+                                    player.transform.position = cell.cellTransform.position + Vector3.up * 1f;
+                                    ModLogger.Info($"✓ Player teleported to cell {cellNumber}");
+
+                                    // Close and lock the cell door
+                                    if (JailController.doorController != null)
+                                    {
+                                        JailController.doorController.CloseJailCellDoor(cellNumber);
+                                        ModLogger.Info($"✓ Cell {cellNumber} door closed and locked");
+                                    }
+
+                                    // Start UI timer
+                                    if (BehindBarsUIManager.Instance?.GetUIWrapper() != null)
+                                    {
+                                        float bailAmount = JailSystem.CalculateBailAmount(testSentence.FineAmount, testSentence.Severity);
+                                        BehindBarsUIManager.Instance.GetUIWrapper().StartDynamicUpdates(testSentence.JailTime, bailAmount);
+                                        ModLogger.Info($"✓ UI timer started: 10s jail time, ${bailAmount} bail");
+                                    }
+
+                                    ModLogger.Info("✓ Quick jail test complete - player in cell with 10-second sentence!");
+                                    ModLogger.Info("   Timer will trigger automatic release when complete");
+                                }
+                                else
+                                {
+                                    ModLogger.Error("Could not find cell transform for teleport");
+                                }
+                            }
+                            else
+                            {
+                                ModLogger.Error("Failed to assign cell");
+                            }
+                        }
+                        else
+                        {
+                            ModLogger.Error("CellAssignmentManager not available");
+                        }
+                    }
+                    else
+                    {
+                        ModLogger.Error("JailSystem or JailController not available");
+                    }
+                }
+                else
+                {
+                    ModLogger.Warn("No player found for quick jail test");
+                }
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error in quick jail test: {e.Message}\n{e.StackTrace}");
             }
         }
 

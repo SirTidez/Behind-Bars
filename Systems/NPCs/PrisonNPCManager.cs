@@ -188,14 +188,17 @@ namespace Behind_Bars.Systems.NPCs
             {
                 var assignment = guardAssignments[i];
                 Transform spawnPoint = GetSpawnPointForAssignment(assignment, jailController);
-                
+
                 if (spawnPoint == null)
                 {
                     ModLogger.Error($"Could not find spawn point for assignment {assignment}");
                     continue;
                 }
-                
-                var guard = SpawnGuard(spawnPoint.position, $"Officer_{i+1}", $"G{1000 + i}", assignment);
+
+                // Give specific names to Booking guards (Intake & Release Officers)
+                string guardName = GetGuardNameForAssignment(assignment, i);
+
+                var guard = SpawnGuard(spawnPoint.position, guardName, $"G{1000 + i}", assignment);
                 if (guard != null)
                 {
                     activeGuards.Add(guard);
@@ -205,7 +208,7 @@ namespace Behind_Bars.Systems.NPCs
                 {
                     ModLogger.Error($"Failed to spawn guard for assignment {assignment}");
                 }
-                
+
                 // Small delay between spawns
                 yield return new WaitForSeconds(0.8f);
             }
@@ -231,6 +234,37 @@ namespace Behind_Bars.Systems.NPCs
                 default:
                     return null;
             }
+        }
+
+        /// <summary>
+        /// Get specific names for guards based on their assignment
+        /// </summary>
+        private string GetGuardNameForAssignment(GuardBehavior.GuardAssignment assignment, int index)
+        {
+            switch (assignment)
+            {
+                case GuardBehavior.GuardAssignment.Booking0:
+                    return $"Intake Officer {GetRandomOfficerName()}";
+                case GuardBehavior.GuardAssignment.Booking1:
+                    return $"Release Officer {GetRandomOfficerName()}";
+                default:
+                    return $"Officer {index + 1}"; // Guard Room officers get generic names
+            }
+        }
+
+        /// <summary>
+        /// Get a random name for an officer
+        /// </summary>
+        private string GetRandomOfficerName()
+        {
+            var names = new string[]
+            {
+                "Billy", "Kelly", "Johnson", "Martinez", "Thompson", "Garcia",
+                "Rodriguez", "Wilson", "Anderson", "Davis", "Miller", "Moore",
+                "Jackson", "Taylor", "Lee", "Harris", "Clark", "Lewis",
+                "Walker", "Hall", "Allen", "Young", "King", "Wright"
+            };
+            return names[UnityEngine.Random.Range(0, names.Length)];
         }
 
         /// <summary>

@@ -5,6 +5,7 @@ using Behind_Bars.Harmony;
 using Behind_Bars.Systems.CrimeDetection;
 using Behind_Bars.Systems.Jail;
 using Behind_Bars.Systems.Data;
+using Behind_Bars.Systems.NPCs;
 using UnityEngine;
 using MelonLoader;
 
@@ -51,6 +52,9 @@ namespace Behind_Bars.Systems
         public IEnumerator HandleImmediateArrest(Player player)
         {
             ModLogger.Info($"Processing IMMEDIATE arrest for player: {player.name}");
+
+            // CRITICAL: Reset all previous jail/booking/release state before starting new arrest
+            ResetPlayerJailState(player);
 
             // Inventory capture now handled in Harmony patch before any clearing happens
             // CreateInventorySnapshotIfNeeded(player); // MOVED TO HARMONY PATCH
@@ -1427,6 +1431,100 @@ namespace Behind_Bars.Systems
                 return "No Bail";
             else
                 return $"${amount:F0}";
+        }
+
+        /// <summary>
+        /// Reset all jail/booking/release state for a player before new arrest
+        /// </summary>
+        private void ResetPlayerJailState(Player player)
+        {
+            try
+            {
+                ModLogger.Info($"Resetting jail state for {player.name} before new arrest");
+
+                // 1. Clear any active booking process
+                // Note: BookingProcess handles its own cleanup when player is arrested
+                var bookingProcess = UnityEngine.Object.FindObjectOfType<BookingProcess>();
+                if (bookingProcess != null)
+                {
+                    ModLogger.Info("BookingProcess found - it will handle its own cleanup");
+                }
+
+                // 2. Clear any active release process
+                var releaseManager = ReleaseManager.Instance;
+                if (releaseManager != null)
+                {
+                    releaseManager.CancelPlayerRelease(player);
+                    ModLogger.Info("Cancelled any active release process");
+                }
+
+                // 3. Clear escort registrations
+                var officerCoordinator = OfficerCoordinator.Instance;
+                if (officerCoordinator != null)
+                {
+                    officerCoordinator.UnregisterAllEscortsForPlayer(player);
+                    ModLogger.Info("Cleared all escort registrations");
+                }
+
+                // 4. Reset station states
+                ResetStationStates(player);
+
+                ModLogger.Info($"Jail state reset completed for {player.name}");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error resetting jail state for {player.name}: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Reset all interaction stations to clean state
+        /// </summary>
+        private void ResetStationStates(Player player)
+        {
+            try
+            {
+                // Reset exit scanner station - most important for preventing "Already completed" issues
+                var exitScannerStation = UnityEngine.Object.FindObjectOfType<ExitScannerStation>();
+                if (exitScannerStation != null)
+                {
+                    // Reset completion flags
+                    var completedField = exitScannerStation.GetType().GetField("isCompleted",
+                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    if (completedField != null)
+                    {
+                        completedField.SetValue(exitScannerStation, false);
+                        ModLogger.Info("Reset ExitScannerStation completion flag");
+                    }
+                }
+
+                // Re-enable jail inventory pickup stations for new inmate
+                var jailInventoryStations = UnityEngine.Object.FindObjectsOfType<JailInventoryPickupStation>();
+                foreach (var station in jailInventoryStations)
+                {
+                    station.gameObject.SetActive(true);
+                    // Reset the items taken flag to re-enable prefabs
+                    var takenField = station.GetType().GetField("itemsCurrentlyTaken",
+                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    if (takenField != null)
+                    {
+                        takenField.SetValue(station, false);
+                    }
+                }
+
+                // Re-enable inventory pickup stations
+                var inventoryPickupStations = UnityEngine.Object.FindObjectsOfType<InventoryPickupStation>();
+                foreach (var station in inventoryPickupStations)
+                {
+                    station.gameObject.SetActive(true);
+                }
+
+                ModLogger.Info("Station states reset successfully");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error resetting station states: {ex.Message}");
+            }
         }
     }
 }

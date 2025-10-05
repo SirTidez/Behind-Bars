@@ -4,6 +4,12 @@ using System.Linq;
 using UnityEngine;
 using Behind_Bars.Systems.Jail;
 
+#if !MONO
+using Il2CppScheduleOne.PlayerScripts;
+#else
+using ScheduleOne.PlayerScripts;
+#endif
+
 [System.Serializable]
 public class JailDoor
 {
@@ -615,6 +621,143 @@ public class CellDetail
             return spawnPointOccupancy.Any(sp => !sp.isOccupied);
         }
         return !isOccupied;
+    }
+}
+
+[System.Serializable]
+public class JailStorageArea
+{
+    [Header("Storage Area Components")]
+    public Transform storageArea;
+    public Transform guardPoint;
+
+    [Header("Door Controls")]
+    public JailDoor storageHallDoor;
+    public JailDoor bookingStorageDoor;
+
+    [Header("Inventory Stations")]
+    public Transform jailInventoryPickup;        // Prison items station (JailInventoryPickupStation)
+    public Transform inventoryDropOff;           // Personal items drop-off station
+    public Transform inventoryPickup;            // Personal items pickup station (InventoryPickupStation)
+
+    [Header("Storage Components")]
+    public Transform cubbies;
+    public Transform bounds;
+    public Transform desktop;
+    public Transform equipJailSuit;
+    public Transform storageWalls;
+
+    // Component references for the stations
+    private JailInventoryPickupStation jailInventoryComponent;
+    private InventoryPickupStation inventoryPickupComponent;
+
+    public bool IsValid()
+    {
+        return storageArea != null && guardPoint != null;
+    }
+
+    /// <summary>
+    /// Initialize the storage area components
+    /// </summary>
+    public void InitializeStorageArea()
+    {
+        if (!IsValid())
+        {
+            Debug.LogError("Storage area is not valid - missing required components");
+            return;
+        }
+
+        // Initialize jail inventory pickup station (prison items)
+        if (jailInventoryPickup != null)
+        {
+            jailInventoryComponent = jailInventoryPickup.GetComponent<JailInventoryPickupStation>();
+            if (jailInventoryComponent == null)
+            {
+                jailInventoryComponent = jailInventoryPickup.gameObject.AddComponent<JailInventoryPickupStation>();
+                Debug.Log("Added JailInventoryPickupStation component to JailInventoryPickup");
+            }
+        }
+
+        // Initialize inventory pickup station (personal items return)
+        if (inventoryPickup != null)
+        {
+            inventoryPickupComponent = inventoryPickup.GetComponent<InventoryPickupStation>();
+            if (inventoryPickupComponent == null)
+            {
+                inventoryPickupComponent = inventoryPickup.gameObject.AddComponent<InventoryPickupStation>();
+                Debug.Log("Added InventoryPickupStation component to InventoryPickup");
+            }
+        }
+
+        Debug.Log("Storage area components initialized successfully");
+    }
+
+    /// <summary>
+    /// Get the jail inventory pickup station component (for prison items)
+    /// </summary>
+    public JailInventoryPickupStation GetJailInventoryPickupStation()
+    {
+        if (jailInventoryComponent == null && jailInventoryPickup != null)
+        {
+            jailInventoryComponent = jailInventoryPickup.GetComponent<JailInventoryPickupStation>();
+        }
+        return jailInventoryComponent;
+    }
+
+    /// <summary>
+    /// Get the inventory pickup station component (for personal items return)
+    /// </summary>
+    public InventoryPickupStation GetInventoryPickupStation()
+    {
+        if (inventoryPickupComponent == null && inventoryPickup != null)
+        {
+            inventoryPickupComponent = inventoryPickup.GetComponent<InventoryPickupStation>();
+        }
+        return inventoryPickupComponent;
+    }
+
+    /// <summary>
+    /// Enable jail inventory pickup for new inmates
+    /// </summary>
+    public void EnableJailInventoryPickup(Player player)
+    {
+        var station = GetJailInventoryPickupStation();
+        if (station != null)
+        {
+            station.gameObject.SetActive(true);
+            Debug.Log($"Enabled jail inventory pickup for {player.name}");
+        }
+    }
+
+    /// <summary>
+    /// Enable inventory pickup for released inmates
+    /// </summary>
+    public void EnableInventoryPickup(Player player)
+    {
+        var station = GetInventoryPickupStation();
+        if (station != null)
+        {
+            station.EnableForRelease(player);
+            Debug.Log($"Enabled inventory pickup for release of {player.name}");
+        }
+    }
+
+    /// <summary>
+    /// Check if a player needs prison items
+    /// </summary>
+    public bool PlayerNeedsPrisonItems(Player player)
+    {
+        var station = GetJailInventoryPickupStation();
+        return station != null && station.NeedsPrisonItems(player);
+    }
+
+    /// <summary>
+    /// Check if a player has personal items to retrieve
+    /// </summary>
+    public bool PlayerHasPersonalItems(Player player)
+    {
+        var station = GetInventoryPickupStation();
+        return station != null && station.HasItemsForPlayer(player);
     }
 }
 
