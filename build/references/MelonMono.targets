@@ -331,9 +331,6 @@
         <Reference Include="Autodesk.Fbx">
             <HintPath>$(S1Dir)\Schedule I_Data\Managed\Autodesk.Fbx.dll</HintPath>
         </Reference>
-        <Reference Include="Boxophobic.AtmosphericHeightFog.Runtime">
-            <HintPath>$(S1Dir)\Schedule I_Data\Managed\Boxophobic.AtmosphericHeightFog.Runtime.dll</HintPath>
-        </Reference>
         <Reference Include="Boxophobic.Utils.Scripts">
             <HintPath>$(S1Dir)\Schedule I_Data\Managed\Boxophobic.Utils.Scripts.dll</HintPath>
         </Reference>
@@ -345,12 +342,6 @@
         </Reference>
         <Reference Include="CorgiGodRays">
             <HintPath>$(S1Dir)\Schedule I_Data\Managed\CorgiGodRays.dll</HintPath>
-        </Reference>
-        <Reference Include="DOTween">
-            <HintPath>$(S1Dir)\Schedule I_Data\Managed\DOTween.dll</HintPath>
-        </Reference>
-        <Reference Include="DOTweenPro">
-            <HintPath>$(S1Dir)\Schedule I_Data\Managed\DOTweenPro.dll</HintPath>
         </Reference>
         <Reference Include="EasyButtons">
             <HintPath>$(S1Dir)\Schedule I_Data\Managed\EasyButtons.dll</HintPath>
@@ -364,30 +355,15 @@
         <Reference Include="FishNet.Runtime">
             <HintPath>$(S1Dir)\Schedule I_Data\Managed\FishNet.Runtime.dll</HintPath>
         </Reference>
-        <Reference Include="I2.Loc">
-            <HintPath>$(S1Dir)\Schedule I_Data\Managed\I2.Loc.dll</HintPath>
-        </Reference>
-        <Reference Include="LitJson">
-            <HintPath>$(S1Dir)\Schedule I_Data\Managed\LitJson.dll</HintPath>
-        </Reference>
         <Reference Include="MelonLoader">
             <HintPath>$(S1Dir)\MelonLoader\net35\MelonLoader.dll</HintPath>
-        </Reference>
-        <Reference Include="MoreMountains.Feedbacks">
-            <HintPath>$(S1Dir)\Schedule I_Data\Managed\MoreMountains.Feedbacks.dll</HintPath>
-        </Reference>
-        <Reference Include="MoreMountains.NiceVibrations">
-            <HintPath>$(S1Dir)\Schedule I_Data\Managed\MoreMountains.NiceVibrations.dll</HintPath>
         </Reference>
         <Reference Include="Newtonsoft.Json">
             <HintPath>$(S1Dir)\Schedule I_Data\Managed\Newtonsoft.Json.dll</HintPath>
         </Reference>
-        <Reference Include="NSubstitute">
-            <HintPath>$(S1Dir)\Schedule I_Data\Managed\NSubstitute.dll</HintPath>
-        </Reference>
-        <Reference Include="TextMeshPro">
-            <HintPath>$(S1Dir)\Schedule I_Data\Managed\TextMeshPro.dll</HintPath>
-        </Reference>
+		<Reference Include="RootMotion">
+			<HintPath>$(S1Dir)\Schedule I_Data\Managed\RootMotion.dll</HintPath>
+		</Reference>
     </ItemGroup>
     <ItemGroup Label="AssembliesMono" Condition="'$(IsMono)' == 'true'">
         <Reference Include="Assembly-CSharp" Publicize="true">

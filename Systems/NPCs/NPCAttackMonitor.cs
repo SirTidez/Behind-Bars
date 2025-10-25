@@ -54,7 +54,8 @@ namespace Behind_Bars.Systems.NPCs
                 ModLogger.Info($"NPCAttackMonitor: {gameObject.name} took {damage} damage");
 
                 // Check if this was recently attacked by a player
-                if (npcHealth.HoursSinceAttackedByPlayer < 1) // Less than 1 hour ago
+                // HoursSinceAttackedByPlayer is not accessable at this time, so skip for nows
+                /*if (npcHealth.HoursSinceAttackedByPlayer < 1) // Less than 1 hour ago
                 {
                     // Find the player who likely attacked (could be improved with more sophisticated tracking)
                     Player attacker = FindNearbyPlayer();
@@ -64,7 +65,7 @@ namespace Behind_Bars.Systems.NPCs
                         jailNPC.OnAttackedByPlayer(attacker);
                         lastAttacker = attacker;
                     }
-                }
+                }*/
 
                 lastHealth = currentHealth;
             }

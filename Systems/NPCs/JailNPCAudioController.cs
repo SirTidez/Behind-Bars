@@ -468,8 +468,8 @@ namespace Behind_Bars.Systems.NPCs
                     {
                         // Use custom audio clip from database
                         mainVoiceSource.AudioSource.clip = audioClip;
-                        mainVoiceSource.volumeMultiplier = volumeMultiplier * voiceEntry.GetVolumeMultiplier() * voiceDatabase.globalVolumeMultiplier;
-                        mainVoiceSource.pitchMultiplier = 1.0f + UnityEngine.Random.Range(-voiceEntry.GetPitchVariation(), voiceEntry.GetPitchVariation());
+                        mainVoiceSource.VolumeMultiplier = volumeMultiplier * voiceEntry.GetVolumeMultiplier() * voiceDatabase.globalVolumeMultiplier;
+                        mainVoiceSource.PitchMultiplier = 1.0f + UnityEngine.Random.Range(-voiceEntry.GetPitchVariation(), voiceEntry.GetPitchVariation());
                         mainVoiceSource.Play();
 
                         ModLogger.Debug($"Playing custom guard command audio: {commandType}");
@@ -585,7 +585,7 @@ namespace Behind_Bars.Systems.NPCs
                 if (mainVoiceSource.AudioSource != null)
                 {
                     mainVoiceSource.AudioSource.pitch = pitch;
-                    mainVoiceSource.volumeMultiplier = volumeMultiplier * 0.5f; // Quieter fallback
+                    mainVoiceSource.VolumeMultiplier = volumeMultiplier * 0.5f; // Quieter fallback
                 }
 
                 ModLogger.Debug($"Simple command sound configured for {commandType} with pitch {pitch}");
