@@ -44,6 +44,7 @@ namespace Behind_Bars.Systems.NPCs
             JailGuard,
             JailInmate,
             GenericJailStaff,
+            ParoleOfficer,
             TestNPC
         }
 
@@ -57,6 +58,17 @@ namespace Behind_Bars.Systems.NPCs
         public static GameObject CreateJailGuard(Vector3 position, string firstName = "Officer", string lastName = "Smith")
         {
             return CreateNPC(NPCType.JailGuard, position, firstName, lastName);
+        }
+
+        /// <summary>
+        /// Creates a parole officer NPC with proper Schedule One component initialization
+        /// </summary>
+        /// <param name="firstName">NPC first name</param>
+        /// <param name="lastName">NPC last name</param>
+        /// <returns>The created GameObject with all components properly initialized</returns>
+        public static GameObject CreateParoleOfficer(Vector3 position, string firstName = "Officer", string lastName = "Johnson")
+        {
+            return CreateNPC(NPCType.ParoleOfficer, position, firstName, lastName);
         }
 
         /// <summary>
@@ -157,7 +169,7 @@ namespace Behind_Bars.Systems.NPCs
 
                 // 12. Add jail-specific behavior components for guards
                 if (npcType == NPCType.JailGuard)
-                {                    
+                {
                     // Add new GuardBehavior component instead of old GuardStateMachine
                     var guardBehavior = npcObject.AddComponent<GuardBehavior>();
                     // Note: Initialize method will be called by PrisonNPCManager with proper assignment
@@ -191,12 +203,22 @@ namespace Behind_Bars.Systems.NPCs
                     {
                         ModLogger.Debug("TestNPC will use BaseJailNPC for basic movement only");
                     }
-                    
+
                     ModLogger.Debug($"✓ Test NPC {firstName} ready for TestNPCController (clean of state machines)");
                 }
+                else if (npcType == NPCType.ParoleOfficer)
+                {
+                    // Add new ParoleOfficerBehavior component
+                    var paroleBehavior = npcObject.AddComponent<ParoleOfficerBehavior>();
+                    if (paroleBehavior != null)
+                    {
+                        // Add any essential initialization here
+                        ModLogger.Debug($"✓ ParoleOfficerBehavior component added to {firstName} {lastName}");
+                    }
+                }
 
-                // 13. Initialize NavMesh positioning after activation
-                InitializeNavMeshPositioning(npcObject);
+                    // 13. Initialize NavMesh positioning after activation
+                    InitializeNavMeshPositioning(npcObject);
 
                 ModLogger.Info($"✓ Successfully created {npcType} NPC: {firstName} {lastName}");
                 return npcObject;

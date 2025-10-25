@@ -34,11 +34,14 @@ namespace Behind_Bars.Systems.NPCs
         
         // NPC tracking
         private List<PrisonGuard> activeGuards = new List<PrisonGuard>();
+        private List<ParoleOfficer> activeParoleOfficers = new List<ParoleOfficer>();
         private List<PrisonInmate> activeInmates = new List<PrisonInmate>();
         
         // Guard coordination for IL2CPP-safe management
         private List<GuardBehavior> registeredGuards = new List<GuardBehavior>();
+        private List<ParoleOfficerBehavior> registeredParoleOfficers = new List<ParoleOfficerBehavior>();
         private GuardBehavior intakeOfficer = null;
+        private ParoleOfficerBehavior paroleSupervisor = null;
         private bool isPatrolInProgress = false;
         private float nextPatrolTime = 0f;
         private readonly float PATROL_COOLDOWN = 300f; // 5 minutes between coordinated patrols
@@ -49,6 +52,7 @@ namespace Behind_Bars.Systems.NPCs
         
         // Spawn areas (will be set by JailController)
         public Transform[] guardSpawnPoints;
+        public Transform[] paroleOfficerSpawnPoints;
         public Transform[] inmateSpawnPoints;
         
         // Guard assignment tracking
@@ -115,6 +119,9 @@ namespace Behind_Bars.Systems.NPCs
 
             // Create inmate spawn points near the jail center
             CreateInmateSpawnPoints(jailController);
+
+            // Create parole officer spawn points
+            CreateParoleOfficerSpawnPoints(jailController);
         }
 
         /// <summary>
@@ -148,6 +155,36 @@ namespace Behind_Bars.Systems.NPCs
             
             inmateSpawnPoints = spawnPoints.ToArray();
             ModLogger.Info($"Created {inmateSpawnPoints.Length} inmate spawn points");
+        }
+
+        private void CreateParoleOfficerSpawnPoints(JailController jailController)
+        {
+            var spawnPoints = new List<Transform>();
+
+            // Create spawn points near the downtown police station
+            Vector3 policeStationPos = new Vector3(50f, 0f, 50f); // Example position TODO: Find exact coordinates for spawn point
+
+            // Create spawn points in a circle around the parking lot of the police station
+            // Spawn in a half-circle starting from the door of the police station
+            int numPoints = 5; // Example number of patroling officers
+            float radius = 6f;
+            
+            for (int i = 0; i < numPoints; i++)
+            {
+                float angle = (180f / numPoints) * i * Mathf.Deg2Rad;
+                Vector3 spawnPos = policeStationPos + new Vector3(
+                    Mathf.Cos(angle) * radius,
+                    0f,
+                    Mathf.Sin(angle) * radius
+                );
+
+                GameObject spawnPoint = new GameObject($"ParoleOfficerSpawnPoint_{i}");
+                spawnPoint.transform.position = spawnPos;
+                spawnPoint.transform.SetParent(transform);
+                spawnPoints.Add(spawnPoint.transform);
+            }
+
+            paroleOfficerSpawnPoints = spawnPoints.ToArray();
         }
 
         /// <summary>
@@ -1854,7 +1891,171 @@ namespace Behind_Bars.Systems.NPCs
             registeredGuards.RemoveAll(g => g == null);
             return new List<GuardBehavior>(registeredGuards);
         }
+
+        #endregion
         
+        #region Parole Officer Coordination Methods
+
+        /// <summary>
+        /// Register a guard with the manager for coordination
+        /// </summary>
+        public void RegisterParoleOfficer(ParoleOfficerBehavior officer)
+        {
+            if (!registeredParoleOfficers.Contains(officer))
+            {
+                registeredParoleOfficers.Add(officer);
+
+                // Track intake officer specifically
+                if (officer.GetRole() == ParoleOfficerBehavior.ParoleOfficerRole.SupervisingOfficer)
+                {
+                    paroleSupervisor = officer;
+                    ModLogger.Info($"Registered supervising officer: {officer.GetBadgeNumber()}");
+                }
+
+                ModLogger.Debug($"Registered officer {officer.GetBadgeNumber()} with PrisonNPCManager");
+            }
+        }
+
+        /// <summary>
+        /// Unregister a guard from the manager
+        /// </summary>
+        public void UnregisterParoleOfficer(ParoleOfficerBehavior officer)
+        {
+            if (registeredParoleOfficers.Contains(officer))
+            {
+                registeredParoleOfficers.Remove(officer);
+
+                if (officer == paroleSupervisor)
+                {
+                    paroleSupervisor = null;
+                    ModLogger.Info($"Unregistered intake officer: {officer.GetBadgeNumber()}");
+                }
+
+                ModLogger.Debug($"Unregistered officer {officer.GetBadgeNumber()} from PrisonNPCManager");
+            }
+        }
+
+        /// <summary>
+        /// Try to assign a coordinated patrol to officers
+        /// </summary>
+        public IEnumerator TryAssignPatrol(ParoleOfficerBehavior requestingOfficer)
+        {
+            // Check if it's time for a patrol and no patrol is in progress
+            if (Time.time < nextPatrolTime || isPatrolInProgress)
+            {
+                yield break;
+            }
+
+            if (requestingOfficer.GetCurrentActivity() != ParoleOfficerBehavior.ParoleOfficerActivity.Idle)
+            {
+                yield break;
+            }
+
+            // Find a partner from the same area
+            var partner = FindPatrolPartner(requestingOfficer);
+            if (partner != null)
+            {
+                isPatrolInProgress = true;
+                nextPatrolTime = Time.time + PATROL_COOLDOWN;
+
+                requestingOfficer.StartPatrol();
+                partner.StartPatrol();
+                ModLogger.Info($"✓ Assigned coordinated patrol: {requestingOfficer.GetBadgeNumber()} + {partner.GetBadgeNumber()}");
+            }
+
+            yield break;
+        }
+
+        /// <summary>
+        /// Find a suitable patrol partner for a parole officer
+        /// </summary>
+        private ParoleOfficerBehavior FindPatrolPartner(ParoleOfficerBehavior requestingOfficer)
+        {
+            foreach (var officer in registeredParoleOfficers)
+            {
+                if (officer == requestingOfficer || officer.GetCurrentActivity() != ParoleOfficerBehavior.ParoleOfficerActivity.Idle) continue;
+
+                // Must be from same area (both guard room or both booking)
+                var requestingRole = requestingOfficer.GetRole();
+                var officerRole = officer.GetRole();
+
+                bool sameArea = (requestingRole == ParoleOfficerBehavior.ParoleOfficerRole.PatrolOfficer && officerRole == ParoleOfficerBehavior.ParoleOfficerRole.PatrolOfficer);
+
+                if (sameArea)
+                {
+                    return officer;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// End patrol coordination state
+        /// </summary>
+        public void EndParolePatrolCoordination()
+        {
+            isPatrolInProgress = false;
+            ModLogger.Debug("Patrol coordination ended");
+        }
+
+        /// <summary>
+        /// Get the supervising officer for prisoner processing
+        /// </summary>
+        public ParoleOfficerBehavior GetSupervisingOfficer()
+        {
+            return paroleSupervisor;
+        }
+
+        /// <summary>
+        /// Check if supervising officer is available
+        /// </summary>
+        public bool IsSupervisingOfficerAvailable()
+        {
+            return paroleSupervisor != null && !paroleSupervisor.IsProcessingIntake();
+        }
+
+        /// <summary>
+        /// Request prisoner escort from parole officer
+        /// TODO: Implement parole intake proccess here
+        /// </summary>
+        public bool RequestReleaseEscort(GameObject parolee)
+        {
+            if (IsSupervisingOfficerAvailable() && parolee != null)
+            {
+                // Convert GameObject to Player component
+#if !MONO
+                var playerComponent = parolee.GetComponent<Il2CppScheduleOne.PlayerScripts.Player>();
+#else
+                var playerComponent = parolee.GetComponent<ScheduleOne.PlayerScripts.Player>();
+#endif
+
+                if (playerComponent != null)
+                {
+                    paroleSupervisor.StartIntakeProcess(playerComponent);
+                    ModLogger.Info($"Requested parole intake for {parolee.name} from parole supervisor");
+                    return true;
+                }
+                else
+                {
+                    ModLogger.Error($"GameObject {parolee.name} does not have a Player component");
+                    return false;
+                }
+            }
+
+            ModLogger.Warn($"Cannot request prisoner escort - intake officer not available");
+            return false;
+        }
+
+        /// <summary>
+        /// Get all registered guards
+        /// </summary>
+        public List<ParoleOfficerBehavior> GetRegisteredParoleOfficers()
+        {
+            // Clean up null references
+            registeredParoleOfficers.RemoveAll(g => g == null);
+            return new List<ParoleOfficerBehavior>(registeredParoleOfficers);
+        }
+
         #endregion
 
         #region Network Prefab Testing Methods
@@ -2013,6 +2214,76 @@ namespace Behind_Bars.Systems.NPCs
 
         public GuardBehavior.GuardRole GetRole() => guardBehavior?.GetRole() ?? GuardBehavior.GuardRole.GuardRoomStationary;
         public GuardBehavior.GuardAssignment GetAssignment() => assignment;
+        public string GetBadgeNumber() => badgeNumber;
+        public string GetFirstName() => firstName;
+    }
+
+    /// <summary>
+    /// Custom prison guard class with enhanced behaviors and assignment system
+    /// </summary>
+    public class ParoleOfficer : MonoBehaviour
+    {
+#if !MONO
+        public ParoleOfficer(System.IntPtr ptr) : base(ptr) { }
+#endif
+
+        public string badgeNumber;
+        public string firstName;
+        public ParoleOfficerBehavior.ParoleOfficerAssignment assignment;
+
+        private ParoleOfficerBehavior officerBehavior;
+
+        public void Initialize(string badge, string name, ParoleOfficerBehavior.ParoleOfficerAssignment guardAssignment = ParoleOfficerBehavior.ParoleOfficerAssignment.PoliceStation0)
+        {
+            badgeNumber = badge;
+            firstName = name;
+            assignment = guardAssignment;
+
+            // Get or add the guard behavior component
+            officerBehavior = GetComponent<ParoleOfficerBehavior>();
+            if (officerBehavior == null)
+            {
+                officerBehavior = gameObject.AddComponent<ParoleOfficerBehavior>();
+            }
+
+            if (officerBehavior != null)
+            {
+                ModLogger.Info($"About to initialize ParoleOfficerBehavior for {name} with assignment {assignment}");
+                try
+                {
+                    officerBehavior.Initialize(assignment, badge);
+                    ModLogger.Info($"ParoleOfficerBehavior initialization completed for {name}");
+
+                    // Force registration if it's an intake officer
+                    if (assignment == ParoleOfficerBehavior.ParoleOfficerAssignment.PoliceStation0)
+                    {
+                        ModLogger.Info($"Manually registering intake officer {name}");
+                        if (PrisonNPCManager.Instance != null)
+                        {
+                            PrisonNPCManager.Instance.RegisterParoleOfficer(officerBehavior);
+                        }
+                    }
+                }
+                catch (System.Exception ex)
+                {
+                    ModLogger.Error($"Error initializing ParoleOfficerBehavior for {name}: {ex.Message}");
+                }
+            }
+            else
+            {
+                ModLogger.Error($"GuardBehavior component not found on guard {name}");
+            }
+
+            ModLogger.Info($"Prison guard {name} initialized with badge {badge} and assignment {assignment}");
+        }
+
+        private void Start()
+        {
+            // Additional initialization if needed
+        }
+
+        public ParoleOfficerBehavior.ParoleOfficerRole GetRole() => officerBehavior?.GetRole() ?? ParoleOfficerBehavior.ParoleOfficerRole.GuardRoomStationary;
+        public ParoleOfficerBehavior.ParoleOfficerAssignment GetAssignment() => assignment;
         public string GetBadgeNumber() => badgeNumber;
         public string GetFirstName() => firstName;
     }
