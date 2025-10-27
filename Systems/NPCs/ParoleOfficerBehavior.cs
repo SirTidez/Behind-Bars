@@ -34,23 +34,19 @@ namespace Behind_Bars.Systems.NPCs
 
         public enum ParoleOfficerRole
         {
-            GuardRoomStationary,      // Guards stationed in guard room
-            PoliceStationStationary,  // Guards stationed in booking area
             SupervisingOfficer,            // Dedicated supervisor for processing new parolees
             PatrolOfficer,            // Officers doing patrol routes
-            ResponseOfficer,          // Responds to incidents
             RandomSearchOfficer       // Conducts random searches
         }
 
         public enum ParoleOfficerAssignment
         {
-            PoliceStation0, // Police station spawn point 0 (usually supervising officer)
-            DowntownPatrol, // Patrols downtown area
-            UptownPatrol,   // Patrols uptown area
-            WestsidePatrol,  // Patrols westside area
-            DocksPatrol,     // Patrols docks area
-            NorthtownPatrol,   // Patrols northtown area
-            SuburbiaPatrol   // Patrols suburbia area
+            PoliceStationSupervisor, // Police station supervising officer (stationary)
+            PoliceStationPatrol,     // Police station patrol route officer
+            UptownPatrol,            // Patrols uptown area
+            WestsidePatrol,          // Patrols westside area
+            DocksPatrol,             // Patrols docks area
+            NorthtownPatrol          // Patrols northtown area
         }
 
         public enum ParoleOfficerActivity
@@ -66,6 +62,7 @@ namespace Behind_Bars.Systems.NPCs
         [System.Serializable]
         public class PatrolRoute
         {
+            public string routeName = "DefaultRoute";
             public Vector3[] points;
             public float speed = 2.5f;
             public float waitTime = 3f;
@@ -84,9 +81,9 @@ namespace Behind_Bars.Systems.NPCs
 
         #endregion
 
-        #region Guard Properties
+        #region Parole Officer Properties
 
-        public ParoleOfficerRole role = ParoleOfficerRole.GuardRoomStationary;
+        public ParoleOfficerRole role = ParoleOfficerRole.PatrolOfficer;
         public ParoleOfficerAssignment assignment;
         public string badgeNumber = "";
         public int experienceLevel = 1;
@@ -137,6 +134,17 @@ namespace Behind_Bars.Systems.NPCs
         private List<Transform> availablePatrolPoints = new List<Transform>();
         private bool patrolInitialized = false;
 
+        // Mapping between assignment and route names
+        public static readonly Dictionary<ParoleOfficerAssignment, string> AssignmentToRouteMap = new Dictionary<ParoleOfficerAssignment, string>
+        {
+            { ParoleOfficerAssignment.PoliceStationSupervisor, null }, // Supervising officer, no route
+            { ParoleOfficerAssignment.PoliceStationPatrol, "PoliceStation" }, // Police station patrol route
+            { ParoleOfficerAssignment.UptownPatrol, "East" },
+            { ParoleOfficerAssignment.WestsidePatrol, "West" },
+            { ParoleOfficerAssignment.DocksPatrol, "Canal" },
+            { ParoleOfficerAssignment.NorthtownPatrol, "North" }
+        };
+
         #endregion
 
         #region Initialization
@@ -176,8 +184,23 @@ namespace Behind_Bars.Systems.NPCs
             // Set role based on assignment
             switch (assignment)
             {
-                case ParoleOfficerAssignment.PoliceStation0:
+                case ParoleOfficerAssignment.PoliceStationSupervisor:
                     role = ParoleOfficerRole.SupervisingOfficer;
+                    break;
+                case ParoleOfficerAssignment.PoliceStationPatrol:
+                    role = ParoleOfficerRole.PatrolOfficer;
+                    break;
+                case ParoleOfficerAssignment.UptownPatrol:
+                    role = ParoleOfficerRole.PatrolOfficer;
+                    break;
+                case ParoleOfficerAssignment.WestsidePatrol:
+                    role = ParoleOfficerRole.PatrolOfficer;
+                    break;
+                case ParoleOfficerAssignment.DocksPatrol:
+                    role = ParoleOfficerRole.PatrolOfficer;
+                    break;
+                case ParoleOfficerAssignment.NorthtownPatrol:
+                    role = ParoleOfficerRole.PatrolOfficer;
                     break;
             }
 
@@ -280,10 +303,14 @@ namespace Behind_Bars.Systems.NPCs
             switch (role)
             {
                 case ParoleOfficerRole.SupervisingOfficer:
+                    // TODO: Implement police station enter/exit logic for supervising officer. Officer should remain at station entrance and handle intake processing.
                     currentActivity = ParoleOfficerActivity.MonitoringArea;
+                    ModLogger.Info($"Guard {badgeNumber} set as supervising officer at {assignment}");
                     break;
                 case ParoleOfficerRole.PatrolOfficer:
                     currentActivity = ParoleOfficerActivity.Patrolling;
+                    string routeName = AssignmentToRouteMap.ContainsKey(assignment) ? AssignmentToRouteMap[assignment] : "unknown";
+                    ModLogger.Info($"Guard {badgeNumber} assigned to patrol {assignment} on route {routeName}");
                     StartPatrol();
                     break;
                 default:
@@ -296,14 +323,46 @@ namespace Behind_Bars.Systems.NPCs
         {
             availablePatrolPoints.Clear();
 
-            var jailController = Core.JailController;
-            if (jailController != null)
+            // If this is a patrol officer, assign a route from PresetParoleOfficerRoutes
+            if (role == ParoleOfficerRole.PatrolOfficer && AssignmentToRouteMap.ContainsKey(assignment))
             {
-                foreach (var point in jailController.patrolPoints)
+                string routeName = AssignmentToRouteMap[assignment];
+                if (!string.IsNullOrEmpty(routeName))
                 {
-                    if (point != null)
+                    var presetRoute = PresetParoleOfficerRoutes.GetRoute(routeName);
+                    if (presetRoute != null && presetRoute.points != null && presetRoute.points.Length > 0)
                     {
-                        availablePatrolPoints.Add(point);
+                        // Assign the preset route
+                        patrolRoute = presetRoute;
+                        ModLogger.Info($"Guard {badgeNumber} assigned to patrol route: {routeName} with {presetRoute.points.Length} waypoints");
+                        
+                        // Convert Vector3[] to Transform list for existing patrol logic
+                        // Create temporary GameObjects with Transform components
+                        foreach (var point in presetRoute.points)
+                        {
+                            GameObject tempPoint = new GameObject($"PatrolPoint_{availablePatrolPoints.Count}");
+                            tempPoint.transform.position = point;
+                            availablePatrolPoints.Add(tempPoint.transform);
+                        }
+                    }
+                    else
+                    {
+                        ModLogger.Warn($"Guard {badgeNumber}: Route {routeName} not found or has no waypoints");
+                    }
+                }
+            }
+            else
+            {
+                // Fallback to jail controller patrol points for supervising officer or if no route assigned
+                var jailController = Core.JailController;
+                if (jailController != null)
+                {
+                    foreach (var point in jailController.patrolPoints)
+                    {
+                        if (point != null)
+                        {
+                            availablePatrolPoints.Add(point);
+                        }
                     }
                 }
             }
@@ -409,6 +468,7 @@ namespace Behind_Bars.Systems.NPCs
 
         public void StartPatrol()
         {
+            // TODO: For officers spawned at police station entrance, add initial pathfinding to route start point before beginning patrol loop
             if (availablePatrolPoints.Count == 0) return;
 
             currentActivity = ParoleOfficerActivity.Patrolling;

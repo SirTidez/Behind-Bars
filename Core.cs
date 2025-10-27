@@ -11,6 +11,7 @@ using Behind_Bars.Systems.CrimeDetection;
 using Behind_Bars.Systems.Jail;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using static Behind_Bars.Systems.NPCs.PresetParoleOfficerRoutes;
 
 using Object = UnityEngine.Object;
 #if !MONO
@@ -98,6 +99,7 @@ namespace Behind_Bars
             // Register Prison NPC System Components
             ClassInjector.RegisterTypeInIl2Cpp<PrisonNPCManager>();
             ClassInjector.RegisterTypeInIl2Cpp<PrisonGuard>();
+            ClassInjector.RegisterTypeInIl2Cpp<ParoleOfficerBehavior>();
             ClassInjector.RegisterTypeInIl2Cpp<PrisonInmate>();
             
             // Register Test Components
@@ -145,6 +147,10 @@ namespace Behind_Bars
             CrimeUIManager.Instance.Initialize();
             _courtSystem = new CourtSystem();
             _probationSystem = new ProbationSystem();
+            
+            // Initialize preset parole officer routes
+            PresetParoleOfficerRoutes.InitializePatrolPoints();
+            ModLogger.Info("Preset parole officer routes initialized");
 
             AssetManager = new AssetManager();
             AssetManager.Init();
