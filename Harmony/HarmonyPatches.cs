@@ -1,5 +1,6 @@
 ﻿using Behind_Bars.Helpers;
 using Behind_Bars.Systems.CrimeDetection;
+using Behind_Bars.Systems.CrimeTracking;
 using Behind_Bars.Systems.Jail;
 using HarmonyLib;
 #if !MONO
@@ -8,12 +9,14 @@ using Il2CppScheduleOne.UI;
 using Il2CppScheduleOne.NPCs;
 using Il2CppScheduleOne.Combat;
 using Il2CppScheduleOne.Police;
+using Il2CppScheduleOne.Law;
 #else
 using ScheduleOne.PlayerScripts;
 using ScheduleOne.UI;
 using ScheduleOne.NPCs;
 using ScheduleOne.Combat;
 using ScheduleOne.Police;
+using ScheduleOne.Law;
 #endif
 using MelonLoader;
 using System;
@@ -227,11 +230,141 @@ namespace Behind_Bars.Harmony
                 ModLogger.Error("[CONTRABAND] Crime detection system is null during arrest!");
             }
 
+            // RAP SHEET LOGGING: Log all crimes to player's rap sheet
+            try
+            {
+                ModLogger.Info($"[RAP SHEET] Logging arrest to rap sheet for {__instance.name}");
+                LogCrimesToRapSheet(__instance);
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"[RAP SHEET] Error logging to rap sheet: {ex.Message}\nStack trace: {ex.StackTrace}");
+            }
+
             // Set flag to prevent default teleportation in Player.Free()
             _jailSystemHandlingArrest = true;
             
             // Start immediate jail processing
             MelonCoroutines.Start(_core.JailSystem.HandleImmediateArrest(__instance));
+        }
+        
+        /// <summary>
+        /// Log all crimes to the player's rap sheet on arrest
+        /// </summary>
+        private static void LogCrimesToRapSheet(Player player)
+        {
+            if (player == null)
+            {
+                ModLogger.Warn("[RAP SHEET] Cannot log crimes - player is null");
+                return;
+            }
+
+            try
+            {
+                // Get active crimes from CrimeDetectionSystem
+                List<CrimeInstance> activeCrimes = null;
+                
+                if (_crimeDetectionSystem != null)
+                {
+                    activeCrimes = _crimeDetectionSystem.GetAllActiveCrimes();
+                    ModLogger.Info($"[RAP SHEET] CrimeDetectionSystem found {activeCrimes?.Count ?? 0} active crimes");
+                }
+                
+                // Create or load rap sheet for the player
+                var rapSheet = new RapSheet(player);
+                
+                // Try to load existing rap sheet
+                if (!rapSheet.LoadRapSheet())
+                {
+                    ModLogger.Info($"[RAP SHEET] No existing rap sheet found for {player.name}, creating new one");
+                    // Initialize new rap sheet
+                    rapSheet.InmateID = rapSheet.GenerateInmateID();
+                    if (rapSheet.CrimesCommited == null)
+                        rapSheet.CrimesCommited = new List<CrimeInstance>();
+                    if (rapSheet.PastParoleRecords == null)
+                        rapSheet.PastParoleRecords = new List<ParoleRecord>();
+                }
+                
+                // Add active crimes from CrimeDetectionSystem to rap sheet
+                if (activeCrimes != null && activeCrimes.Count > 0)
+                {
+                    ModLogger.Info($"[RAP SHEET] Adding {activeCrimes.Count} active crimes from CrimeDetectionSystem to rap sheet");
+                    foreach (var crimeInstance in activeCrimes)
+                    {
+                        if (crimeInstance != null)
+                        {
+                            rapSheet.AddCrime(crimeInstance);
+                            ModLogger.Info($"[RAP SHEET] Logged crime from CrimeDetectionSystem: {crimeInstance.Description} (Severity: {crimeInstance.Severity})");
+                        }
+                    }
+                }
+                
+                // Get player's current crimes from CrimeData (native system)
+                if (player.CrimeData != null && player.CrimeData.Crimes != null && player.CrimeData.Crimes.Count > 0)
+                {
+                    ModLogger.Info($"[RAP SHEET] Player also has {player.CrimeData.Crimes.Count} crimes from native CrimeData system");
+                    
+                    // Convert player's CrimeData.Crimes to CrimeInstance records
+                    foreach (var crimeEntry in player.CrimeData.Crimes)
+                    {
+                        if (crimeEntry.Key != null)
+                        {
+                            var crime = crimeEntry.Key;
+                            var crimeInstance = new CrimeInstance(
+                                crime: crime,
+                                location: player.transform.position,
+                                severity: CalculateCrimeSeverity(crime)
+                            );
+                            
+                            rapSheet.AddCrime(crimeInstance);
+                            ModLogger.Info($"[RAP SHEET] Logged crime from CrimeData: {crime.CrimeName}");
+                        }
+                    }
+                }
+                
+                // Save the updated rap sheet
+                if (rapSheet.SaveRapSheet())
+                {
+                    ModLogger.Info($"[RAP SHEET] ✓ Rap sheet saved successfully for {player.name}");
+                    ModLogger.Info($"[RAP SHEET]   Total crimes recorded: {rapSheet.GetCrimeCount()}");
+                }
+                else
+                {
+                    ModLogger.Error("[RAP SHEET] Failed to save rap sheet");
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"[RAP SHEET] Error logging arrest to rap sheet: {ex.Message}");
+                ModLogger.Error($"[RAP SHEET] Stack trace: {ex.StackTrace}");
+            }
+        }
+        
+        /// <summary>
+        /// Calculate severity based on crime type
+        /// </summary>
+        private static float CalculateCrimeSeverity(Crime crime)
+        {
+            // Default severity
+            float severity = 1.0f;
+            
+            // Check crime name for severity indicators
+            string crimeName = crime.CrimeName?.ToLower() ?? "";
+            
+            // Major crimes (severity 3.0)
+            if (crimeName.Contains("murder") || crimeName.Contains("manslaughter"))
+                severity = 3.0f;
+            // Serious crimes (severity 2.5)
+            else if (crimeName.Contains("assault") && crimeName.Contains("officer"))
+                severity = 2.5f;
+            // Moderate crimes (severity 2.0)
+            else if (crimeName.Contains("assault") || crimeName.Contains("robbery") || crimeName.Contains("possession"))
+                severity = 2.0f;
+            // Minor crimes (severity 1.0)
+            else if (crimeName.Contains("disturbance") || crimeName.Contains("trespass"))
+                severity = 1.0f;
+            
+            return severity;
         }
         
         // NEW: Prevent ArrestNoticeScreen from opening when our jail system is handling the arrest
@@ -328,12 +461,6 @@ namespace Behind_Bars.Harmony
                 {
                     // Check if this was intentional (simplified - could be enhanced with weapon tracking)
                     bool wasIntentional = true; // For now, assume most close deaths are intentional
-                    
-                    // Exception: if NPC died from vehicle collision, might be accidental
-                    if (__instance.Movement != null && __instance.Movement.timeSinceHitByCar < 2f)
-                    {
-                        wasIntentional = false; // Vehicle deaths are often accidental
-                    }
                     
                     ModLogger.Info($"Player-caused NPC death detected: {__instance.name} (distance: {distanceToPlayer:F1}m, intentional: {wasIntentional})");
                     _crimeDetectionSystem.ProcessNPCDeath(__instance, localPlayer, wasIntentional);

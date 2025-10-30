@@ -22,13 +22,21 @@ using ScheduleOne.PlayerScripts;
 using Behind_Bars.Players;
 using Behind_Bars.Systems;
 using Behind_Bars.Systems.Jail;
+using Behind_Bars.Systems.CrimeTracking;
 using Behind_Bars.Harmony;
+using Behind_Bars.Utils;
 
+#if !MONO
+using Il2CppScheduleOne.Law;
+#else
+using ScheduleOne.Law;
+#endif
 
 #if MONO
 using FishNet;
 using ScheduleOne.UI.Phone;
 using ScheduleOne.DevUtilities;
+using FishNet.Managing;
 #else
 using Il2CppFishNet;
 using Il2CppInterop.Runtime.Injection;
@@ -169,69 +177,11 @@ namespace Behind_Bars
         {
             ModLogger.Debug($"Scene initialized: {sceneName} (Build Index: {buildIndex})");
 
-            // Ensure ToiletSinkManager exists
-            if (ToiletSinkManager.Instance == null)
-            {
-                ModLogger.Debug("ToiletSinkManager instance is null, creating...");
-            }
-
             // Spawn furniture when the scene is initialized
             try
             {
                 if (sceneName == "Main")
                 {
-                    //// Spawn toilet sink using generic method
-                    //var toiletSink = AssetManager.SpawnAsset<ToiletSink>(FurnitureType.ToiletSink);
-                    //if (toiletSink != null)
-                    //{
-                    //    ModLogger.Info($"Successfully spawned toilet sink on scene initialization: {toiletSink.GetDebugInfo()}");
-                    //    ModLogger.Debug($"Total toilet sinks in scene: {ToiletSinkManager.GetToiletSinkCount()}");
-                    //}
-                    //else
-                    //{
-                    //    ModLogger.Warn("Failed to spawn toilet sink on scene initialization");
-                    //}
-
-                    //// Spawn bunk bed using generic method
-                    //var bunkBed = AssetManager.SpawnAsset<BunkBed>(FurnitureType.BunkBed);
-                    //if (bunkBed != null)
-                    //{
-                    //    ModLogger.Info($"Successfully spawned bunk bed on scene initialization: {bunkBed.GetDebugInfo()}");
-                    //    ModLogger.Debug($"Total bunk beds in scene: {BunkBedManager.GetBunkBedCount()}");
-                    //}
-                    //else
-                    //{
-                    //    ModLogger.Warn("Failed to spawn bunk bed on scene initialization");
-                    //}
-
-                    //// Spawn common room table using generic method
-                    //var commonRoomTable = AssetManager.SpawnAsset<CommonRoomTable>(FurnitureType.CommonRoomTable);
-                    //if (commonRoomTable != null)
-                    //{
-                    //    ModLogger.Info($"Successfully spawned common room table on scene initialization: {commonRoomTable.GetDebugInfo()}");
-                    //    ModLogger.Debug($"Total common room tables in scene: {CommonRoomTableManager.GetCommonRoomTableCount()}");
-                    //}
-                    //else
-                    //{
-                    //    ModLogger.Warn("Failed to spawn common room table on scene initialization");
-                    //}
-
-                    //// Spawn cell table using generic method
-                    //var cellTable = AssetManager.SpawnAsset<CellTable>(FurnitureType.CellTable);
-                    //if (cellTable != null)
-                    //{
-                    //    ModLogger.Info($"Successfully spawned cell table on scene initialization: {cellTable.GetDebugInfo()}");
-                    //    ModLogger.Debug($"Total cell tables in scene: {CellTableManager.GetCellTableCount()}");
-                    //}
-                    //else
-                    //{
-                    //    ModLogger.Warn("Failed to spawn cell table on scene initialization");
-                    //}
-
-                    //// Test the systems after successful spawning
-                    //TestToiletSinkSystem();
-                    //TestBunkBedSystem();
-
                     // Initialize UI system
                     MelonCoroutines.Start(InitializeUISystem());
                     
@@ -285,12 +235,7 @@ namespace Behind_Bars
             {
                 var playerHandler = new PlayerHandler(Player.Local);
                 _playerHandlers[Player.Local] = playerHandler;
-                // Subscribe to arrest events
-#if !MONO
-                Player.Local.onArrested.AddListener(new Action(OnPlayerArrested));
-#else
-                Player.Local.onArrested.AddListener(OnPlayerArrested);
-#endif
+                // Arrest handling is centralized in HarmonyPatches; no direct listener needed here
 
                 ModLogger.Info("Player systems initialized successfully");
             }
@@ -940,16 +885,6 @@ namespace Behind_Bars
             }
         }
 
-        private void OnPlayerArrested()
-        {
-            ModLogger.Info("Player arrested - initiating arrest sequence");
-
-            if (Player.Local != null)
-            {
-                // Start the arrest sequence
-                // MelonCoroutines.Start(_jailSystem!.HandlePlayerArrest(Player.Local));
-            }
-        }
 
         public JailSystem GetJailSystem() => _jailSystem!;
         public BailSystem GetBailSystem() => _bailSystem!;

@@ -37,12 +37,15 @@ namespace Behind_Bars.Systems.CrimeDetection
         
         public CrimeRecord CrimeRecord => _crimeRecord;
         public ContrabandDetectionSystem ContrabandDetection => _contrabandDetectionSystem;
+
+        public static CrimeDetectionSystem Instance { get; private set; }
         
         public CrimeDetectionSystem()
         {
             _crimeRecord = new CrimeRecord();
             _witnessSystem = new WitnessSystem();
             _contrabandDetectionSystem = new ContrabandDetectionSystem(this);
+            Instance = this;
             
             ModLogger.Info("Crime detection system initialized");
         }
@@ -336,7 +339,12 @@ namespace Behind_Bars.Systems.CrimeDetection
         {
             return _crimeRecord.GetCrimeSummary();
         }
-        
+
+        public List<CrimeInstance> GetAllActiveCrimes()
+        {
+            return _crimeRecord.GetActiveCrimes();
+        }
+
         /// <summary>
         /// Calculate total fine amount for all accumulated crimes
         /// </summary>

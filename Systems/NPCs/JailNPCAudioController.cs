@@ -63,7 +63,8 @@ namespace Behind_Bars.Systems.NPCs
             AllClear,
             Backup,
             Greeting,
-            Warning
+            Warning,
+            SpreadThem
         }
 
         protected virtual void Awake()

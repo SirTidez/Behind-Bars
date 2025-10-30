@@ -204,6 +204,7 @@ namespace Behind_Bars.Systems.NPCs
                 case JailNPCAudioController.GuardCommandType.Follow:
                 case JailNPCAudioController.GuardCommandType.StayBack:
                 case JailNPCAudioController.GuardCommandType.Escort:
+                case JailNPCAudioController.GuardCommandType.SpreadThem:
                     return EVOLineType.Command;
 
                 case JailNPCAudioController.GuardCommandType.Alert:
