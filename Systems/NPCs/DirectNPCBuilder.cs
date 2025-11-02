@@ -1725,7 +1725,7 @@ namespace Behind_Bars.Systems.NPCs
             try
             {
                 // Set Avatar reference
-                npcAnimation.Avatar = avatar;
+                npcAnimation.npc.Avatar = avatar;
 
                 // Find AvatarAnimation component (should be on avatar GameObject)
                 var avatarAnimation = avatar.GetComponent<

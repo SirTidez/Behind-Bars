@@ -317,7 +317,7 @@ namespace Behind_Bars.Systems.Jail
 
             // Freeze player movement
             var playerCamera = PlayerSingleton<PlayerCamera>.Instance;
-            PlayerSingleton<PlayerMovement>.Instance.canMove = false;
+            PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
             PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(false);
             PlayerSingleton<PlayerInventory>.Instance.SetEquippingEnabled(false);
 
@@ -503,7 +503,7 @@ namespace Behind_Bars.Systems.Jail
 
             // Restore player state
             var playerCamera = PlayerSingleton<PlayerCamera>.Instance;
-            PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+            PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
             PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
             PlayerSingleton<PlayerInventory>.Instance.SetEquippingEnabled(true);
 
@@ -549,7 +549,7 @@ namespace Behind_Bars.Systems.Jail
 
             // Freeze player movement
             var playerCamera = PlayerSingleton<PlayerCamera>.Instance;
-            PlayerSingleton<PlayerMovement>.Instance.canMove = false;
+            PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
             PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(false);
             PlayerSingleton<PlayerInventory>.Instance.SetEquippingEnabled(false);
 
@@ -611,7 +611,7 @@ namespace Behind_Bars.Systems.Jail
 
             // Restore player state
             var playerCamera = PlayerSingleton<PlayerCamera>.Instance;
-            PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+            PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
             PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
             PlayerSingleton<PlayerInventory>.Instance.SetEquippingEnabled(true);
 

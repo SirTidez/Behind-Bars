@@ -75,12 +75,12 @@ namespace Behind_Bars.Systems.CrimeDetection
             // Police respond immediately
             if (crime.Severity >= 2.0f) // Serious crimes
             {
-                police.BeginFootPursuit_Networked(perpetrator.NetworkObject);
+                police.BeginFootPursuit_Networked(perpetrator.NetworkObject.ToString());
             }
             else
             {
                 // For minor crimes, just investigate
-                police.BeginBodySearch_Networked(perpetrator.NetworkObject);
+                police.BeginBodySearch_Networked(perpetrator.NetworkObject.ToString());
             }
         }
 

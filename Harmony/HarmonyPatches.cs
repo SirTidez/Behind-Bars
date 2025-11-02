@@ -113,7 +113,7 @@ namespace Behind_Bars.Harmony
 #endif
                 if (playerMovement != null)
                 {
-                    playerMovement.canMove = true;
+                    playerMovement.CanMove = true;
                     ModLogger.Debug("Player movement re-enabled");
                 }
                 
@@ -143,27 +143,43 @@ namespace Behind_Bars.Harmony
             }
         }
 
-        // NEW: Intercept arrests immediately at the Player.Arrest() level
-        [HarmonyPatch(typeof(Player), "RpcLogic___Arrest_2166136261")]
+        // ====== ARREST SYSTEM PATCHES ======
+        // NOTE: Game update split the arrest system into Server/Client RPC methods
+        // - Server method (Arrest_Server): Calls the RPC handler for authoritative game logic
+        // - Client method (Arrest_Client): Calls the RPC handler for UI and visual feedback
+        // This separation prepares for future multiplayer support where:
+        //   - Server logic runs once on the host/server
+        //   - Client logic runs on each affected player's client
+        
+        // COMMENTED OUT: RPC Handler patches (trying wrapper methods instead)
+        // The game calls Arrest_Client() and Arrest_Server() which then trigger the RPC handlers
+        // We should patch the wrapper methods, not the RPC handlers directly
+        /*
+        /// <summary>
+        /// SERVER-SIDE ARREST PATCH: Handles authoritative game logic when player is arrested
+        /// This runs on the server/host and processes all gameplay-affecting operations
+        /// </summary>
+        [HarmonyPatch(typeof(Player), "RpcLogic___Arrest_Server_2166136261")]
         [HarmonyPostfix]
-        public static void Player_RpcLogic_Arrest_Postfix(Player __instance)
+        public static void Player_ArrestServer_RpcHandler_Postfix(Player __instance)
         {
             if (_core == null)
             {
-                MelonLogger.Error("Core instance is null in Player_RpcLogic_Arrest_Postfix");
+                MelonLogger.Error("Core instance is null in Player_ArrestServer_Postfix");
                 return;
             }
             
             // Only handle local player arrests for now
+            // TODO: For multiplayer support, also check __instance.IsOwner instead of just Player.Local
             if (__instance != Player.Local)
                 return;
                 
-            ModLogger.Info($"[ARREST] Player {__instance.name} arrested - performing inventory processing and jail processing");
+            ModLogger.Info($"[ARREST SERVER] Player {__instance.name} arrested - processing authoritative game logic");
 
             // STEP 1: Remove ALL ammo BEFORE capturing inventory (ammo is never returned)
             try
             {
-                ModLogger.Info($"[ARREST] Removing ammunition before inventory capture");
+                ModLogger.Info($"[ARREST SERVER] Removing ammunition before inventory capture");
                 var playerInventory = __instance.GetComponent<PlayerInventory>();
                 if (playerInventory == null)
                 {
@@ -181,23 +197,23 @@ namespace Behind_Bars.Harmony
             }
             catch (Exception ex)
             {
-                ModLogger.Error($"[ARREST] Error removing ammo: {ex.Message}");
+                ModLogger.Error($"[ARREST SERVER] Error removing ammo: {ex.Message}");
             }
 
             // STEP 2: Capture player's inventory AFTER ammo removal
             try
             {
-                ModLogger.Info($"[ARREST] Capturing {__instance.name}'s inventory after ammo removal");
+                ModLogger.Info($"[ARREST SERVER] Capturing {__instance.name}'s inventory after ammo removal");
                 var persistentData = Behind_Bars.Systems.Data.PersistentPlayerData.Instance;
                 if (persistentData != null)
                 {
                     string snapshotId = persistentData.CreateInventorySnapshot(__instance);
-                    ModLogger.Info($"[ARREST] Inventory snapshot created: {snapshotId}");
+                    ModLogger.Info($"[ARREST SERVER] Inventory snapshot created: {snapshotId}");
                 }
             }
             catch (Exception ex)
             {
-                ModLogger.Error($"[ARREST] Error capturing inventory: {ex.Message}");
+                ModLogger.Error($"[ARREST SERVER] Error capturing inventory: {ex.Message}");
             }
 
             // INVENTORY LOCKING: Lock inventory during jail time
@@ -244,8 +260,182 @@ namespace Behind_Bars.Harmony
             // Set flag to prevent default teleportation in Player.Free()
             _jailSystemHandlingArrest = true;
             
-            // Start immediate jail processing
-            MelonCoroutines.Start(_core.JailSystem.HandleImmediateArrest(__instance));
+            ModLogger.Info($"[ARREST SERVER] Server-side arrest processing complete for {__instance.name}");
+        }
+        
+        /// <summary>
+        /// CLIENT-SIDE ARREST PATCH: Handles UI and visual feedback when player is arrested
+        /// This runs on the arrested player's client and manages local presentation
+        /// </summary>
+        [HarmonyPatch(typeof(Player), "RpcLogic___Arrest_Client_2166136261")]
+        [HarmonyPostfix]
+        public static void Player_ArrestClient_RpcHandler_Postfix(Player __instance)
+        {
+            if (_core == null)
+            {
+                MelonLogger.Error("Core instance is null in Player_ArrestClient_Postfix");
+                return;
+            }
+            
+            // Only handle local player arrests for now
+            // TODO: For multiplayer support, also check __instance.IsOwner instead of just Player.Local
+            if (__instance != Player.Local)
+                return;
+                
+            ModLogger.Info($"[ARREST CLIENT] Player {__instance.name} arrested - handling UI and visual feedback");
+            
+            // Start immediate jail processing (booking, UI, camera control, etc.)
+            try
+            {
+                MelonCoroutines.Start(_core.JailSystem.HandleImmediateArrest(__instance));
+                ModLogger.Info($"[ARREST CLIENT] Jail processing coroutine started for {__instance.name}");
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"[ARREST CLIENT] Error starting jail processing: {ex.Message}");
+            }
+        }
+        */
+        
+        /// <summary>
+        /// SERVER-SIDE ARREST WRAPPER PATCH: Intercepts Arrest_Server() method
+        /// This is the actual method the game calls, which then triggers the RPC handler
+        /// </summary>
+        [HarmonyPatch(typeof(Player), "Arrest_Server")]
+        [HarmonyPostfix]
+        public static void Player_ArrestServer_Postfix(Player __instance)
+        {
+            if (_core == null)
+            {
+                MelonLogger.Error("Core instance is null in Player_ArrestServer_Postfix");
+                return;
+            }
+            
+            // Only handle local player arrests for now
+            // TODO: For multiplayer support, also check __instance.IsOwner instead of just Player.Local
+            if (__instance != Player.Local)
+                return;
+                
+            ModLogger.Info($"[ARREST SERVER] Player {__instance.name} arrested - processing authoritative game logic");
+
+            // STEP 1: Remove ALL ammo BEFORE capturing inventory (ammo is never returned)
+            try
+            {
+                ModLogger.Info($"[ARREST SERVER] Removing ammunition before inventory capture");
+                var playerInventory = __instance.GetComponent<PlayerInventory>();
+                if (playerInventory == null)
+                {
+#if !MONO
+                    playerInventory = Il2CppScheduleOne.PlayerScripts.PlayerInventory.Instance;
+#else
+                    playerInventory = ScheduleOne.PlayerScripts.PlayerInventory.Instance;
+#endif
+                }
+
+                if (playerInventory != null)
+                {
+                    InventoryProcessor.RemoveAllAmmo(playerInventory);
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"[ARREST SERVER] Error removing ammo: {ex.Message}");
+            }
+
+            // STEP 2: Capture player's inventory AFTER ammo removal
+            try
+            {
+                ModLogger.Info($"[ARREST SERVER] Capturing {__instance.name}'s inventory after ammo removal");
+                var persistentData = Behind_Bars.Systems.Data.PersistentPlayerData.Instance;
+                if (persistentData != null)
+                {
+                    string snapshotId = persistentData.CreateInventorySnapshot(__instance);
+                    ModLogger.Info($"[ARREST SERVER] Inventory snapshot created: {snapshotId}");
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"[ARREST SERVER] Error capturing inventory: {ex.Message}");
+            }
+
+            // INVENTORY LOCKING: Lock inventory during jail time
+            try
+            {
+                ModLogger.Info($"[INVENTORY] Locking inventory for arrested player: {__instance.name}");
+                InventoryProcessor.LockPlayerInventory(__instance);
+                ModLogger.Info($"[INVENTORY] Inventory locked - player cannot access items during jail time");
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"[INVENTORY] Error locking inventory: {ex.Message}");
+            }
+
+            // CONTRABAND DETECTION: Additional crime detection for drugs/weapons
+            if (_crimeDetectionSystem != null)
+            {
+                try
+                {
+                    ModLogger.Info($"[CONTRABAND] Performing arrest contraband search on {__instance.name}");
+                    _crimeDetectionSystem.ProcessContrabandSearch(__instance);
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Error($"[CONTRABAND] Error during arrest contraband search: {ex.Message}");
+                }
+            }
+            else
+            {
+                ModLogger.Error("[CONTRABAND] Crime detection system is null during arrest!");
+            }
+
+            // RAP SHEET LOGGING: Log all crimes to player's rap sheet
+            try
+            {
+                ModLogger.Info($"[RAP SHEET] Logging arrest to rap sheet for {__instance.name}");
+                LogCrimesToRapSheet(__instance);
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"[RAP SHEET] Error logging to rap sheet: {ex.Message}\nStack trace: {ex.StackTrace}");
+            }
+
+            // Set flag to prevent default teleportation in Player.Free()
+            _jailSystemHandlingArrest = true;
+            
+            ModLogger.Info($"[ARREST SERVER] Server-side arrest processing complete for {__instance.name}");
+        }
+        
+        /// <summary>
+        /// CLIENT-SIDE ARREST WRAPPER PATCH: Intercepts Arrest_Client() method
+        /// This is the actual method the game calls, which then triggers the RPC handler
+        /// </summary>
+        [HarmonyPatch(typeof(Player), "Arrest_Client")]
+        [HarmonyPostfix]
+        public static void Player_ArrestClient_Postfix(Player __instance)
+        {
+            if (_core == null)
+            {
+                MelonLogger.Error("Core instance is null in Player_ArrestClient_Postfix");
+                return;
+            }
+            
+            // Only handle local player arrests for now
+            // TODO: For multiplayer support, also check __instance.IsOwner instead of just Player.Local
+            if (__instance != Player.Local)
+                return;
+                
+            ModLogger.Info($"[ARREST CLIENT] Player {__instance.name} arrested - handling UI and visual feedback");
+            
+            // Start immediate jail processing (booking, UI, camera control, etc.)
+            try
+            {
+                MelonCoroutines.Start(_core.JailSystem.HandleImmediateArrest(__instance));
+                ModLogger.Info($"[ARREST CLIENT] Jail processing coroutine started for {__instance.name}");
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"[ARREST CLIENT] Error starting jail processing: {ex.Message}");
+            }
         }
         
         /// <summary>
@@ -403,10 +593,16 @@ namespace Behind_Bars.Harmony
             return true;
         }
         
-        // NEW: Prevent Player.Free() from teleporting during our jail system processing, but allow it during our release
+        // ====== PLAYER FREE SYSTEM PATCHES ======
+        // NOTE: Game update split Free into Server/Client methods, matching the arrest system
+        // - Free_Server: Handles server-side release logic
+        // - Free_Client: Handles client-side UI and visual feedback
+        
+        // COMMENTED OUT: Old unified Free() patch (trying wrapper methods instead)
+        /*
         [HarmonyPatch(typeof(Player), "Free")]
         [HarmonyPrefix]
-        public static bool Player_Free_Prefix(Player __instance)
+        public static bool Player_Free_Old_Prefix(Player __instance)
         {
             // Only handle local player
             if (__instance != Player.Local)
@@ -422,6 +618,61 @@ namespace Behind_Bars.Harmony
                 return false;
             }
             
+            // Let normal execution continue if we didn't handle the arrest or have finished processing
+            return true;
+        }
+        */
+        
+        /// <summary>
+        /// SERVER-SIDE FREE PATCH: Prevents Free_Server() during jail processing
+        /// </summary>
+        [HarmonyPatch(typeof(Player), "Free_Server")]
+        [HarmonyPrefix]
+        public static bool Player_FreeServer_Prefix(Player __instance)
+        {
+            // Only handle local player
+            // TODO: For multiplayer support, also check __instance.IsOwner instead of just Player.Local
+            if (__instance != Player.Local)
+                return true; // Let normal execution continue for other players
+                
+            // If our jail system is handling the arrest but hasn't cleared the flag yet, block the Free_Server() call
+            // Once we reset the flag in our release process, Player.Free_Server() will be allowed to run
+            if (_jailSystemHandlingArrest)
+            {
+                ModLogger.Info("[FREE SERVER] Jail system handling arrest - preventing premature Free_Server() call");
+                
+                // Prevent the default Free() logic from running while we're still processing
+                return false;
+            }
+            
+            ModLogger.Info("[FREE SERVER] Allowing Free_Server() to execute - jail processing complete");
+            // Let normal execution continue if we didn't handle the arrest or have finished processing
+            return true;
+        }
+        
+        /// <summary>
+        /// CLIENT-SIDE FREE PATCH: Prevents Free_Client() during jail processing
+        /// </summary>
+        [HarmonyPatch(typeof(Player), "Free_Client")]
+        [HarmonyPrefix]
+        public static bool Player_FreeClient_Prefix(Player __instance)
+        {
+            // Only handle local player
+            // TODO: For multiplayer support, also check __instance.IsOwner instead of just Player.Local
+            if (__instance != Player.Local)
+                return true; // Let normal execution continue for other players
+                
+            // If our jail system is handling the arrest but hasn't cleared the flag yet, block the Free_Client() call
+            // Once we reset the flag in our release process, Player.Free_Client() will be allowed to run
+            if (_jailSystemHandlingArrest)
+            {
+                ModLogger.Info("[FREE CLIENT] Jail system handling arrest - preventing premature Free_Client() call");
+                
+                // Prevent the default Free() logic from running while we're still processing
+                return false;
+            }
+            
+            ModLogger.Info("[FREE CLIENT] Allowing Free_Client() to execute - jail processing complete");
             // Let normal execution continue if we didn't handle the arrest or have finished processing
             return true;
         }

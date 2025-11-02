@@ -122,7 +122,7 @@ namespace Behind_Bars.Systems
                 try
                 {
                     // Just disable player controls briefly to simulate the "busted" pause
-                    PlayerSingleton<PlayerMovement>.Instance.canMove = false;
+                    PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
                     PlayerSingleton<PlayerCamera>.Instance.SetCanLook(false);
                     ModLogger.Info("Using fallback 'busted' effect - controls disabled briefly");
                 }
@@ -140,7 +140,7 @@ namespace Behind_Bars.Systems
             {
                 try
                 {
-                    PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+                    PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
                     PlayerSingleton<PlayerCamera>.Instance.SetCanLook(true);
                     ModLogger.Info("Re-enabled controls after fallback busted effect");
                 }
@@ -496,7 +496,7 @@ namespace Behind_Bars.Systems
                     PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
                     PlayerSingleton<PlayerCamera>.Instance.SetCanLook(true);
                     PlayerSingleton<PlayerCamera>.Instance.LockMouse();
-                    PlayerSingleton<PlayerMovement>.Instance.canMove = true; // Allow movement
+                    PlayerSingleton<PlayerMovement>.Instance.CanMove = true; // Allow movement
 
                     // Keep HUD enabled
                     Singleton<HUD>.Instance.canvas.enabled = true;
@@ -516,7 +516,7 @@ namespace Behind_Bars.Systems
 
                 try
                 {
-                    PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+                    PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
                     PlayerSingleton<PlayerInventory>.Instance.enabled = true;
                     PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
                     PlayerSingleton<PlayerCamera>.Instance.SetCanLook(true);
@@ -557,7 +557,7 @@ namespace Behind_Bars.Systems
                     PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
                     PlayerSingleton<PlayerCamera>.Instance.SetCanLook(true);
                     PlayerSingleton<PlayerCamera>.Instance.LockMouse();
-                    PlayerSingleton<PlayerMovement>.Instance.canMove = true; // Enable movement in jail
+                    PlayerSingleton<PlayerMovement>.Instance.CanMove = true; // Enable movement in jail
                     Singleton<HUD>.Instance.canvas.enabled = true;
                     Singleton<HUD>.Instance.SetCrosshairVisible(true);
                 }
@@ -896,7 +896,7 @@ namespace Behind_Bars.Systems
         private IEnumerator FallbackJailMethod(Player player, JailSentence sentence)
         {
             // Keep all controls enabled even in fallback
-            PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+            PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
             Singleton<BlackOverlay>.Instance.Open(2f);
 
             ModLogger.Info($"Player {player.name} using fallback jail method (screen blackout) for {sentence.JailTime}s");
@@ -1150,7 +1150,8 @@ namespace Behind_Bars.Systems
             // Now call the game's native Player.Free() to properly restore all systems
             try
             {
-                player.Free();
+                player.Free_Server();
+                player.Free_Client();
                 ModLogger.Info("Called Player.Free() to restore all systems");
             }
             catch (Exception ex)
@@ -1180,7 +1181,7 @@ namespace Behind_Bars.Systems
                 // }
 
                 // Make sure movement is fully enabled
-                PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+                PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
                 PlayerSingleton<PlayerMovement>.Instance.enabled = true;
                 ModLogger.Debug("Re-enabled PlayerMovement");
 

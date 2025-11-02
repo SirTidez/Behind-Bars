@@ -120,7 +120,7 @@ namespace Behind_Bars.Systems.CrimeDetection
                     if (closestWitness is PoliceOfficer policeWitness)
                     {
                         // Immediate police response
-                        policeWitness.BeginFootPursuit_Networked(perpetrator.NetworkObject);
+                        policeWitness.BeginFootPursuit_Networked(perpetrator.NetworkObject.ToString());
                     }
                     else
                     {
@@ -179,7 +179,7 @@ namespace Behind_Bars.Systems.CrimeDetection
                 var policeWitnesses = witnesses.OfType<PoliceOfficer>();
                 foreach (var policeWitness in policeWitnesses)
                 {
-                    policeWitness.BeginFootPursuit_Networked(perpetrator.NetworkObject);
+                    policeWitness.BeginFootPursuit_Networked(perpetrator.NetworkObject.ToString());
                 }
             }
             
