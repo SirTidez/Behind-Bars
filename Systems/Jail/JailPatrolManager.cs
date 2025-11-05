@@ -16,10 +16,14 @@ namespace Behind_Bars.Systems.Jail
     public sealed class JailPatrolManager(IntPtr ptr) : MonoBehaviour(ptr)
 #endif
     {
+#if MONO
         [Header("Patrol System")]
+#endif
         public List<Transform> patrolPoints = new List<Transform>();
 
+#if MONO
         [Header("Patrol Configuration")]
+#endif
         public bool enablePatrolSystem = true;
         public float patrolPointRadius = 2f;
         public bool showPatrolGizmos = false;

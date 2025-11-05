@@ -318,7 +318,8 @@ namespace Behind_Bars.Systems.NPCs
                 StopCoroutine(currentDoorOperation);
             }
 
-            currentDoorOperation = StartCoroutine(ExecuteDoorOperation());
+            currentDoorOperation = (Coroutine)MelonCoroutines.Start(ExecuteDoorOperation());
+            //currentDoorOperation = StartCoroutine(ExecuteDoorOperation());
         }
 
         /// <summary>

@@ -363,3 +363,4 @@ MigrationBackup/
 FodyWeavers.xsd
 assets/discord.md
 /assets/memories
+.claude/settings.local.json

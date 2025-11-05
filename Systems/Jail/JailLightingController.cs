@@ -17,28 +17,38 @@ namespace Behind_Bars.Systems.Jail
     public sealed class JailLightingController(IntPtr ptr) : MonoBehaviour(ptr)
 #endif
     {
+#if MONO
         [Header("Lighting System")]
+#endif
         public List<AreaLighting> areaLights = new List<AreaLighting>();
         public LightingState currentLightingState = LightingState.Normal;
 
+#if MONO
         [Header("Lighting LOD")]
+#endif
         public bool enableLightingLOD = true;
         public float lightCullingDistance = 50f;
         public int maxRealTimeLights = 20;
         public bool preferBakedLighting = true;
 
+#if MONO
         [Header("Emissive Material Control")]
+#endif
         public Material emissiveMaterial;
         public List<Material> allEmissiveMaterials = new List<Material>();
         public string emissiveMaterialName = "M_LightEmissive";
         public bool enableEmissiveControl = true;
 
+#if MONO
         [Header("Emissive Colors")]
+#endif
         public Color emissiveNormalColor = Color.white;
         public Color emissiveEmergencyColor = Color.red;
         public Color emissiveBlackoutColor = Color.black;
 
+#if MONO
         [Header("Emissive Intensities")]
+#endif
         public float emissiveNormalIntensity = 1.0f;
         public float emissiveEmergencyIntensity = 0.8f;
         public float emissiveBlackoutIntensity = 0.0f;

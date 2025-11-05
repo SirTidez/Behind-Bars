@@ -766,7 +766,23 @@ namespace Behind_Bars.Systems.Data
             {
                 if (crimeData != null)
                 {
-                    return JsonConvert.SerializeObject(crimeData);
+                    // Create a sanitized version without Unity object references
+                    var sanitized = new
+                    {
+                        Crimes = ExtractCrimesData(crimeData),
+                        EvadedArrest = GetPropertyValue<bool>(crimeData, "EvadedArrest"),
+                        PursuitLevel = GetPropertyValue<int>(crimeData, "CurrentPursuitLevel")
+                    };
+
+                    // Serialize with settings to handle any remaining circular references
+                    var settings = new JsonSerializerSettings
+                    {
+                        ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
+                        MaxDepth = 5,
+                        NullValueHandling = NullValueHandling.Ignore
+                    };
+
+                    return JsonConvert.SerializeObject(sanitized, settings);
                 }
             }
             catch (System.Exception ex)
@@ -775,6 +791,109 @@ namespace Behind_Bars.Systems.Data
             }
 
             return null;
+        }
+
+        private List<string> ExtractCrimesData(object crimeData)
+        {
+            var crimesList = new List<string>();
+            try
+            {
+                var crimesProperty = crimeData.GetType().GetProperty("Crimes");
+                if (crimesProperty != null)
+                {
+                    var crimes = crimesProperty.GetValue(crimeData);
+                    if (crimes is System.Collections.IDictionary crimeDict)
+                    {
+                        foreach (System.Collections.DictionaryEntry entry in crimeDict)
+                        {
+                            if (entry.Key != null)
+                            {
+                                // Get crime name/type as string
+                                var crimeName = entry.Key.ToString();
+                                var crimeCount = entry.Value?.ToString() ?? "1";
+                                crimesList.Add($"{crimeName} (x{crimeCount})");
+                            }
+                        }
+                    }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Debug($"Error extracting crimes data: {ex.Message}");
+            }
+            return crimesList;
+        }
+
+        private T GetPropertyValue<T>(object obj, string propertyName)
+        {
+            try
+            {
+                var property = obj.GetType().GetProperty(propertyName);
+                if (property != null)
+                {
+                    var value = property.GetValue(obj);
+                    if (value is T typedValue)
+                    {
+                        return typedValue;
+                    }
+                    // Try to convert the value
+                    return (T)System.Convert.ChangeType(value, typeof(T));
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Debug($"Error getting property {propertyName}: {ex.Message}");
+            }
+            return default(T);
+        }
+
+        #endregion
+
+        #region Testing Methods
+
+        /// <summary>
+        /// Test method to verify crime data serialization works without errors
+        /// Call this method after creating an inventory snapshot to verify the fix
+        /// </summary>
+        public void TestCrimeDataSerialization(Player player)
+        {
+            try
+            {
+                ModLogger.Info("=== Testing Crime Data Serialization ===");
+
+                if (player == null)
+                {
+                    ModLogger.Error("Cannot test - player is null");
+                    return;
+                }
+
+                var crimeData = player.CrimeData;
+                if (crimeData == null)
+                {
+                    ModLogger.Info("Player has no CrimeData - test skipped");
+                    return;
+                }
+
+                ModLogger.Info("Attempting to serialize crime data...");
+                var serialized = SerializeCrimeData(crimeData);
+
+                if (serialized != null)
+                {
+                    ModLogger.Info($"✓ SUCCESS: Crime data serialized successfully!");
+                    ModLogger.Info($"Serialized data preview: {serialized.ToString().Substring(0, Math.Min(200, serialized.ToString().Length))}...");
+                }
+                else
+                {
+                    ModLogger.Warn("Serialization returned null - check if player has crime data");
+                }
+
+                ModLogger.Info("=== Test Complete ===");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"✗ FAILED: Test failed with error: {ex.Message}");
+                ModLogger.Error($"Stack trace: {ex.StackTrace}");
+            }
         }
 
         #endregion

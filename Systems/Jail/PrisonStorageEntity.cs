@@ -76,27 +76,46 @@ namespace Behind_Bars.Systems.Jail
             // Ensure ItemSlots list is properly initialized
             if (ItemSlots == null)
             {
+#if MONO
                 ItemSlots = new List<ItemSlot>();
+#else
+                ItemSlots = new Il2CppSystem.Collections.Generic.List<ItemSlot>();
+#endif
             }
 
             // Create slots if they don't exist
             while (ItemSlots.Count < SlotCount)
             {
                 ItemSlot itemSlot = new ItemSlot(SlotsAreFilterable);
+#if MONO
                 itemSlot.onItemDataChanged += ContentsChanged;
+#else
+                itemSlot.onItemDataChanged += new System.Action(ContentsChanged);
+#endif
+#if MONO
                 itemSlot.SetSlotOwner(this);
+#else
+                itemSlot.SetSlotOwner(this.Cast<Il2CppScheduleOne.ItemFramework.IItemSlotOwner>());
+#endif
                 ItemSlots.Add(itemSlot);
             }
 
             // Subscribe to onClosed event
             if (onClosed != null)
             {
+#if MONO
                 onClosed.AddListener(HandleStorageClosed);
+#else
+                onClosed.AddListener(new System.Action(HandleStorageClosed));
+#endif
             }
 
             ModLogger.Info($"PrisonStorageEntity initialized with {ItemSlots.Count} slots (local-only mode)");
         }
 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private void HandleStorageClosed()
         {
             ModLogger.Info("Storage closed by player");
@@ -114,6 +133,9 @@ namespace Behind_Bars.Systems.Jail
         /// <summary>
         /// Reset storage for a new release (clear all items and flags)
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         public void ResetForNewRelease()
         {
             ModLogger.Info("PrisonStorageEntity: Resetting for new release");
@@ -136,6 +158,9 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info("PrisonStorageEntity: Reset complete");
         }
 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         public void PopulateWithPlayerItems(Player player)
         {
             // Prevent repeated population for the same player
@@ -184,6 +209,9 @@ namespace Behind_Bars.Systems.Jail
         /// <summary>
         /// Convert stored items to ItemInstances and populate storage slots
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private void PopulateStorageSlots()
         {
             int slotIndex = 0;
@@ -223,6 +251,9 @@ namespace Behind_Bars.Systems.Jail
         /// <summary>
         /// Create ItemInstance from stored item data
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private ItemInstance CreateItemInstanceFromStoredItem(PersistentPlayerData.StoredItem storedItem)
         {
             ModLogger.Info($"Attempting to create ItemInstance for: {storedItem.itemName} (ID: {storedItem.itemId}, Count: {storedItem.stackCount})");
@@ -329,6 +360,9 @@ namespace Behind_Bars.Systems.Jail
         /// <summary>
         /// Search the entire Registry by item name to find matching ItemDefinition
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private bool TryFindItemInRegistryByName(string itemName, int quantity, out ItemInstance itemInstance)
         {
             itemInstance = null;
@@ -421,6 +455,9 @@ namespace Behind_Bars.Systems.Jail
         /// <summary>
         /// Try to create item by name pattern matching when ID is unknown
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private bool TryCreateItemByName(PersistentPlayerData.StoredItem storedItem, out ItemInstance itemInstance)
         {
             itemInstance = null;
@@ -543,6 +580,9 @@ namespace Behind_Bars.Systems.Jail
         /// <summary>
         /// Get count of items still in storage
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         public int GetRemainingItemCount()
         {
             int count = 0;
@@ -557,6 +597,9 @@ namespace Behind_Bars.Systems.Jail
         /// <summary>
         /// Clear all storage and reset state
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         public void ResetStorage()
         {
             ClearContents();

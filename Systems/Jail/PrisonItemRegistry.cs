@@ -5,8 +5,11 @@ using MelonLoader;
 using HarmonyLib;
 using Behind_Bars.Helpers;
 
+
+
 #if !MONO
 using Il2CppInterop.Runtime.Attributes;
+using Il2CppInterop.Runtime;
 using Il2CppScheduleOne.ItemFramework;
 using Il2CppScheduleOne;
 using Il2CppScheduleOne.Equipping;

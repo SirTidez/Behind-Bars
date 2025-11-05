@@ -16,22 +16,32 @@ namespace Behind_Bars.Systems.NPCs
     /// Supports different voice types and randomized audio clips
     /// </summary>
     [System.Serializable]
+#if MONO
     [CreateAssetMenu(fileName = "JailVoiceDatabase", menuName = "Behind Bars/Jail Voice Database")]
+#endif
     public class JailVoiceDatabase : ScriptableObject
     {
+#if MONO
         [Header("Database Settings")]
         [Range(0f, 2f)]
+#endif
         public float globalVolumeMultiplier = 1f;
 
+#if MONO
         [Header("Voice Entries")]
+#endif
         public List<JailVoiceEntry> voiceEntries = new List<JailVoiceEntry>();
 
+#if MONO
         [Header("Radio Effects")]
+#endif
         public AudioClip radioBeepSound;
         public AudioClip radioStaticSound;
         public bool enableRadioEffects = true;
 
+#if MONO
         [Header("Default Fallback Settings")]
+#endif
         public bool useScheduleOneVOFallback = true;
 
         /// <summary>
@@ -286,22 +296,32 @@ namespace Behind_Bars.Systems.NPCs
     [System.Serializable]
     public class JailVoiceEntry
     {
+#if MONO
         [Header("Command Configuration")]
+#endif
         public JailNPCAudioController.GuardCommandType commandType;
 
+#if MONO
         [Header("Audio Clips")]
+#endif
         public AudioClip[] audioClips;
 
+#if MONO
         [Header("Playback Settings")]
         [Range(0f, 2f)]
+#endif
         public float volumeMultiplier = 1f;
 
+#if MONO
         [Range(0.5f, 2f)]
+#endif
         public float pitchVariation = 0.1f;
 
         public bool useRadioEffect = true;
 
+#if MONO
         [Header("Fallback")]
+#endif
         public EVOLineType fallbackEVOType = EVOLineType.Command;
 
         private AudioClip lastPlayedClip;

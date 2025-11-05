@@ -1,13 +1,19 @@
 using System;
 using UnityEngine;
 using Behind_Bars.Helpers;
+
+
+#if !MONO
+using Il2CppFishNet;
+using Il2CppFishNet.Managing;
+using Il2CppFishNet.Managing.Object;
+using Il2CppFishNet.Object;
+using Il2CppScheduleOne.NPCs;
+#else
 using FishNet;
 using FishNet.Managing;
 using FishNet.Managing.Object;
-
-#if !MONO
-using Il2CppScheduleOne.NPCs;
-#else
+using FishNet.Object;
 using ScheduleOne.NPCs;
 #endif
 
@@ -106,7 +112,7 @@ namespace Behind_Bars.Systems.NPCs
                         }
 
                         // Check for other relevant components
-                        var networkObject = prefab.GetComponent<FishNet.Object.NetworkObject>();
+                        var networkObject = prefab.GetComponent<NetworkObject>();
                         if (networkObject != null)
                         {
                             ModLogger.Info($"  ✓ Has NetworkObject (Prefab ID: {networkObject.PrefabId})");
@@ -208,7 +214,7 @@ namespace Behind_Bars.Systems.NPCs
                 ModLogger.Info($"✓ Successfully instantiated '{instance.name}'");
 
                 // Try to spawn it on the network
-                var networkObject = instance.GetComponent<FishNet.Object.NetworkObject>();
+                var networkObject = instance.GetComponent<NetworkObject>();
                 if (networkObject == null)
                 {
                     ModLogger.Error("Instance doesn't have NetworkObject component!");

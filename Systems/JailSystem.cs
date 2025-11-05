@@ -122,7 +122,11 @@ namespace Behind_Bars.Systems
                 try
                 {
                     // Just disable player controls briefly to simulate the "busted" pause
+#if MONO
                     PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
+#else
+                    PlayerSingleton<PlayerMovement>.Instance.canMove = false;
+#endif
                     PlayerSingleton<PlayerCamera>.Instance.SetCanLook(false);
                     ModLogger.Info("Using fallback 'busted' effect - controls disabled briefly");
                 }
@@ -140,7 +144,11 @@ namespace Behind_Bars.Systems
             {
                 try
                 {
+#if MONO
                     PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
+#else
+                    PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+#endif
                     PlayerSingleton<PlayerCamera>.Instance.SetCanLook(true);
                     ModLogger.Info("Re-enabled controls after fallback busted effect");
                 }
@@ -496,7 +504,11 @@ namespace Behind_Bars.Systems
                     PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
                     PlayerSingleton<PlayerCamera>.Instance.SetCanLook(true);
                     PlayerSingleton<PlayerCamera>.Instance.LockMouse();
+#if MONO
                     PlayerSingleton<PlayerMovement>.Instance.CanMove = true; // Allow movement
+#else
+                    PlayerSingleton<PlayerMovement>.Instance.canMove = true; // Allow movement
+#endif
 
                     // Keep HUD enabled
                     Singleton<HUD>.Instance.canvas.enabled = true;
@@ -516,7 +528,11 @@ namespace Behind_Bars.Systems
 
                 try
                 {
+#if MONO
                     PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
+#else
+                    PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+#endif
                     PlayerSingleton<PlayerInventory>.Instance.enabled = true;
                     PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
                     PlayerSingleton<PlayerCamera>.Instance.SetCanLook(true);
@@ -557,7 +573,11 @@ namespace Behind_Bars.Systems
                     PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
                     PlayerSingleton<PlayerCamera>.Instance.SetCanLook(true);
                     PlayerSingleton<PlayerCamera>.Instance.LockMouse();
+#if MONO
                     PlayerSingleton<PlayerMovement>.Instance.CanMove = true; // Enable movement in jail
+#else
+                    PlayerSingleton<PlayerMovement>.Instance.canMove = true; // Enable movement in jail
+#endif
                     Singleton<HUD>.Instance.canvas.enabled = true;
                     Singleton<HUD>.Instance.SetCrosshairVisible(true);
                 }
@@ -896,7 +916,11 @@ namespace Behind_Bars.Systems
         private IEnumerator FallbackJailMethod(Player player, JailSentence sentence)
         {
             // Keep all controls enabled even in fallback
+#if MONO
             PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
+#else
+            PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+#endif
             Singleton<BlackOverlay>.Instance.Open(2f);
 
             ModLogger.Info($"Player {player.name} using fallback jail method (screen blackout) for {sentence.JailTime}s");
@@ -1173,15 +1197,19 @@ namespace Behind_Bars.Systems
                 //     ModLogger.Debug("Re-enabled PlayerCombat");
                 // }
 
-                // Ensure interaction system is enabled - PlayerInteraction class not found, skipping
-                // if (PlayerSingleton<PlayerInteraction>.Instance != null)
-                // {
-                //     PlayerSingleton<PlayerInteraction>.Instance.enabled = true;
-                //     ModLogger.Debug("Re-enabled PlayerInteraction");
-                // }
+// Ensure interaction system is enabled - PlayerInteraction class not found, skipping
+// if (PlayerSingleton<PlayerInteraction>.Instance != null)
+// {
+//     PlayerSingleton<PlayerInteraction>.Instance.enabled = true;
+//     ModLogger.Debug("Re-enabled PlayerInteraction");
+// }
 
-                // Make sure movement is fully enabled
+// Make sure movement is fully enabled
+#if MONO
                 PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
+#else
+                PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+#endif
                 PlayerSingleton<PlayerMovement>.Instance.enabled = true;
                 ModLogger.Debug("Re-enabled PlayerMovement");
 

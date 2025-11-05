@@ -70,7 +70,10 @@ namespace Behind_Bars.Systems.NPCs
 
         #region State Variables
 
-        [SerializeField] private new IntakeState currentState = IntakeState.Idle;
+#if MONO
+        [SerializeField]
+#endif
+        private new IntakeState currentState = IntakeState.Idle;
         private Player currentPrisoner;
         private Transform guardPostTransform;
         private int assignedCellNumber = -1;
@@ -249,7 +252,11 @@ namespace Behind_Bars.Systems.NPCs
             MelonLoader.MelonCoroutines.Start(WaitForDialogueController());
         }
 
+#if MONO
         private System.Collections.IEnumerator WaitForDialogueController()
+#else
+        private IEnumerator WaitForDialogueController()
+#endif
         {
             int retryCount = 0;
             const int maxRetries = 10;
@@ -862,6 +869,9 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Door Timing
 
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
         private IEnumerator DelayedDoorClose()
         {
             if (doorCloseInitiated) yield break; // Prevent multiple coroutines
@@ -966,6 +976,9 @@ namespace Behind_Bars.Systems.NPCs
             MelonCoroutines.Start(DelayedNavigationResume());
         }
 
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
         private IEnumerator DelayedNavigationResume()
         {
             // Wait for guard to move away from door area
@@ -1736,7 +1749,11 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+#if MONO
         private System.Collections.IEnumerator ContinuousPlayerLookingCoroutine()
+#else
+        private IEnumerator ContinuousPlayerLookingCoroutine()
+#endif
         {
             while (true)
             {
@@ -1783,7 +1800,11 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+#if MONO
         private System.Collections.IEnumerator SmoothRotateToTarget(Quaternion targetRotation, float duration)
+#else
+        private IEnumerator SmoothRotateToTarget(Quaternion targetRotation, float duration)
+#endif
         {
             Quaternion startRotation = transform.rotation;
             float elapsed = 0f;

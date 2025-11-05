@@ -287,7 +287,11 @@ namespace Behind_Bars.Systems.Jail
             if (playerCamera != null && currentPlayer != null)
             {
                 // Disable player movement and inventory during photo
+#if MONO
                 PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
+#else
+                PlayerSingleton<PlayerMovement>.Instance.canMove = false;
+#endif
                 PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(false);
                 PlayerSingleton<PlayerInventory>.Instance.SetEquippingEnabled(false);
 
@@ -330,7 +334,11 @@ namespace Behind_Bars.Systems.Jail
                 currentPlayer.SetVisibleToLocalPlayer(false);
 
                 // Restore player controls
+#if MONO
                 PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
+#else
+                PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+#endif
                 PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
                 PlayerSingleton<PlayerInventory>.Instance.SetEquippingEnabled(true);
 

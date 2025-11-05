@@ -20,7 +20,9 @@ namespace Behind_Bars.Systems.Jail
     public sealed class JailCellManager(IntPtr ptr) : MonoBehaviour(ptr)
 #endif
     {
+#if MONO
         [Header("Cell Management")]
+#endif
         public List<CellDetail> cells = new List<CellDetail>();
         public List<CellDetail> holdingCells = new List<CellDetail>();
 
@@ -245,8 +247,10 @@ namespace Behind_Bars.Systems.Jail
 
         Transform FindChildContaining(Transform parent, string namePart)
         {
-            foreach (Transform child in parent)
+            // IL2CPP fix: Use GetChild instead of foreach to avoid casting issues
+            for (int i = 0; i < parent.childCount; i++)
             {
+                Transform child = parent.GetChild(i);
                 if (child.name.Contains(namePart))
                 {
                     return child;
@@ -270,8 +274,10 @@ namespace Behind_Bars.Systems.Jail
 
         void FindAllChildrenContainingRecursive(Transform parent, string namePart, List<Transform> foundChildren)
         {
-            foreach (Transform child in parent)
+            // IL2CPP fix: Use GetChild instead of foreach to avoid casting issues
+            for (int i = 0; i < parent.childCount; i++)
             {
+                Transform child = parent.GetChild(i);
                 if (child.name.Contains(namePart))
                 {
                     foundChildren.Add(child);

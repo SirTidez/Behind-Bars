@@ -627,20 +627,28 @@ public class CellDetail
 [System.Serializable]
 public class JailStorageArea
 {
+#if MONO
     [Header("Storage Area Components")]
+#endif
     public Transform storageArea;
     public Transform guardPoint;
 
+#if MONO
     [Header("Door Controls")]
+#endif
     public JailDoor storageHallDoor;
     public JailDoor bookingStorageDoor;
 
+#if MONO
     [Header("Inventory Stations")]
+#endif
     public Transform jailInventoryPickup;        // Prison items station (JailInventoryPickupStation)
     public Transform inventoryDropOff;           // Personal items drop-off station
     public Transform inventoryPickup;            // Personal items pickup station (InventoryPickupStation)
 
+#if MONO
     [Header("Storage Components")]
+#endif
     public Transform cubbies;
     public Transform bounds;
     public Transform desktop;

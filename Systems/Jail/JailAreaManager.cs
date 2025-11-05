@@ -17,7 +17,9 @@ namespace Behind_Bars.Systems.Jail
     public sealed class JailAreaManager(IntPtr ptr) : MonoBehaviour(ptr)
 #endif
     {
+#if MONO
         [Header("Jail Areas")]
+#endif
         public KitchenArea kitchen = new KitchenArea();
         public LaundryArea laundry = new LaundryArea();
         public PhoneArea phoneArea = new PhoneArea();
@@ -28,7 +30,9 @@ namespace Behind_Bars.Systems.Jail
         public MainRecArea mainRec = new MainRecArea();
         public ShowerArea showers = new ShowerArea();
 
+#if MONO
         [Header("Area Configuration")]
+#endif
         public bool enableAreaSystem = true;
         public bool showAreaBounds = false;
 

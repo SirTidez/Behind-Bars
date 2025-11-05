@@ -11,11 +11,13 @@ using Il2CppScheduleOne.NPCs;
 using Il2CppScheduleOne.PlayerScripts;
 using Il2CppScheduleOne.AvatarFramework;
 using Il2CppScheduleOne.AvatarFramework.Animation;
+using Avatar = Il2CppScheduleOne.AvatarFramework.Avatar;
 #else
 using ScheduleOne.NPCs;
 using ScheduleOne.PlayerScripts;
 using ScheduleOne.AvatarFramework;
 using ScheduleOne.AvatarFramework.Animation;
+using Avatar = ScheduleOne.AvatarFramework.Avatar;
 #endif
 
 namespace Behind_Bars.Systems.NPCs
@@ -142,7 +144,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                npcAvatar = GetComponent<ScheduleOne.AvatarFramework.Avatar>();
+                npcAvatar = GetComponent<Avatar>();
                 if (npcAvatar != null)
                 {
                     lookController = npcAvatar.GetComponent<AvatarLookController>();
@@ -365,6 +367,9 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Action Queue System
 
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
         public virtual void QueueAction(System.Action action)
         {
             if (action != null)
@@ -373,6 +378,9 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
         protected virtual void ProcessActionQueue()
         {
             if (actionQueue.Count > 0 && currentState == NPCState.Idle)
@@ -390,7 +398,8 @@ namespace Behind_Bars.Systems.NPCs
         {
             if (lookControllerAvailable && lookController != null)
             {
-                StartCoroutine(LookAtTarget(target, duration));
+                MelonCoroutines.Start(LookAtTarget(target, duration));
+                //StartCoroutine(LookAtTarget(target, duration));
             }
         }
 
@@ -402,6 +411,9 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
         protected virtual IEnumerator LookAtTarget(Vector3 target, float duration)
         {
             if (!lookControllerAvailable) yield break;
@@ -424,6 +436,7 @@ namespace Behind_Bars.Systems.NPCs
         /// Get the AvatarLookController component for proper NPC rotation control
         /// </summary>
 #if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
         protected virtual Il2CppScheduleOne.AvatarFramework.Animation.AvatarLookController GetAvatarLookController()
         {
             if (npcComponent == null)

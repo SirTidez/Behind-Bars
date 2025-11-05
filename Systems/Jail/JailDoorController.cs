@@ -18,17 +18,23 @@ namespace Behind_Bars.Systems.Jail
     public sealed class JailDoorController(IntPtr ptr) : MonoBehaviour(ptr)
 #endif
     {
+#if MONO
         [Header("Door System")]
+#endif
         public GameObject jailDoorPrefab;
         public GameObject steelDoorPrefab;
 
+#if MONO
         [Header("Control Keys")]
+#endif
         public KeyCode emergencyLockdownKey = KeyCode.L;
         public KeyCode unlockAllKey = KeyCode.U;
         public KeyCode openAllCellsKey = KeyCode.O;
         public KeyCode closeAllCellsKey = KeyCode.C;
 
+#if MONO
         [Header("Test Door References")]
+#endif
         public Transform holdingCellDoor0;
         public Transform holdingCellDoor1;
 

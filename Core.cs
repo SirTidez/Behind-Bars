@@ -65,6 +65,7 @@ namespace Behind_Bars
         private BailSystem? _bailSystem;
         private CourtSystem? _courtSystem;
         private ProbationSystem? _probationSystem;
+        private FileUtilities _fileUtilities;
 
         // Player management
         private Dictionary<Player, PlayerHandler> _playerHandlers = new();
@@ -83,6 +84,7 @@ namespace Behind_Bars
         public BailSystem? BailSystem => _bailSystem;
         public CourtSystem? CourtSystem => _courtSystem;
         public ProbationSystem? ProbationSystem => _probationSystem;
+        public FileUtilities FileUtilities => _fileUtilities;
 
         public override void OnInitializeMelon()
         {
@@ -103,41 +105,63 @@ namespace Behind_Bars
             ClassInjector.RegisterTypeInIl2Cpp<JailController>();
             ClassInjector.RegisterTypeInIl2Cpp<SecurityCamera>();
             ClassInjector.RegisterTypeInIl2Cpp<MonitorController>();
-                        
+            ClassInjector.RegisterTypeInIl2Cpp<JailMonitorController>();
+            ClassInjector.RegisterTypeInIl2Cpp<JailLightingController>();
+            ClassInjector.RegisterTypeInIl2Cpp<JailCellManager>();
+            ClassInjector.RegisterTypeInIl2Cpp<JailAreaManager>();
+            ClassInjector.RegisterTypeInIl2Cpp<JailDoorController>();
+            ClassInjector.RegisterTypeInIl2Cpp<JailPatrolManager>();
+
             // Register Prison NPC System Components
+            // NOTE: BaseJailNPC is abstract and shouldn't be registered directly
             ClassInjector.RegisterTypeInIl2Cpp<PrisonNPCManager>();
             ClassInjector.RegisterTypeInIl2Cpp<PrisonGuard>();
-            ClassInjector.RegisterTypeInIl2Cpp<ParoleOfficerBehavior>();
             ClassInjector.RegisterTypeInIl2Cpp<PrisonInmate>();
-            
+
+            // Testing BaseJailNPC-derived types one at a time
+            // ClassInjector.RegisterTypeInIl2Cpp<ParoleOfficerBehavior>();
+            ClassInjector.RegisterTypeInIl2Cpp<IntakeOfficerStateMachine>();
+            // ClassInjector.RegisterTypeInIl2Cpp<ReleaseOfficerBehavior>(); // Moved here for testing
+
+            // Re-enabling registrations after fixing trampoline error
+            ClassInjector.RegisterTypeInIl2Cpp<SecurityDoorBehavior>();
+            ClassInjector.RegisterTypeInIl2Cpp<JailNPCDialogueController>();
+            ClassInjector.RegisterTypeInIl2Cpp<JailNPCAudioController>();
+            ClassInjector.RegisterTypeInIl2Cpp<OfficerCoordinator>();
+            ClassInjector.RegisterTypeInIl2Cpp<DoorTriggerHandler>();
+
             // Register Test Components
             ClassInjector.RegisterTypeInIl2Cpp<TestNPCController>();
             ClassInjector.RegisterTypeInIl2Cpp<MoveableTargetController>();
-            
+
             // Register UI Components
             ClassInjector.RegisterTypeInIl2Cpp<BehindBarsUIWrapper>();
             ClassInjector.RegisterTypeInIl2Cpp<WantedLevelUI>();
-            
+
             // Register Booking System Components
             ClassInjector.RegisterTypeInIl2Cpp<BookingProcess>();
             ClassInjector.RegisterTypeInIl2Cpp<MugshotStation>();
             ClassInjector.RegisterTypeInIl2Cpp<ScannerStation>();
             ClassInjector.RegisterTypeInIl2Cpp<InventoryDropOff>();
             ClassInjector.RegisterTypeInIl2Cpp<JailBed>();
-            
+            ClassInjector.RegisterTypeInIl2Cpp<PrisonBedInteractable>();
+            ClassInjector.RegisterTypeInIl2Cpp<PrisonItemEquippable>();
+
             // Register Cell Management Components
             ClassInjector.RegisterTypeInIl2Cpp<CellAssignmentManager>();
-            
+
             // Register Jail Inventory System
             ClassInjector.RegisterTypeInIl2Cpp<JailInventoryPickupStation>();
             ClassInjector.RegisterTypeInIl2Cpp<InventoryPickupStation>();
-            ClassInjector.RegisterTypeInIl2Cpp<PrisonStorageEntity>();
+            // ClassInjector.RegisterTypeInIl2Cpp<PrisonStorageEntity>(); // REMOVED - inherits from StorageEntity which has NetworkConnection methods
             ClassInjector.RegisterTypeInIl2Cpp<ExitScannerStation>();
             ClassInjector.RegisterTypeInIl2Cpp<SimpleExitDoor>();
 
             // Register Release System
             ClassInjector.RegisterTypeInIl2Cpp<ReleaseManager>();
-            ClassInjector.RegisterTypeInIl2Cpp<ReleaseOfficerBehavior>();
+            ClassInjector.RegisterTypeInIl2Cpp<ReleaseOfficerBehavior>(); // Re-enabled after fixing IEnumerator issue
+            ClassInjector.RegisterTypeInIl2Cpp<ParoleOfficer>();
+            // NOTE: ParoleOfficerBehavior and PrisonNPCManager already registered above - removed duplicates
 #endif
             // Initialize core systems
             HarmonyPatches.Initialize(this);
@@ -155,7 +179,9 @@ namespace Behind_Bars
             CrimeUIManager.Instance.Initialize();
             _courtSystem = new CourtSystem();
             _probationSystem = new ProbationSystem();
-            
+            FileUtilities.Initialize();
+            _fileUtilities = FileUtilities.Instance;
+
             // Initialize preset parole officer routes
             PresetParoleOfficerRoutes.InitializePatrolPoints();
             ModLogger.Info("Preset parole officer routes initialized");

@@ -2,6 +2,10 @@ using System;
 using UnityEngine;
 using Behind_Bars.Helpers;
 using HarmonyLib;
+using MelonLoader;
+using System.Collections;
+
+
 
 #if !MONO
 using Il2CppScheduleOne.NPCs;
@@ -1525,7 +1529,11 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Coroutine to ensure NPC is properly positioned on NavMesh
         /// </summary>
+#if MONO
         private static System.Collections.IEnumerator InitializeNavMeshCoroutine(GameObject npc, UnityEngine.AI.NavMeshAgent navAgent)
+#else
+        private static IEnumerator InitializeNavMeshCoroutine(GameObject npc, UnityEngine.AI.NavMeshAgent navAgent)
+#endif
         {
             // Wait a frame for everything to initialize
             yield return null;
@@ -1572,7 +1580,7 @@ namespace Behind_Bars.Systems.NPCs
                         // Start basic patrol behavior (except for TestNPC and guards with GuardBehavior)
                         if (!npc.name.Contains("TestNPC") && npc.GetComponent<GuardBehavior>() == null)
                         {
-                            MelonLoader.MelonCoroutines.Start(BasicPatrolBehavior(npc, navAgent));
+                            MelonCoroutines.Start(BasicPatrolBehavior(npc, navAgent));
                         }
                         else if (npc.GetComponent<GuardBehavior>() != null)
                         {
@@ -1599,7 +1607,11 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Basic patrol behavior for NPCs using NavMesh
         /// </summary>
+#if MONO
         private static System.Collections.IEnumerator BasicPatrolBehavior(GameObject npc, UnityEngine.AI.NavMeshAgent navAgent)
+#else
+        private static IEnumerator BasicPatrolBehavior(GameObject npc, UnityEngine.AI.NavMeshAgent navAgent)
+#endif
         {
             if (navAgent == null || !navAgent.enabled) yield break;
 

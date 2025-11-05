@@ -360,7 +360,11 @@ namespace Behind_Bars.Systems.Jail
 
             // Freeze player movement (copied from working ScannerStation)
             var playerCamera = PlayerSingleton<PlayerCamera>.Instance;
+#if MONO
             PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
+#else
+            PlayerSingleton<PlayerMovement>.Instance.canMove = false;
+#endif
             PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(false);
             PlayerSingleton<PlayerInventory>.Instance.SetEquippingEnabled(false);
 
@@ -397,7 +401,8 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info("Starting scan animation for exit scanner");
 
             // Start scan animation (copied from working ScannerStation)
-            yield return StartCoroutine(StartScanAnimation());
+            yield return MelonCoroutines.Start(StartScanAnimation());
+            //yield return StartCoroutine(StartScanAnimation());
 
             // Complete the scan
             CompletePalmScan();
@@ -862,7 +867,11 @@ namespace Behind_Bars.Systems.Jail
 
             // Restore player state (copied from working ScannerStation)
             var playerCamera = PlayerSingleton<PlayerCamera>.Instance;
+#if MONO
             PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
+#else
+            PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+#endif
             PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
             PlayerSingleton<PlayerInventory>.Instance.SetEquippingEnabled(true);
 

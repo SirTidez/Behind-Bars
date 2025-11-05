@@ -30,7 +30,9 @@ namespace Behind_Bars.Systems.NPCs
             public EVOLineType voType = EVOLineType.Greeting;
         }
 
+#if MONO
         [Header("NPC Dialog Configuration")]
+#endif
         public List<StateDialogue> stateDialogues = new List<StateDialogue>();
         public string defaultGreeting = "Hello.";
         public float greetingCooldown = 5f;

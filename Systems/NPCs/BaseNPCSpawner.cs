@@ -1,16 +1,26 @@
 using System;
 using UnityEngine;
 using Behind_Bars.Helpers;
+
+
+#if !MONO
+using Il2CppFishNet;
+using Il2CppFishNet.Managing;
+using Il2CppFishNet.Managing.Object;
+using Il2CppFishNet.Object;
+using Il2CppScheduleOne.NPCs;
+using Il2CppScheduleOne.AvatarFramework;
+using Il2CppScheduleOne.Employees;
+using Avatar = Il2CppScheduleOne.AvatarFramework.Avatar;
+#else
 using FishNet;
 using FishNet.Managing;
 using FishNet.Managing.Object;
-
-#if !MONO
-using Il2CppScheduleOne.NPCs;
-using Il2CppScheduleOne.AvatarFramework;
-#else
+using FishNet.Object;
+using ScheduleOne.Employees;
 using ScheduleOne.NPCs;
 using ScheduleOne.AvatarFramework;
+using Avatar = ScheduleOne.AvatarFramework.Avatar;
 #endif
 
 namespace Behind_Bars.Systems.NPCs
@@ -171,7 +181,7 @@ namespace Behind_Bars.Systems.NPCs
                 }
 
                 // Try to find the Avatar component on the NPC or its children
-                var npcAvatar = npcInstance.GetComponentInChildren<ScheduleOne.AvatarFramework.Avatar>();
+                var npcAvatar = npcInstance.GetComponentInChildren<Avatar>();
 
                 if (npcAvatar == null)
                 {
@@ -181,7 +191,7 @@ namespace Behind_Bars.Systems.NPCs
                     var templateNPC = FindWorkingNPCWithAvatar();
                     if (templateNPC != null)
                     {
-                        var templateAvatar = templateNPC.GetComponentInChildren<ScheduleOne.AvatarFramework.Avatar>();
+                        var templateAvatar = templateNPC.GetComponentInChildren<Avatar>();
                         if (templateAvatar != null && templateAvatar.gameObject != null)
                         {
                             ModLogger.Info($"Found template Avatar from {templateNPC.name}, attempting to copy structure");
@@ -191,7 +201,7 @@ namespace Behind_Bars.Systems.NPCs
                             avatarClone.name = "Avatar";
 
                             // Get the cloned Avatar component
-                            npcAvatar = avatarClone.GetComponent<ScheduleOne.AvatarFramework.Avatar>();
+                            npcAvatar = avatarClone.GetComponent<Avatar>();
 
                             // Assign it to the NPC
                             npcComponent.Avatar = npcAvatar;
@@ -316,8 +326,8 @@ namespace Behind_Bars.Systems.NPCs
             try
             {
 #if !MONO
-                var avatar = npcAvatar as Il2CppScheduleOne.AvatarFramework.Avatar;
-                if (avatar?.AvatarSettings?.BodyLayerSettings == null)
+                var avatar = npcAvatar as Avatar;
+                if (avatar?.CurrentSettings?.BodyLayerSettings == null)
                 {
                     ModLogger.Warn("Cannot apply Dre customizations - no body layer settings");
                     return;
@@ -327,7 +337,6 @@ namespace Behind_Bars.Systems.NPCs
                 var armTattooLayer = new Il2CppScheduleOne.AvatarFramework.AvatarSettings.LayerSetting
                 {
                     layerPath = AvatarResourcePaths.Body.UpperBodyTattoos,
-                    layerType = Il2CppScheduleOne.AvatarFramework.AvatarSettings.LayerType.Top,
                     layerTint = new Color(0.15f, 0.1f, 0.1f, 1.0f) // Dark tattoo color
                 };
 
@@ -350,14 +359,14 @@ namespace Behind_Bars.Systems.NPCs
                 }
 
                 // Make him slightly more intimidating - taller and broader
-                if (null // DISABLED - API not available != null)
-                {
-                    // Set height to tall
-                    SetOrUpdateCustomizationField(null // DISABLED - API not available, "Height", 0.8f);
-                    // Set build to broader
-                    SetOrUpdateCustomizationField(null // DISABLED - API not available, "Weight", 0.7f);
-                    ModLogger.Info("✓ Applied Dre's physical customizations (tall & broad)");
-                }
+                //if (null // DISABLED - API not available != null)
+                //{
+                //    // Set height to tall
+                //    SetOrUpdateCustomizationField(null // DISABLED - API not available, "Height", 0.8f);
+                //    // Set build to broader
+                //    SetOrUpdateCustomizationField(null // DISABLED - API not available, "Weight", 0.7f);
+                //    ModLogger.Info("✓ Applied Dre's physical customizations (tall & broad)");
+                //}
 
 #else
                 var avatar = npcAvatar as ScheduleOne.AvatarFramework.Avatar;
@@ -445,12 +454,12 @@ namespace Behind_Bars.Systems.NPCs
             try
             {
                 // First try to find employees as they typically have working avatars
-                var employees = UnityEngine.Object.FindObjectsOfType<ScheduleOne.Employees.Employee>();
+                var employees = UnityEngine.Object.FindObjectsOfType<Employee>();
                 foreach (var employee in employees)
                 {
                     if (employee.gameObject.name.Contains("Employee") && !employee.gameObject.name.Contains("Prison"))
                     {
-                        var avatar = employee.GetComponentInChildren<ScheduleOne.AvatarFramework.Avatar>();
+                        var avatar = employee.GetComponentInChildren<Avatar>();
                         if (avatar != null && avatar.CurrentSettings != null)
                         {
                             ModLogger.Info($"Found working avatar on employee: {employee.gameObject.name}");
@@ -460,13 +469,13 @@ namespace Behind_Bars.Systems.NPCs
                 }
 
                 // Then try regular NPCs
-                var npcs = UnityEngine.Object.FindObjectsOfType<ScheduleOne.NPCs.NPC>();
+                var npcs = UnityEngine.Object.FindObjectsOfType<NPC>();
                 foreach (var npc in npcs)
                 {
                     // Skip our own spawned NPCs
                     if (!npc.gameObject.name.Contains("Prison") && !npc.gameObject.name.Contains("BaseNPC"))
                     {
-                        var avatar = npc.GetComponentInChildren<ScheduleOne.AvatarFramework.Avatar>();
+                        var avatar = npc.GetComponentInChildren<Avatar>();
                         if (avatar != null && avatar.CurrentSettings != null)
                         {
                             ModLogger.Info($"Found working avatar on NPC: {npc.gameObject.name}");
@@ -603,7 +612,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                var networkObject = npcInstance.GetComponent<FishNet.Object.NetworkObject>();
+                var networkObject = npcInstance.GetComponent<NetworkObject>();
                 if (networkObject == null)
                 {
                     ModLogger.Warn($"⚠️ No NetworkObject found on {npcInstance.name} - multiplayer may not work");

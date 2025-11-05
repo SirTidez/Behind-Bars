@@ -364,7 +364,12 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info($"Starting complete inventory exchange for {player.name}");
 
             // Phase 1: Drop off prison items
-            yield return StartCoroutine(ProcessPrisonItemDropOff(player));
+#if MONO
+            yield return StartCoroutine(RemovePrisonItems(player));
+#else
+            // In IL2CPP, directly yield the IEnumerator instead of using StartCoroutine
+            yield return RemovePrisonItems(player);
+#endif
 
             // Short delay between drop-off and pickup
             yield return new WaitForSeconds(1f);
@@ -386,7 +391,8 @@ namespace Behind_Bars.Systems.Jail
             }
 
             // Phase 3: Open interactive storage for item retrieval
-            yield return StartCoroutine(OpenInteractiveStorage(player));
+            yield return MelonCoroutines.Start(OpenInteractiveStorage(player));
+            //yield return StartCoroutine(OpenInteractiveStorage(player));
         }
 
 #if !MONO
@@ -559,7 +565,11 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+#if MONO
         private System.Collections.IEnumerator DirectItemTransfer(Player player)
+#else
+        private IEnumerator DirectItemTransfer(Player player)
+#endif
         {
             isProcessing = true;
             ModLogger.Info($"Starting direct item transfer for {player.name} - {legalItems.Count} items to return");
@@ -573,7 +583,12 @@ namespace Behind_Bars.Systems.Jail
             }
 
             // STEP 1: Remove prison items first
-            yield return MelonCoroutines.Start(RemovePrisonItems(player));
+#if MONO
+            yield return StartCoroutine(RemovePrisonItems(player));
+#else
+            // In IL2CPP, directly yield the IEnumerator instead of using StartCoroutine
+            yield return RemovePrisonItems(player);
+#endif
 
             yield return new WaitForSeconds(1f);
 
@@ -670,7 +685,11 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+#if MONO
         private System.Collections.IEnumerator RemovePrisonItems(Player player)
+#else
+        private IEnumerator RemovePrisonItems(Player player)
+#endif
         {
             ModLogger.Info("Removing prison items from inventory");
 

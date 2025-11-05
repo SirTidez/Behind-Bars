@@ -1,8 +1,8 @@
 ﻿<Project>
     <PropertyGroup>
         <IsMono Condition="'$(DefineConstants)' != '' and $(DefineConstants.Contains('MONO'))">true</IsMono>
-        <IsMultiplayerTest Condition="'$(DefineConstants)' != '' and $(DefineConstants.Contains('TestMultiplayer'))">true</IsMultiplayerTest>
-        <IsUnityExplorer Condition="'$(DefineConstants)' != '' and $(DefineConstants.Contains('UnityExplorer'))">true</IsUnityExplorer>
+        <!--<IsMultiplayerTest Condition="'$(DefineConstants)' != '' and $(DefineConstants.Contains('TestMultiplayer'))">true</IsMultiplayerTest>
+        <IsUnityExplorer Condition="'$(DefineConstants)' != '' and $(DefineConstants.Contains('UnityExplorer'))">true</IsUnityExplorer>-->
     </PropertyGroup>
 
     <PropertyGroup>

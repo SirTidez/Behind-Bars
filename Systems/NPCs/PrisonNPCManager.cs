@@ -6,14 +6,20 @@ using UnityEngine;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.Jail;
 using MelonLoader;
-using FishNet;
-using FishNet.Managing;
-using FishNet.Managing.Object;
+
 
 #if !MONO
+using Il2CppFishNet;
+using Il2CppFishNet.Managing;
+using Il2CppFishNet.Managing.Object;
+using Il2CppFishNet.Object;
 using Il2CppScheduleOne.NPCs;
 using Il2CppScheduleOne.AvatarFramework;
 #else
+using FishNet;
+using FishNet.Managing;
+using FishNet.Managing.Object;
+using FishNet.Object;
 using ScheduleOne.NPCs;
 using ScheduleOne.AvatarFramework;
 #endif
@@ -1449,7 +1455,11 @@ namespace Behind_Bars.Systems.NPCs
                 // Try ScriptableObject.CreateInstance if it's a ScriptableObject
                 if (typeof(ScriptableObject).IsAssignableFrom(settingsType))
                 {
+#if MONO
                     var newSettings = ScriptableObject.CreateInstance(settingsType);
+#else
+                    var newSettings = ScriptableObject.CreateInstance(settingsType.AssemblyQualifiedName);
+#endif
                     CopySettingsFields(originalSettings, newSettings);
                     return newSettings;
                 }
@@ -1781,7 +1791,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                var networkObject = npcInstance.GetComponent<FishNet.Object.NetworkObject>();
+                var networkObject = npcInstance.GetComponent<NetworkObject>();
                 if (networkObject == null) return;
 
                 var networkManager = InstanceFinder.NetworkManager;

@@ -354,9 +354,13 @@ namespace Behind_Bars.Systems.Jail
             // Disable punch container like CameraHubController 
             if (punchContainer != null) 
                 punchContainer.SetActive(false);
-            
+
             // Freeze player movement like CameraHubController
+#if MONO
             PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
+#else
+            PlayerSingleton<PlayerMovement>.Instance.canMove = false;
+#endif
             PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(false);
             PlayerSingleton<PlayerInventory>.Instance.SetEquippingEnabled(false);
             
@@ -416,9 +420,13 @@ namespace Behind_Bars.Systems.Jail
             // Re-enable punch container like CameraHubController
             if (punchContainer != null) 
                 punchContainer.SetActive(true);
-            
+
             // Restore player state like CameraHubController
+#if MONO
             PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
+#else
+            PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+#endif
             PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
             PlayerSingleton<PlayerInventory>.Instance.SetEquippingEnabled(true);
             

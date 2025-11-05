@@ -113,7 +113,11 @@ namespace Behind_Bars.Harmony
 #endif
                 if (playerMovement != null)
                 {
+#if MONO
                     playerMovement.CanMove = true;
+#else
+                    playerMovement.canMove = true;
+#endif
                     ModLogger.Debug("Player movement re-enabled");
                 }
                 

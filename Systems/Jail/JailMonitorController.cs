@@ -19,11 +19,15 @@ namespace Behind_Bars.Systems.Jail
     public sealed class JailMonitorController(IntPtr ptr) : MonoBehaviour(ptr)
 #endif
     {
+#if MONO
         [Header("Monitor System")]
+#endif
         public List<MonitorAssignment> monitorAssignments = new List<MonitorAssignment>();
         public List<SecurityCamera> securityCameras = new List<SecurityCamera>();
 
+#if MONO
         [Header("Debug")]
+#endif
         public bool showDebugInfo = false;
 
         [System.Serializable]

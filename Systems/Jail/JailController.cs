@@ -37,7 +37,9 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     public JailPatrolManager patrolManager;
     public JailAreaManager areaManager;
 
+#if MONO
     [Header("Guard Points - Direct References")]
+#endif
     public Transform mugshotStationGuardPoint;
     public Transform scannerStationGuardPoint;
     public Transform exitScannerStationGuardPoint;

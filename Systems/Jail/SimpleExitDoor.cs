@@ -16,9 +16,10 @@ namespace Behind_Bars.Systems.Jail
     {
 #if !MONO
         public SimpleExitDoor(System.IntPtr ptr) : base(ptr) { }
-#endif
+#else
 
         [Header("Door Settings")]
+#endif
         public float openRotation = 70f;    // Z rotation when open
         public float closedRotation = 0f;   // Z rotation when closed
         public float animationSpeed = 2f;   // Speed of rotation animation

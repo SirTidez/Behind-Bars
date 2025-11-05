@@ -2,6 +2,8 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using Behind_Bars.Helpers;
+using MelonLoader;
+
 
 #if !MONO
 using Il2CppScheduleOne.Audio;
@@ -23,19 +25,24 @@ namespace Behind_Bars.Systems.NPCs
     {
 #if !MONO
         public JailNPCAudioController(System.IntPtr ptr) : base(ptr) { }
-#endif
+#else
 
         [Header("Audio Components")]
+#endif
         public AudioSourceController mainVoiceSource;
         public AudioSourceController radioBeepSource;
         public AudioSourceController radioStaticSource;
 
+#if MONO
         [Header("Voice Settings")]
+#endif
         public float volumeMultiplier = 1.0f;
         public float pitchVariation = 0.1f;
         public float commandCooldown = 3.0f;
 
+#if MONO
         [Header("Radio Effect Settings")]
+#endif
         public bool useRadioEffect = true;
         public float radioBeepDelay = 0.25f;
         public float staticVolume = 0.3f;
@@ -78,7 +85,8 @@ namespace Behind_Bars.Systems.NPCs
             SetupVOEmitter();
 
             // Delay initialization to ensure all components are ready
-            StartCoroutine(DelayedInitialization());
+            MelonCoroutines.Start(DelayedInitialization());
+            //StartCoroutine(DelayedInitialization());
         }
 
         /// <summary>
@@ -357,7 +365,8 @@ namespace Behind_Bars.Systems.NPCs
                 StopCoroutine(currentVoiceRoutine);
             }
 
-            currentVoiceRoutine = StartCoroutine(PlayGuardCommandCoroutine(commandType, useRadio));
+            currentVoiceRoutine = (Coroutine)MelonCoroutines.Start(PlayGuardCommandCoroutine(commandType, useRadio));
+            //currentVoiceRoutine = StartCoroutine(PlayGuardCommandCoroutine(commandType, useRadio));
             lastCommandTime = Time.time;
         }
 
@@ -722,6 +731,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Set voice database for this audio controller
         /// </summary>
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
         public void SetVoiceDatabase(JailVoiceDatabase database)
         {
             voiceDatabase = database;

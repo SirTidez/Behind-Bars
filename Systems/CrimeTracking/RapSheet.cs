@@ -1,10 +1,12 @@
 ﻿using Behind_Bars.Helpers;
 using Behind_Bars.Utils;
 using JetBrains.Annotations;
-using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.Text;
+using Newtonsoft.Json;
+using UnityEngine;
+
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -16,6 +18,57 @@ using ScheduleOne.Law;
 
 namespace Behind_Bars.Systems.CrimeTracking
 {
+    /// <summary>
+    /// Custom JSON converter for Unity Vector3 to avoid circular reference issues
+    /// Serializes Vector3 as a simple object with x, y, z properties
+    /// </summary>
+    public class Vector3JsonConverter : JsonConverter<Vector3>
+    {
+        public override void WriteJson(JsonWriter writer, Vector3 value, JsonSerializer serializer)
+        {
+            writer.WriteStartObject();
+            writer.WritePropertyName("x");
+            writer.WriteValue(value.x);
+            writer.WritePropertyName("y");
+            writer.WriteValue(value.y);
+            writer.WritePropertyName("z");
+            writer.WriteValue(value.z);
+            writer.WriteEndObject();
+        }
+
+        public override Vector3 ReadJson(JsonReader reader, Type objectType, Vector3 existingValue, bool hasExistingValue, JsonSerializer serializer)
+        {
+            float x = 0, y = 0, z = 0;
+
+            while (reader.Read())
+            {
+                if (reader.TokenType == JsonToken.EndObject)
+                    break;
+
+                if (reader.TokenType == JsonToken.PropertyName)
+                {
+                    string propertyName = reader.Value.ToString();
+                    reader.Read();
+
+                    switch (propertyName)
+                    {
+                        case "x":
+                            x = Convert.ToSingle(reader.Value);
+                            break;
+                        case "y":
+                            y = Convert.ToSingle(reader.Value);
+                            break;
+                        case "z":
+                            z = Convert.ToSingle(reader.Value);
+                            break;
+                    }
+                }
+            }
+
+            return new Vector3(x, y, z);
+        }
+    }
+
     [Serializable]
     public class RapSheet
     {
@@ -113,12 +166,15 @@ namespace Behind_Bars.Systems.CrimeTracking
                 ModLogger.Warn("Failed to load rap sheet: FileUtilities instance is null!");
                 return false;
             }
-            
+
             var settings = new JsonSerializerSettings
             {
                 MissingMemberHandling = MissingMemberHandling.Ignore,
                 NullValueHandling = NullValueHandling.Ignore,
-                Formatting = Formatting.Indented
+                Formatting = Formatting.Indented,
+                ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
+                MaxDepth = 10,
+                Converters = new List<JsonConverter> { new Vector3JsonConverter() }
             };
 
             // Try to load from disk first if not in cache
@@ -138,13 +194,13 @@ namespace Behind_Bars.Systems.CrimeTracking
             {
                 // Deserialize the JSON into the RapSheet object
                 JsonConvert.PopulateObject(json, this, settings);
-                
+
                 // Ensure collections are initialized
                 if (CrimesCommited == null)
                     CrimesCommited = new List<CrimeInstance>();
                 if (PastParoleRecords == null)
                     PastParoleRecords = new List<ParoleRecord>();
-                
+
                 ModLogger.Info($"Rap sheet loaded for {Player.name}: {GetCrimeCount()} crimes, {PastParoleRecords.Count} past parole records");
                 return true;
             }
@@ -166,26 +222,29 @@ namespace Behind_Bars.Systems.CrimeTracking
                 ModLogger.Warn("Failed to save rap sheet: FileUtilities instance is null!");
                 return false;
             }
-            
+
             try
             {
                 var settings = new JsonSerializerSettings
                 {
                     MissingMemberHandling = MissingMemberHandling.Ignore,
                     NullValueHandling = NullValueHandling.Ignore,
-                    Formatting = Formatting.Indented
+                    Formatting = Formatting.Indented,
+                    ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
+                    MaxDepth = 10,
+                    Converters = new List<JsonConverter> { new Vector3JsonConverter() }
                 };
-                
+
                 string fileName = $"{Player.name}-rapsheet.json";
                 string jsonData = JsonConvert.SerializeObject(this, settings);
-                
+
                 bool success = FileUtilities.AddOrUpdateFile(fileName, jsonData);
-                
+
                 if (success)
                 {
                     ModLogger.Info($"Rap sheet saved for {Player.name}: {GetCrimeCount()} crimes, {PastParoleRecords?.Count ?? 0} past parole records");
                 }
-                
+
                 return success;
             }
             catch (Exception ex)
