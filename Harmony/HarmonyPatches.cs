@@ -515,16 +515,22 @@ namespace Behind_Bars.Harmony
                         }
                     }
                 }
-                
-                // Save the updated rap sheet
+
+                // Final verification - LSI should have been calculated during AddCrime calls
+                ModLogger.Info($"[RAP SHEET] === Arrest Processing Complete ===");
+                ModLogger.Info($"[RAP SHEET] Total crimes recorded: {rapSheet.GetCrimeCount()}");
+                ModLogger.Info($"[RAP SHEET] Current LSI Level: {rapSheet.LSILevel}");
+                ModLogger.Info($"[RAP SHEET] Last LSI Assessment: {rapSheet.LastLSIAssessment}");
+
+                // Note: SaveRapSheet is called within UpdateLSILevel during each AddCrime
+                // This final save ensures consistency in case of any edge cases
                 if (rapSheet.SaveRapSheet())
                 {
-                    ModLogger.Info($"[RAP SHEET] ✓ Rap sheet saved successfully for {player.name}");
-                    ModLogger.Info($"[RAP SHEET]   Total crimes recorded: {rapSheet.GetCrimeCount()}");
+                    ModLogger.Info($"[RAP SHEET] ✓ Final rap sheet save successful");
                 }
                 else
                 {
-                    ModLogger.Error("[RAP SHEET] Failed to save rap sheet");
+                    ModLogger.Error("[RAP SHEET] ✗ Final rap sheet save failed");
                 }
             }
             catch (Exception ex)

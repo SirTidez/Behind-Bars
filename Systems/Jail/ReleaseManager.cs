@@ -7,6 +7,7 @@ using Behind_Bars.Helpers;
 using Behind_Bars.UI;
 using Behind_Bars.Players;
 using Behind_Bars.Systems.NPCs;
+using Behind_Bars.Systems.CrimeTracking;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -751,6 +752,16 @@ namespace Behind_Bars.Systems.Jail
                     ModLogger.Info($"Cleared persistent storage snapshot after successful release for {player.name}");
                 }
 
+                // Start parole supervision for time-served releases (not bail releases)
+                if (releaseType == ReleaseType.TimeServed)
+                {
+                    StartParoleForReleasedPlayer(player);
+                }
+                else
+                {
+                    ModLogger.Info($"Player {player.name} released on bail - no parole supervision");
+                }
+
                 ModLogger.Info($"Player release completed for {player.name} via {releaseType} - all systems cleared");
 
             }
@@ -758,6 +769,109 @@ namespace Behind_Bars.Systems.Jail
             {
                 ModLogger.Error($"Error completing player release: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Start parole supervision for a released player
+        /// Calculates appropriate parole term based on crime severity and LSI level
+        /// </summary>
+        private void StartParoleForReleasedPlayer(Player player)
+        {
+            try
+            {
+                ModLogger.Info($"[PAROLE] === Starting Parole for Released Player: {player.name} ===");
+
+                // Load player's rap sheet to determine parole term
+                var rapSheet = new RapSheet(player);
+                bool rapSheetLoaded = rapSheet.LoadRapSheet();
+
+                if (!rapSheetLoaded)
+                {
+                    ModLogger.Warn($"[PAROLE] No rap sheet found for {player.name} - using default parole term");
+                }
+
+                // Calculate parole duration based on criminal history
+                float paroleDuration = CalculateParoleDuration(rapSheet, rapSheetLoaded);
+
+                // Calculate game time equivalent (1 game hour = 60 seconds)
+                float gameHours = paroleDuration / 60f;
+                float gameDays = gameHours / 24f;
+
+                ModLogger.Info($"[PAROLE] Calculated parole duration: {paroleDuration}s ({paroleDuration / 60f:F1} real minutes / {gameDays:F1} game days)");
+                ModLogger.Info($"[PAROLE] Crime count: {rapSheet.GetCrimeCount()}, LSI Level: {rapSheet.LSILevel}");
+
+                // Start parole through ParoleSystem
+                var paroleSystem = Core.Instance?.ParoleSystem;
+                if (paroleSystem != null)
+                {
+                    paroleSystem.StartParole(player, paroleDuration);
+                    ModLogger.Info($"[PAROLE] ✓ Parole started successfully for {player.name}");
+                }
+                else
+                {
+                    ModLogger.Error($"[PAROLE] ✗ ParoleSystem not available - cannot start parole");
+                }
+
+                ModLogger.Info($"[PAROLE] === Parole Start Complete ===");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"[PAROLE] Error starting parole for {player.name}: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Calculate parole duration based on rap sheet data
+        /// Formula: Base time + (crimes * multiplier) + LSI modifier
+        /// </summary>
+        /// <returns>Parole duration in seconds</returns>
+        private float CalculateParoleDuration(RapSheet rapSheet, bool hasRapSheet)
+        {
+            // Game time scale: 1 hour = 60s, 1 day = 24 minutes (1440s), 1 week = 168 minutes (10080s)
+            // Parole terms scaled to game time for realism
+            const float BASE_PAROLE_TIME = 2880f;  // 2 game days (48 real minutes)
+            const float MIN_PAROLE_TIME = 1440f;   // 1 game day (24 real minutes)
+            const float MAX_PAROLE_TIME = 10080f;  // 1 game week / 7 days (168 real minutes / 2.8 hours)
+            const float CRIME_MULTIPLIER = 240f;   // 4 game hours per crime (4 real minutes)
+
+            if (!hasRapSheet)
+            {
+                return BASE_PAROLE_TIME;
+            }
+
+            float paroleDuration = BASE_PAROLE_TIME;
+
+            // Factor 1: Crime count (more crimes = longer parole)
+            int crimeCount = rapSheet.GetCrimeCount();
+            float crimeBonus = crimeCount * CRIME_MULTIPLIER;
+            paroleDuration += crimeBonus;
+
+            float crimeGameHours = (crimeBonus / 60f);
+            ModLogger.Debug($"[PAROLE CALC] Base: {BASE_PAROLE_TIME / 60f:F1} min (2 days) + Crime bonus: {crimeCount} crimes × {CRIME_MULTIPLIER / 60f:F1} min = +{crimeGameHours:F1} hours");
+
+            // Factor 2: LSI level modifier (higher risk = longer parole)
+            float lsiMultiplier = rapSheet.LSILevel switch
+            {
+                LSILevel.None => 1.0f,
+                LSILevel.Minimum => 1.0f,  // No change
+                LSILevel.Medium => 1.25f,  // +25%
+                LSILevel.High => 1.5f,     // +50%
+                LSILevel.Severe => 2.0f,   // +100%
+                _ => 1.0f
+            };
+
+            paroleDuration *= lsiMultiplier;
+
+            float gameDaysBeforeClamp = (paroleDuration / 60f) / 24f;
+            ModLogger.Debug($"[PAROLE CALC] LSI Level: {rapSheet.LSILevel} (×{lsiMultiplier}) = {gameDaysBeforeClamp:F1} game days");
+
+            // Clamp to reasonable bounds
+            paroleDuration = Mathf.Clamp(paroleDuration, MIN_PAROLE_TIME, MAX_PAROLE_TIME);
+
+            float finalGameDays = (paroleDuration / 60f) / 24f;
+            ModLogger.Debug($"[PAROLE CALC] Final duration: {paroleDuration / 60f:F1} real minutes ({finalGameDays:F1} game days)");
+
+            return paroleDuration;
         }
 
         #endregion

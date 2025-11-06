@@ -19,21 +19,29 @@ namespace Behind_Bars.Systems.Data
     /// Custom JSON converter for Unity Vector3 to avoid circular reference issues
     /// Serializes Vector3 as a simple object with x, y, z properties
     /// </summary>
-    public class Vector3JsonConverter : JsonConverter<Vector3>
+    public class Vector3JsonConverter : JsonConverter
     {
-        public override void WriteJson(JsonWriter writer, Vector3 value, JsonSerializer serializer)
+        public override bool CanConvert(Type objectType)
         {
-            writer.WriteStartObject();
-            writer.WritePropertyName("x");
-            writer.WriteValue(value.x);
-            writer.WritePropertyName("y");
-            writer.WriteValue(value.y);
-            writer.WritePropertyName("z");
-            writer.WriteValue(value.z);
-            writer.WriteEndObject();
+            return objectType == typeof(Vector3);
         }
 
-        public override Vector3 ReadJson(JsonReader reader, Type objectType, Vector3 existingValue, bool hasExistingValue, JsonSerializer serializer)
+        public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)
+        {
+            if (value is Vector3 vector)
+            {
+                writer.WriteStartObject();
+                writer.WritePropertyName("x");
+                writer.WriteValue(vector.x);
+                writer.WritePropertyName("y");
+                writer.WriteValue(vector.y);
+                writer.WritePropertyName("z");
+                writer.WriteValue(vector.z);
+                writer.WriteEndObject();
+            }
+        }
+
+        public override object ReadJson(JsonReader reader, Type objectType, object existingValue, JsonSerializer serializer)
         {
             float x = 0, y = 0, z = 0;
 
@@ -63,6 +71,32 @@ namespace Behind_Bars.Systems.Data
             }
 
             return new Vector3(x, y, z);
+        }
+    }
+
+    /// <summary>
+    /// Contract resolver to ignore problematic Vector3 properties
+    /// </summary>
+    public class Vector3ContractResolver : Newtonsoft.Json.Serialization.DefaultContractResolver
+    {
+        protected override Newtonsoft.Json.Serialization.JsonProperty CreateProperty(
+            System.Reflection.MemberInfo member,
+            Newtonsoft.Json.MemberSerialization memberSerialization)
+        {
+            var property = base.CreateProperty(member, memberSerialization);
+
+            // Ignore computed Vector3 properties that cause circular references
+            if (property.DeclaringType == typeof(Vector3))
+            {
+                if (property.PropertyName == "normalized" ||
+                    property.PropertyName == "magnitude" ||
+                    property.PropertyName == "sqrMagnitude")
+                {
+                    property.ShouldSerialize = instance => false;
+                }
+            }
+
+            return property;
         }
     }
 
@@ -963,6 +997,7 @@ namespace Behind_Bars.Systems.Data
                     ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
                     MaxDepth = 10,
                     NullValueHandling = NullValueHandling.Ignore,
+                    ContractResolver = new Vector3ContractResolver(),
                     Converters = new List<JsonConverter> { new Vector3JsonConverter() }
                 };
 
@@ -992,6 +1027,7 @@ namespace Behind_Bars.Systems.Data
                             ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
                             MaxDepth = 10,
                             NullValueHandling = NullValueHandling.Ignore,
+                            ContractResolver = new Vector3ContractResolver(),
                             Converters = new List<JsonConverter> { new Vector3JsonConverter() }
                         };
 

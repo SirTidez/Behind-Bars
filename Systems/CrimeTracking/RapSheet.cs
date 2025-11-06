@@ -189,13 +189,11 @@ namespace Behind_Bars.Systems.CrimeTracking
             CrimesCommited.Add(crimeInstance);
             ModLogger.Info($"Added crime to rap sheet: {crimeInstance.Description} (Severity: {crimeInstance.Severity})");
 
-            // Only update LSI if player is currently on parole
-            // Initial assessment is performed when parole starts via StartParoleWithAssessment()
-            if (CurrentParoleRecord != null && CurrentParoleRecord.IsOnParole())
-            {
-                ModLogger.Debug($"[LSI] Updating LSI for {FullName} after crime added (on parole)");
-                UpdateLSILevel();
-            }
+            // Always calculate and update LSI when crimes are added
+            // This ensures LSI is current and ready for parole assessment
+            bool isOnParole = CurrentParoleRecord != null && CurrentParoleRecord.IsOnParole();
+            ModLogger.Info($"[LSI] Crime added - calculating LSI for {FullName} (OnParole: {isOnParole}, Total Crimes: {CrimesCommited.Count})");
+            UpdateLSILevel();
 
             return true;
         }
@@ -231,8 +229,11 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// <returns>Calculated LSI level</returns>
         public LSILevel CalculateLSILevel()
         {
+            ModLogger.Debug($"[LSI] Starting LSI calculation for {FullName}");
+
             if (CrimesCommited == null || CrimesCommited.Count == 0)
             {
+                ModLogger.Debug($"[LSI] No crimes recorded - defaulting to Minimum");
                 return LSILevel.Minimum;
             }
 
@@ -240,7 +241,9 @@ namespace Behind_Bars.Systems.CrimeTracking
 
             // Factor 1: Number of crimes (0-20 points)
             // More crimes = higher risk
-            score += Math.Min(CrimesCommited.Count * 2, 20);
+            int crimeCountScore = Math.Min(CrimesCommited.Count * 2, 20);
+            score += crimeCountScore;
+            ModLogger.Debug($"[LSI]   Factor 1 - Crime Count: {CrimesCommited.Count} crimes = {crimeCountScore} points");
 
             // Factor 2: Crime severity (0-30 points)
             // Average severity of all crimes
@@ -250,29 +253,50 @@ namespace Behind_Bars.Systems.CrimeTracking
                 avgSeverity += crime.Severity;
             }
             avgSeverity /= CrimesCommited.Count;
-            score += (int)(avgSeverity * 10);
+            int severityScore = (int)(avgSeverity * 10);
+            score += severityScore;
+            ModLogger.Debug($"[LSI]   Factor 2 - Crime Severity: Avg {avgSeverity:F2} = {severityScore} points");
 
             // Factor 3: Parole violations (0-30 points)
             // Current parole violations are a strong indicator of risk
+            int violationScore = 0;
             if (CurrentParoleRecord != null)
             {
                 int violationCount = CurrentParoleRecord.GetViolationCount();
-                score += Math.Min(violationCount * 5, 30);
+                violationScore = Math.Min(violationCount * 5, 30);
+                score += violationScore;
+                ModLogger.Debug($"[LSI]   Factor 3 - Parole Violations: {violationCount} violations = {violationScore} points");
+            }
+            else
+            {
+                ModLogger.Debug($"[LSI]   Factor 3 - Parole Violations: No current parole record = 0 points");
             }
 
             // Factor 4: Past parole failures (0-20 points)
             // History of parole failures indicates recidivism risk
-            if (PastParoleRecords != null)
+            int pastParoleScore = 0;
+            if (PastParoleRecords != null && PastParoleRecords.Count > 0)
             {
-                score += Math.Min(PastParoleRecords.Count * 10, 20);
+                pastParoleScore = Math.Min(PastParoleRecords.Count * 10, 20);
+                score += pastParoleScore;
+                ModLogger.Debug($"[LSI]   Factor 4 - Past Parole Failures: {PastParoleRecords.Count} failures = {pastParoleScore} points");
+            }
+            else
+            {
+                ModLogger.Debug($"[LSI]   Factor 4 - Past Parole Failures: No past records = 0 points");
             }
 
             // Determine LSI level based on score
             // Total possible: 100 points
-            if (score < 20) return LSILevel.Minimum;      // 0-19 points
-            if (score < 40) return LSILevel.Medium;       // 20-39 points
-            if (score < 70) return LSILevel.High;         // 40-69 points
-            return LSILevel.Severe;                       // 70+ points
+            LSILevel calculatedLevel;
+            if (score < 20) calculatedLevel = LSILevel.Minimum;      // 0-19 points
+            else if (score < 40) calculatedLevel = LSILevel.Medium;  // 20-39 points
+            else if (score < 70) calculatedLevel = LSILevel.High;    // 40-69 points
+            else calculatedLevel = LSILevel.Severe;                   // 70+ points
+
+            ModLogger.Debug($"[LSI] Total Score: {score}/100 → LSI Level: {calculatedLevel}");
+
+            return calculatedLevel;
         }
 
         /// <summary>
@@ -282,19 +306,34 @@ namespace Behind_Bars.Systems.CrimeTracking
         public void UpdateLSILevel()
         {
             LSILevel oldLevel = LSILevel;
+            ModLogger.Info($"[LSI] === Starting LSI Update for {FullName} ===");
+            ModLogger.Info($"[LSI] Previous Level: {oldLevel}");
+
             LSILevel = CalculateLSILevel();
             LastLSIAssessment = DateTime.Now;
 
             if (oldLevel != LSILevel)
             {
-                ModLogger.Info($"[LSI] Updated LSI level for {FullName}: {oldLevel} -> {LSILevel}");
+                ModLogger.Info($"[LSI] ✓ LSI Level Changed: {oldLevel} -> {LSILevel}");
             }
             else
             {
-                ModLogger.Debug($"[LSI] Reassessed LSI level for {FullName}: {LSILevel} (no change)");
+                ModLogger.Info($"[LSI] ✓ LSI Level Unchanged: {LSILevel}");
             }
 
-            SaveRapSheet();
+            ModLogger.Info($"[LSI] Saving rap sheet with updated LSI...");
+            bool saveSuccess = SaveRapSheet();
+
+            if (saveSuccess)
+            {
+                ModLogger.Info($"[LSI] ✓ Rap sheet saved successfully with LSI: {LSILevel}");
+            }
+            else
+            {
+                ModLogger.Error($"[LSI] ✗ Failed to save rap sheet!");
+            }
+
+            ModLogger.Info($"[LSI] === LSI Update Complete ===");
         }
 
         /// <summary>
@@ -448,6 +487,7 @@ namespace Behind_Bars.Systems.CrimeTracking
                     PastParoleRecords = new List<ParoleRecord>();
 
                 ModLogger.Info($"Rap sheet loaded for {Player.name}: {GetCrimeCount()} crimes, {PastParoleRecords.Count} past parole records");
+                ModLogger.Info($"[LSI] Loaded LSI data - Level: {LSILevel}, Last Assessment: {LastLSIAssessment}");
                 return true;
             }
             catch (Exception ex)
@@ -482,13 +522,15 @@ namespace Behind_Bars.Systems.CrimeTracking
                 };
 
                 string fileName = $"{Player.name}-rapsheet.json";
+
+                ModLogger.Debug($"[LSI] Serializing rap sheet - Current LSI: {LSILevel}, Assessment Date: {LastLSIAssessment}");
                 string jsonData = JsonConvert.SerializeObject(this, settings);
 
                 bool success = FileUtilities.AddOrUpdateFile(fileName, jsonData);
 
                 if (success)
                 {
-                    ModLogger.Info($"Rap sheet saved for {Player.name}: {GetCrimeCount()} crimes, {PastParoleRecords?.Count ?? 0} past parole records");
+                    ModLogger.Info($"Rap sheet saved for {Player.name}: {GetCrimeCount()} crimes, {PastParoleRecords?.Count ?? 0} past parole records, LSI: {LSILevel}");
                 }
 
                 return success;
