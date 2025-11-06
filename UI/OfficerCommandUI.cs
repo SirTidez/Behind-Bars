@@ -5,8 +5,12 @@ using System.Collections;
 
 #if !MONO
 using Il2CppTMPro;
+using Il2CppScheduleOne.UI;
+using Il2CppScheduleOne.DevUtilities;
 #else
 using TMPro;
+using ScheduleOne.UI;
+using ScheduleOne.DevUtilities;
 #endif
 
 namespace Behind_Bars.UI
@@ -48,11 +52,71 @@ namespace Behind_Bars.UI
         {
             try
             {
-                // Find the main Canvas
-                Canvas mainCanvas = FindObjectOfType<Canvas>();
-                if (mainCanvas == null)
+                // Get the player HUD canvas
+                Canvas hudCanvas = GetPlayerHUDCanvas();
+
+                // If canvas not found, wait a bit and try again (HUD might not be initialized yet)
+                if (hudCanvas == null)
                 {
-                    ModLogger.Error("OfficerCommandUI: Could not find main Canvas");
+                    ModLogger.Warn("OfficerCommandUI: Player HUD Canvas not found on first attempt, waiting...");
+                    MelonLoader.MelonCoroutines.Start(WaitForCanvasAndCreate());
+                    return;
+                }
+
+                CreateUIWithCanvas(hudCanvas);
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error creating OfficerCommandUI: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Get the player's HUD canvas
+        /// </summary>
+        private Canvas GetPlayerHUDCanvas()
+        {
+            Canvas canvas = null;
+
+#if !MONO
+            // IL2CPP version
+            try
+            {
+                var hudInstance = Singleton<Il2CppScheduleOne.UI.HUD>.Instance;
+                if (hudInstance != null && hudInstance.Pointer != System.IntPtr.Zero)
+                {
+                    canvas = hudInstance.canvas;
+                }
+            }
+            catch (System.Exception)
+            {
+                // HUD singleton not available yet
+            }
+#else
+            // Mono version
+            try
+            {
+                canvas = Singleton<HUD>.Instance?.canvas;
+            }
+            catch (System.Exception)
+            {
+                // HUD singleton not available yet
+            }
+#endif
+
+            return canvas;
+        }
+
+        /// <summary>
+        /// Create UI with a known canvas
+        /// </summary>
+        private void CreateUIWithCanvas(Canvas mainCanvas)
+        {
+            try
+            {
+                if (_isInitialized)
+                {
+                    ModLogger.Debug("OfficerCommandUI: Already initialized, skipping");
                     return;
                 }
 
@@ -156,8 +220,34 @@ namespace Behind_Bars.UI
             }
             catch (System.Exception ex)
             {
-                ModLogger.Error($"Error creating OfficerCommandUI: {ex.Message}");
+                ModLogger.Error($"Error creating OfficerCommandUI with canvas: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Wait for HUD canvas to be available and then create UI
+        /// </summary>
+        private IEnumerator WaitForCanvasAndCreate()
+        {
+            int attempts = 0;
+            const int maxAttempts = 10;
+
+            while (attempts < maxAttempts)
+            {
+                yield return new WaitForSeconds(0.5f);
+
+                Canvas hudCanvas = GetPlayerHUDCanvas();
+                if (hudCanvas != null)
+                {
+                    ModLogger.Info($"OfficerCommandUI: Player HUD Canvas found after {attempts + 1} attempts");
+                    CreateUIWithCanvas(hudCanvas);
+                    yield break;
+                }
+
+                attempts++;
+            }
+
+            ModLogger.Error($"OfficerCommandUI: Could not find Player HUD Canvas after {maxAttempts} attempts");
         }
 
         /// <summary>
@@ -221,6 +311,14 @@ namespace Behind_Bars.UI
 
             try
             {
+                // Null check all components before updating
+                if (_officerTypeText == null || _commandText == null || _progressText == null || _escortIndicator == null)
+                {
+                    ModLogger.Error("OfficerCommandUI: One or more text components are null, recreating UI");
+                    ShowCommand(data);
+                    return;
+                }
+
                 _officerTypeText.text = data.OfficerType;
                 _commandText.text = data.CommandText;
                 _progressText.text = $"Stage {data.CurrentStage}/{data.TotalStages}";
@@ -239,6 +337,7 @@ namespace Behind_Bars.UI
             catch (System.Exception ex)
             {
                 ModLogger.Error($"Error updating officer command: {ex.Message}");
+                ModLogger.Error($"Stack trace: {ex.StackTrace}");
             }
         }
 

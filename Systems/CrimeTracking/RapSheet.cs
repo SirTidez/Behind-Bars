@@ -437,6 +437,35 @@ namespace Behind_Bars.Systems.CrimeTracking
             return success;
         }
 
+        /// <summary>
+        /// Archive the current parole record to past records
+        /// Moves CurrentParoleRecord to PastParoleRecords and clears CurrentParoleRecord
+        /// </summary>
+        /// <returns>True if archived successfully, false if no current parole record exists</returns>
+        public bool ArchiveCurrentParoleRecord()
+        {
+            if (CurrentParoleRecord == null)
+            {
+                ModLogger.Debug($"No current parole record to archive for {FullName}");
+                return false;
+            }
+
+            // Ensure PastParoleRecords list exists
+            if (PastParoleRecords == null)
+            {
+                PastParoleRecords = new List<ParoleRecord>();
+            }
+
+            // Add current record to past records
+            PastParoleRecords.Add(CurrentParoleRecord);
+            ModLogger.Info($"Archived parole record for {FullName} - Total past records: {PastParoleRecords.Count}");
+
+            // Clear current parole record
+            CurrentParoleRecord = null;
+
+            return true;
+        }
+
         #endregion
 
         #region File Operations

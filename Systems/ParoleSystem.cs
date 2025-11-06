@@ -1,6 +1,7 @@
 using System.Collections;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.CrimeTracking;
+using Behind_Bars.UI;
 using UnityEngine;
 using MelonLoader;
 using System.Collections.Generic;
@@ -90,6 +91,9 @@ namespace Behind_Bars.Systems
             {
                 SpawnParoleOfficer();
             }
+
+            // Show parole status UI after a short delay to ensure RapSheet is initialized
+            MelonCoroutines.Start(DelayedShowParoleUI(player));
         }
 
         /// <summary>
@@ -126,6 +130,29 @@ namespace Behind_Bars.Systems
             catch (System.Exception ex)
             {
                 ModLogger.Error($"[LSI] Error initializing parole tracking for {player.name}: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Delayed show parole UI to ensure RapSheet is initialized
+        /// </summary>
+        private IEnumerator DelayedShowParoleUI(Player player)
+        {
+            // Wait a frame to ensure RapSheet initialization is complete
+            yield return new WaitForSeconds(0.5f);
+
+            try
+            {
+                var uiManager = BehindBarsUIManager.Instance;
+                if (uiManager != null)
+                {
+                    uiManager.ShowParoleStatus();
+                    ModLogger.Info($"Parole status UI shown for {player.name}");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Warn($"Failed to show parole status UI: {ex.Message}");
             }
         }
 
@@ -350,6 +377,41 @@ namespace Behind_Bars.Systems
         {
             ModLogger.Info($"Handling parole revocation for {record.Player.name}");
 
+            // End parole in RapSheet and archive it
+            try
+            {
+                var rapSheet = RapSheetManager.Instance.GetRapSheet(record.Player);
+                if (rapSheet?.CurrentParoleRecord != null)
+                {
+                    rapSheet.CurrentParoleRecord.EndParole();
+                    // Move current parole record to past records
+                    rapSheet.ArchiveCurrentParoleRecord();
+                    RapSheetManager.Instance.SaveRapSheet(record.Player, invalidateCache: true);
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error ending parole in RapSheet: {ex.Message}");
+            }
+
+            // Hide parole status UI
+            try
+            {
+                var uiManager = BehindBarsUIManager.Instance;
+                if (uiManager != null)
+                {
+                    uiManager.HideParoleStatus();
+                    ModLogger.Info($"Parole status UI hidden for {record.Player.name} (revoked)");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Warn($"Failed to hide parole status UI: {ex.Message}");
+            }
+
+            // Remove from active parole
+            _paroleRecords.Remove(record.Player);
+
             // TODO: Implement revocation consequences
             // This could involve:
             // 1. Immediate arrest by parole officer
@@ -375,6 +437,38 @@ namespace Behind_Bars.Systems
 
             record.Status = ParoleStatus.Completed;
             record.TimeRemaining = 0f;
+
+            // End parole in RapSheet and archive it
+            try
+            {
+                var rapSheet = RapSheetManager.Instance.GetRapSheet(record.Player);
+                if (rapSheet?.CurrentParoleRecord != null)
+                {
+                    rapSheet.CurrentParoleRecord.EndParole();
+                    // Move current parole record to past records
+                    rapSheet.ArchiveCurrentParoleRecord();
+                    RapSheetManager.Instance.SaveRapSheet(record.Player, invalidateCache: true);
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error ending parole in RapSheet: {ex.Message}");
+            }
+
+            // Hide parole status UI
+            try
+            {
+                var uiManager = BehindBarsUIManager.Instance;
+                if (uiManager != null)
+                {
+                    uiManager.HideParoleStatus();
+                    ModLogger.Info($"Parole status UI hidden for {record.Player.name}");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Warn($"Failed to hide parole status UI: {ex.Message}");
+            }
 
             // TODO: Implement parole completion rewards
             // This could involve:

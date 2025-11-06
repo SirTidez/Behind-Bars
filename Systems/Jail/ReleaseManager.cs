@@ -772,14 +772,14 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Start parole supervision for a released player
-        /// Calculates appropriate parole term based on crime severity and LSI level
+        /// Start or resume parole supervision for a released player
+        /// If player has paused parole, extends and resumes it; otherwise starts new parole
         /// </summary>
         private void StartParoleForReleasedPlayer(Player player)
         {
             try
             {
-                ModLogger.Info($"[PAROLE] === Starting Parole for Released Player: {player.name} ===");
+                ModLogger.Info($"[PAROLE] === Processing Parole for Released Player: {player.name} ===");
 
                 // Get cached rap sheet (loads from file only once)
                 var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
@@ -790,36 +790,71 @@ namespace Behind_Bars.Systems.Jail
                     ModLogger.Warn($"[PAROLE] No rap sheet found for {player.name} - using default parole term");
                 }
 
-                // Calculate parole duration based on criminal history
-                float paroleDuration = CalculateParoleDuration(rapSheet, rapSheetLoaded);
+                // Check if player has paused parole from previous incarceration
+                bool hasPausedParole = rapSheet?.CurrentParoleRecord != null &&
+                                      rapSheet.CurrentParoleRecord.IsOnParole() &&
+                                      rapSheet.CurrentParoleRecord.IsPaused();
 
-                // Calculate game time equivalent (1 game hour = 60 seconds)
-                float gameHours = paroleDuration / 60f;
-                float gameDays = gameHours / 24f;
-
-                ModLogger.Info($"[PAROLE] Calculated parole duration: {paroleDuration}s ({paroleDuration / 60f:F1} real minutes / {gameDays:F1} game days)");
-                if (rapSheet != null)
+                if (hasPausedParole)
                 {
-                    ModLogger.Info($"[PAROLE] Crime count: {rapSheet.GetCrimeCount()}, LSI Level: {rapSheet.LSILevel}");
-                }
+                    // RESUME AND EXTEND paused parole
+                    float pausedRemainingTime = rapSheet.CurrentParoleRecord.GetPausedRemainingTime();
+                    ModLogger.Info($"[PAROLE] Player has paused parole with {pausedRemainingTime}s ({pausedRemainingTime / 60f:F1} minutes) remaining");
 
-                // Start parole through ParoleSystem
-                var paroleSystem = Core.Instance?.ParoleSystem;
-                if (paroleSystem != null)
-                {
-                    paroleSystem.StartParole(player, paroleDuration);
-                    ModLogger.Info($"[PAROLE] ✓ Parole started successfully for {player.name}");
+                    // Calculate additional time from new crimes
+                    float additionalTime = CalculateAdditionalParoleTime(rapSheet, rapSheetLoaded);
+
+                    // Add violation penalties
+                    int violationCount = rapSheet.CurrentParoleRecord.GetViolationCount();
+                    float violationPenalty = CalculateViolationPenalty(violationCount);
+
+                    ModLogger.Info($"[PAROLE] Additional time from new crimes: {additionalTime}s ({additionalTime / 60f:F1} minutes)");
+                    ModLogger.Info($"[PAROLE] Violation penalty: {violationPenalty}s ({violationPenalty / 60f:F1} minutes) for {violationCount} violations");
+
+                    // Extend the paused parole
+                    float totalAdditional = additionalTime + violationPenalty;
+                    rapSheet.CurrentParoleRecord.ExtendPausedParole(totalAdditional);
+
+                    float newTotalTime = pausedRemainingTime + totalAdditional;
+                    float newGameDays = (newTotalTime / 60f) / 24f;
+                    ModLogger.Info($"[PAROLE] New total parole time: {newTotalTime}s ({newTotalTime / 60f:F1} real minutes / {newGameDays:F1} game days)");
+
+                    // Resume parole
+                    rapSheet.CurrentParoleRecord.ResumeParole();
+                    ModLogger.Info($"[PAROLE] ✓ Paused parole resumed and extended for {player.name}");
                 }
                 else
                 {
-                    ModLogger.Error($"[PAROLE] ✗ ParoleSystem not available - cannot start parole");
+                    // START NEW parole term
+                    float paroleDuration = CalculateParoleDuration(rapSheet, rapSheetLoaded);
+                    float gameHours = paroleDuration / 60f;
+                    float gameDays = gameHours / 24f;
+
+                    ModLogger.Info($"[PAROLE] Starting new parole term: {paroleDuration}s ({paroleDuration / 60f:F1} real minutes / {gameDays:F1} game days)");
+                    if (rapSheet != null)
+                    {
+                        ModLogger.Info($"[PAROLE] Crime count: {rapSheet.GetCrimeCount()}, LSI Level: {rapSheet.LSILevel}");
+                    }
+
+                    // Start parole through ParoleSystem
+                    var paroleSystem = Core.Instance?.ParoleSystem;
+                    if (paroleSystem != null)
+                    {
+                        paroleSystem.StartParole(player, paroleDuration);
+                        ModLogger.Info($"[PAROLE] ✓ New parole started successfully for {player.name}");
+                    }
+                    else
+                    {
+                        ModLogger.Error($"[PAROLE] ✗ ParoleSystem not available - cannot start parole");
+                    }
                 }
 
-                ModLogger.Info($"[PAROLE] === Parole Start Complete ===");
+                ModLogger.Info($"[PAROLE] === Parole Processing Complete ===");
             }
             catch (System.Exception ex)
             {
-                ModLogger.Error($"[PAROLE] Error starting parole for {player.name}: {ex.Message}");
+                ModLogger.Error($"[PAROLE] Error processing parole for {player.name}: {ex.Message}");
+                ModLogger.Error($"[PAROLE] Stack trace: {ex.StackTrace}");
             }
         }
 
@@ -875,6 +910,44 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Debug($"[PAROLE CALC] Final duration: {paroleDuration / 60f:F1} real minutes ({finalGameDays:F1} game days)");
 
             return paroleDuration;
+        }
+
+        /// <summary>
+        /// Calculate additional parole time from new crimes (without base time or LSI modifier)
+        /// Used when extending paused parole
+        /// </summary>
+        private float CalculateAdditionalParoleTime(RapSheet rapSheet, bool hasRapSheet)
+        {
+            const float CRIME_MULTIPLIER = 240f;   // 4 game hours per crime (4 real minutes)
+
+            if (!hasRapSheet)
+            {
+                return 0f;
+            }
+
+            // Just calculate crime-based time, without base or LSI modifier
+            // This represents the additional burden of new crimes
+            int crimeCount = rapSheet.GetCrimeCount();
+            float additionalTime = crimeCount * CRIME_MULTIPLIER;
+
+            ModLogger.Debug($"[PAROLE CALC] Additional time for {crimeCount} new crimes: {additionalTime}s ({additionalTime / 60f:F1} minutes)");
+
+            return additionalTime;
+        }
+
+        /// <summary>
+        /// Calculate penalty time for parole violations
+        /// Each violation adds additional supervision time
+        /// </summary>
+        private float CalculateViolationPenalty(int violationCount)
+        {
+            const float VIOLATION_PENALTY = 480f;  // 8 game hours per violation (8 real minutes)
+
+            float penalty = violationCount * VIOLATION_PENALTY;
+
+            ModLogger.Debug($"[PAROLE CALC] Violation penalty for {violationCount} violations: {penalty}s ({penalty / 60f:F1} minutes)");
+
+            return penalty;
         }
 
         #endregion

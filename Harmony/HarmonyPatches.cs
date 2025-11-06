@@ -471,7 +471,30 @@ namespace Behind_Bars.Harmony
                     ModLogger.Warn($"[RAP SHEET] Failed to get rap sheet for {player.name}");
                     return;
                 }
-                
+
+                // Check if player is on parole - if so, pause it during incarceration
+                if (rapSheet.CurrentParoleRecord != null && rapSheet.CurrentParoleRecord.IsOnParole())
+                {
+                    if (!rapSheet.CurrentParoleRecord.IsPaused())
+                    {
+                        rapSheet.CurrentParoleRecord.PauseParole();
+                        ModLogger.Info($"[PAROLE] Player {player.name} was on parole at time of arrest - parole time paused");
+
+                        // Add a violation for being arrested while on parole
+                        var arrestViolation = new ViolationRecord(
+                            ViolationType.NewCrime,
+                            "Player was arrested and charged with new crimes while on parole supervision",
+                            3.0f
+                        );
+                        rapSheet.CurrentParoleRecord.AddViolation(arrestViolation);
+                        ModLogger.Info($"[PAROLE] Added violation for arrest while on parole");
+                    }
+                    else
+                    {
+                        ModLogger.Info($"[PAROLE] Player {player.name} parole was already paused");
+                    }
+                }
+
                 // Add active crimes from CrimeDetectionSystem to rap sheet
                 if (activeCrimes != null && activeCrimes.Count > 0)
                 {

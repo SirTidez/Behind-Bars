@@ -6,14 +6,18 @@ using System.Collections;
 
 #if !MONO
 using Il2CppTMPro;
+using Il2CppScheduleOne.UI;
+using Il2CppScheduleOne.DevUtilities;
 #else
 using TMPro;
+using ScheduleOne.UI;
+using ScheduleOne.DevUtilities;
 #endif
 
 namespace Behind_Bars.UI
 {
     /// <summary>
-    /// Persistent UI component that displays parole status on the left side of the screen, vertically centered
+    /// Persistent UI component that displays parole status on the right side of the screen, vertically centered
     /// Shows time remaining, supervision level with search probability, and violation count
     /// </summary>
     public class ParoleStatusUI : MonoBehaviour
@@ -49,24 +53,59 @@ namespace Behind_Bars.UI
         {
             try
             {
-                // Find the main Canvas
-                Canvas mainCanvas = FindObjectOfType<Canvas>();
-                
-                // If canvas not found, wait a bit and try again (canvas might not be initialized yet)
-                if (mainCanvas == null)
+                // Get the player HUD canvas
+                Canvas hudCanvas = GetPlayerHUDCanvas();
+
+                // If canvas not found, wait a bit and try again (HUD might not be initialized yet)
+                if (hudCanvas == null)
                 {
-                    ModLogger.Warn("ParoleStatusUI: Canvas not found on first attempt, waiting...");
-                    // Try to find canvas in next frame
+                    ModLogger.Warn("ParoleStatusUI: Player HUD Canvas not found on first attempt, waiting...");
                     MelonLoader.MelonCoroutines.Start(WaitForCanvasAndCreate());
                     return;
                 }
 
-                CreateUIWithCanvas(mainCanvas);
+                CreateUIWithCanvas(hudCanvas);
             }
             catch (System.Exception ex)
             {
                 ModLogger.Error($"Error creating ParoleStatusUI: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Get the player's HUD canvas
+        /// </summary>
+        private Canvas GetPlayerHUDCanvas()
+        {
+            Canvas canvas = null;
+
+#if !MONO
+            // IL2CPP version
+            try
+            {
+                var hudInstance = Singleton<Il2CppScheduleOne.UI.HUD>.Instance;
+                if (hudInstance != null && hudInstance.Pointer != System.IntPtr.Zero)
+                {
+                    canvas = hudInstance.canvas;
+                }
+            }
+            catch (System.Exception)
+            {
+                // HUD singleton not available yet
+            }
+#else
+            // Mono version
+            try
+            {
+                canvas = Singleton<HUD>.Instance?.canvas;
+            }
+            catch (System.Exception)
+            {
+                // HUD singleton not available yet
+            }
+#endif
+
+            return canvas;
         }
 
         /// <summary>
@@ -86,12 +125,12 @@ namespace Behind_Bars.UI
                 _statusPanel = new GameObject("ParoleStatusPanel");
                 _statusPanel.transform.SetParent(mainCanvas.transform, false);
 
-                // Add RectTransform component - LEFT SIDE, VERTICALLY CENTERED
+                // Add RectTransform component - RIGHT SIDE, VERTICALLY CENTERED
                 RectTransform panelRect = _statusPanel.AddComponent<RectTransform>();
-                panelRect.anchorMin = new Vector2(0f, 0.5f); // Left edge, vertical center
-                panelRect.anchorMax = new Vector2(0f, 0.5f);
-                panelRect.pivot = new Vector2(0f, 0.5f); // Left edge, vertical center
-                panelRect.anchoredPosition = new Vector2(10f, 0f); // 10 pixels from left edge, centered vertically
+                panelRect.anchorMin = new Vector2(1f, 0.5f); // Right edge, vertical center
+                panelRect.anchorMax = new Vector2(1f, 0.5f);
+                panelRect.pivot = new Vector2(1f, 0.5f); // Right edge, vertical center
+                panelRect.anchoredPosition = new Vector2(-10f, 0f); // 10 pixels from right edge, centered vertically
                 panelRect.sizeDelta = new Vector2(250f, 140f); // Width 250px, Height 140px
 
                 // Add CanvasGroup for fade animations
@@ -176,7 +215,8 @@ namespace Behind_Bars.UI
                 _statusPanel.SetActive(false);
 
                 _isInitialized = true;
-                ModLogger.Info("ParoleStatusUI created successfully at left side, vertically centered");
+                ModLogger.Info("ParoleStatusUI created successfully at right side, vertically centered");
+                ModLogger.Debug($"ParoleStatusUI: Panel active = {_statusPanel.activeSelf}, Alpha = {_canvasGroup.alpha}");
             }
             catch (System.Exception ex)
             {
@@ -185,30 +225,29 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Wait for canvas to be available and then create UI
+        /// Wait for HUD canvas to be available and then create UI
         /// </summary>
         private IEnumerator WaitForCanvasAndCreate()
         {
             int attempts = 0;
             const int maxAttempts = 10;
-            
+
             while (attempts < maxAttempts)
             {
                 yield return new WaitForSeconds(0.5f);
-                
-                Canvas mainCanvas = FindObjectOfType<Canvas>();
-                if (mainCanvas != null)
+
+                Canvas hudCanvas = GetPlayerHUDCanvas();
+                if (hudCanvas != null)
                 {
-                    ModLogger.Info($"ParoleStatusUI: Canvas found after {attempts + 1} attempts");
-                    // Create UI now that canvas is available
-                    CreateUIWithCanvas(mainCanvas);
+                    ModLogger.Info($"ParoleStatusUI: Player HUD Canvas found after {attempts + 1} attempts");
+                    CreateUIWithCanvas(hudCanvas);
                     yield break;
                 }
-                
+
                 attempts++;
             }
-            
-            ModLogger.Error($"ParoleStatusUI: Could not find Canvas after {maxAttempts} attempts");
+
+            ModLogger.Error($"ParoleStatusUI: Could not find Player HUD Canvas after {maxAttempts} attempts");
         }
 
         /// <summary>
@@ -222,27 +261,52 @@ namespace Behind_Bars.UI
                 return;
             }
 
+            if (_statusPanel == null)
+            {
+                ModLogger.Error("ParoleStatusUI: _statusPanel is null!");
+                return;
+            }
+
+            if (_canvasGroup == null)
+            {
+                ModLogger.Error("ParoleStatusUI: _canvasGroup is null!");
+                return;
+            }
+
             try
             {
+                ModLogger.Info($"ParoleStatusUI: Showing status for parole - IsOnParole: {data.IsOnParole}");
+
+                // Check if panel is already visible - if so, just update without fading
+                bool wasVisible = _statusPanel.activeSelf && _canvasGroup.alpha > 0.9f;
+
                 UpdateStatus(data);
 
-                // Activate and fade in
+                // Activate panel
                 _statusPanel.SetActive(true);
 
-                // Stop any existing fade coroutine
-                if (_fadeCoroutine != null)
+                // Only fade in if panel wasn't already visible
+                if (!wasVisible)
                 {
-                    MelonLoader.MelonCoroutines.Stop(_fadeCoroutine);
+                    // Stop any existing fade coroutine
+                    if (_fadeCoroutine != null)
+                    {
+                        MelonLoader.MelonCoroutines.Stop(_fadeCoroutine);
+                    }
+
+                    var fadeInCoroutine = FadeIn();
+                    _fadeCoroutine = MelonLoader.MelonCoroutines.Start(fadeInCoroutine) as Coroutine;
                 }
-
-                var fadeInCoroutine = FadeIn();
-                _fadeCoroutine = MelonLoader.MelonCoroutines.Start(fadeInCoroutine) as Coroutine;
-
-                ModLogger.Debug($"ParoleStatusUI: Showing status - Time: {data.TimeRemainingFormatted}");
+                else
+                {
+                    // Ensure alpha is at 1.0 if already visible
+                    _canvasGroup.alpha = 1f;
+                }
             }
             catch (System.Exception ex)
             {
                 ModLogger.Error($"Error showing parole status: {ex.Message}");
+                ModLogger.Error($"Stack trace: {ex.StackTrace}");
             }
         }
 
@@ -253,6 +317,7 @@ namespace Behind_Bars.UI
         {
             if (!_isInitialized || data == null)
             {
+                ModLogger.Warn($"ParoleStatusUI: Cannot update - Initialized: {_isInitialized}, Data null: {data == null}");
                 return;
             }
 
@@ -260,7 +325,18 @@ namespace Behind_Bars.UI
             {
                 if (!data.IsOnParole)
                 {
+                    ModLogger.Debug("ParoleStatusUI: Not on parole, hiding UI");
                     Hide();
+                    return;
+                }
+
+                // Null check all text components
+                if (_timeRemainingText == null || _supervisionLevelText == null || _violationsText == null)
+                {
+                    ModLogger.Error("ParoleStatusUI: One or more text components are null!");
+                    ModLogger.Error($"  _timeRemainingText: {_timeRemainingText != null}");
+                    ModLogger.Error($"  _supervisionLevelText: {_supervisionLevelText != null}");
+                    ModLogger.Error($"  _violationsText: {_violationsText != null}");
                     return;
                 }
 
@@ -279,6 +355,7 @@ namespace Behind_Bars.UI
             catch (System.Exception ex)
             {
                 ModLogger.Error($"Error updating parole status: {ex.Message}");
+                ModLogger.Error($"Stack trace: {ex.StackTrace}");
             }
         }
 

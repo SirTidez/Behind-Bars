@@ -739,7 +739,6 @@ namespace Behind_Bars.Systems.NPCs
                 return;
             }
 
-            // Check if we should show a command notification for this activity
             if (!ShouldShowCommandNotification(activity))
             {
                 return;
