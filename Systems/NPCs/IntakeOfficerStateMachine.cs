@@ -5,6 +5,7 @@ using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.Jail;
+using Behind_Bars.UI;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -420,6 +421,9 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Debug($"IntakeOfficer: Calling UpdateDialogueForState({newState}) - dialogueController is {(dialogueController != null ? "available" : "null")}");
             UpdateDialogueForState(newState);
 
+            // Update officer command notification
+            UpdateOfficerCommandNotification(newState);
+
             // Handle state entry logic
             OnStateEnter(newState);
         }
@@ -497,6 +501,124 @@ namespace Behind_Bars.Systems.NPCs
             return distanceToDestination > 3f; // If more than 3 units away, show "Follow me"
         }
 
+        /// <summary>
+        /// Update officer command notification based on current state
+        /// </summary>
+        private void UpdateOfficerCommandNotification(IntakeState state)
+        {
+            // Check if we should show a command notification for this state
+            if (!ShouldShowCommandNotification(state))
+            {
+                return;
+            }
+
+            try
+            {
+                var commandData = GetCommandDataForState(state);
+                if (commandData != null)
+                {
+                    BehindBarsUIManager.Instance?.UpdateOfficerCommand(commandData);
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"IntakeOfficer: Error updating command notification: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Determine if this state should display a command notification
+        /// </summary>
+        private bool ShouldShowCommandNotification(IntakeState state)
+        {
+            return state switch
+            {
+                IntakeState.WaitingForPlayerExit => true,
+                IntakeState.EscortToMugshot => true,
+                IntakeState.WaitingForMugshot => true,
+                IntakeState.EscortToScanner => true,
+                IntakeState.WaitingForScan => true,
+                IntakeState.EscortToStorage => true,
+                IntakeState.WaitingForStorage => true,
+                IntakeState.EscortToCell => true,
+                IntakeState.WaitingForCellEntry => true,
+                _ => false
+            };
+        }
+
+        /// <summary>
+        /// Get command data for the current state
+        /// </summary>
+        private OfficerCommandData? GetCommandDataForState(IntakeState state)
+        {
+            bool isEscorting = IsCurrentlyEscorting();
+
+            return state switch
+            {
+                IntakeState.WaitingForPlayerExit => new OfficerCommandData(
+                    "INTAKE OFFICER",
+                    "Go through the door",
+                    1, 5, false),
+
+                IntakeState.EscortToMugshot => new OfficerCommandData(
+                    "INTAKE OFFICER",
+                    "Follow me to the mugshot station",
+                    2, 5, true),
+
+                IntakeState.WaitingForMugshot => new OfficerCommandData(
+                    "INTAKE OFFICER",
+                    isEscorting ? "Follow me to the mugshot station" : "Go take your mugshot!",
+                    2, 5, isEscorting),
+
+                IntakeState.EscortToScanner => new OfficerCommandData(
+                    "INTAKE OFFICER",
+                    "Follow me to the fingerprint scanner",
+                    3, 5, true),
+
+                IntakeState.WaitingForScan => new OfficerCommandData(
+                    "INTAKE OFFICER",
+                    isEscorting ? "Follow me to the scanner" : "Place your hand on the scanner",
+                    3, 5, isEscorting),
+
+                IntakeState.EscortToStorage => new OfficerCommandData(
+                    "INTAKE OFFICER",
+                    "Follow me to storage",
+                    4, 5, true),
+
+                IntakeState.WaitingForStorage => new OfficerCommandData(
+                    "INTAKE OFFICER",
+                    isEscorting ? "Follow me to storage" : "Drop your belongings and pick up prison items",
+                    4, 5, isEscorting),
+
+                IntakeState.EscortToCell => new OfficerCommandData(
+                    "INTAKE OFFICER",
+                    "Follow me to your cell",
+                    5, 5, true),
+
+                IntakeState.WaitingForCellEntry => new OfficerCommandData(
+                    "INTAKE OFFICER",
+                    "Enter your cell",
+                    5, 5, false),
+
+                _ => null
+            };
+        }
+
+        /// <summary>
+        /// Hide officer command notification
+        /// </summary>
+        private void HideOfficerCommandNotification()
+        {
+            try
+            {
+                BehindBarsUIManager.Instance?.HideOfficerCommand();
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"IntakeOfficer: Error hiding command notification: {ex.Message}");
+            }
+        }
+
         private void OnStateEnter(IntakeState state)
         {
             switch (state)
@@ -535,6 +657,7 @@ namespace Behind_Bars.Systems.NPCs
                     break;
 
                 case IntakeState.ReturningToPost:
+                    HideOfficerCommandNotification();
                     ReturnToGuardPost();
                     break;
             }

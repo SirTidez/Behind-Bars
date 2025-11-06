@@ -396,10 +396,16 @@ namespace Behind_Bars.UI
         public BehindBarsUIWrapper? GetUIWrapper() => _uiWrapper;
 
         // === BOOKING NOTIFICATION SYSTEM ===
-        
+
         private GameObject? _notificationUI;
         private Text? _notificationText;
         private Coroutine? _notificationCoroutine;
+
+        // === OFFICER COMMAND SYSTEM ===
+
+        private GameObject? _officerCommandManager;
+        private OfficerCommandUI? _officerCommandUI;
+        private OfficerCommandData? _currentCommand;
         
         /// <summary>
         /// Show a booking notification to the player
@@ -631,6 +637,140 @@ namespace Behind_Bars.UI
             {
                 MelonLoader.MelonCoroutines.Stop(_notificationCoroutine);
                 _notificationCoroutine = null;
+            }
+        }
+
+        // === OFFICER COMMAND SYSTEM ===
+
+        /// <summary>
+        /// Show a persistent officer command notification
+        /// </summary>
+        public void ShowOfficerCommand(OfficerCommandData data)
+        {
+            try
+            {
+                // Create officer command UI if it doesn't exist
+                if (_officerCommandUI == null)
+                {
+                    CreateOfficerCommandUI();
+                }
+
+                if (_officerCommandUI == null)
+                {
+                    ModLogger.Error("Failed to create officer command UI");
+                    return;
+                }
+
+                // Store current command
+                _currentCommand = data;
+
+                // Show the command
+                _officerCommandUI.ShowCommand(data);
+
+                ModLogger.Debug($"Showing officer command: {data.CommandText}");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error showing officer command: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Update the current officer command
+        /// </summary>
+        public void UpdateOfficerCommand(OfficerCommandData data)
+        {
+            try
+            {
+                if (_officerCommandUI == null)
+                {
+                    ShowOfficerCommand(data);
+                    return;
+                }
+
+                // Store current command
+                _currentCommand = data;
+
+                // Update the command
+                _officerCommandUI.UpdateCommand(data);
+
+                ModLogger.Debug($"Updating officer command: {data.CommandText}");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error updating officer command: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Hide the officer command notification
+        /// </summary>
+        public void HideOfficerCommand()
+        {
+            try
+            {
+                if (_officerCommandUI != null)
+                {
+                    _officerCommandUI.Hide();
+                    _currentCommand = null;
+                    ModLogger.Debug("Hiding officer command");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error hiding officer command: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Check if there's an active officer command
+        /// </summary>
+        public bool HasActiveOfficerCommand()
+        {
+            return _officerCommandUI != null && _officerCommandUI.IsVisible();
+        }
+
+        /// <summary>
+        /// Get the current officer command data
+        /// </summary>
+        public OfficerCommandData? GetCurrentOfficerCommand()
+        {
+            return _currentCommand;
+        }
+
+        /// <summary>
+        /// Create the officer command UI component
+        /// </summary>
+        private void CreateOfficerCommandUI()
+        {
+            try
+            {
+                // Create a persistent manager object
+                _officerCommandManager = new GameObject("OfficerCommandManager");
+                GameObject.DontDestroyOnLoad(_officerCommandManager);
+
+                // Add the OfficerCommandUI component
+#if !MONO
+                // IL2CPP-safe component addition
+                var componentType = Il2CppInterop.Runtime.Il2CppType.Of<OfficerCommandUI>();
+                var component = _officerCommandManager.AddComponent(componentType);
+                _officerCommandUI = component.Cast<OfficerCommandUI>();
+#else
+                _officerCommandUI = _officerCommandManager.AddComponent<OfficerCommandUI>();
+#endif
+
+                // Manually initialize the UI immediately (don't wait for Unity Start() to be called)
+                if (_officerCommandUI != null)
+                {
+                    _officerCommandUI.CreateUI();
+                    ModLogger.Info("OfficerCommandUI CreateUI() called manually");
+                }
+
+                ModLogger.Info("OfficerCommandUI manager initialized successfully");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error creating officer command UI: {ex.Message}");
             }
         }
     }

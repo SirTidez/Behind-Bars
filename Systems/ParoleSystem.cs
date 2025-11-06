@@ -1,5 +1,6 @@
 using System.Collections;
 using Behind_Bars.Helpers;
+using Behind_Bars.Systems.CrimeTracking;
 using UnityEngine;
 using MelonLoader;
 using System.Collections.Generic;
@@ -11,14 +12,22 @@ using ScheduleOne.PlayerScripts;
 
 namespace Behind_Bars.Systems
 {
-    public class ProbationSystem
+    /// <summary>
+    /// Manages active parole supervision for released players
+    /// Handles parole monitoring, random searches, violations, and completion
+    /// Integrates with RapSheet/LSI system for risk assessment
+    /// </summary>
+    public class ParoleSystem
     {
-        private const float PROBATION_DURATION = 600f; // 10 minutes default
+        private const float PAROLE_DURATION = 600f; // 10 minutes default
         private const float SEARCH_INTERVAL_MIN = 30f; // Minimum time between searches
         private const float SEARCH_INTERVAL_MAX = 120f; // Maximum time between searches
         private const float SEARCH_RADIUS = 50f; // How close PO needs to be to search
-        
-        public enum ProbationStatus
+
+        /// <summary>
+        /// Parole supervision status
+        /// </summary>
+        public enum ParoleStatus
         {
             None = 0,
             Active = 1,
@@ -27,10 +36,14 @@ namespace Behind_Bars.Systems
             Revoked = 4
         }
 
-        public class ProbationRecord
+        /// <summary>
+        /// Runtime parole tracking record (in-memory)
+        /// Separate from ParoleRecord in RapSheet which handles persistent storage
+        /// </summary>
+        public class ParoleRuntimeRecord
         {
             public Player Player { get; set; }
-            public ProbationStatus Status { get; set; }
+            public ParoleStatus Status { get; set; }
             public float StartTime { get; set; }
             public float Duration { get; set; }
             public float TimeRemaining { get; set; }
@@ -40,18 +53,22 @@ namespace Behind_Bars.Systems
             public List<string> Violations { get; set; } = new();
         }
 
-        private Dictionary<Player, ProbationRecord> _probationRecords = new();
-        private GameObject? _probationOfficerPrefab;
-        private Transform? _probationOfficerInstance;
+        private Dictionary<Player, ParoleRuntimeRecord> _paroleRecords = new();
+        private GameObject? _paroleOfficerPrefab;
+        private Transform? _paroleOfficerInstance;
 
-        public void StartProbation(Player player, float duration = PROBATION_DURATION)
+        /// <summary>
+        /// Start parole supervision for a player
+        /// Creates runtime tracking and initializes RapSheet/LSI integration
+        /// </summary>
+        public void StartParole(Player player, float duration = PAROLE_DURATION)
         {
-            ModLogger.Info($"Starting probation for {player.name} for {duration}s");
-            
-            var record = new ProbationRecord
+            ModLogger.Info($"Starting parole for {player.name} for {duration}s");
+
+            var record = new ParoleRuntimeRecord
             {
                 Player = player,
-                Status = ProbationStatus.Active,
+                Status = ParoleStatus.Active,
                 StartTime = Time.time,
                 Duration = duration,
                 TimeRemaining = duration,
@@ -59,56 +76,104 @@ namespace Behind_Bars.Systems
                 LastSearchTime = 0f,
                 NextSearchTime = Time.time + UnityEngine.Random.Range(SEARCH_INTERVAL_MIN, SEARCH_INTERVAL_MAX)
             };
-            
-            _probationRecords[player] = record;
-            
-            // Start probation monitoring
-            MelonCoroutines.Start(MonitorProbation(record));
-            
-            // Spawn probation officer if not already present
-            if (_probationOfficerInstance == null)
+
+            _paroleRecords[player] = record;
+
+            // Initialize RapSheet ParoleRecord and perform LSI assessment
+            InitializeParoleTracking(player, duration);
+
+            // Start parole monitoring
+            MelonCoroutines.Start(MonitorParole(record));
+
+            // Spawn parole officer if not already present
+            if (_paroleOfficerInstance == null)
             {
-                SpawnProbationOfficer();
+                SpawnParoleOfficer();
             }
         }
 
-        private IEnumerator MonitorProbation(ProbationRecord record)
+        /// <summary>
+        /// Initialize parole tracking in RapSheet system with LSI assessment
+        /// This integrates the ParoleSystem with the RapSheet/LSI tracking
+        /// </summary>
+        private void InitializeParoleTracking(Player player, float duration)
         {
-            ModLogger.Info($"Monitoring probation for {record.Player.name}");
-            
-            while (record.Status == ProbationStatus.Active && record.TimeRemaining > 0)
+            try
+            {
+                // Create or load rap sheet for the player
+                var rapSheet = new RapSheet(player);
+
+                // Try to load existing rap sheet
+                if (!rapSheet.LoadRapSheet())
+                {
+                    ModLogger.Info($"[LSI] No existing rap sheet found for {player.name}, creating new one");
+                    rapSheet.InmateID = rapSheet.GenerateInmateID();
+                }
+
+                // Start parole with initial LSI assessment
+                bool success = rapSheet.StartParoleWithAssessment(duration);
+
+                if (success)
+                {
+                    ModLogger.Info($"[LSI] Parole tracking initialized for {player.name} - LSI Level: {rapSheet.LSILevel}");
+
+                    // Save the updated rap sheet
+                    rapSheet.SaveRapSheet();
+                }
+                else
+                {
+                    ModLogger.Warn($"[LSI] Failed to start parole tracking for {player.name}");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"[LSI] Error initializing parole tracking for {player.name}: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Monitor active parole and conduct periodic searches
+        /// </summary>
+        private IEnumerator MonitorParole(ParoleRuntimeRecord record)
+        {
+            ModLogger.Info($"Monitoring parole for {record.Player.name}");
+
+            while (record.Status == ParoleStatus.Active && record.TimeRemaining > 0)
             {
                 // Update time remaining
                 record.TimeRemaining = Mathf.Max(0, record.Duration - (Time.time - record.StartTime));
-                
+
                 // Check if it's time for a random search
                 if (Time.time >= record.NextSearchTime)
                 {
                     yield return ConductRandomSearch(record);
                 }
-                
-                // Check for probation violations
+
+                // Check for parole violations
                 //yield return CheckForViolations(record);
-                
+
                 yield return new WaitForSeconds(1f);
             }
-            
-            // Probation completed or violated
-            if (record.Status == ProbationStatus.Active)
+
+            // Parole completed or violated
+            if (record.Status == ParoleStatus.Active)
             {
-                CompleteProbation(record);
+                CompleteParole(record);
             }
         }
 
-        private IEnumerator ConductRandomSearch(ProbationRecord record)
+        /// <summary>
+        /// Conduct a random search if parole officer is in range
+        /// </summary>
+        private IEnumerator ConductRandomSearch(ParoleRuntimeRecord record)
         {
             ModLogger.Info($"Conducting random search on {record.Player.name}");
-            
-            // Check if probation officer is close enough
-            if (_probationOfficerInstance != null && record.Player != null)
+
+            // Check if parole officer is close enough
+            if (_paroleOfficerInstance != null && record.Player != null)
             {
-                float distance = Vector3.Distance(_probationOfficerInstance.position, record.Player.transform.position);
-                
+                float distance = Vector3.Distance(_paroleOfficerInstance.position, record.Player.transform.position);
+
                 if (distance <= SEARCH_RADIUS)
                 {
                     // Conduct the search
@@ -116,40 +181,43 @@ namespace Behind_Bars.Systems
                 }
                 else
                 {
-                    ModLogger.Info($"Probation Officer too far from {record.Player.name} for search");
+                    ModLogger.Info($"Parole Officer too far from {record.Player.name} for search");
                 }
             }
-            
+
             // Schedule next search
             record.LastSearchTime = Time.time;
             record.NextSearchTime = Time.time + UnityEngine.Random.Range(SEARCH_INTERVAL_MIN, SEARCH_INTERVAL_MAX);
         }
 
-        private IEnumerator PerformBodySearch(ProbationRecord record)
+        /// <summary>
+        /// Perform body search on parolee
+        /// </summary>
+        private IEnumerator PerformBodySearch(ParoleRuntimeRecord record)
         {
             ModLogger.Info($"Performing body search on {record.Player.name}");
-            
+
             // TODO: Implement actual search mechanics
             // This could involve:
             // 1. Showing search UI
             // 2. Checking player inventory for contraband
             // 3. Applying consequences for violations
             // 4. Recording search results
-            
+
             // Simulate search time
             yield return new WaitForSeconds(2f);
-            
+
             // Check for violations during search
             bool hasViolations = CheckForSearchViolations(record);
-            
+
             if (hasViolations)
             {
                 record.ViolationCount++;
                 record.Violations.Add($"Contraband found during search at {Time.time}");
                 ModLogger.Info($"Search violation found for {record.Player.name}. Total violations: {record.ViolationCount}");
-                
+
                 // Apply violation consequences
-                yield return HandleProbationViolation(record);
+                yield return HandleParoleViolation(record);
             }
             else
             {
@@ -157,16 +225,19 @@ namespace Behind_Bars.Systems
             }
         }
 
-        private bool CheckForSearchViolations(ProbationRecord record)
+        /// <summary>
+        /// Check player inventory for contraband during search
+        /// </summary>
+        private bool CheckForSearchViolations(ParoleRuntimeRecord record)
         {
             bool foundViolations = false;
             var violationDetails = new System.Text.StringBuilder();
-            
+
             if (record.Player?.Inventory == null)
                 return false;
-                
+
             ModLogger.Info($"Checking inventory for contraband items for {record.Player.name}");
-            
+
             try
             {
                 // Get all inventory slots from PlayerInventory instance
@@ -176,7 +247,7 @@ namespace Behind_Bars.Systems
                     ModLogger.Info($"Player {record.Player.name} has no inventory instance");
                     return false;
                 }
-                
+
                 // Inventory checking disabled - use fallback random detection for now
                 return UnityEngine.Random.Range(0f, 1f) < 0.2f; // 20% chance
             }
@@ -187,7 +258,7 @@ namespace Behind_Bars.Systems
                 return UnityEngine.Random.Range(0f, 1f) < 0.2f;
             }
         }
-        
+
         /// <summary>
         /// Check if an item name indicates it's a drug-related item
         /// </summary>
@@ -195,9 +266,9 @@ namespace Behind_Bars.Systems
         {
             if (string.IsNullOrEmpty(itemName))
                 return false;
-                
+
             var name = itemName.ToLower();
-            
+
             return name.Contains("weed") ||
                    name.Contains("cannabis") ||
                    name.Contains("marijuana") ||
@@ -212,7 +283,7 @@ namespace Behind_Bars.Systems
                    name.Contains("narcotic") ||
                    name.Contains("substance");
         }
-        
+
         /// <summary>
         /// Check if an item name indicates it's a weapon
         /// </summary>
@@ -220,9 +291,9 @@ namespace Behind_Bars.Systems
         {
             if (string.IsNullOrEmpty(itemName))
                 return false;
-                
+
             var name = itemName.ToLower();
-            
+
             return name.Contains("gun") ||
                    name.Contains("pistol") ||
                    name.Contains("rifle") ||
@@ -237,52 +308,58 @@ namespace Behind_Bars.Systems
                    name.Contains("hammer") && name.Contains("war"); // war hammer, etc.
         }
 
-        private IEnumerator HandleProbationViolation(ProbationRecord record)
+        /// <summary>
+        /// Handle parole violation consequences
+        /// </summary>
+        private IEnumerator HandleParoleViolation(ParoleRuntimeRecord record)
         {
-            ModLogger.Info($"Handling probation violation for {record.Player.name}");
-            
+            ModLogger.Info($"Handling parole violation for {record.Player.name}");
+
             // Determine violation severity
             if (record.ViolationCount >= 3)
             {
-                // Major violation - revoke probation
-                record.Status = ProbationStatus.Revoked;
-                ModLogger.Info($"Probation revoked for {record.Player.name} due to multiple violations");
-                
-                // TODO: Implement probation revocation consequences
+                // Major violation - revoke parole
+                record.Status = ParoleStatus.Revoked;
+                ModLogger.Info($"Parole revoked for {record.Player.name} due to multiple violations");
+
+                // TODO: Implement parole revocation consequences
                 // This could involve:
                 // 1. Immediate arrest
                 // 2. Extended jail time
                 // 3. Increased fines
                 // 4. Permanent record
-                
-                yield return HandleProbationRevocation(record);
+
+                yield return HandleParoleRevocation(record);
             }
             else
             {
-                // Minor violation - extend probation
+                // Minor violation - extend parole
                 float extension = record.Duration * 0.2f; // 20% extension
                 record.Duration += extension;
                 record.TimeRemaining += extension;
-                
-                ModLogger.Info($"Probation extended for {record.Player.name} by {extension}s due to violation");
-                
+
+                ModLogger.Info($"Parole extended for {record.Player.name} by {extension}s due to violation");
+
                 // TODO: Show violation warning to player
                 yield return new WaitForSeconds(1f);
             }
         }
 
-        private IEnumerator HandleProbationRevocation(ProbationRecord record)
+        /// <summary>
+        /// Handle parole revocation (send back to jail)
+        /// </summary>
+        private IEnumerator HandleParoleRevocation(ParoleRuntimeRecord record)
         {
-            ModLogger.Info($"Handling probation revocation for {record.Player.name}");
-            
+            ModLogger.Info($"Handling parole revocation for {record.Player.name}");
+
             // TODO: Implement revocation consequences
             // This could involve:
-            // 1. Immediate arrest by probation officer
+            // 1. Immediate arrest by parole officer
             // 2. Transfer to jail system
             // 3. Harsher sentencing
-            
+
             yield return new WaitForSeconds(1f);
-            
+
             // Hand off to jail system
             var jailSystem = Core.Instance?.GetJailSystem();
             if (jailSystem != null && record.Player != null)
@@ -291,66 +368,84 @@ namespace Behind_Bars.Systems
             }
         }
 
-        private void CompleteProbation(ProbationRecord record)
+        /// <summary>
+        /// Complete parole successfully
+        /// </summary>
+        private void CompleteParole(ParoleRuntimeRecord record)
         {
-            ModLogger.Info($"Probation completed successfully for {record.Player.name}");
-            
-            record.Status = ProbationStatus.Completed;
+            ModLogger.Info($"Parole completed successfully for {record.Player.name}");
+
+            record.Status = ParoleStatus.Completed;
             record.TimeRemaining = 0f;
-            
-            // TODO: Implement probation completion rewards
+
+            // TODO: Implement parole completion rewards
             // This could involve:
             // 1. Clearing criminal record
             // 2. Restoring full rights
             // 3. Positive reputation boost
             // 4. Achievement unlock
-            
-            // Remove from active probation
-            _probationRecords.Remove(record.Player);
-            
-            // Check if we can despawn probation officer
-            if (_probationRecords.Count == 0)
+
+            // Remove from active parole
+            _paroleRecords.Remove(record.Player);
+
+            // Check if we can despawn parole officer
+            if (_paroleRecords.Count == 0)
             {
-                DespawnProbationOfficer();
+                DespawnParoleOfficer();
             }
         }
 
-        private void SpawnProbationOfficer()
+        /// <summary>
+        /// Spawn parole officer NPC (placeholder)
+        /// </summary>
+        private void SpawnParoleOfficer()
         {
-            ModLogger.Info("Probation Officer NPC spawning removed - feature not implemented");
-            
+            ModLogger.Info("Parole Officer NPC spawning removed - feature not implemented");
+
             // NOTE: NPC spawning functionality has been removed from this mod
-            // The probation system will continue to work without the physical NPC
-            // Players will still be subject to probation rules and violations
+            // The parole system will continue to work without the physical NPC
+            // Players will still be subject to parole rules and violations
         }
 
-        private void DespawnProbationOfficer()
+        /// <summary>
+        /// Despawn parole officer NPC (placeholder)
+        /// </summary>
+        private void DespawnParoleOfficer()
         {
-            ModLogger.Info("Probation Officer NPC despawning removed - feature not implemented");
-            
+            ModLogger.Info("Parole Officer NPC despawning removed - feature not implemented");
+
             // NOTE: NPC despawning functionality has been removed from this mod
             // No cleanup needed as no NPCs are spawned
         }
 
-        public ProbationRecord? GetProbationRecord(Player player)
+        /// <summary>
+        /// Get parole record for player
+        /// </summary>
+        public ParoleRuntimeRecord? GetParoleRecord(Player player)
         {
-            _probationRecords.TryGetValue(player, out var record);
+            _paroleRecords.TryGetValue(player, out var record);
             return record;
         }
 
-        public bool IsPlayerOnProbation(Player player)
+        /// <summary>
+        /// Check if player is currently on active parole
+        /// </summary>
+        public bool IsPlayerOnParole(Player player)
         {
-            return _probationRecords.ContainsKey(player) && 
-                   _probationRecords[player].Status == ProbationStatus.Active;
+            return _paroleRecords.ContainsKey(player) &&
+                   _paroleRecords[player].Status == ParoleStatus.Active;
         }
 
-        public void ExtendProbation(Player player, float additionalTime)
+        /// <summary>
+        /// Extend parole duration for a player
+        /// </summary>
+        public void ExtendParole(Player player, float additionalTime)
         {
-            if (_probationRecords.TryGetValue(player, out var record))
+            if (_paroleRecords.TryGetValue(player, out var record))
             {
                 record.Duration += additionalTime;
                 record.TimeRemaining += additionalTime;
-                ModLogger.Info($"Extended probation for {player.name} by {additionalTime}s");
+                ModLogger.Info($"Extended parole for {player.name} by {additionalTime}s");
             }
         }
     }

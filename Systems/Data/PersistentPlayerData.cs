@@ -16,6 +16,57 @@ using ScheduleOne.ItemFramework;
 namespace Behind_Bars.Systems.Data
 {
     /// <summary>
+    /// Custom JSON converter for Unity Vector3 to avoid circular reference issues
+    /// Serializes Vector3 as a simple object with x, y, z properties
+    /// </summary>
+    public class Vector3JsonConverter : JsonConverter<Vector3>
+    {
+        public override void WriteJson(JsonWriter writer, Vector3 value, JsonSerializer serializer)
+        {
+            writer.WriteStartObject();
+            writer.WritePropertyName("x");
+            writer.WriteValue(value.x);
+            writer.WritePropertyName("y");
+            writer.WriteValue(value.y);
+            writer.WritePropertyName("z");
+            writer.WriteValue(value.z);
+            writer.WriteEndObject();
+        }
+
+        public override Vector3 ReadJson(JsonReader reader, Type objectType, Vector3 existingValue, bool hasExistingValue, JsonSerializer serializer)
+        {
+            float x = 0, y = 0, z = 0;
+
+            while (reader.Read())
+            {
+                if (reader.TokenType == JsonToken.EndObject)
+                    break;
+
+                if (reader.TokenType == JsonToken.PropertyName)
+                {
+                    string propertyName = reader.Value.ToString();
+                    reader.Read();
+
+                    switch (propertyName)
+                    {
+                        case "x":
+                            x = Convert.ToSingle(reader.Value);
+                            break;
+                        case "y":
+                            y = Convert.ToSingle(reader.Value);
+                            break;
+                        case "z":
+                            z = Convert.ToSingle(reader.Value);
+                            break;
+                    }
+                }
+            }
+
+            return new Vector3(x, y, z);
+        }
+    }
+
+    /// <summary>
     /// Handles persistent storage of player data across saves and sessions
     /// Stores inventory snapshots, crime data, and arrest metadata
     /// </summary>
@@ -905,7 +956,17 @@ namespace Behind_Bars.Systems.Data
             try
             {
                 gameData.lastSaveTime = DateTime.Now;
-                string jsonData = JsonConvert.SerializeObject(gameData, Formatting.Indented);
+
+                var settings = new JsonSerializerSettings
+                {
+                    Formatting = Formatting.Indented,
+                    ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
+                    MaxDepth = 10,
+                    NullValueHandling = NullValueHandling.Ignore,
+                    Converters = new List<JsonConverter> { new Vector3JsonConverter() }
+                };
+
+                string jsonData = JsonConvert.SerializeObject(gameData, settings);
                 PlayerPrefs.SetString(SAVE_KEY, jsonData);
                 PlayerPrefs.Save();
 
@@ -926,7 +987,15 @@ namespace Behind_Bars.Systems.Data
                     string jsonData = PlayerPrefs.GetString(SAVE_KEY);
                     if (!string.IsNullOrEmpty(jsonData))
                     {
-                        gameData = JsonConvert.DeserializeObject<PersistentGameData>(jsonData);
+                        var settings = new JsonSerializerSettings
+                        {
+                            ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
+                            MaxDepth = 10,
+                            NullValueHandling = NullValueHandling.Ignore,
+                            Converters = new List<JsonConverter> { new Vector3JsonConverter() }
+                        };
+
+                        gameData = JsonConvert.DeserializeObject<PersistentGameData>(jsonData, settings);
                         if (gameData == null)
                         {
                             gameData = new PersistentGameData();

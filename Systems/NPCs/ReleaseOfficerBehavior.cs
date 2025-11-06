@@ -563,6 +563,9 @@ namespace Behind_Bars.Systems.NPCs
             // Update dialogue state
             UpdateDialogueForState(newState);
 
+            // Update officer command notification
+            UpdateOfficerCommandNotification(newState);
+
             // Handle state entry logic
             OnStateEnter(newState);
         }
@@ -595,6 +598,92 @@ namespace Behind_Bars.Systems.NPCs
             };
 
             dialogueController.UpdateGreetingForState(dialogueState);
+        }
+
+        /// <summary>
+        /// Update officer command notification based on current state
+        /// </summary>
+        private void UpdateOfficerCommandNotification(ReleaseState state)
+        {
+            // Check if we should show a command notification for this state
+            if (!ShouldShowCommandNotification(state))
+            {
+                return;
+            }
+
+            try
+            {
+                var commandData = GetCommandDataForState(state);
+                if (commandData != null)
+                {
+                    BehindBarsUIManager.Instance?.UpdateOfficerCommand(commandData);
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"ReleaseOfficer {badgeNumber}: Error updating command notification: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Determine if this state should display a command notification
+        /// </summary>
+        private bool ShouldShowCommandNotification(ReleaseState state)
+        {
+            return state switch
+            {
+                ReleaseState.EscortingToStorage => true,
+                ReleaseState.WaitingAtStorage => true,
+                ReleaseState.EscortingToExitScanner => true,
+                ReleaseState.WaitingForExitScan => true,
+                _ => false
+            };
+        }
+
+        /// <summary>
+        /// Get command data for the current state
+        /// </summary>
+        private OfficerCommandData? GetCommandDataForState(ReleaseState state)
+        {
+            return state switch
+            {
+                ReleaseState.EscortingToStorage => new OfficerCommandData(
+                    "RELEASE OFFICER",
+                    "Follow me to storage",
+                    1, 3, true),
+
+                ReleaseState.WaitingAtStorage => new OfficerCommandData(
+                    "RELEASE OFFICER",
+                    "Collect your personal items",
+                    2, 3, false),
+
+                ReleaseState.EscortingToExitScanner => new OfficerCommandData(
+                    "RELEASE OFFICER",
+                    "Follow me to the exit scanner",
+                    3, 3, true),
+
+                ReleaseState.WaitingForExitScan => new OfficerCommandData(
+                    "RELEASE OFFICER",
+                    "Complete your exit scan to be released",
+                    3, 3, false),
+
+                _ => null
+            };
+        }
+
+        /// <summary>
+        /// Hide officer command notification
+        /// </summary>
+        private void HideOfficerCommandNotification()
+        {
+            try
+            {
+                BehindBarsUIManager.Instance?.HideOfficerCommand();
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"ReleaseOfficer {badgeNumber}: Error hiding command notification: {ex.Message}");
+            }
         }
 
         private void OnStateEnter(ReleaseState state)
@@ -648,12 +737,14 @@ namespace Behind_Bars.Systems.NPCs
 
                 case ReleaseState.ProcessingExit:
                     PlayVoiceCommand("You're free to go.", "AtExit");
+                    HideOfficerCommandNotification();
                     StartContinuousPlayerLooking();
                     break;
 
                 case ReleaseState.ReturningToPost:
                     // Start tracking return journey time for proactive releases
                     returnJourneyStartTime = Time.time;
+                    HideOfficerCommandNotification();
                     ReturnToPost();
                     break;
             }

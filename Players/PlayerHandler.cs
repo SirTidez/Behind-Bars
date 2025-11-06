@@ -21,7 +21,7 @@ namespace Behind_Bars.Players
         public DateTime LastArrestTime { get; private set; }
         public int ArrestCount { get; private set; } = 0;
         public bool IsCurrentlyArrested { get; private set; } = false;
-        public bool IsOnProbation { get; private set; } = false;
+        public bool IsOnParole { get; private set; } = false;
         
         // Criminal record tracking
         public List<CriminalRecord> CriminalHistory { get; private set; } = new();
@@ -97,13 +97,13 @@ namespace Behind_Bars.Players
                 TotalFinesPaid += finePaid;
                 ModLogger.Info($"Total fines paid by {Player.name}: ${TotalFinesPaid:F0}");
             }
-            
-            // Check if probation should be started
-            if (ShouldStartProbation())
+
+            // Check if parole should be started
+            if (ShouldStartParole())
             {
-                StartProbation();
+                StartParole();
             }
-            
+
             // Update the most recent criminal record
             if (CriminalHistory.Count > 0)
             {
@@ -133,21 +133,21 @@ namespace Behind_Bars.Players
                 latestRecord.ReleasedOnBail = true;
             }
             
-            // Check if probation should be started
-            if (ShouldStartProbation())
+            // Check if parole should be started
+            if (ShouldStartParole())
             {
-                StartProbation();
+                StartParole();
             }
         }
 
-        private bool ShouldStartProbation()
+        private bool ShouldStartParole()
         {
-            // Start probation if:
+            // Start parole if:
             // 1. Player has been arrested multiple times
             // 2. Recent arrests were for serious crimes
-            // 3. Player is not already on probation
-            
-            if (IsOnProbation) return false;
+            // 3. Player is not already on parole
+
+            if (IsOnParole) return false;
             if (ArrestCount < 2) return false;
             
             // Check recent criminal history for serious offenses
@@ -157,36 +157,36 @@ namespace Behind_Bars.Players
             
             if (recentArrests.Count >= 2)
             {
-                ModLogger.Info($"Player {Player?.name} qualifies for probation due to {recentArrests.Count} recent arrests");
+                ModLogger.Info($"Player {Player?.name} qualifies for parole due to {recentArrests.Count} recent arrests");
                 return true;
             }
             
             return false;
         }
 
-        private void StartProbation()
+        private void StartParole()
         {
-            if (Player == null || IsOnProbation) return;
-            
-            ModLogger.Info($"Starting probation for {Player.name}");
-            
-            IsOnProbation = true;
-            
-            // Get probation system and start probation
-            var probationSystem = Core.Instance?.GetProbationSystem();
-            if (probationSystem != null)
+            if (Player == null || IsOnParole) return;
+
+            ModLogger.Info($"Starting parole for {Player.name}");
+
+            IsOnParole = true;
+
+            // Get parole system and start parole
+            var paroleSystem = Core.Instance?.GetParoleSystem();
+            if (paroleSystem != null)
             {
-                // Calculate probation duration based on criminal history
-                float probationDuration = CalculateProbationDuration();
-                probationSystem.StartProbation(Player, probationDuration);
-                
-                ModLogger.Info($"Probation started for {Player.name} - duration: {probationDuration}s");
+                // Calculate parole duration based on criminal history
+                float paroleDuration = CalculateParoleDuration();
+                paroleSystem.StartParole(Player, paroleDuration);
+
+                ModLogger.Info($"Parole started for {Player.name} - duration: {paroleDuration}s");
             }
         }
 
-        private float CalculateProbationDuration()
+        private float CalculateParoleDuration()
         {
-            // Base probation duration
+            // Base parole duration
             float baseDuration = 300f; // 5 minutes
             
             // Increase based on arrest count
@@ -205,16 +205,16 @@ namespace Behind_Bars.Players
             return Mathf.Min(finalDuration, 1800f); // Max 30 minutes
         }
 
-        public void OnProbationCompleted()
+        public void OnParoleCompleted()
         {
-            ModLogger.Info($"Probation completed for {Player?.name}");
-            IsOnProbation = false;
+            ModLogger.Info($"Parole completed for {Player?.name}");
+            IsOnParole = false;
         }
 
-        public void OnProbationViolation()
+        public void OnParoleViolation()
         {
-            ModLogger.Info($"Probation violation for {Player?.name}");
-            // Probation system will handle the consequences
+            ModLogger.Info($"Parole violation for {Player?.name}");
+            // Parole system will handle the consequences
         }
 
         public CriminalRecord? GetLatestCriminalRecord()

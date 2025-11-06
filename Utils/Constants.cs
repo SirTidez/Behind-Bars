@@ -9,7 +9,7 @@ namespace Behind_Bars.Helpers
         public const string MOD_NAME = "Behind Bars";
         public const string MOD_AUTHOR = "SirTidez";
         public const string MOD_VERSION = "1.0.0";
-        public const string MOD_DESCRIPTION = "Expands the after-arrest experience in Schedule I with jail, bail, court, and probation systems";
+        public const string MOD_DESCRIPTION = "Expands the after-arrest experience in Schedule I with jail, bail, court, and parole systems";
 
         /// <summary>
         /// MelonPreferences configuration
@@ -36,9 +36,9 @@ namespace Behind_Bars.Helpers
         public const float MIN_NEGOTIATION_AMOUNT = 0.5f;
         
         /// <summary>
-        /// Probation system constants
+        /// Parole system constants
         /// </summary>
-        public const float DEFAULT_PROBATION_DURATION = 600f;
+        public const float DEFAULT_PAROLE_DURATION = 600f;
         public const float DEFAULT_SEARCH_INTERVAL_MIN = 30f;
         public const float DEFAULT_SEARCH_INTERVAL_MAX = 120f;
         public const float DEFAULT_SEARCH_RADIUS = 50f;

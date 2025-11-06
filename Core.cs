@@ -64,7 +64,7 @@ namespace Behind_Bars
         private JailSystem? _jailSystem;
         private BailSystem? _bailSystem;
         private CourtSystem? _courtSystem;
-        private ProbationSystem? _probationSystem;
+        private ParoleSystem? _paroleSystem;
         private FileUtilities _fileUtilities;
 
         // Player management
@@ -83,7 +83,7 @@ namespace Behind_Bars
         public JailSystem? JailSystem => _jailSystem;
         public BailSystem? BailSystem => _bailSystem;
         public CourtSystem? CourtSystem => _courtSystem;
-        public ProbationSystem? ProbationSystem => _probationSystem;
+        public ParoleSystem? ParoleSystem => _paroleSystem;
         public FileUtilities FileUtilities => _fileUtilities;
 
         public override void OnInitializeMelon()
@@ -137,6 +137,7 @@ namespace Behind_Bars
             // Register UI Components
             ClassInjector.RegisterTypeInIl2Cpp<BehindBarsUIWrapper>();
             ClassInjector.RegisterTypeInIl2Cpp<WantedLevelUI>();
+            ClassInjector.RegisterTypeInIl2Cpp<OfficerCommandUI>();
 
             // Register Booking System Components
             ClassInjector.RegisterTypeInIl2Cpp<BookingProcess>();
@@ -178,7 +179,7 @@ namespace Behind_Bars
             // Initialize crime detection UI
             CrimeUIManager.Instance.Initialize();
             _courtSystem = new CourtSystem();
-            _probationSystem = new ProbationSystem();
+            _paroleSystem = new ParoleSystem();
             FileUtilities.Initialize();
             _fileUtilities = FileUtilities.Instance;
 
@@ -915,7 +916,7 @@ namespace Behind_Bars
         public JailSystem GetJailSystem() => _jailSystem!;
         public BailSystem GetBailSystem() => _bailSystem!;
         public CourtSystem GetCourtSystem() => _courtSystem!;
-        public ProbationSystem GetProbationSystem() => _probationSystem!;
+        public ParoleSystem GetParoleSystem() => _paroleSystem!;
 
         public void TestToiletSinkSystem()
         {

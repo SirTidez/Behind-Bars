@@ -273,7 +273,7 @@ namespace Behind_Bars.Systems.NPCs
             switch (currentActivity)
             {
                 case ParoleOfficerActivity.Patrolling:
-                    PlayGuardVoiceCommand(JailNPCAudioController.GuardCommandType.CellCheck, "Cell check in progress.");
+                    PlayGuardVoiceCommand(JailNPCAudioController.GuardCommandType.CellCheck, "Move along.");
                     break;
 
                 case ParoleOfficerActivity.ProcessingIntake:
