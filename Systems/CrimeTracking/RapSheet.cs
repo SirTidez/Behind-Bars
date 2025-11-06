@@ -3,6 +3,7 @@ using Behind_Bars.Utils;
 using JetBrains.Annotations;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 using Newtonsoft.Json;
 using UnityEngine;
@@ -477,8 +478,58 @@ namespace Behind_Bars.Systems.CrimeTracking
 
             try
             {
-                // Deserialize the JSON into the RapSheet object
+                // Temporarily store CurrentParoleRecord to handle it separately
+                ParoleRecord existingParoleRecord = CurrentParoleRecord;
+                CurrentParoleRecord = null; // Clear it to avoid deserialization issues
+
+                // Deserialize the JSON into the RapSheet object (without CurrentParoleRecord)
                 JsonConvert.PopulateObject(json, this, settings);
+
+                // Handle CurrentParoleRecord deserialization separately
+                // Parse JSON to check if CurrentParoleRecord exists
+                try
+                {
+                    var jsonObject = Newtonsoft.Json.Linq.JObject.Parse(json);
+                    if (jsonObject["currentParoleRecord"] != null)
+                    {
+                        // Extract the CurrentParoleRecord JSON
+                        var paroleRecordJson = jsonObject["currentParoleRecord"].ToString();
+                        var paroleSettings = new JsonSerializerSettings
+                        {
+                            MissingMemberHandling = MissingMemberHandling.Ignore,
+                            NullValueHandling = NullValueHandling.Ignore
+                        };
+                        
+                        // Deserialize using parameterless constructor (for JSON deserialization)
+                        CurrentParoleRecord = JsonConvert.DeserializeObject<ParoleRecord>(paroleRecordJson, paroleSettings);
+                        
+                        // Set the player reference after deserialization
+                        if (CurrentParoleRecord != null)
+                        {
+                            CurrentParoleRecord.SetPlayer(Player);
+                            ModLogger.Debug($"Successfully loaded CurrentParoleRecord from rap sheet JSON for {Player.name}");
+                        }
+                    }
+                    else
+                    {
+                        // No CurrentParoleRecord in JSON - create new one (it will load from its own file)
+                        CurrentParoleRecord = new ParoleRecord(Player);
+                    }
+                }
+                catch (Exception paroleEx)
+                {
+                    ModLogger.Warn($"Failed to deserialize CurrentParoleRecord from rap sheet JSON for {Player.name}: {paroleEx.Message}. Will use separate file if available.");
+                    // If deserialization fails, create a new ParoleRecord (it will load from its own file)
+                    try
+                    {
+                        CurrentParoleRecord = new ParoleRecord(Player);
+                    }
+                    catch (Exception createEx)
+                    {
+                        ModLogger.Error($"Failed to create ParoleRecord for {Player.name}: {createEx.Message}");
+                        CurrentParoleRecord = null;
+                    }
+                }
 
                 // Ensure collections are initialized
                 if (CrimesCommited == null)
@@ -492,7 +543,52 @@ namespace Behind_Bars.Systems.CrimeTracking
             }
             catch (Exception ex)
             {
-                ModLogger.Error($"Error deserializing rap sheet: {ex.Message}");
+                // Log detailed error information including inner exceptions
+                string errorDetails = $"Error deserializing rap sheet for {Player.name}: {ex.GetType().Name} - {ex.Message}";
+                
+                if (ex.InnerException != null)
+                {
+                    errorDetails += $"\n  Inner Exception: {ex.InnerException.GetType().Name} - {ex.InnerException.Message}";
+                    if (ex.InnerException.StackTrace != null)
+                    {
+                        // Limit stack trace to first few lines to avoid log spam
+                        string[] stackLines = ex.InnerException.StackTrace.Split('\n');
+                        string shortStackTrace = string.Join("\n  ", stackLines.Take(5));
+                        errorDetails += $"\n  Inner Stack Trace (first 5 lines):\n  {shortStackTrace}";
+                    }
+                }
+                
+                if (ex.StackTrace != null)
+                {
+                    // Limit stack trace to first few lines
+                    string[] stackLines = ex.StackTrace.Split('\n');
+                    string shortStackTrace = string.Join("\n  ", stackLines.Take(5));
+                    errorDetails += $"\n  Stack Trace (first 5 lines):\n  {shortStackTrace}";
+                }
+
+                // Log JSON snippet for debugging (first 500 chars)
+                if (!string.IsNullOrEmpty(json) && json.Length > 0)
+                {
+                    string jsonPreview = json.Length > 500 ? json.Substring(0, 500) + "..." : json;
+                    errorDetails += $"\n  JSON Preview (first 500 chars): {jsonPreview}";
+                }
+
+                ModLogger.Error(errorDetails);
+                
+                // Try to recover by initializing empty collections
+                try
+                {
+                    if (CrimesCommited == null)
+                        CrimesCommited = new List<CrimeInstance>();
+                    if (PastParoleRecords == null)
+                        PastParoleRecords = new List<ParoleRecord>();
+                    ModLogger.Info($"Initialized empty collections for {Player.name} after deserialization error");
+                }
+                catch (Exception recoveryEx)
+                {
+                    ModLogger.Error($"Failed to recover from deserialization error: {recoveryEx.Message}");
+                }
+                
                 return false;
             }
         }

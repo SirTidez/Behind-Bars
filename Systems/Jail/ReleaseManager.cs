@@ -781,9 +781,9 @@ namespace Behind_Bars.Systems.Jail
             {
                 ModLogger.Info($"[PAROLE] === Starting Parole for Released Player: {player.name} ===");
 
-                // Load player's rap sheet to determine parole term
-                var rapSheet = new RapSheet(player);
-                bool rapSheetLoaded = rapSheet.LoadRapSheet();
+                // Get cached rap sheet (loads from file only once)
+                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                bool rapSheetLoaded = rapSheet != null;
 
                 if (!rapSheetLoaded)
                 {
@@ -798,7 +798,10 @@ namespace Behind_Bars.Systems.Jail
                 float gameDays = gameHours / 24f;
 
                 ModLogger.Info($"[PAROLE] Calculated parole duration: {paroleDuration}s ({paroleDuration / 60f:F1} real minutes / {gameDays:F1} game days)");
-                ModLogger.Info($"[PAROLE] Crime count: {rapSheet.GetCrimeCount()}, LSI Level: {rapSheet.LSILevel}");
+                if (rapSheet != null)
+                {
+                    ModLogger.Info($"[PAROLE] Crime count: {rapSheet.GetCrimeCount()}, LSI Level: {rapSheet.LSILevel}");
+                }
 
                 // Start parole through ParoleSystem
                 var paroleSystem = Core.Instance?.ParoleSystem;

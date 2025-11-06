@@ -100,14 +100,12 @@ namespace Behind_Bars.Systems
         {
             try
             {
-                // Create or load rap sheet for the player
-                var rapSheet = new RapSheet(player);
-
-                // Try to load existing rap sheet
-                if (!rapSheet.LoadRapSheet())
+                // Get cached rap sheet (loads from file only once)
+                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                if (rapSheet == null)
                 {
-                    ModLogger.Info($"[LSI] No existing rap sheet found for {player.name}, creating new one");
-                    rapSheet.InmateID = rapSheet.GenerateInmateID();
+                    ModLogger.Warn($"[LSI] Failed to get rap sheet for {player.name}");
+                    return;
                 }
 
                 // Start parole with initial LSI assessment
@@ -117,8 +115,8 @@ namespace Behind_Bars.Systems
                 {
                     ModLogger.Info($"[LSI] Parole tracking initialized for {player.name} - LSI Level: {rapSheet.LSILevel}");
 
-                    // Save the updated rap sheet
-                    rapSheet.SaveRapSheet();
+                    // Save the updated rap sheet and invalidate cache
+                    RapSheetManager.Instance.SaveRapSheet(player, invalidateCache: true);
                 }
                 else
                 {

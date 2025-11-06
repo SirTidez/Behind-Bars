@@ -3,6 +3,7 @@ using Behind_Bars.Helpers;
 using Behind_Bars.Utils;
 using Behind_Bars.Systems;
 using Behind_Bars.Systems.Jail;
+using Behind_Bars.Systems.CrimeTracking;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine.UI;
@@ -54,6 +55,9 @@ namespace Behind_Bars.UI
                 
                 // Load UI prefab from asset bundle
                 LoadUIPrefab();
+                
+                // Initialize parole status UI
+                InitializeParoleStatusUI();
                 
                 _isInitialized = true;
                 ModLogger.Info("✓ BehindBarsUIManager initialized successfully");
@@ -406,6 +410,12 @@ namespace Behind_Bars.UI
         private GameObject? _officerCommandManager;
         private OfficerCommandUI? _officerCommandUI;
         private OfficerCommandData? _currentCommand;
+
+        // === PAROLE STATUS SYSTEM ===
+
+        private GameObject? _paroleStatusManager;
+        private ParoleStatusUI? _paroleStatusUI;
+        private Coroutine? _paroleStatusUpdateCoroutine;
         
         /// <summary>
         /// Show a booking notification to the player
@@ -771,6 +781,277 @@ namespace Behind_Bars.UI
             catch (System.Exception ex)
             {
                 ModLogger.Error($"Error creating officer command UI: {ex.Message}");
+            }
+        }
+
+        // === PAROLE STATUS SYSTEM ===
+
+        /// <summary>
+        /// Initialize parole status UI
+        /// </summary>
+        public void InitializeParoleStatusUI()
+        {
+            try
+            {
+                if (_paroleStatusUI == null)
+                {
+                    CreateParoleStatusUI();
+                }
+
+                if (_paroleStatusUI != null && _paroleStatusUpdateCoroutine == null)
+                {
+                    // Start update coroutine
+                    _paroleStatusUpdateCoroutine = MelonLoader.MelonCoroutines.Start(UpdateParoleStatusCoroutine()) as Coroutine;
+                    ModLogger.Info("Parole status UI update coroutine started");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error initializing parole status UI: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Create the parole status UI component
+        /// </summary>
+        private void CreateParoleStatusUI()
+        {
+            try
+            {
+                // Create a persistent manager object
+                _paroleStatusManager = new GameObject("ParoleStatusManager");
+                GameObject.DontDestroyOnLoad(_paroleStatusManager);
+
+                // Add the ParoleStatusUI component
+#if !MONO
+                // IL2CPP-safe component addition
+                var componentType = Il2CppInterop.Runtime.Il2CppType.Of<ParoleStatusUI>();
+                var component = _paroleStatusManager.AddComponent(componentType);
+                _paroleStatusUI = component.Cast<ParoleStatusUI>();
+#else
+                _paroleStatusUI = _paroleStatusManager.AddComponent<ParoleStatusUI>();
+#endif
+
+                // Manually initialize the UI immediately
+                if (_paroleStatusUI != null)
+                {
+                    _paroleStatusUI.CreateUI();
+                    ModLogger.Info("ParoleStatusUI CreateUI() called manually");
+                }
+
+                ModLogger.Info("ParoleStatusUI manager initialized successfully");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error creating parole status UI: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Show parole status UI
+        /// </summary>
+        public void ShowParoleStatus()
+        {
+            try
+            {
+                if (_paroleStatusUI == null)
+                {
+                    CreateParoleStatusUI();
+                }
+
+                if (_paroleStatusUI == null)
+                {
+                    ModLogger.Error("Failed to create parole status UI");
+                    return;
+                }
+
+                var statusData = GetParoleStatusData();
+                if (statusData != null && statusData.IsOnParole)
+                {
+                    _paroleStatusUI.Show(statusData);
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error showing parole status: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Hide parole status UI
+        /// </summary>
+        public void HideParoleStatus()
+        {
+            try
+            {
+                if (_paroleStatusUI != null)
+                {
+                    _paroleStatusUI.Hide();
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error hiding parole status: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Update parole status UI
+        /// </summary>
+        public void UpdateParoleStatus()
+        {
+            try
+            {
+                if (_paroleStatusUI == null)
+                {
+                    return;
+                }
+
+                var statusData = GetParoleStatusData();
+                if (statusData != null)
+                {
+                    if (statusData.IsOnParole)
+                    {
+                        _paroleStatusUI.UpdateStatus(statusData);
+                    }
+                    else
+                    {
+                        _paroleStatusUI.Hide();
+                    }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error updating parole status: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Get parole status data for current player
+        /// </summary>
+        private ParoleStatusData? GetParoleStatusData()
+        {
+            try
+            {
+#if !MONO
+                var player = Il2CppScheduleOne.PlayerScripts.Player.Local;
+#else
+                var player = ScheduleOne.PlayerScripts.Player.Local;
+#endif
+                if (player == null)
+                {
+                    return null;
+                }
+
+                // Get cached rap sheet (loads from file only once)
+                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                if (rapSheet == null)
+                {
+                    // No rap sheet available - player is not on parole
+                    return new ParoleStatusData { IsOnParole = false };
+                }
+
+                var paroleRecord = rapSheet.CurrentParoleRecord;
+                if (paroleRecord == null || !paroleRecord.IsOnParole())
+                {
+                    return new ParoleStatusData { IsOnParole = false };
+                }
+
+                var (isParole, remainingTime) = paroleRecord.GetParoleStatus();
+                var searchProbability = rapSheet.GetSearchProbability();
+                var searchPercent = Mathf.RoundToInt(searchProbability * 100f);
+
+                return new ParoleStatusData
+                {
+                    IsOnParole = true,
+                    TimeRemaining = remainingTime,
+                    TimeRemainingFormatted = FormatTimeRemaining(remainingTime),
+                    SupervisionLevel = rapSheet.LSILevel,
+                    SearchProbabilityPercent = searchPercent,
+                    ViolationCount = paroleRecord.GetViolationCount()
+                };
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error getting parole status data: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Format time remaining in a human-readable format
+        /// </summary>
+        private string FormatTimeRemaining(float seconds)
+        {
+            if (seconds <= 0)
+            {
+                return "Expired";
+            }
+
+            int days = Mathf.FloorToInt(seconds / 86400);
+            int hours = Mathf.FloorToInt((seconds % 86400) / 3600);
+            int minutes = Mathf.FloorToInt((seconds % 3600) / 60);
+
+            if (days > 0)
+            {
+                return $"{days}d {hours}h {minutes}m";
+            }
+            else if (hours > 0)
+            {
+                return $"{hours}h {minutes}m";
+            }
+            else
+            {
+                return $"{minutes}m";
+            }
+        }
+
+        /// <summary>
+        /// Coroutine to periodically update parole status
+        /// </summary>
+        private IEnumerator UpdateParoleStatusCoroutine()
+        {
+            while (true)
+            {
+                yield return new WaitForSeconds(1f); // Update every second
+
+                try
+                {
+                    var statusData = GetParoleStatusData();
+                    if (statusData != null)
+                    {
+                        if (statusData.IsOnParole)
+                        {
+                            if (_paroleStatusUI == null)
+                            {
+                                CreateParoleStatusUI();
+                            }
+
+                            if (_paroleStatusUI != null)
+                            {
+                                if (!_paroleStatusUI.IsVisible())
+                                {
+                                    _paroleStatusUI.Show(statusData);
+                                }
+                                else
+                                {
+                                    _paroleStatusUI.UpdateStatus(statusData);
+                                }
+                            }
+                        }
+                        else
+                        {
+                            if (_paroleStatusUI != null && _paroleStatusUI.IsVisible())
+                            {
+                                _paroleStatusUI.Hide();
+                            }
+                        }
+                    }
+                }
+                catch (System.Exception ex)
+                {
+                    ModLogger.Error($"Error in parole status update coroutine: {ex.Message}");
+                }
             }
         }
     }

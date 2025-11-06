@@ -464,19 +464,12 @@ namespace Behind_Bars.Harmony
                     ModLogger.Info($"[RAP SHEET] CrimeDetectionSystem found {activeCrimes?.Count ?? 0} active crimes");
                 }
                 
-                // Create or load rap sheet for the player
-                var rapSheet = new RapSheet(player);
-                
-                // Try to load existing rap sheet
-                if (!rapSheet.LoadRapSheet())
+                // Get cached rap sheet (loads from file only once)
+                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                if (rapSheet == null)
                 {
-                    ModLogger.Info($"[RAP SHEET] No existing rap sheet found for {player.name}, creating new one");
-                    // Initialize new rap sheet
-                    rapSheet.InmateID = rapSheet.GenerateInmateID();
-                    if (rapSheet.CrimesCommited == null)
-                        rapSheet.CrimesCommited = new List<CrimeInstance>();
-                    if (rapSheet.PastParoleRecords == null)
-                        rapSheet.PastParoleRecords = new List<ParoleRecord>();
+                    ModLogger.Warn($"[RAP SHEET] Failed to get rap sheet for {player.name}");
+                    return;
                 }
                 
                 // Add active crimes from CrimeDetectionSystem to rap sheet
@@ -522,9 +515,10 @@ namespace Behind_Bars.Harmony
                 ModLogger.Info($"[RAP SHEET] Current LSI Level: {rapSheet.LSILevel}");
                 ModLogger.Info($"[RAP SHEET] Last LSI Assessment: {rapSheet.LastLSIAssessment}");
 
+                // Save the rap sheet and invalidate cache
                 // Note: SaveRapSheet is called within UpdateLSILevel during each AddCrime
                 // This final save ensures consistency in case of any edge cases
-                if (rapSheet.SaveRapSheet())
+                if (RapSheetManager.Instance.SaveRapSheet(player, invalidateCache: true))
                 {
                     ModLogger.Info($"[RAP SHEET] ✓ Final rap sheet save successful");
                 }

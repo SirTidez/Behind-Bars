@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
@@ -6,6 +6,7 @@ using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.Jail;
+using Behind_Bars.UI;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -56,7 +57,8 @@ namespace Behind_Bars.Systems.NPCs
             ProcessingIntake,
             EscortingParolee,
             MonitoringArea,
-            RespondingToIncident
+            RespondingToIncident,
+            SearchingParolee
         }
 
         [System.Serializable]
@@ -100,6 +102,10 @@ namespace Behind_Bars.Systems.NPCs
         private int currentPatrolIndex = 0;
         private float lastPatrolTime = 0f;
         private bool isOnDuty = true;
+
+        // Search system integration
+        private float lastSearchCheckTime = 0f;
+        private const float SEARCH_CHECK_INTERVAL = 5f; // Check for search opportunities every 5 seconds
 
         #endregion
 
@@ -292,6 +298,10 @@ namespace Behind_Bars.Systems.NPCs
                     PlayGuardVoiceCommand(JailNPCAudioController.GuardCommandType.AllClear, "Area secure.");
                     break;
 
+                case ParoleOfficerActivity.SearchingParolee:
+                    PlayGuardVoiceCommand(JailNPCAudioController.GuardCommandType.Stop, "Parole compliance check.");
+                    break;
+
                 default:
                     PlayGuardVoiceCommand(JailNPCAudioController.GuardCommandType.Greeting, "Guard on duty.");
                     break;
@@ -304,17 +314,17 @@ namespace Behind_Bars.Systems.NPCs
             {
                 case ParoleOfficerRole.SupervisingOfficer:
                     // TODO: Implement police station enter/exit logic for supervising officer. Officer should remain at station entrance and handle intake processing.
-                    currentActivity = ParoleOfficerActivity.MonitoringArea;
+                    ChangeParoleActivity(ParoleOfficerActivity.MonitoringArea);
                     ModLogger.Info($"Guard {badgeNumber} set as supervising officer at {assignment}");
                     break;
                 case ParoleOfficerRole.PatrolOfficer:
-                    currentActivity = ParoleOfficerActivity.Patrolling;
+                    ChangeParoleActivity(ParoleOfficerActivity.Patrolling);
                     string routeName = AssignmentToRouteMap.ContainsKey(assignment) ? AssignmentToRouteMap[assignment] : "unknown";
                     ModLogger.Info($"Guard {badgeNumber} assigned to patrol {assignment} on route {routeName}");
                     StartPatrol();
                     break;
                 default:
-                    currentActivity = ParoleOfficerActivity.MonitoringArea;
+                    ChangeParoleActivity(ParoleOfficerActivity.MonitoringArea);
                     break;
             }
         }
@@ -424,6 +434,9 @@ namespace Behind_Bars.Systems.NPCs
                 case ParoleOfficerActivity.ProcessingIntake:
                     // Intake processing is handled by coroutines
                     break;
+                case ParoleOfficerActivity.SearchingParolee:
+                    // Search processing is handled by coroutines
+                    break;
             }
         }
 
@@ -436,6 +449,9 @@ namespace Behind_Bars.Systems.NPCs
             {
                 CheckParoleeCompliance();
             }
+
+            // Update command notification during movement
+            UpdateOfficerCommandNotification(currentActivity);
         }
 
         protected override void HandleWorkingState()
@@ -444,10 +460,12 @@ namespace Behind_Bars.Systems.NPCs
             {
                 case ParoleOfficerActivity.ProcessingIntake:
                     // Intake processing is handled by coroutines
+                    // Notifications are handled by IntakeOfficerStateMachine
                     break;
                 // Escort the new parolee to the intake processing area
                 case ParoleOfficerActivity.EscortingParolee:
                     HandleEscortLogic();
+                    UpdateOfficerCommandNotification(currentActivity);
                     break;
             }
         }
@@ -460,9 +478,17 @@ namespace Behind_Bars.Systems.NPCs
         {
             if (!patrolInitialized || availablePatrolPoints.Count == 0) return;
 
+            // Continue patrol movement
             if (Time.time - lastPatrolTime >= patrolRoute.waitTime)
             {
                 MoveToNextPatrolPoint();
+            }
+
+            // Check for search opportunities while patrolling
+            if (Time.time - lastSearchCheckTime >= SEARCH_CHECK_INTERVAL)
+            {
+                CheckForSearchOpportunities();
+                lastSearchCheckTime = Time.time;
             }
         }
 
@@ -471,7 +497,7 @@ namespace Behind_Bars.Systems.NPCs
             // TODO: For officers spawned at police station entrance, add initial pathfinding to route start point before beginning patrol loop
             if (availablePatrolPoints.Count == 0) return;
 
-            currentActivity = ParoleOfficerActivity.Patrolling;
+            ChangeParoleActivity(ParoleOfficerActivity.Patrolling);
             currentPatrolIndex = 0;
 
             // Play patrol start announcement
@@ -503,6 +529,46 @@ namespace Behind_Bars.Systems.NPCs
             if (currentActivity == ParoleOfficerActivity.Patrolling)
             {
                 StartPatrol();
+            }
+        }
+
+        /// <summary>
+        /// Check if any nearby players should be searched
+        /// Called periodically during patrol
+        /// </summary>
+        private void CheckForSearchOpportunities()
+        {
+            // Only patrol officers perform random searches
+            if (role != ParoleOfficerRole.PatrolOfficer) return;
+
+            // Get all players in range
+            var players = GameObject.FindObjectsOfType<Player>();
+            if (players == null || players.Length == 0) return;
+
+            foreach (var player in players)
+            {
+                if (player == null) continue;
+
+                // Check if search should be initiated
+                if (ParoleSearchSystem.Instance.ShouldInitiateSearch(this, player))
+                {
+                    // Initiate search
+                    ModLogger.Info($"Officer {badgeNumber}: Initiating random search on {player.name}");
+
+                    // Stop patrol temporarily and set search activity
+                    StopMovement();
+                    ChangeParoleActivity(ParoleOfficerActivity.SearchingParolee);
+                    currentParolee = player;
+
+                    // Show initial search notification
+                    ShowSearchNotification("Parole compliance check - stay where you are", false);
+
+                    // Start search coroutine
+                    MelonCoroutines.Start(ParoleSearchSystem.Instance.PerformParoleSearch(this, player));
+
+                    // Only search one player at a time
+                    break;
+                }
             }
         }
 
@@ -542,7 +608,7 @@ namespace Behind_Bars.Systems.NPCs
             {
                 intakeStateMachine.ForceStartIntake(parolee);
                 isProcessingIntake = true;
-                currentActivity = ParoleOfficerActivity.ProcessingIntake;
+                ChangeParoleActivity(ParoleOfficerActivity.ProcessingIntake);
                 currentParolee = parolee;
                 ModLogger.Info($"Guard {badgeNumber} delegating intake process to state machine for {parolee.name}");
             }
@@ -640,11 +706,270 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Change parole officer activity and update notifications
+        /// </summary>
+        private void ChangeParoleActivity(ParoleOfficerActivity newActivity)
+        {
+            if (currentActivity == newActivity) return;
+
+            ParoleOfficerActivity oldActivity = currentActivity;
+            currentActivity = newActivity;
+
+            ModLogger.Info($"ParoleOfficer {badgeNumber}: {oldActivity} → {newActivity}");
+
+            // Update officer command notification
+            UpdateOfficerCommandNotification(newActivity);
+
+            // Hide notification if activity doesn't require it
+            if (!ShouldShowCommandNotification(newActivity))
+            {
+                HideOfficerCommandNotification();
+            }
+        }
+
+        /// <summary>
+        /// Update officer command notification based on current activity
+        /// </summary>
+        private void UpdateOfficerCommandNotification(ParoleOfficerActivity activity)
+        {
+            // Don't show notifications for intake processing - IntakeOfficerStateMachine handles those
+            if (activity == ParoleOfficerActivity.ProcessingIntake && intakeStateMachine != null)
+            {
+                return;
+            }
+
+            // Check if we should show a command notification for this activity
+            if (!ShouldShowCommandNotification(activity))
+            {
+                return;
+            }
+
+            try
+            {
+                var commandData = GetCommandDataForActivity(activity);
+                if (commandData != null)
+                {
+                    BehindBarsUIManager.Instance?.UpdateOfficerCommand(commandData);
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"ParoleOfficer {badgeNumber}: Error updating command notification: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Determine if this activity should display a command notification
+        /// </summary>
+        private bool ShouldShowCommandNotification(ParoleOfficerActivity activity)
+        {
+            return activity switch
+            {
+                ParoleOfficerActivity.EscortingParolee => true,
+                ParoleOfficerActivity.SearchingParolee => true,
+                _ => false
+            };
+        }
+
+        /// <summary>
+        /// Get command data for the current activity
+        /// </summary>
+        private OfficerCommandData? GetCommandDataForActivity(ParoleOfficerActivity activity)
+        {
+            bool isEscorting = IsCurrentlyEscortingParolee();
+
+            return activity switch
+            {
+                ParoleOfficerActivity.EscortingParolee => new OfficerCommandData(
+                    "PAROLE OFFICER",
+                    isEscorting ? "Follow me" : "Stay close",
+                    1, 1, isEscorting),
+
+                ParoleOfficerActivity.SearchingParolee => new OfficerCommandData(
+                    "PAROLE OFFICER",
+                    GetCurrentSearchMessage(),
+                    1, 1, false),
+
+                _ => null
+            };
+        }
+
+        /// <summary>
+        /// Check if currently escorting a parolee (officer is moving)
+        /// </summary>
+        private bool IsCurrentlyEscortingParolee()
+        {
+            if (currentParolee == null) return false;
+            if (currentState != NPCState.Moving) return false;
+
+            // Check if officer is moving toward the parolee or a destination
+            float distanceToParolee = Vector3.Distance(transform.position, currentParolee.transform.position);
+            return distanceToParolee > 3f; // If more than 3 units away, show "Follow me"
+        }
+
+        /// <summary>
+        /// Hide officer command notification
+        /// </summary>
+        private void HideOfficerCommandNotification()
+        {
+            try
+            {
+                BehindBarsUIManager.Instance?.HideOfficerCommand();
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"ParoleOfficer {badgeNumber}: Error hiding command notification: {ex.Message}");
+            }
+        }
+
+        #region Search Notification Methods
+
+        // Search state tracking
+        private string currentSearchMessage = "";
+        private bool searchInProgress = false;
+        private bool searchContrabandFound = false;
+        private int contrabandItemCount = 0;
+
+        /// <summary>
+        /// Show search notification - called when search starts
+        /// </summary>
+        public void ShowSearchNotification(string message, bool isSearching)
+        {
+            currentSearchMessage = message;
+            searchInProgress = isSearching;
+            
+            try
+            {
+                var commandData = new OfficerCommandData(
+                    "PAROLE OFFICER",
+                    message,
+                    1, 1, false);
+
+                BehindBarsUIManager.Instance?.UpdateOfficerCommand(commandData);
+                ModLogger.Debug($"ParoleOfficer {badgeNumber}: Showing search notification: {message}");
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"ParoleOfficer {badgeNumber}: Error showing search notification: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Update search notification during search process
+        /// </summary>
+        public void UpdateSearchNotification(string message)
+        {
+            currentSearchMessage = message;
+            searchInProgress = true;
+
+            try
+            {
+                var commandData = new OfficerCommandData(
+                    "PAROLE OFFICER",
+                    message,
+                    1, 1, false);
+
+                BehindBarsUIManager.Instance?.UpdateOfficerCommand(commandData);
+                ModLogger.Debug($"ParoleOfficer {badgeNumber}: Updating search notification: {message}");
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"ParoleOfficer {badgeNumber}: Error updating search notification: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Show search results notification
+        /// </summary>
+        public void ShowSearchResults(bool contrabandFound, int itemCount = 0)
+        {
+            searchContrabandFound = contrabandFound;
+            contrabandItemCount = itemCount;
+            searchInProgress = false;
+
+            string resultMessage;
+            if (contrabandFound)
+            {
+                if (itemCount > 0)
+                {
+                    resultMessage = $"Contraband found! ({itemCount} item{(itemCount > 1 ? "s" : "")}) - Parole violation!";
+                }
+                else
+                {
+                    resultMessage = "Contraband found! - Parole violation!";
+                }
+            }
+            else
+            {
+                resultMessage = "Search complete - you're clean";
+            }
+
+            currentSearchMessage = resultMessage;
+
+            try
+            {
+                var commandData = new OfficerCommandData(
+                    "PAROLE OFFICER",
+                    resultMessage,
+                    1, 1, false);
+
+                BehindBarsUIManager.Instance?.UpdateOfficerCommand(commandData);
+                ModLogger.Debug($"ParoleOfficer {badgeNumber}: Showing search results: {resultMessage}");
+
+                // Hide notification after a delay
+                MelonCoroutines.Start(HideSearchNotificationAfterDelay(contrabandFound ? 5f : 3f));
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"ParoleOfficer {badgeNumber}: Error showing search results: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Get current search message for notification
+        /// </summary>
+        private string GetCurrentSearchMessage()
+        {
+            if (!string.IsNullOrEmpty(currentSearchMessage))
+            {
+                return currentSearchMessage;
+            }
+
+            if (searchInProgress)
+            {
+                return "Searching inventory - don't move";
+            }
+
+            return "Parole compliance check";
+        }
+
+        /// <summary>
+        /// Hide search notification after delay
+        /// </summary>
+        private IEnumerator HideSearchNotificationAfterDelay(float delay)
+        {
+            yield return new WaitForSeconds(delay);
+            
+            // Only hide if we're still in search activity
+            if (currentActivity == ParoleOfficerActivity.SearchingParolee)
+            {
+                ChangeParoleActivity(ParoleOfficerActivity.Patrolling);
+                currentParolee = null;
+                currentSearchMessage = "";
+                searchInProgress = false;
+                searchContrabandFound = false;
+                contrabandItemCount = 0;
+            }
+        }
+
+        #endregion
+
         private void HandleEscortLogic()
         {
             if (currentParolee == null)
             {
-                currentActivity = ParoleOfficerActivity.MonitoringArea;
+                ChangeParoleActivity(ParoleOfficerActivity.MonitoringArea);
                 ChangeState(NPCState.Idle);
                 return;
             }
@@ -733,7 +1058,7 @@ namespace Behind_Bars.Systems.NPCs
             if (!onDuty)
             {
                 StopMovement();
-                currentActivity = ParoleOfficerActivity.Idle;
+                ChangeParoleActivity(ParoleOfficerActivity.Idle);
             }
         }
 
@@ -747,7 +1072,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             if (currentActivity != ParoleOfficerActivity.EscortingParolee) // Don't abandon escorting
             {
-                currentActivity = ParoleOfficerActivity.RespondingToIncident;
+                ChangeParoleActivity(ParoleOfficerActivity.RespondingToIncident);
                 MoveTo(location);
                 TrySendNPCMessage("Responding to incident.", 2f);
 
@@ -818,7 +1143,7 @@ namespace Behind_Bars.Systems.NPCs
                 }
 
                 // Return to alert state
-                currentActivity = ParoleOfficerActivity.RespondingToIncident;
+                ChangeParoleActivity(ParoleOfficerActivity.RespondingToIncident);
                 officerPatience = 0f; // No patience left
             }
             catch (System.Exception ex)
@@ -878,6 +1203,7 @@ namespace Behind_Bars.Systems.NPCs
                 case ParoleOfficerActivity.EscortingParolee: return Color.yellow;
                 case ParoleOfficerActivity.MonitoringArea: return Color.cyan;
                 case ParoleOfficerActivity.RespondingToIncident: return Color.red;
+                case ParoleOfficerActivity.SearchingParolee: return Color.magenta;
                 default: return Color.gray;
             }
         }

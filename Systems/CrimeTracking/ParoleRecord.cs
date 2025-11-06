@@ -35,6 +35,16 @@ namespace Behind_Bars.Systems.CrimeTracking
         private Player player;
 
         /// <summary>
+        /// Parameterless constructor for JSON deserialization
+        /// </summary>
+        [JsonConstructor]
+        public ParoleRecord()
+        {
+            this.paroleViolations = new List<ViolationRecord>();
+            // Don't load from file during JSON deserialization
+        }
+
+        /// <summary>
         /// Initializes a new instance of ParoleRecord for the specified player.
         /// </summary>
         /// <param name="player">The player this parole record belongs to.</param>
@@ -43,6 +53,14 @@ namespace Behind_Bars.Systems.CrimeTracking
             this.player = player;
             this.paroleViolations = new List<ViolationRecord>();
             LoadRecordFromFile();
+        }
+
+        /// <summary>
+        /// Set the player reference after deserialization
+        /// </summary>
+        public void SetPlayer(Player player)
+        {
+            this.player = player;
         }
 
         #region Parole Status Methods
@@ -298,13 +316,26 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// <returns>True if the load was successful, false otherwise.</returns>
         public bool LoadRecordFromFile()
         {
+            if (player == null)
+            {
+                ModLogger.Warn("Cannot load parole record: Player reference is null");
+                return false;
+            }
+
             if (FileUtilities.Instance == null)
             {
                 ModLogger.Warn($"Failed to load parole record: FileUtilities instance is null for {player.name}!");
                 return false;
             }
 
-            if (!FileUtilities.AllLoadedFiles().TryGetValue($"{player.name}-parolerecord.json", out string json))
+            var allLoadedFiles = FileUtilities.AllLoadedFiles();
+            if (allLoadedFiles == null)
+            {
+                ModLogger.Warn($"Failed to load parole record: AllLoadedFiles() returned null for {player.name}!");
+                return false;
+            }
+
+            if (!allLoadedFiles.TryGetValue($"{player.name}-parolerecord.json", out string json))
             {
                 ModLogger.Info($"No existing parole record found for {player.name}. Initializing new record.");
                 
