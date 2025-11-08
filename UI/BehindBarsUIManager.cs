@@ -979,31 +979,17 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Format time remaining in a human-readable format
+        /// Format time remaining in a human-readable format (now uses game time)
         /// </summary>
-        private string FormatTimeRemaining(float seconds)
+        private string FormatTimeRemaining(float gameMinutes)
         {
-            if (seconds <= 0)
+            if (gameMinutes <= 0)
             {
                 return "Expired";
             }
 
-            int days = Mathf.FloorToInt(seconds / 86400);
-            int hours = Mathf.FloorToInt((seconds % 86400) / 3600);
-            int minutes = Mathf.FloorToInt((seconds % 3600) / 60);
-
-            if (days > 0)
-            {
-                return $"{days}d {hours}h {minutes}m";
-            }
-            else if (hours > 0)
-            {
-                return $"{hours}h {minutes}m";
-            }
-            else
-            {
-                return $"{minutes}m";
-            }
+            // Use GameTimeManager to format game time
+            return GameTimeManager.FormatGameTime(gameMinutes);
         }
 
         /// <summary>

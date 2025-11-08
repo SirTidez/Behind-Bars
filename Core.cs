@@ -166,6 +166,11 @@ namespace Behind_Bars
 #endif
             // Initialize core systems
             HarmonyPatches.Initialize(this);
+            
+            // Initialize GameTimeManager first (needed by other systems)
+            GameTimeManager.Instance.Initialize();
+            ModLogger.Info("GameTimeManager initialized");
+            
             _jailSystem = new JailSystem();
             _jailSystem.Initialize(); // Initialize JailSystem components
 

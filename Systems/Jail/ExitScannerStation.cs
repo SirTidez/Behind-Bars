@@ -841,6 +841,13 @@ namespace Behind_Bars.Systems.Jail
                 currentPlayer.transform.position = releasePosition;
                 currentPlayer.transform.rotation = Quaternion.Euler(releaseRotation);
 
+                // CRITICAL: Hide officer command notification in fallback path
+                if (BehindBarsUIManager.Instance != null)
+                {
+                    BehindBarsUIManager.Instance.HideOfficerCommand();
+                    ModLogger.Info("ExitScannerStation: Hidden officer command notification (fallback path)");
+                }
+
                 // Final notification
                 if (BehindBarsUIManager.Instance != null)
                 {

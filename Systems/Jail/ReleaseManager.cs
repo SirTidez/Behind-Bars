@@ -8,6 +8,7 @@ using Behind_Bars.UI;
 using Behind_Bars.Players;
 using Behind_Bars.Systems.NPCs;
 using Behind_Bars.Systems.CrimeTracking;
+using Behind_Bars.Systems;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -529,6 +530,13 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info($"Completing release for {request.player.name}");
             request.status = ReleaseStatus.Completed;
 
+            // CRITICAL: Hide officer command notification before teleporting player
+            if (BehindBarsUIManager.Instance != null)
+            {
+                BehindBarsUIManager.Instance.HideOfficerCommand();
+                ModLogger.Info($"Hidden officer command notification for {request.player.name}");
+            }
+
             // CRITICAL: Clear ALL escort registrations for this player to prevent conflicts
             OfficerCoordinator.Instance.UnregisterAllEscortsForPlayer(request.player);
 
@@ -798,26 +806,26 @@ namespace Behind_Bars.Systems.Jail
                 if (hasPausedParole)
                 {
                     // RESUME AND EXTEND paused parole
-                    float pausedRemainingTime = rapSheet.CurrentParoleRecord.GetPausedRemainingTime();
-                    ModLogger.Info($"[PAROLE] Player has paused parole with {pausedRemainingTime}s ({pausedRemainingTime / 60f:F1} minutes) remaining");
+                    float pausedRemainingTime = rapSheet.CurrentParoleRecord.GetPausedRemainingTime(); // In game minutes
+                    ModLogger.Info($"[PAROLE] Player has paused parole with {pausedRemainingTime} game minutes ({GameTimeManager.FormatGameTime(pausedRemainingTime)}) remaining");
 
-                    // Calculate additional time from new crimes
+                    // Calculate additional time from new crimes (in game minutes)
                     float additionalTime = CalculateAdditionalParoleTime(rapSheet, rapSheetLoaded);
 
-                    // Add violation penalties
+                    // Add violation penalties (in game minutes)
                     int violationCount = rapSheet.CurrentParoleRecord.GetViolationCount();
                     float violationPenalty = CalculateViolationPenalty(violationCount);
 
-                    ModLogger.Info($"[PAROLE] Additional time from new crimes: {additionalTime}s ({additionalTime / 60f:F1} minutes)");
-                    ModLogger.Info($"[PAROLE] Violation penalty: {violationPenalty}s ({violationPenalty / 60f:F1} minutes) for {violationCount} violations");
+                    ModLogger.Info($"[PAROLE] Additional time from new crimes: {additionalTime} game minutes ({GameTimeManager.FormatGameTime(additionalTime)})");
+                    ModLogger.Info($"[PAROLE] Violation penalty: {violationPenalty} game minutes ({GameTimeManager.FormatGameTime(violationPenalty)}) for {violationCount} violations");
 
                     // Extend the paused parole
                     float totalAdditional = additionalTime + violationPenalty;
                     rapSheet.CurrentParoleRecord.ExtendPausedParole(totalAdditional);
 
                     float newTotalTime = pausedRemainingTime + totalAdditional;
-                    float newGameDays = (newTotalTime / 60f) / 24f;
-                    ModLogger.Info($"[PAROLE] New total parole time: {newTotalTime}s ({newTotalTime / 60f:F1} real minutes / {newGameDays:F1} game days)");
+                    float newGameDays = newTotalTime / (60f * 24f); // Convert game minutes to game days
+                    ModLogger.Info($"[PAROLE] New total parole time: {newTotalTime} game minutes ({newGameDays:F1} game days / {GameTimeManager.FormatGameTime(newTotalTime)})");
 
                     // Resume parole
                     rapSheet.CurrentParoleRecord.ResumeParole();
@@ -825,18 +833,17 @@ namespace Behind_Bars.Systems.Jail
                 }
                 else
                 {
-                    // START NEW parole term
-                    float paroleDuration = CalculateParoleDuration(rapSheet, rapSheetLoaded);
-                    float gameHours = paroleDuration / 60f;
-                    float gameDays = gameHours / 24f;
+                    // START NEW parole term (duration is in game minutes)
+                    float paroleDuration = CalculateParoleDuration(rapSheet, rapSheetLoaded); // Returns game minutes
+                    float gameDays = paroleDuration / (60f * 24f); // Convert game minutes to game days
 
-                    ModLogger.Info($"[PAROLE] Starting new parole term: {paroleDuration}s ({paroleDuration / 60f:F1} real minutes / {gameDays:F1} game days)");
+                    ModLogger.Info($"[PAROLE] Starting new parole term: {paroleDuration} game minutes ({gameDays:F1} game days / {GameTimeManager.FormatGameTime(paroleDuration)})");
                     if (rapSheet != null)
                     {
                         ModLogger.Info($"[PAROLE] Crime count: {rapSheet.GetCrimeCount()}, LSI Level: {rapSheet.LSILevel}");
                     }
 
-                    // Start parole through ParoleSystem
+                    // Start parole through ParoleSystem (expects game minutes)
                     var paroleSystem = Core.Instance?.ParoleSystem;
                     if (paroleSystem != null)
                     {
@@ -862,15 +869,15 @@ namespace Behind_Bars.Systems.Jail
         /// Calculate parole duration based on rap sheet data
         /// Formula: Base time + (crimes * multiplier) + LSI modifier
         /// </summary>
-        /// <returns>Parole duration in seconds</returns>
+        /// <returns>Parole duration in game minutes</returns>
         private float CalculateParoleDuration(RapSheet rapSheet, bool hasRapSheet)
         {
-            // Game time scale: 1 hour = 60s, 1 day = 24 minutes (1440s), 1 week = 168 minutes (10080s)
-            // Parole terms scaled to game time for realism
-            const float BASE_PAROLE_TIME = 2880f;  // 2 game days (48 real minutes)
-            const float MIN_PAROLE_TIME = 1440f;   // 1 game day (24 real minutes)
-            const float MAX_PAROLE_TIME = 10080f;  // 1 game week / 7 days (168 real minutes / 2.8 hours)
-            const float CRIME_MULTIPLIER = 240f;   // 4 game hours per crime (4 real minutes)
+            // Game time scale: 1 game minute = 1 real second, 1 game hour = 60 game minutes, 1 game day = 1440 game minutes
+            // Parole terms are calculated in game time units
+            const float BASE_PAROLE_TIME = 2880f;  // 2 game days (2880 game minutes)
+            const float MIN_PAROLE_TIME = 1440f;   // 1 game day (1440 game minutes)
+            const float MAX_PAROLE_TIME = 10080f;  // 7 game days (10080 game minutes)
+            const float CRIME_MULTIPLIER = 240f;   // 4 game hours per crime (240 game minutes)
 
             if (!hasRapSheet)
             {
@@ -885,7 +892,7 @@ namespace Behind_Bars.Systems.Jail
             paroleDuration += crimeBonus;
 
             float crimeGameHours = (crimeBonus / 60f);
-            ModLogger.Debug($"[PAROLE CALC] Base: {BASE_PAROLE_TIME / 60f:F1} min (2 days) + Crime bonus: {crimeCount} crimes × {CRIME_MULTIPLIER / 60f:F1} min = +{crimeGameHours:F1} hours");
+            ModLogger.Debug($"[PAROLE CALC] Base: {BASE_PAROLE_TIME} game min (2 days) + Crime bonus: {crimeCount} crimes × {CRIME_MULTIPLIER} game min = +{crimeGameHours:F1} game hours");
 
             // Factor 2: LSI level modifier (higher risk = longer parole)
             float lsiMultiplier = rapSheet.LSILevel switch
@@ -900,14 +907,14 @@ namespace Behind_Bars.Systems.Jail
 
             paroleDuration *= lsiMultiplier;
 
-            float gameDaysBeforeClamp = (paroleDuration / 60f) / 24f;
+            float gameDaysBeforeClamp = paroleDuration / (60f * 24f); // Convert game minutes to game days
             ModLogger.Debug($"[PAROLE CALC] LSI Level: {rapSheet.LSILevel} (×{lsiMultiplier}) = {gameDaysBeforeClamp:F1} game days");
 
             // Clamp to reasonable bounds
             paroleDuration = Mathf.Clamp(paroleDuration, MIN_PAROLE_TIME, MAX_PAROLE_TIME);
 
-            float finalGameDays = (paroleDuration / 60f) / 24f;
-            ModLogger.Debug($"[PAROLE CALC] Final duration: {paroleDuration / 60f:F1} real minutes ({finalGameDays:F1} game days)");
+            float finalGameDays = paroleDuration / (60f * 24f); // Convert game minutes to game days
+            ModLogger.Debug($"[PAROLE CALC] Final duration: {paroleDuration} game minutes ({finalGameDays:F1} game days)");
 
             return paroleDuration;
         }
@@ -916,9 +923,10 @@ namespace Behind_Bars.Systems.Jail
         /// Calculate additional parole time from new crimes (without base time or LSI modifier)
         /// Used when extending paused parole
         /// </summary>
+        /// <returns>Additional time in game minutes</returns>
         private float CalculateAdditionalParoleTime(RapSheet rapSheet, bool hasRapSheet)
         {
-            const float CRIME_MULTIPLIER = 240f;   // 4 game hours per crime (4 real minutes)
+            const float CRIME_MULTIPLIER = 240f;   // 4 game hours per crime (240 game minutes)
 
             if (!hasRapSheet)
             {
@@ -930,7 +938,7 @@ namespace Behind_Bars.Systems.Jail
             int crimeCount = rapSheet.GetCrimeCount();
             float additionalTime = crimeCount * CRIME_MULTIPLIER;
 
-            ModLogger.Debug($"[PAROLE CALC] Additional time for {crimeCount} new crimes: {additionalTime}s ({additionalTime / 60f:F1} minutes)");
+            ModLogger.Debug($"[PAROLE CALC] Additional time for {crimeCount} new crimes: {additionalTime} game minutes ({GameTimeManager.FormatGameTime(additionalTime)})");
 
             return additionalTime;
         }
@@ -939,13 +947,14 @@ namespace Behind_Bars.Systems.Jail
         /// Calculate penalty time for parole violations
         /// Each violation adds additional supervision time
         /// </summary>
+        /// <returns>Penalty time in game minutes</returns>
         private float CalculateViolationPenalty(int violationCount)
         {
-            const float VIOLATION_PENALTY = 480f;  // 8 game hours per violation (8 real minutes)
+            const float VIOLATION_PENALTY = 480f;  // 8 game hours per violation (480 game minutes)
 
             float penalty = violationCount * VIOLATION_PENALTY;
 
-            ModLogger.Debug($"[PAROLE CALC] Violation penalty for {violationCount} violations: {penalty}s ({penalty / 60f:F1} minutes)");
+            ModLogger.Debug($"[PAROLE CALC] Violation penalty for {violationCount} violations: {penalty} game minutes ({GameTimeManager.FormatGameTime(penalty)})");
 
             return penalty;
         }

@@ -40,17 +40,18 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Runtime parole tracking record (in-memory)
         /// Separate from ParoleRecord in RapSheet which handles persistent storage
+        /// Now uses game time units (game minutes) instead of real-time seconds
         /// </summary>
         public class ParoleRuntimeRecord
         {
             public Player Player { get; set; }
             public ParoleStatus Status { get; set; }
-            public float StartTime { get; set; }
-            public float Duration { get; set; }
-            public float TimeRemaining { get; set; }
+            public float StartGameTimeMinutes { get; set; } // Game time when parole started (game minutes)
+            public float DurationGameMinutes { get; set; } // Total parole duration (game minutes)
+            public float TimeRemainingGameMinutes { get; set; } // Remaining time (game minutes)
             public int ViolationCount { get; set; }
-            public float LastSearchTime { get; set; }
-            public float NextSearchTime { get; set; }
+            public float LastSearchGameTimeMinutes { get; set; } // Last search time (game minutes)
+            public float NextSearchGameTimeMinutes { get; set; } // Next search time (game minutes)
             public List<string> Violations { get; set; } = new();
         }
 
@@ -62,26 +63,33 @@ namespace Behind_Bars.Systems
         /// Start parole supervision for a player
         /// Creates runtime tracking and initializes RapSheet/LSI integration
         /// </summary>
-        public void StartParole(Player player, float duration = PAROLE_DURATION)
+        public void StartParole(Player player, float durationGameMinutes = PAROLE_DURATION)
         {
-            ModLogger.Info($"Starting parole for {player.name} for {duration}s");
+            ModLogger.Info($"Starting parole for {player.name} for {durationGameMinutes} game minutes ({GameTimeManager.FormatGameTime(durationGameMinutes)})");
+
+            float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
+            float searchIntervalMin = GameTimeManager.RealSecondsToGameMinutes(SEARCH_INTERVAL_MIN);
+            float searchIntervalMax = GameTimeManager.RealSecondsToGameMinutes(SEARCH_INTERVAL_MAX);
 
             var record = new ParoleRuntimeRecord
             {
                 Player = player,
                 Status = ParoleStatus.Active,
-                StartTime = Time.time,
-                Duration = duration,
-                TimeRemaining = duration,
+                StartGameTimeMinutes = currentGameTime,
+                DurationGameMinutes = durationGameMinutes,
+                TimeRemainingGameMinutes = durationGameMinutes,
                 ViolationCount = 0,
-                LastSearchTime = 0f,
-                NextSearchTime = Time.time + UnityEngine.Random.Range(SEARCH_INTERVAL_MIN, SEARCH_INTERVAL_MAX)
+                LastSearchGameTimeMinutes = 0f,
+                NextSearchGameTimeMinutes = currentGameTime + UnityEngine.Random.Range(searchIntervalMin, searchIntervalMax)
             };
 
             _paroleRecords[player] = record;
 
-            // Initialize RapSheet ParoleRecord and perform LSI assessment
-            InitializeParoleTracking(player, duration);
+            // Initialize RapSheet ParoleRecord and perform LSI assessment (convert to game minutes)
+            InitializeParoleTracking(player, durationGameMinutes);
+
+            // Start tracking with ParoleTimeTracker
+            ParoleTimeTracker.Instance.StartTracking(player, durationGameMinutes, OnParoleComplete);
 
             // Start parole monitoring
             MelonCoroutines.Start(MonitorParole(record));
@@ -94,6 +102,20 @@ namespace Behind_Bars.Systems
 
             // Show parole status UI after a short delay to ensure RapSheet is initialized
             MelonCoroutines.Start(DelayedShowParoleUI(player));
+        }
+
+        /// <summary>
+        /// Callback when parole period completes via game time tracking
+        /// </summary>
+        private void OnParoleComplete(Player player)
+        {
+            if (_paroleRecords.TryGetValue(player, out var record))
+            {
+                if (record.Status == ParoleStatus.Active)
+                {
+                    CompleteParole(record);
+                }
+            }
         }
 
         /// <summary>
@@ -163,13 +185,20 @@ namespace Behind_Bars.Systems
         {
             ModLogger.Info($"Monitoring parole for {record.Player.name}");
 
-            while (record.Status == ParoleStatus.Active && record.TimeRemaining > 0)
+            while (record.Status == ParoleStatus.Active)
             {
-                // Update time remaining
-                record.TimeRemaining = Mathf.Max(0, record.Duration - (Time.time - record.StartTime));
+                // Update time remaining from ParoleTimeTracker
+                record.TimeRemainingGameMinutes = ParoleTimeTracker.Instance.GetRemainingTime(record.Player);
 
-                // Check if it's time for a random search
-                if (Time.time >= record.NextSearchTime)
+                // Check if parole is complete
+                if (record.TimeRemainingGameMinutes <= 0)
+                {
+                    break;
+                }
+
+                // Check if it's time for a random search (using game time)
+                float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
+                if (currentGameTime >= record.NextSearchGameTimeMinutes)
                 {
                     yield return ConductRandomSearch(record);
                 }
@@ -177,7 +206,7 @@ namespace Behind_Bars.Systems
                 // Check for parole violations
                 //yield return CheckForViolations(record);
 
-                yield return new WaitForSeconds(1f);
+                yield return new WaitForSeconds(1f); // Check every real second
             }
 
             // Parole completed or violated
@@ -210,9 +239,12 @@ namespace Behind_Bars.Systems
                 }
             }
 
-            // Schedule next search
-            record.LastSearchTime = Time.time;
-            record.NextSearchTime = Time.time + UnityEngine.Random.Range(SEARCH_INTERVAL_MIN, SEARCH_INTERVAL_MAX);
+            // Schedule next search (using game time)
+            float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
+            float searchIntervalMin = GameTimeManager.RealSecondsToGameMinutes(SEARCH_INTERVAL_MIN);
+            float searchIntervalMax = GameTimeManager.RealSecondsToGameMinutes(SEARCH_INTERVAL_MAX);
+            record.LastSearchGameTimeMinutes = currentGameTime;
+            record.NextSearchGameTimeMinutes = currentGameTime + UnityEngine.Random.Range(searchIntervalMin, searchIntervalMax);
         }
 
         /// <summary>
@@ -358,12 +390,16 @@ namespace Behind_Bars.Systems
             }
             else
             {
-                // Minor violation - extend parole
-                float extension = record.Duration * 0.2f; // 20% extension
-                record.Duration += extension;
-                record.TimeRemaining += extension;
+                // Minor violation - extend parole (in game minutes)
+                float extension = record.DurationGameMinutes * 0.2f; // 20% extension
+                record.DurationGameMinutes += extension;
+                record.TimeRemainingGameMinutes += extension;
 
-                ModLogger.Info($"Parole extended for {record.Player.name} by {extension}s due to violation");
+                // Update ParoleTimeTracker with new duration
+                ParoleTimeTracker.Instance.StopTracking(record.Player);
+                ParoleTimeTracker.Instance.StartTracking(record.Player, record.DurationGameMinutes, OnParoleComplete);
+
+                ModLogger.Info($"Parole extended for {record.Player.name} by {extension} game minutes ({GameTimeManager.FormatGameTime(extension)}) due to violation");
 
                 // TODO: Show violation warning to player
                 yield return new WaitForSeconds(1f);
@@ -376,6 +412,9 @@ namespace Behind_Bars.Systems
         private IEnumerator HandleParoleRevocation(ParoleRuntimeRecord record)
         {
             ModLogger.Info($"Handling parole revocation for {record.Player.name}");
+
+            // Stop tracking with ParoleTimeTracker
+            ParoleTimeTracker.Instance.StopTracking(record.Player);
 
             // End parole in RapSheet and archive it
             try
@@ -436,7 +475,10 @@ namespace Behind_Bars.Systems
             ModLogger.Info($"Parole completed successfully for {record.Player.name}");
 
             record.Status = ParoleStatus.Completed;
-            record.TimeRemaining = 0f;
+            record.TimeRemainingGameMinutes = 0f;
+
+            // Stop tracking with ParoleTimeTracker
+            ParoleTimeTracker.Instance.StopTracking(record.Player);
 
             // End parole in RapSheet and archive it
             try
@@ -529,15 +571,20 @@ namespace Behind_Bars.Systems
         }
 
         /// <summary>
-        /// Extend parole duration for a player
+        /// Extend parole duration for a player (in game minutes)
         /// </summary>
-        public void ExtendParole(Player player, float additionalTime)
+        public void ExtendParole(Player player, float additionalGameMinutes)
         {
             if (_paroleRecords.TryGetValue(player, out var record))
             {
-                record.Duration += additionalTime;
-                record.TimeRemaining += additionalTime;
-                ModLogger.Info($"Extended parole for {player.name} by {additionalTime}s");
+                record.DurationGameMinutes += additionalGameMinutes;
+                record.TimeRemainingGameMinutes += additionalGameMinutes;
+                
+                // Update ParoleTimeTracker with new duration
+                ParoleTimeTracker.Instance.StopTracking(player);
+                ParoleTimeTracker.Instance.StartTracking(player, record.DurationGameMinutes, OnParoleComplete);
+                
+                ModLogger.Info($"Extended parole for {player.name} by {additionalGameMinutes} game minutes ({GameTimeManager.FormatGameTime(additionalGameMinutes)})");
             }
         }
     }

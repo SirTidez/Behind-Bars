@@ -6,6 +6,7 @@ using Behind_Bars.Systems.CrimeDetection;
 using Behind_Bars.Systems.Jail;
 using Behind_Bars.Systems.Data;
 using Behind_Bars.Systems.NPCs;
+using Behind_Bars.Systems.CrimeTracking;
 using UnityEngine;
 using MelonLoader;
 
@@ -77,20 +78,20 @@ namespace Behind_Bars.Systems
             // CreateInventorySnapshotIfNeeded(player); // REMOVED - now done at start of HandleImmediateArrest
 
             // Determine jail time threshold for holding vs main cell
-            // 1 game day = 24 real-world minutes (from TimeManager CYCLE_DURATION_MINS)
-            // Convert to seconds: 24 * 60 = 1440 seconds
-            const float ONE_GAME_DAY_SECONDS = 1440f;
+            // sentence.JailTime is in game minutes
+            // 1 game day = 1440 game minutes (24 hours * 60 minutes)
+            const float ONE_GAME_DAY_MINUTES = 1440f;
 
-            if (sentence.JailTime < ONE_GAME_DAY_SECONDS)
+            if (sentence.JailTime < ONE_GAME_DAY_MINUTES)
             {
                 // Short sentence - send directly to holding cell
-                ModLogger.Info($"Short sentence ({sentence.JailTime}s < {ONE_GAME_DAY_SECONDS}s) - sending to holding cell");
+                ModLogger.Info($"Short sentence ({sentence.JailTime} game minutes < {ONE_GAME_DAY_MINUTES} game minutes / {GameTimeManager.FormatGameTime(sentence.JailTime)}) - sending to holding cell");
                 yield return SendPlayerToHoldingCell(player, sentence);
             }
             else
             {
                 // Long sentence - start in holding cell, then process to main cell
-                ModLogger.Info($"Long sentence ({sentence.JailTime}s >= {ONE_GAME_DAY_SECONDS}s) - processing to main jail cell");
+                ModLogger.Info($"Long sentence ({sentence.JailTime} game minutes >= {ONE_GAME_DAY_MINUTES} game minutes / {GameTimeManager.FormatGameTime(sentence.JailTime)}) - processing to main jail cell");
                 yield return ProcessPlayerToJail(player, sentence);
             }
         }
@@ -214,172 +215,49 @@ namespace Behind_Bars.Systems
         }
 
         /// <summary>
-        /// Calculate total fines based on the same logic as PenaltyHandler.ProcessCrimeList
-        /// ENHANCED: Now includes crimes from our crime detection system
+        /// Calculate total fines using FineCalculator (independent from sentences)
         /// </summary>
         private float CalculateTotalCrimeFines(Player player)
         {
-            float totalFine = 0f;
-
-            // First, get crimes from our enhanced crime detection system
-            var crimeDetectionSystem = HarmonyPatches.GetCrimeDetectionSystem();
-            if (crimeDetectionSystem != null)
-            {
-                float enhancedCrimeFines = crimeDetectionSystem.CalculateTotalFines();
-                totalFine += enhancedCrimeFines;
-                ModLogger.Info($"Enhanced crime system fines: ${enhancedCrimeFines:F2}");
-            }
-
-            // Then add crimes from Schedule I's native system (for compatibility)
-            if (player?.CrimeData?.Crimes != null)
-            {
-                float nativeCrimeFines = CalculateNativeCrimeFines(player);
-                totalFine += nativeCrimeFines;
-                ModLogger.Info($"Native crime system fines: ${nativeCrimeFines:F2}");
-            }
-
-            // If no crimes found anywhere, return default
-            if (totalFine <= 0f)
-                return 50f; // Default minor fine
-
-            ModLogger.Info($"Total calculated fines: ${totalFine:F2}");
+            // Get RapSheet for repeat offender multiplier
+            var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+            
+            // Use FineCalculator to calculate fines (rapSheet is optional)
+            float totalFine = FineCalculator.Instance.CalculateTotalFine(player, rapSheet);
+            
+            ModLogger.Info($"Calculated total fines using FineCalculator: ${totalFine:F2}");
             return totalFine;
         }
 
-        /// <summary>
-        /// Calculate fines from Schedule I's native crime system
-        /// </summary>
-        private float CalculateNativeCrimeFines(Player player)
-        {
-            float totalFine = 0f;
-
-            // Process each crime type like PenaltyHandler does
-            foreach (var crimeEntry in player.CrimeData.Crimes)
-            {
-                var crime = crimeEntry.Key;
-                int count = crimeEntry.Value;
-
-                // Match PenaltyHandler fine calculations exactly
-                string crimeName = crime.GetType().Name;
-
-                switch (crimeName)
-                {
-                    case "PossessingControlledSubstances":
-                        totalFine += 5f * count;
-                        break;
-                    case "PossessingLowSeverityDrug":
-                        totalFine += 10f * count;
-                        break;
-                    case "PossessingModerateSeverityDrug":
-                        totalFine += 20f * count;
-                        break;
-                    case "PossessingHighSeverityDrug":
-                        totalFine += 30f * count;
-                        break;
-                    case "Evading":
-                        totalFine += 50f;
-                        break;
-                    case "FailureToComply":
-                        totalFine += 50f;
-                        break;
-                    case "ViolatingCurfew":
-                        totalFine += 100f;
-                        break;
-                    case "AttemptingToSell":
-                        totalFine += 150f;
-                        break;
-                    case "Assault":
-                        totalFine += 75f;
-                        break;
-                    case "DeadlyAssault":
-                        totalFine += 150f;
-                        break;
-                    case "Vandalism":
-                        totalFine += 50f;
-                        break;
-                    case "Theft":
-                        totalFine += 50f;
-                        break;
-                    case "BrandishingWeapon":
-                        totalFine += 50f;
-                        break;
-                    case "DischargeFirearm":
-                        totalFine += 50f;
-                        break;
-
-                    // NEW ENHANCED CRIME TYPES
-                    case "Murder":
-                        totalFine += 1000f;
-                        break;
-                    case "Manslaughter":
-                        totalFine += 300f;
-                        break;
-                    case "AssaultOnCivilian":
-                        totalFine += 100f;
-                        break;
-                    case "WitnessIntimidation":
-                        totalFine += 150f;
-                        break;
-                    case "VehicularAssault":
-                        totalFine += 100f;
-                        break;
-                    case "DrugTrafficking":
-                        totalFine += 200f;
-                        break;
-
-                    default:
-                        // Unknown crime type - assign moderate fine
-                        totalFine += 25f;
-                        break;
-                }
-            }
-
-            // Check for evaded arrest (not stored in Crimes dict)
-            if (player.CrimeData.EvadedArrest)
-            {
-                totalFine += 50f;
-            }
-
-            ModLogger.Info($"Calculated total crime fines: ${totalFine}");
-            return totalFine;
-        }
 
         private void CalculateSentence(JailSentence sentence, Player player)
         {
-            // Calculate actual fine amount
+            // Get RapSheet for sentence calculation
+            var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+            
+            // Calculate fine using FineCalculator (independent from sentence)
             float actualFine = CalculateTotalCrimeFines(player);
             sentence.FineAmount = actualFine;
 
-            // Convert fine to jail time - more realistic scaling
-            // Base conversion: $1 = 2 seconds jail time (but with minimums per severity)
-            float baseJailTime = actualFine * 2f;
-
-            switch (sentence.Severity)
-            {
-                case JailSeverity.Minor:
-                    baseJailTime = Mathf.Max(baseJailTime, MIN_JAIL_TIME);  // Use constants
-                    sentence.Description = $"Minor offenses (${actualFine} in fines)";
-                    break;
-                case JailSeverity.Moderate:
-                    baseJailTime = Mathf.Max(baseJailTime, MIN_JAIL_TIME * 2f);  // Double minimum
-                    sentence.Description = $"Moderate offenses (${actualFine} in fines)";
-                    break;
-                case JailSeverity.Major:
-                    baseJailTime = Mathf.Max(baseJailTime, MIN_JAIL_TIME * 3f);  // Triple minimum
-                    sentence.Description = $"Major offenses (${actualFine} in fines)";
-                    break;
-                case JailSeverity.Severe:
-                    baseJailTime = Mathf.Max(baseJailTime, MAX_JAIL_TIME);  // Use max time
-                    sentence.Description = $"Severe offenses (${actualFine} in fines)";
-                    break;
-            }
-
-            // Apply level multiplier but keep reasonable bounds
-            float levelMultiplier = GetPlayerLevelMultiplier(player);
-            sentence.JailTime = Mathf.Clamp(baseJailTime * levelMultiplier, MIN_JAIL_TIME, MAX_JAIL_TIME);
+            // Calculate sentence using CrimeSentenceCalculator (in game minutes)
+            var sentenceData = CrimeSentenceCalculator.Instance.CalculateSentence(player, rapSheet);
+            
+            // Convert game minutes to real-time seconds for JailTime
+            // 1 game minute = 1 real second, so conversion is 1:1
+            float jailTimeInSeconds = sentenceData.TotalGameMinutes;
+            
+            sentence.JailTime = jailTimeInSeconds;
+            
+            // Update description with formatted sentence
+            sentence.Description = GetCrimeDescription(sentence.Severity, player);
+            sentence.Description += $" - {sentenceData.FormattedSentence}";
 
             // For immediate jail system, we don't offer fine payment
             sentence.CanPayFine = false;
+            
+            ModLogger.Info($"[SENTENCE CALC] Calculated sentence: {sentenceData.FormattedSentence}");
+            ModLogger.Info($"[SENTENCE CALC] TotalGameMinutes: {sentenceData.TotalGameMinutes}, JailTime (game minutes): {jailTimeInSeconds}");
+            ModLogger.Info($"[SENTENCE CALC] Base: {sentenceData.BaseSentenceMinutes}, Severity: {sentenceData.SeverityMultiplier}, Repeat: {sentenceData.RepeatOffenderMultiplier}, Witness: {sentenceData.WitnessMultiplier}, Global: {sentenceData.GlobalMultiplier}");
         }
 
         private float GetPlayerLevelMultiplier(Player player)
@@ -591,6 +469,66 @@ namespace Behind_Bars.Systems
         }
 
         /// <summary>
+        /// Wait for jail sentence using game time tracking
+        /// </summary>
+        private IEnumerator WaitForJailSentence(float sentenceGameMinutes, Player player)
+        {
+            ModLogger.Info($"[JAIL TRACKING] Starting jail sentence tracking for {player.name}: {sentenceGameMinutes} game minutes ({GameTimeManager.FormatGameTime(sentenceGameMinutes)})");
+
+            if (sentenceGameMinutes <= 0)
+            {
+                ModLogger.Warn($"[JAIL TRACKING] Invalid sentence time: {sentenceGameMinutes} game minutes - completing immediately");
+                yield break;
+            }
+
+            bool sentenceComplete = false;
+            System.Action<Player> onComplete = (p) => 
+            { 
+                sentenceComplete = true;
+                ModLogger.Info($"[JAIL TRACKING] Sentence completion callback triggered for {p.name}");
+            };
+
+            // Start tracking with JailTimeTracker
+            JailTimeTracker.Instance.StartTracking(player, sentenceGameMinutes, onComplete);
+
+            // Wait while maintaining controls and checking for completion
+            const float checkInterval = 1f; // Check every real second
+            while (!sentenceComplete)
+            {
+                yield return new WaitForSeconds(checkInterval);
+
+                // Ensure controls are still enabled
+                try
+                {
+                    PlayerSingleton<PlayerInventory>.Instance.enabled = true;
+                    PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
+                    PlayerSingleton<PlayerCamera>.Instance.SetCanLook(true);
+                    PlayerSingleton<PlayerCamera>.Instance.LockMouse();
+#if MONO
+                    PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
+#else
+                    PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+#endif
+                    Singleton<HUD>.Instance.canvas.enabled = true;
+                    Singleton<HUD>.Instance.SetCrosshairVisible(true);
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Debug($"Control maintenance error: {ex.Message}");
+                }
+
+                // Check remaining time for logging
+                float remaining = JailTimeTracker.Instance.GetRemainingTime(player);
+                if (remaining > 0 && Mathf.FloorToInt(remaining) % 60 == 0) // Log every game hour
+                {
+                    ModLogger.Debug($"[JAIL TRACKING] Remaining: {JailTimeTracker.Instance.GetFormattedRemainingTime(player)}");
+                }
+            }
+
+            ModLogger.Info($"[JAIL TRACKING] Jail sentence completed for {player.name}");
+        }
+
+        /// <summary>
         /// Send player directly to holding cell for short sentences
         /// </summary>
         private IEnumerator SendPlayerToHoldingCell(Player player, JailSentence sentence)
@@ -652,9 +590,9 @@ namespace Behind_Bars.Systems
 
             ModLogger.Info($"Player {player.name} has completed booking process");
 
-            // Start actual jail time AFTER booking completion
-            ModLogger.Info($"Booking complete - now starting full jail sentence of {sentence.JailTime}s");
-            yield return WaitWithControlMaintenance(sentence.JailTime, player);
+            // Start actual jail time AFTER booking completion (using game time tracking)
+            ModLogger.Info($"Booking complete - now starting full jail sentence of {sentence.JailTime} game minutes");
+            yield return WaitForJailSentence(sentence.JailTime, player);
 
             // Release from holding cell
             holdingCell.ReleasePlayerFromSpawnPoint(player.name);
@@ -666,93 +604,33 @@ namespace Behind_Bars.Systems
         
         /// <summary>
         /// Start the booking process for the player
+        /// This handles the processing/booking time before sentence starts
         /// </summary>
         private IEnumerator StartBookingProcess(Player player, JailSentence sentence, CellDetail holdingCell)
         {
-            ModLogger.Info($"Starting booking process for {player.name}");
+            ModLogger.Info($"Starting booking/processing for {player.name}");
             
-            // Find booking process system
-            var bookingProcess = UnityEngine.Object.FindObjectOfType<Behind_Bars.Systems.Jail.BookingProcess>();
-            if (bookingProcess == null)
+            // CRITICAL: Start the actual booking process immediately
+            var bookingProcess = BookingProcess.Instance;
+            if (bookingProcess != null)
             {
-                ModLogger.Warn("No BookingProcess found - using traditional jail time");
-                yield return WaitWithControlMaintenance(sentence.JailTime, player);
-                ModLogger.Info($"Player {player.name} has served their jail time (no booking process) - initiating release");
-                SafeInitiateEnhancedRelease(player, ReleaseManager.ReleaseType.TimeServed);
-                yield break;
-            }
-            
-            bool bookingStarted = false;
-            try
-            {
-                // Start the booking process
+                ModLogger.Info($"Starting BookingProcess for {player.name} with sentence: {sentence.JailTime}s, Fine: ${sentence.FineAmount}");
                 bookingProcess.StartBooking(player, sentence);
-                bookingStarted = true;
-                ModLogger.Info("Booking process started successfully");
-            }
-            catch (System.Exception ex)
-            {
-                ModLogger.Error($"Error starting booking process: {ex.Message}");
-                bookingStarted = false;
-            }
-            
-            if (!bookingStarted)
-            {
-                yield return WaitWithControlMaintenance(sentence.JailTime, player);
-                ModLogger.Info($"Player {player.name} has served their jail time (booking failed to start) - initiating release");
-                SafeInitiateEnhancedRelease(player, ReleaseManager.ReleaseType.TimeServed);
-                yield break;
-            }
-            
-            // Wait for booking to complete
-            float timeout = 300f; // 5 minutes max
-            float elapsed = 0f;
-            
-            while (elapsed < timeout)
-            {
-                bool isComplete = false;
-                try
+                
+                // Wait for booking to complete (monitored by BookingProcess)
+                while (bookingProcess.IsBookingInProgress())
                 {
-                    isComplete = bookingProcess.mugshotComplete && 
-                               bookingProcess.fingerprintComplete && 
-                               bookingProcess.inventoryProcessed;
-                }
-                catch (System.Exception ex)
-                {
-                    ModLogger.Error($"Error checking booking completion: {ex.Message}");
-                    break;
+                    yield return new WaitForSeconds(1f);
                 }
                 
-                if (isComplete)
-                {
-                    ModLogger.Info("Booking process completed successfully");
-                    break;
-                }
-                
-                elapsed += 1f;
-                yield return new WaitForSeconds(1f);
+                ModLogger.Info($"Booking process completed for {player.name}");
             }
-            
-            if (elapsed >= timeout)
+            else
             {
-                try
-                {
-                    ModLogger.Warn("Booking process timed out - forcing completion");
-                    bookingProcess.ForceCompleteBooking();
-                }
-                catch (System.Exception ex)
-                {
-                    ModLogger.Error($"Error forcing booking completion: {ex.Message}");
-                }
+                ModLogger.Error("BookingProcess.Instance is null - cannot start booking!");
+                // Fallback: wait a short time then proceed
+                yield return new WaitForSeconds(5f);
             }
-            
-            // Start actual jail time AFTER booking completion
-            ModLogger.Info($"Booking complete - now starting full jail sentence of {sentence.JailTime}s");
-            yield return WaitWithControlMaintenance(sentence.JailTime, player);
-
-            // Release the player after serving time
-            ModLogger.Info($"Player {player.name} has served their jail time after booking - initiating release");
-            SafeInitiateEnhancedRelease(player, ReleaseManager.ReleaseType.TimeServed);
         }
 
         /// <summary>
@@ -808,10 +686,26 @@ namespace Behind_Bars.Systems
             // Keep controls enabled during processing
             ModLogger.Info("Player controls kept enabled during processing");
 
-            ModLogger.Info($"Player {player.name} in holding cell for processing - waiting 60 seconds");
-
-            // Processing delay - 60 seconds with control maintenance
-            yield return WaitWithControlMaintenance(60f, player);
+            // Start booking process immediately - it will handle the intake officer escort
+            ModLogger.Info($"Starting booking process for {player.name} in holding cell");
+            var bookingProcess = BookingProcess.Instance;
+            if (bookingProcess != null)
+            {
+                bookingProcess.StartBooking(player, sentence);
+                
+                // Wait for booking to complete (monitored by BookingProcess)
+                while (bookingProcess.IsBookingInProgress())
+                {
+                    yield return new WaitForSeconds(1f);
+                }
+                
+                ModLogger.Info($"Booking process completed for {player.name}");
+            }
+            else
+            {
+                ModLogger.Error("BookingProcess.Instance is null - falling back to simple wait");
+                yield return WaitWithControlMaintenance(5f, player);
+            }
 
             // Release from holding cell (but don't release from jail yet)
             holdingCell.ReleasePlayerFromSpawnPoint(player.name);
@@ -843,7 +737,9 @@ namespace Behind_Bars.Systems
                     {
                         player.transform.position = holdingSpawn.position;
                         holdingCell.cellDoor.LockDoor();
-                        yield return WaitWithControlMaintenance(sentence.JailTime - 60f, player); // Subtract processing time
+                        // Start tracking full sentence (processing time was separate)
+                        ModLogger.Info($"Starting jail sentence tracking in holding cell: {sentence.JailTime} game minutes ({GameTimeManager.FormatGameTime(sentence.JailTime)})");
+                        yield return WaitForJailSentence(sentence.JailTime, player);
                         holdingCell.ReleasePlayerFromSpawnPoint(player.name);
                         holdingCell.cellDoor.UnlockDoor();
                         // Use enhanced release system for time served
@@ -867,11 +763,10 @@ namespace Behind_Bars.Systems
             mainCell.cellDoor.LockDoor();
             mainCell.cellDoor.CloseDoor();
 
-            ModLogger.Info($"Player {player.name} transferred to main cell {mainCell.cellName} for remaining {sentence.JailTime - 60f}s");
+            ModLogger.Info($"Player {player.name} transferred to main cell {mainCell.cellName} for {sentence.JailTime} game minutes ({GameTimeManager.FormatGameTime(sentence.JailTime)})");
 
-            // Wait for remaining sentence time (minus the 60s processing time)
-            float remainingTime = sentence.JailTime - 60f;
-            yield return WaitWithControlMaintenance(remainingTime, player);
+            // Wait for full sentence time (processing time was separate, already waited)
+            yield return WaitForJailSentence(sentence.JailTime, player);
 
             ModLogger.Info($"Player {player.name} has served their main cell time");
 
@@ -925,7 +820,7 @@ namespace Behind_Bars.Systems
 
             ModLogger.Info($"Player {player.name} using fallback jail method (screen blackout) for {sentence.JailTime}s");
 
-            yield return WaitWithControlMaintenance(sentence.JailTime, player);
+            yield return WaitForJailSentence(sentence.JailTime, player);
 
             ModLogger.Info($"Player {player.name} has served their jail time (fallback method)");
             // Use enhanced release system for time served
@@ -1016,7 +911,7 @@ namespace Behind_Bars.Systems
             ModLogger.Info($"Starting jail time for {player.name} after booking completion - {sentence.JailTime}s");
 
             // Wait for the jail time with control maintenance
-            yield return WaitWithControlMaintenance(sentence.JailTime, player);
+            yield return WaitForJailSentence(sentence.JailTime, player);
 
             // After jail time completes, safely trigger release (checks for existing releases)
             SafeInitiateEnhancedRelease(player, ReleaseManager.ReleaseType.TimeServed);
@@ -1382,18 +1277,12 @@ namespace Behind_Bars.Systems
         }
 
         /// <summary>
-        /// Format jail time in a user-friendly way
+        /// Format jail time in a user-friendly way (now uses game time)
         /// </summary>
-        private string FormatJailTime(float timeInSeconds)
+        private string FormatJailTime(float timeInGameMinutes)
         {
-            if (timeInSeconds < 60)
-                return $"{(int)timeInSeconds} seconds";
-            else if (timeInSeconds < 3600)
-                return $"{(int)(timeInSeconds / 60)} minutes";
-            else if (timeInSeconds < 86400)
-                return $"{(int)(timeInSeconds / 3600)} hours";
-            else
-                return $"{(int)(timeInSeconds / 86400)} days";
+            // Use GameTimeManager to format game time
+            return GameTimeManager.FormatGameTime(timeInGameMinutes);
         }
 
         /// <summary>

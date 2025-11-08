@@ -2,6 +2,7 @@ using UnityEngine;
 using Behind_Bars.Helpers;
 using Behind_Bars.Utils;
 using Behind_Bars.Systems.Jail;
+using Behind_Bars.Systems;
 using System;
 using System.Collections;
 using System.Linq;
@@ -458,29 +459,19 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Format time in seconds to user-friendly display
+        /// Format time in game seconds to user-friendly display (now uses game time)
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
-        private string FormatTime(float timeInSeconds)
+        private string FormatTime(float timeInGameSeconds)
         {
-            if (timeInSeconds <= 0)
+            if (timeInGameSeconds <= 0)
                 return "Released";
-                
-            int totalSeconds = (int)timeInSeconds;
-            int days = totalSeconds / 86400;
-            int hours = (totalSeconds % 86400) / 3600;
-            int minutes = (totalSeconds % 3600) / 60;
             
-            if (days > 0)
-                return $"{days}d {hours}h {minutes}m";
-            else if (hours > 0)
-                return $"{hours}h {minutes}m";
-            else if (minutes > 0)
-                return $"{minutes}m";
-            else
-                return "< 1m"; // Less than 1 minute remaining
+            // Convert game seconds to game minutes and use GameTimeManager
+            float gameMinutes = timeInGameSeconds / 60f;
+            return GameTimeManager.FormatGameTime(gameMinutes);
         }
 
         /// <summary>

@@ -22,17 +22,17 @@ namespace Behind_Bars.Systems.CrimeTracking
         [JsonProperty("isOnParole")]
         private bool isOnParole;
         [JsonProperty("paroleStartTime")]
-        private float paroleStartTime;
+        private float paroleStartTime; // Now stores game time (game minutes)
         [JsonProperty("paroleEndTime")]
-        private float paroleEndTime;
+        private float paroleEndTime; // Now stores game time (game minutes)
         [JsonProperty("paroleTermLengthInSeconds")]
-        private float paroleTermLengthInSeconds;
+        private float paroleTermLengthInSeconds; // Kept for JSON compatibility, but now stores game minutes
         [JsonProperty("paroleViolations")]
         private List<ViolationRecord> paroleViolations;
         [JsonProperty("isPaused")]
         private bool isPaused;
         [JsonProperty("pausedRemainingTime")]
-        private float pausedRemainingTime;
+        private float pausedRemainingTime; // Now stores game time (game minutes)
 
         // Non-Serialized fields
         [NonSerialized]
@@ -81,7 +81,7 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// <summary>
         /// Gets the current parole status and remaining time.
         /// </summary>
-        /// <returns>A tuple containing whether they're on parole and remaining time in seconds (0 if not on parole).</returns>
+        /// <returns>A tuple containing whether they're on parole and remaining time in game minutes (0 if not on parole).</returns>
         public (bool isParole, float remainingTime) GetParoleStatus()
         {
             if (!isOnParole)
@@ -89,24 +89,24 @@ namespace Behind_Bars.Systems.CrimeTracking
                 return (false, 0f);
             }
 
-            // If paused, return the preserved remaining time
+            // If paused, return the preserved remaining time (in game minutes)
             if (isPaused)
             {
                 return (true, pausedRemainingTime);
             }
 
-            // Otherwise calculate from current time
-            float currentTime = UnityEngine.Time.time;
-            float remainingTime = paroleEndTime - currentTime;
+            // Otherwise calculate from current game time
+            float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
+            float remainingTime = paroleEndTime - currentGameTime;
             return (true, Mathf.Max(0f, remainingTime));
         }
 
         /// <summary>
         /// Starts parole for the player with the specified term length.
         /// </summary>
-        /// <param name="termLengthInSeconds">The length of the parole term in seconds.</param>
+        /// <param name="termLengthInGameMinutes">The length of the parole term in game minutes.</param>
         /// <returns>True if parole was started successfully, false if already on parole.</returns>
-        public bool StartParole(float termLengthInSeconds)
+        public bool StartParole(float termLengthInGameMinutes)
         {
             if (isOnParole)
             {
@@ -115,11 +115,12 @@ namespace Behind_Bars.Systems.CrimeTracking
             }
 
             isOnParole = true;
-            paroleStartTime = UnityEngine.Time.time;
-            paroleTermLengthInSeconds = termLengthInSeconds;
-            paroleEndTime = paroleStartTime + termLengthInSeconds;
+            float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
+            paroleStartTime = currentGameTime;
+            paroleTermLengthInSeconds = termLengthInGameMinutes; // Store in game minutes (kept name for JSON compatibility)
+            paroleEndTime = paroleStartTime + termLengthInGameMinutes;
 
-            ModLogger.Info($"Started parole for {player.name}. Term: {termLengthInSeconds} seconds. Ends at: {paroleEndTime}");
+            ModLogger.Info($"Started parole for {player.name}. Term: {termLengthInGameMinutes} game minutes ({GameTimeManager.FormatGameTime(termLengthInGameMinutes)}). Ends at game time: {paroleEndTime}");
             SaveRecordToFile();
             return true;
         }
@@ -137,15 +138,15 @@ namespace Behind_Bars.Systems.CrimeTracking
             }
 
             isOnParole = false;
-            float actualEndTime = UnityEngine.Time.time;
+            float actualEndGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
 
-            ModLogger.Info($"Ended parole for {player.name}. Was scheduled to end at: {paroleEndTime}, actually ended at: {actualEndTime}");
+            ModLogger.Info($"Ended parole for {player.name}. Was scheduled to end at game time: {paroleEndTime}, actually ended at game time: {actualEndGameTime}");
             SaveRecordToFile();
             return true;
         }
 
         /// <summary>
-        /// Checks if the player's parole has expired based on the current time.
+        /// Checks if the player's parole has expired based on the current game time.
         /// </summary>
         /// <returns>True if parole has expired, false otherwise.</returns>
         public bool IsParoleExpired()
@@ -155,7 +156,8 @@ namespace Behind_Bars.Systems.CrimeTracking
                 return false;
             }
 
-            return UnityEngine.Time.time >= paroleEndTime;
+            float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
+            return currentGameTime >= paroleEndTime;
         }
 
         /// <summary>
@@ -192,12 +194,12 @@ namespace Behind_Bars.Systems.CrimeTracking
                 return false;
             }
 
-            // Calculate and store remaining time
-            float currentTime = UnityEngine.Time.time;
-            pausedRemainingTime = Mathf.Max(0f, paroleEndTime - currentTime);
+            // Calculate and store remaining time (in game minutes)
+            float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
+            pausedRemainingTime = Mathf.Max(0f, paroleEndTime - currentGameTime);
             isPaused = true;
 
-            ModLogger.Info($"[PAROLE] Paused parole for {player.name}. Remaining time preserved: {pausedRemainingTime}s ({pausedRemainingTime / 60f:F1} minutes)");
+            ModLogger.Info($"[PAROLE] Paused parole for {player.name}. Remaining time preserved: {pausedRemainingTime} game minutes ({GameTimeManager.FormatGameTime(pausedRemainingTime)})");
             SaveRecordToFile();
             return true;
         }
@@ -214,13 +216,14 @@ namespace Behind_Bars.Systems.CrimeTracking
                 return false;
             }
 
-            // Resume with preserved remaining time
+            // Resume with preserved remaining time (in game minutes)
             isPaused = false;
-            paroleStartTime = UnityEngine.Time.time;
+            float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
+            paroleStartTime = currentGameTime;
             paroleEndTime = paroleStartTime + pausedRemainingTime;
-            paroleTermLengthInSeconds = pausedRemainingTime;
+            paroleTermLengthInSeconds = pausedRemainingTime; // Store in game minutes
 
-            ModLogger.Info($"[PAROLE] Resumed parole for {player.name}. Remaining time: {pausedRemainingTime}s ({pausedRemainingTime / 60f:F1} minutes)");
+            ModLogger.Info($"[PAROLE] Resumed parole for {player.name}. Remaining time: {pausedRemainingTime} game minutes ({GameTimeManager.FormatGameTime(pausedRemainingTime)})");
             SaveRecordToFile();
             return true;
         }
@@ -229,9 +232,9 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// Extends an existing paused parole term by adding additional time.
         /// Used when player accumulates new crimes or violations while paused.
         /// </summary>
-        /// <param name="additionalSeconds">Additional time to add to the paused parole term.</param>
+        /// <param name="additionalGameMinutes">Additional time to add to the paused parole term (in game minutes).</param>
         /// <returns>True if parole was extended successfully, false if not paused.</returns>
-        public bool ExtendPausedParole(float additionalSeconds)
+        public bool ExtendPausedParole(float additionalGameMinutes)
         {
             if (!isOnParole || !isPaused)
             {
@@ -239,9 +242,9 @@ namespace Behind_Bars.Systems.CrimeTracking
                 return false;
             }
 
-            pausedRemainingTime += additionalSeconds;
+            pausedRemainingTime += additionalGameMinutes;
 
-            ModLogger.Info($"[PAROLE] Extended paused parole for {player.name} by {additionalSeconds}s. New remaining time: {pausedRemainingTime}s ({pausedRemainingTime / 60f:F1} minutes)");
+            ModLogger.Info($"[PAROLE] Extended paused parole for {player.name} by {additionalGameMinutes} game minutes ({GameTimeManager.FormatGameTime(additionalGameMinutes)}). New remaining time: {pausedRemainingTime} game minutes ({GameTimeManager.FormatGameTime(pausedRemainingTime)})");
             SaveRecordToFile();
             return true;
         }
@@ -331,7 +334,7 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// <summary>
         /// Gets the start time of the current parole term.
         /// </summary>
-        /// <returns>The start time in Unity time, or 0 if not on parole.</returns>
+        /// <returns>The start time in game minutes, or 0 if not on parole.</returns>
         public float GetParoleStartTime()
         {
             return isOnParole ? paroleStartTime : 0f;
@@ -340,19 +343,19 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// <summary>
         /// Gets the scheduled end time of the current parole term.
         /// </summary>
-        /// <returns>The end time in Unity time, or 0 if not on parole.</returns>
+        /// <returns>The end time in game minutes, or 0 if not on parole.</returns>
         public float GetParoleEndTime()
         {
             return isOnParole ? paroleEndTime : 0f;
         }
 
         /// <summary>
-        /// Gets the total length of the parole term in seconds.
+        /// Gets the total length of the parole term in game minutes.
         /// </summary>
-        /// <returns>The term length in seconds.</returns>
+        /// <returns>The term length in game minutes.</returns>
         public float GetParoleTermLength()
         {
-            return paroleTermLengthInSeconds;
+            return paroleTermLengthInSeconds; // Actually stores game minutes (kept name for JSON compatibility)
         }
 
         /// <summary>
@@ -366,17 +369,14 @@ namespace Behind_Bars.Systems.CrimeTracking
                 return "Not on parole";
             }
 
-            float remaining = GetParoleStatus().remainingTime;
+            float remaining = GetParoleStatus().remainingTime; // In game minutes
             if (remaining <= 0)
             {
                 return "Parole expired";
             }
 
-            int days = Mathf.FloorToInt(remaining / 86400);
-            int hours = Mathf.FloorToInt((remaining % 86400) / 3600);
-            int minutes = Mathf.FloorToInt((remaining % 3600) / 60);
-
-            return $"{days}d {hours}h {minutes}m";
+            // Format using GameTimeManager
+            return GameTimeManager.FormatGameTime(remaining);
         }
 
         #endregion

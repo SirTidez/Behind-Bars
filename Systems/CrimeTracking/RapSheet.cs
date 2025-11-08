@@ -349,7 +349,7 @@ namespace Behind_Bars.Systems.CrimeTracking
                 case LSILevel.None:
                     return 0.0f;        // 0% - Not on parole or no assessment
                 case LSILevel.Minimum:
-                    return 0.10f;       // 10% - Low risk
+                    return 0.15f;       // 15% - Low risk (increased from 10%)
                 case LSILevel.Medium:
                     return 0.30f;       // 30% - Moderate risk
                 case LSILevel.High:
@@ -388,9 +388,9 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// Start parole for this player with initial LSI assessment
         /// This is a convenience method that combines parole start and LSI calculation
         /// </summary>
-        /// <param name="termLengthInSeconds">Length of parole term in seconds</param>
+        /// <param name="termLengthInGameMinutes">Length of parole term in game minutes</param>
         /// <returns>True if parole was started successfully</returns>
-        public bool StartParoleWithAssessment(float termLengthInSeconds)
+        public bool StartParoleWithAssessment(float termLengthInGameMinutes)
         {
             // Create parole record if it doesn't exist
             if (CurrentParoleRecord == null)
@@ -398,8 +398,8 @@ namespace Behind_Bars.Systems.CrimeTracking
                 CurrentParoleRecord = new ParoleRecord(Player);
             }
 
-            // Start parole
-            bool success = CurrentParoleRecord.StartParole(termLengthInSeconds);
+            // Start parole (now uses game minutes)
+            bool success = CurrentParoleRecord.StartParole(termLengthInGameMinutes);
 
             if (success)
             {

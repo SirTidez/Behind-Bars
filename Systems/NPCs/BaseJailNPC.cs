@@ -252,7 +252,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             if (HasReachedDestination())
             {
-                ModLogger.Info($"BaseJailNPC: Destination reached, firing OnDestinationReached event for {gameObject.name}");
+                // ModLogger.Info($"BaseJailNPC: Destination reached, firing OnDestinationReached event for {gameObject.name}");
                 OnDestinationReached?.Invoke(currentDestination);
                 ChangeState(NPCState.Idle);
             }
@@ -300,7 +300,7 @@ namespace Behind_Bars.Systems.NPCs
             navAgent.SetDestination(destination);
             ChangeState(NPCState.Moving);
 
-            ModLogger.Debug($"{gameObject.name} moving to {destination}");
+            // ModLogger.Debug($"{gameObject.name} moving to {destination}");
             return true;
         }
 
@@ -311,12 +311,12 @@ namespace Behind_Bars.Systems.NPCs
             bool pathComplete = !navAgent.pathPending && navAgent.remainingDistance < positionTolerance;
             bool distanceCheck = Vector3.Distance(transform.position, currentDestination) < positionTolerance;
 
-            // Debug logging
-            if (currentState == NPCState.Moving && Time.frameCount % 120 == 0) // Log every 2 seconds at 60fps
-            {
-                float currentDistance = Vector3.Distance(transform.position, currentDestination);
-                ModLogger.Debug($"BaseJailNPC {gameObject.name}: pathPending={navAgent.pathPending}, remainingDistance={navAgent.remainingDistance:F2}, actualDistance={currentDistance:F2}, tolerance={positionTolerance}, pathComplete={pathComplete}, distanceCheck={distanceCheck}");
-            }
+            // Debug logging (commented out to reduce log spam)
+            // if (currentState == NPCState.Moving && Time.frameCount % 120 == 0) // Log every 2 seconds at 60fps
+            // {
+            //     float currentDistance = Vector3.Distance(transform.position, currentDestination);
+            //     ModLogger.Debug($"BaseJailNPC {gameObject.name}: pathPending={navAgent.pathPending}, remainingDistance={navAgent.remainingDistance:F2}, actualDistance={currentDistance:F2}, tolerance={positionTolerance}, pathComplete={pathComplete}, distanceCheck={distanceCheck}");
+            // }
 
             return pathComplete || distanceCheck;
         }
@@ -343,7 +343,7 @@ namespace Behind_Bars.Systems.NPCs
 
                 if (stuckCheckTime >= stuckThreshold)
                 {
-                    ModLogger.Warn($"NPC {gameObject.name} appears stuck. Attempting to resolve...");
+                    // ModLogger.Warn($"NPC {gameObject.name} appears stuck. Attempting to resolve...");
                     OnStuck?.Invoke();
 
                     // Try to resolve by re-setting destination

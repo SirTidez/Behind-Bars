@@ -18,10 +18,30 @@ namespace Behind_Bars.Helpers
         
         /// <summary>
         /// Jail system constants
+        /// Note: Jail times are now in game minutes (see GameTimeManager for conversion)
         /// </summary>
-        public const float DEFAULT_MIN_JAIL_TIME = 5f;  // 5 seconds for testing
-        public const float DEFAULT_MAX_JAIL_TIME = 30f; // 30 seconds max for testing
+        public const float DEFAULT_MIN_JAIL_TIME = 5f;  // 5 seconds for testing (deprecated - use game time)
+        public const float DEFAULT_MAX_JAIL_TIME = 30f; // 30 seconds max for testing (deprecated - use game time)
         public const float DEFAULT_JAIL_TIME_MULTIPLIER = 1.0f;
+        
+        /// <summary>
+        /// Game time constants (see GameTimeManager for full documentation)
+        /// 1 real second = 1 game minute
+        /// 1 real minute = 1 game hour
+        /// 24 real minutes = 1 game day
+        /// </summary>
+        public const float REAL_SECONDS_PER_GAME_MINUTE = 1f;      // 1 real second = 1 game minute
+        public const float GAME_SECONDS_PER_GAME_MINUTE = 60f;     // 60 game seconds = 1 game minute
+        public const float GAME_MINUTES_PER_GAME_HOUR = 60f;       // 60 game minutes = 1 game hour
+        public const float GAME_HOURS_PER_GAME_DAY = 24f;          // 24 game hours = 1 game day
+        public const float REAL_SECONDS_PER_GAME_HOUR = 60f;       // 1 real minute = 1 game hour
+        public const float REAL_SECONDS_PER_GAME_DAY = 1440f;      // 24 real minutes = 1 game day
+        
+        /// <summary>
+        /// Sentence constraints (in game minutes)
+        /// </summary>
+        public const float MIN_SENTENCE_GAME_MINUTES = 120f;         // Minimum sentence: 2 game hours (120 game minutes)
+        public const float MAX_SENTENCE_GAME_MINUTES = 7200f;       // Maximum sentence: 5 game days (7200 game minutes)
         
         /// <summary>
         /// Bail system constants

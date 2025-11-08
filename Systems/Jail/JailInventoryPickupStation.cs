@@ -415,7 +415,7 @@ namespace Behind_Bars.Systems.Jail
             }
             
             // First, change player to prison clothing
-            ChangePlayerToPrisonClothing(player);
+            yield return ChangePlayerToPrisonClothing(player);
 
             yield return new WaitForSeconds(1f);
 
@@ -566,9 +566,51 @@ namespace Behind_Bars.Systems.Jail
         
         /// <summary>
         /// Change player's appearance to prison attire
+        /// Uses third-person camera view to fix visual bug when applying uniform
         /// </summary>
-        private void ChangePlayerToPrisonClothing(Player player)
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private IEnumerator ChangePlayerToPrisonClothing(Player player)
         {
+            var playerCamera = PlayerSingleton<PlayerCamera>.Instance;
+            
+            // Freeze player movement during uniform application
+            bool wasMovable = false;
+            try
+            {
+#if MONO
+                wasMovable = PlayerSingleton<PlayerMovement>.Instance.CanMove;
+                PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
+#else
+                wasMovable = PlayerSingleton<PlayerMovement>.Instance.canMove;
+                PlayerSingleton<PlayerMovement>.Instance.canMove = false;
+#endif
+                ModLogger.Debug("Froze player movement during uniform application");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error freezing player movement: {ex.Message}");
+            }
+            
+            // Enter third-person view to fix visual bug
+            if (playerCamera != null)
+            {
+                try
+                {
+                    playerCamera.ViewAvatar();
+                    ModLogger.Debug("Entered third-person view for uniform application");
+                }
+                catch (System.Exception ex)
+                {
+                    ModLogger.Debug($"Could not enter third-person view: {ex.Message}");
+                }
+            }
+
+            // Wait a moment for camera transition to complete
+            yield return new WaitForSeconds(0.2f);
+
+            // Get player's avatar component and apply uniform
             try
             {
                 ModLogger.Info($"Changing {player.name} to prison clothing...");
@@ -582,7 +624,22 @@ namespace Behind_Bars.Systems.Jail
                 if (playerAvatar == null)
                 {
                     ModLogger.Error("Could not find player's Avatar component");
-                    return;
+                    // Exit third-person view before breaking
+                    if (playerCamera != null)
+                    {
+                        try { playerCamera.StopViewingAvatar(); } catch { }
+                    }
+                    // Restore movement before breaking
+                    try
+                    {
+#if MONO
+                        PlayerSingleton<PlayerMovement>.Instance.CanMove = wasMovable;
+#else
+                        PlayerSingleton<PlayerMovement>.Instance.canMove = wasMovable;
+#endif
+                    }
+                    catch { }
+                    yield break;
                 }
 
                 // Get current avatar settings
@@ -590,7 +647,22 @@ namespace Behind_Bars.Systems.Jail
                 if (currentSettings == null)
                 {
                     ModLogger.Error("Could not get player's current avatar settings");
-                    return;
+                    // Exit third-person view before breaking
+                    if (playerCamera != null)
+                    {
+                        try { playerCamera.StopViewingAvatar(); } catch { }
+                    }
+                    // Restore movement before breaking
+                    try
+                    {
+#if MONO
+                        PlayerSingleton<PlayerMovement>.Instance.CanMove = wasMovable;
+#else
+                        PlayerSingleton<PlayerMovement>.Instance.canMove = wasMovable;
+#endif
+                    }
+                    catch { }
+                    yield break;
                 }
 
                 // Save original clothing (body layers and accessories)
@@ -657,20 +729,53 @@ namespace Behind_Bars.Systems.Jail
                 playerAvatar.LoadAvatarSettings(currentSettings);
 
                 ModLogger.Info($"✓ Changed {player.name} to prison attire");
-
-                // Show notification
-                if (BehindBarsUIManager.Instance != null)
-                {
-                    BehindBarsUIManager.Instance.ShowNotification(
-                        "Changed into prison uniform",
-                        NotificationType.Progress
-                    );
-                }
             }
             catch (System.Exception ex)
             {
                 ModLogger.Error($"Error changing player to prison clothing: {ex.Message}");
                 ModLogger.Error($"Stack trace: {ex.StackTrace}");
+            }
+
+            // Hold third-person view for 1 second while player is frozen to see the uniform change
+            // Player remains frozen and in third-person during this wait
+            yield return new WaitForSeconds(1f);
+
+            // Exit third-person view
+            if (playerCamera != null)
+            {
+                try
+                {
+                    playerCamera.StopViewingAvatar();
+                    ModLogger.Debug("Exited third-person view after uniform application");
+                }
+                catch (System.Exception ex)
+                {
+                    ModLogger.Debug($"Could not exit third-person view: {ex.Message}");
+                }
+            }
+
+            // Restore player movement after uniform application and third-person view
+            try
+            {
+#if MONO
+                PlayerSingleton<PlayerMovement>.Instance.CanMove = wasMovable;
+#else
+                PlayerSingleton<PlayerMovement>.Instance.canMove = wasMovable;
+#endif
+                ModLogger.Debug("Restored player movement after uniform application");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error restoring player movement: {ex.Message}");
+            }
+
+            // Show notification
+            if (BehindBarsUIManager.Instance != null)
+            {
+                BehindBarsUIManager.Instance.ShowNotification(
+                    "Changed into prison uniform",
+                    NotificationType.Progress
+                );
             }
         }
 

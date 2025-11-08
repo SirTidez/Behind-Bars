@@ -624,7 +624,7 @@ namespace Behind_Bars.Systems.NPCs
             switch (state)
             {
                 case IntakeState.DelayBeforeFetch:
-                    delayDuration = UnityEngine.Random.Range(5f, 10f);
+                    delayDuration = UnityEngine.Random.Range(2f, 4f); // Reduced from 5-10 seconds to 2-4 seconds
                     ModLogger.Info($"IntakeOfficer: Waiting {delayDuration:F1} seconds before fetching prisoner");
                     break;
 
