@@ -7,6 +7,7 @@ using Behind_Bars.Systems.Jail;
 using Behind_Bars.Systems.Data;
 using Behind_Bars.Systems.NPCs;
 using Behind_Bars.Systems.CrimeTracking;
+using Behind_Bars.Systems;
 using UnityEngine;
 using MelonLoader;
 
@@ -481,7 +482,21 @@ namespace Behind_Bars.Systems
                 yield break;
             }
 
+            // Calculate and store bail amount
+            float bailAmount = 0f;
+            var bailSystem = new BailSystem();
+            float fineAmount = CalculateTotalCrimeFines(player);
+            
+            if (fineAmount > 0)
+            {
+                var bailOffer = bailSystem.CalculateBailAmount(player, fineAmount);
+                bailAmount = bailOffer.Amount;
+                bailSystem.StoreBailAmount(player, bailAmount);
+                ModLogger.Info($"[BAIL] Calculated bail amount: ${bailAmount:F0} for {player.name} (based on fine: ${fineAmount:F0})");
+            }
+
             bool sentenceComplete = false;
+            bool bailPaid = false;
             System.Action<Player> onComplete = (p) => 
             { 
                 sentenceComplete = true;
@@ -491,9 +506,33 @@ namespace Behind_Bars.Systems
             // Start tracking with JailTimeTracker
             JailTimeTracker.Instance.StartTracking(player, sentenceGameMinutes, onComplete);
 
-            // Wait while maintaining controls and checking for completion
-            const float checkInterval = 1f; // Check every real second
-            while (!sentenceComplete)
+            // Update jail status UI with the correct bail amount (ensure consistency)
+            var jailStatusUIWrapper = BehindBarsUIManager.Instance.GetUIWrapper();
+            if (jailStatusUIWrapper != null && bailAmount > 0)
+            {
+                // Update the bail amount in the jail status UI to match the payment amount
+                jailStatusUIWrapper.UpdateBailAmount(bailAmount);
+                ModLogger.Info($"[BAIL] Updated jail status UI bail amount to ${bailAmount:F0}");
+            }
+
+            // Show bail UI if player can afford it
+            if (bailAmount > 0 && bailSystem.CanPlayerAffordBail(player, bailAmount))
+            {
+                BehindBarsUIManager.Instance.ShowBailUI(bailAmount);
+                ModLogger.Info($"[BAIL] Showing bail UI for {player.name}: ${bailAmount:F0}");
+            }
+            else if (bailAmount > 0)
+            {
+                ModLogger.Info($"[BAIL] Player {player.name} cannot afford bail of ${bailAmount:F0}");
+            }
+
+            // Wait while maintaining controls and checking for completion or bail payment
+            const float checkInterval = 0.1f; // Check more frequently for key presses
+            float lastBailCheck = 0f;
+            const float bailCheckInterval = 1f; // Check cash balance every second
+            bool bailKeyWasPressed = false; // Track previous frame key state to detect key press
+            
+            while (!sentenceComplete && !bailPaid)
             {
                 yield return new WaitForSeconds(checkInterval);
 
@@ -517,6 +556,72 @@ namespace Behind_Bars.Systems
                     ModLogger.Debug($"Control maintenance error: {ex.Message}");
                 }
 
+                // Check for bail payment key press using flag-based detection
+                // This is more reliable than GetKeyDown in coroutines that check every 0.1s
+                bool bailKeyCurrentlyPressed = Input.GetKey(Core.BailoutKey);
+                bool bailKeyJustPressed = bailKeyCurrentlyPressed && !bailKeyWasPressed;
+                bailKeyWasPressed = bailKeyCurrentlyPressed;
+                
+                if (bailAmount > 0 && bailKeyJustPressed)
+                {
+                    if (bailSystem.CanPlayerAffordBail(player, bailAmount))
+                    {
+                        ModLogger.Info($"[BAIL] Player {player.name} pressed bail payment key");
+                        bailPaid = true;
+                        
+                        // Hide bail UI immediately
+                        BehindBarsUIManager.Instance.HideBailUI();
+                        
+                        // Update jail status UI to show "Bailed Out"
+                        var uiWrapper = BehindBarsUIManager.Instance.GetUIWrapper();
+                        if (uiWrapper != null)
+                        {
+                            uiWrapper.SetBailedOutStatus();
+                        }
+                        
+                        // Stop sentence tracking (cancel time-based release)
+                        JailTimeTracker.Instance.StopTracking(player);
+                        
+                        // Process bail payment and release
+                        MelonLoader.MelonCoroutines.Start(bailSystem.ProcessBailPayment(player, bailAmount, false));
+                        
+                        ModLogger.Info($"[BAIL] Bail payment initiated for {player.name}");
+                        yield break; // Exit the wait loop
+                    }
+                    else
+                    {
+                        // Show notification that they can't afford bail
+                        BehindBarsUIManager.Instance.ShowNotification(
+                            $"Insufficient cash for bail. Required: ${bailAmount:F0}",
+                            NotificationType.Warning
+                        );
+                    }
+                }
+
+                // Periodically check cash balance and update UI visibility
+                float currentTime = Time.time;
+                if (currentTime - lastBailCheck >= bailCheckInterval)
+                {
+                    lastBailCheck = currentTime;
+                    
+                    if (bailAmount > 0)
+                    {
+                        bool canAfford = bailSystem.CanPlayerAffordBail(player, bailAmount);
+                        bool uiVisible = BehindBarsUIManager.Instance.IsBailUIVisible();
+                        
+                        if (canAfford && !uiVisible)
+                        {
+                            // Player gained enough cash - show UI
+                            BehindBarsUIManager.Instance.ShowBailUI(bailAmount);
+                        }
+                        else if (!canAfford && uiVisible)
+                        {
+                            // Player lost cash - hide UI
+                            BehindBarsUIManager.Instance.HideBailUI();
+                        }
+                    }
+                }
+
                 // Check remaining time for logging
                 float remaining = JailTimeTracker.Instance.GetRemainingTime(player);
                 if (remaining > 0 && Mathf.FloorToInt(remaining) % 60 == 0) // Log every game hour
@@ -525,7 +630,13 @@ namespace Behind_Bars.Systems
                 }
             }
 
-            ModLogger.Info($"[JAIL TRACKING] Jail sentence completed for {player.name}");
+            // Hide bail UI if sentence completed normally
+            if (sentenceComplete && !bailPaid)
+            {
+                BehindBarsUIManager.Instance.HideBailUI();
+            }
+
+            ModLogger.Info($"[JAIL TRACKING] Jail sentence completed for {player.name} (bail paid: {bailPaid})");
         }
 
         /// <summary>
@@ -1154,8 +1265,23 @@ namespace Behind_Bars.Systems
                 string crimeInfo = GetCrimeDescription(sentence.Severity, player);
                 string timeInfo = FormatJailTime(sentence.JailTime);
 
-                // Calculate proper bail amount (much higher than fine for serious crimes)
-                float bailAmount = CalculateBailAmount(sentence.FineAmount, sentence.Severity);
+                // Calculate proper bail amount using BailSystem (consistent with payment system)
+                // Try to get stored bail amount first, otherwise calculate it
+                var bailSystemForUI = new BailSystem();
+                float bailAmount = bailSystemForUI.GetBailAmount(player);
+                
+                // If no stored bail amount, calculate it
+                if (bailAmount <= 0)
+                {
+                    float fineAmount = CalculateTotalCrimeFines(player);
+                    if (fineAmount > 0)
+                    {
+                        var bailOffer = bailSystemForUI.CalculateBailAmount(player, fineAmount);
+                        bailAmount = bailOffer.Amount;
+                        // Store it for consistency
+                        bailSystemForUI.StoreBailAmount(player, bailAmount);
+                    }
+                }
                 string bailInfo = FormatBailAmount(bailAmount);
 
                 // Show the UI using the BehindBarsUIManager WITHOUT starting timer (timer starts after booking)

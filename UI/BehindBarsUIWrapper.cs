@@ -227,6 +227,21 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
+        /// Set the UI to show "Bailed Out" status
+        /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        public void SetBailedOutStatus()
+        {
+            SetTimeInfo("Bailed Out");
+            SetBailInfo("$0");
+            // Stop dynamic updates since player is bailed out
+            _isUpdating = false;
+            ModLogger.Info("Jail UI updated to show 'Bailed Out' status");
+        }
+
+        /// <summary>
         /// Update all jail information at once
         /// </summary>
 #if !MONO
@@ -237,6 +252,21 @@ namespace Behind_Bars.UI
             SetCrimeInfo(crime);
             SetTimeInfo(timeInfo);
             SetBailInfo(bailInfo);
+        }
+
+        /// <summary>
+        /// Update the stored bail amount without restarting dynamic updates
+        /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        public void UpdateBailAmount(float bailAmount)
+        {
+            _originalBailAmount = bailAmount;
+            _currentBailAmount = bailAmount;
+            // Update the display immediately
+            SetBailInfo($"${bailAmount:F0}");
+            ModLogger.Debug($"Updated bail amount to ${bailAmount:F0}");
         }
 
         /// <summary>
@@ -353,19 +383,8 @@ namespace Behind_Bars.UI
                 _remainingJailTime -= GAME_SECONDS_PER_GAME_MINUTE;
                 if (_remainingJailTime < 0) _remainingJailTime = 0;
                 
-                // Update bail amount using linear interpolation based on time remaining
-                if (_originalJailTime > 0 && _originalBailAmount > 0)
-                {
-                    // Calculate progress: 0 = just started, 1 = time is up
-                    float progress = 1f - (_remainingJailTime / _originalJailTime);
-                    
-                    // Lerp from original bail to minimum bail (50) based on progress
-                    float minBail = 50f;
-                    _currentBailAmount = Mathf.Lerp(_originalBailAmount, minBail, progress);
-                    
-                    // Ensure we don't go below minimum
-                    if (_currentBailAmount < minBail) _currentBailAmount = minBail;
-                }
+                // Bail amount stays static - don't decrease over time
+                // The bail amount displayed should match the actual bail amount required for payment
                 
                 // Update the UI display every second for smooth countdown
                 UpdateDisplayedValues();

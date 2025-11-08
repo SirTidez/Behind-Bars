@@ -417,6 +417,11 @@ namespace Behind_Bars.UI
         private ParoleStatusUI? _paroleStatusUI;
         private Coroutine? _paroleStatusUpdateCoroutine;
         
+        // === BAIL UI SYSTEM ===
+
+        private GameObject? _bailManager;
+        private BailUI? _bailUI;
+        
         /// <summary>
         /// Show a booking notification to the player
         /// </summary>
@@ -1038,6 +1043,129 @@ namespace Behind_Bars.UI
                 {
                     ModLogger.Error($"Error in parole status update coroutine: {ex.Message}");
                 }
+            }
+        }
+
+        // === BAIL UI SYSTEM ===
+
+        /// <summary>
+        /// Show bail payment prompt
+        /// </summary>
+        public void ShowBailUI(float bailAmount)
+        {
+            try
+            {
+                // Create bail UI if it doesn't exist
+                if (_bailUI == null)
+                {
+                    CreateBailUI();
+                }
+
+                if (_bailUI == null)
+                {
+                    ModLogger.Error("Failed to create bail UI");
+                    return;
+                }
+
+                _bailUI.ShowBail(bailAmount);
+                ModLogger.Debug($"Showing bail UI: ${bailAmount:F0}");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error showing bail UI: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Update bail amount in UI
+        /// </summary>
+        public void UpdateBailUI(float bailAmount)
+        {
+            try
+            {
+                if (_bailUI == null)
+                {
+                    ShowBailUI(bailAmount);
+                    return;
+                }
+
+                _bailUI.UpdateBailAmount(bailAmount);
+                ModLogger.Debug($"Updated bail UI: ${bailAmount:F0}");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error updating bail UI: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Hide bail payment prompt
+        /// </summary>
+        public void HideBailUI()
+        {
+            try
+            {
+                if (_bailUI != null)
+                {
+                    _bailUI.Hide();
+                    ModLogger.Debug("Hiding bail UI");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error hiding bail UI: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Check if bail UI is currently visible
+        /// </summary>
+        public bool IsBailUIVisible()
+        {
+            return _bailUI != null && _bailUI.IsVisible();
+        }
+
+        /// <summary>
+        /// Get current bail amount being displayed
+        /// </summary>
+        public float GetCurrentBailAmount()
+        {
+            return _bailUI != null ? _bailUI.GetCurrentBailAmount() : 0f;
+        }
+
+        /// <summary>
+        /// Create the bail UI component
+        /// </summary>
+        private void CreateBailUI()
+        {
+            try
+            {
+                // Create a persistent manager object
+                _bailManager = new GameObject("BailManager");
+                GameObject.DontDestroyOnLoad(_bailManager);
+
+                // Add the BailUI component
+#if !MONO
+                // IL2CPP-safe component addition
+                var componentType = Il2CppInterop.Runtime.Il2CppType.Of<BailUI>();
+                var component = _bailManager.AddComponent(componentType);
+                _bailUI = component.Cast<BailUI>();
+#else
+                _bailUI = _bailManager.AddComponent<BailUI>();
+#endif
+
+                // Manually initialize the UI immediately
+                if (_bailUI != null)
+                {
+                    _bailUI.CreateUI();
+                    ModLogger.Info("BailUI CreateUI() called manually");
+                }
+
+                ModLogger.Info("BailUI manager initialized successfully");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error creating bail UI: {ex.Message}");
             }
         }
     }

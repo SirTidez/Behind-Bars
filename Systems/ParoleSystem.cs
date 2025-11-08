@@ -468,6 +468,43 @@ namespace Behind_Bars.Systems
         }
 
         /// <summary>
+        /// Complete parole for a player (public method for external calls)
+        /// </summary>
+        public void CompleteParoleForPlayer(Player player)
+        {
+            if (player == null)
+            {
+                ModLogger.Warn("Cannot complete parole for null player");
+                return;
+            }
+            
+            if (_paroleRecords.TryGetValue(player, out var record))
+            {
+                CompleteParole(record);
+            }
+            else
+            {
+                ModLogger.Warn($"No active parole record found for {player.name} to complete");
+                // Still try to end parole in RapSheet if it exists
+                try
+                {
+                    var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                    if (rapSheet?.CurrentParoleRecord != null && rapSheet.CurrentParoleRecord.IsOnParole())
+                    {
+                        rapSheet.CurrentParoleRecord.EndParole();
+                        rapSheet.ArchiveCurrentParoleRecord();
+                        RapSheetManager.Instance.SaveRapSheet(player, invalidateCache: true);
+                        ModLogger.Info($"Completed parole in RapSheet for {player.name}");
+                    }
+                }
+                catch (System.Exception ex)
+                {
+                    ModLogger.Error($"Error completing parole in RapSheet: {ex.Message}");
+                }
+            }
+        }
+
+        /// <summary>
         /// Complete parole successfully
         /// </summary>
         private void CompleteParole(ParoleRuntimeRecord record)

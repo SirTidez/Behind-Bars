@@ -594,6 +594,8 @@ namespace Behind_Bars.Systems.Jail
             }
             
             // Enter third-person view to fix visual bug
+            // TEMPORARILY COMMENTED OUT FOR TESTING
+            /*
             if (playerCamera != null)
             {
                 try
@@ -606,9 +608,10 @@ namespace Behind_Bars.Systems.Jail
                     ModLogger.Debug($"Could not enter third-person view: {ex.Message}");
                 }
             }
+            */
 
             // Wait a moment for camera transition to complete
-            yield return new WaitForSeconds(0.2f);
+            // yield return new WaitForSeconds(0.2f);
 
             // Get player's avatar component and apply uniform
             try
@@ -625,10 +628,13 @@ namespace Behind_Bars.Systems.Jail
                 {
                     ModLogger.Error("Could not find player's Avatar component");
                     // Exit third-person view before breaking
+                    // TEMPORARILY COMMENTED OUT FOR TESTING
+                    /*
                     if (playerCamera != null)
                     {
                         try { playerCamera.StopViewingAvatar(); } catch { }
                     }
+                    */
                     // Restore movement before breaking
                     try
                     {
@@ -648,10 +654,13 @@ namespace Behind_Bars.Systems.Jail
                 {
                     ModLogger.Error("Could not get player's current avatar settings");
                     // Exit third-person view before breaking
+                    // TEMPORARILY COMMENTED OUT FOR TESTING
+                    /*
                     if (playerCamera != null)
                     {
                         try { playerCamera.StopViewingAvatar(); } catch { }
                     }
+                    */
                     // Restore movement before breaking
                     try
                     {
@@ -729,11 +738,34 @@ namespace Behind_Bars.Systems.Jail
                 playerAvatar.LoadAvatarSettings(currentSettings);
 
                 ModLogger.Info($"✓ Changed {player.name} to prison attire");
+                
+                // CRITICAL: Ensure player visibility is reset to false after uniform application
+                // This fixes visual bugs that can occur if SetVisibleToLocalPlayer was set to true during mugshot
+                try
+                {
+                    // Reset player visibility to false
+                    player.SetVisibleToLocalPlayer(false);
+                    ModLogger.Debug("Reset player visibility to false after uniform application");
+                }
+                catch (System.Exception ex)
+                {
+                    ModLogger.Debug($"Could not reset player visibility: {ex.Message}");
+                }
             }
             catch (System.Exception ex)
             {
                 ModLogger.Error($"Error changing player to prison clothing: {ex.Message}");
                 ModLogger.Error($"Stack trace: {ex.StackTrace}");
+                
+                // Ensure visibility is reset even on error
+                try
+                {
+                    if (player != null)
+                    {
+                        player.SetVisibleToLocalPlayer(false);
+                    }
+                }
+                catch { }
             }
 
             // Hold third-person view for 1 second while player is frozen to see the uniform change
@@ -741,6 +773,8 @@ namespace Behind_Bars.Systems.Jail
             yield return new WaitForSeconds(1f);
 
             // Exit third-person view
+            // TEMPORARILY COMMENTED OUT FOR TESTING
+            /*
             if (playerCamera != null)
             {
                 try
@@ -753,6 +787,7 @@ namespace Behind_Bars.Systems.Jail
                     ModLogger.Debug($"Could not exit third-person view: {ex.Message}");
                 }
             }
+            */
 
             // Restore player movement after uniform application and third-person view
             try

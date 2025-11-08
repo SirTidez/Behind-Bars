@@ -56,7 +56,7 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     public KeyCode unlockAllKey = KeyCode.U;
     public KeyCode openAllCellsKey = KeyCode.O;
     public KeyCode closeAllCellsKey = KeyCode.C;
-    public KeyCode blackoutKey = KeyCode.B;
+    public KeyCode blackoutKey = KeyCode.H;
     public KeyCode normalLightingKey = KeyCode.N;
 
     // Properties for backward compatibility

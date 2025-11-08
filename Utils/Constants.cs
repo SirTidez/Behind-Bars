@@ -50,6 +50,11 @@ namespace Behind_Bars.Helpers
         public const float DEFAULT_NEGOTIATION_RANGE = 0.2f;
         
         /// <summary>
+        /// Bail system key bindings
+        /// </summary>
+        public const UnityEngine.KeyCode BAIL_PAYMENT_KEY = UnityEngine.KeyCode.B;
+        
+        /// <summary>
         /// Court system constants
         /// </summary>
         public const float DEFAULT_NEGOTIATION_TIME = 60f;

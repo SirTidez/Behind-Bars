@@ -760,15 +760,9 @@ namespace Behind_Bars.Systems.Jail
                     ModLogger.Info($"Cleared persistent storage snapshot after successful release for {player.name}");
                 }
 
-                // Start parole supervision for time-served releases (not bail releases)
-                if (releaseType == ReleaseType.TimeServed)
-                {
-                    StartParoleForReleasedPlayer(player);
-                }
-                else
-                {
-                    ModLogger.Info($"Player {player.name} released on bail - no parole supervision");
-                }
+                // Start parole supervision for ALL releases (bail and time-served)
+                // Bailing out doesn't allow you to skip parole - it only gets you out of jail quicker
+                StartParoleForReleasedPlayer(player);
 
                 ModLogger.Info($"Player release completed for {player.name} via {releaseType} - all systems cleared");
 

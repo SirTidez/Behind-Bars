@@ -1,19 +1,171 @@
 ﻿using MelonLoader.Utils;
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using UnityEngine;
+using Behind_Bars.Helpers;
+
+
+
+#if !MONO
+using Il2CppFishNet;
+using Il2CppScheduleOne.DevUtilities;
+#else
+using FishNet;
+using ScheduleOne.DevUtilities;
+#endif
 
 namespace Behind_Bars.Utils
 {
     /// <summary>
     /// Provides utility methods for file operations with caching capabilities.
     /// Manages file reading, writing, and caching for the Behind Bars mod data directory.
+    /// Now supports save-specific directories for multiple save files.
     /// </summary>
     public class FileUtilities
     {
-        private static string _dataDirectory;
+        private static string _baseDataDirectory;
+        private static string _currentSaveDirectory;
+        private static string _currentSaveName;
         public static FileUtilities Instance;
 
         private static Dictionary<string, string> _fileCache = new Dictionary<string, string>();
+
+        /// <summary>
+        /// Gets the current save name from GameManager
+        /// </summary>
+        /// <returns>The save name, or null if not available (to avoid creating default folder)</returns>
+        private static string GetSaveName()
+        {
+            try
+            {
+#if !MONO
+                if (NetworkSingleton<GameManager>.InstanceExists && NetworkSingleton<GameManager>.Instance != null)
+                {
+                    string saveName = NetworkSingleton<GameManager>.Instance.OrganisationName;
+                    if (!string.IsNullOrEmpty(saveName) && saveName != "Game")
+                    {
+                        ModLogger.Info($"Got organization name from GameManager: {saveName}");
+                        return saveName;
+                    }
+                }
+#else
+                if (NetworkSingleton<GameManager>.InstanceExists && NetworkSingleton<GameManager>.Instance != null)
+                {
+                    string saveName = NetworkSingleton<GameManager>.Instance.OrganisationName;
+                    if (!string.IsNullOrEmpty(saveName) && saveName != "Game")
+                    {
+                        ModLogger.Info($"Got organization name from GameManager: {saveName}");
+                        return saveName;
+                    }
+                }
+#endif
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"Could not get save name from GameManager: {ex.Message}");
+                ModLogger.Warn($"Stack trace: {ex.StackTrace}");
+            }
+            
+            // Return null instead of "default" to avoid creating unnecessary folders
+            // The directory will be created when a save is actually loaded
+            ModLogger.Debug("No valid save name found, returning null");
+            return null;
+        }
+
+        /// <summary>
+        /// Gets the save-specific directory path
+        /// </summary>
+        /// <returns>The full path to the save-specific directory, or base directory if save name not available</returns>
+        private static string GetSaveDirectory()
+        {
+            string saveName = GetSaveName();
+            
+            // If no save name available yet, return base directory (don't create default folder)
+            if (string.IsNullOrEmpty(saveName))
+            {
+                if (_baseDataDirectory == null)
+                {
+                    _baseDataDirectory = Path.Combine(MelonEnvironment.UserDataDirectory, "Behind-Bars");
+                    if (!Directory.Exists(_baseDataDirectory))
+                    {
+                        Directory.CreateDirectory(_baseDataDirectory);
+                    }
+                }
+                return _baseDataDirectory;
+            }
+            
+            // If save name changed, update the directory and clear cache
+            if (_currentSaveName != saveName || _currentSaveDirectory == null)
+            {
+                // Clear cache if save changed
+                if (_currentSaveName != null && _currentSaveName != saveName)
+                {
+                    _fileCache.Clear();
+                    ModLogger.Info($"Save changed from '{_currentSaveName}' to '{saveName}' - cleared file cache");
+                }
+                
+                _currentSaveName = saveName;
+                
+                if (_baseDataDirectory == null)
+                {
+                    _baseDataDirectory = Path.Combine(MelonEnvironment.UserDataDirectory, "Behind-Bars");
+                }
+                
+                // Sanitize save name for use as directory name
+                string sanitizedSaveName = SanitizeFileName(saveName);
+                // Prefix with "save-" to make it clear which folder is which
+                string prefixedSaveName = $"save-{sanitizedSaveName}";
+                _currentSaveDirectory = Path.Combine(_baseDataDirectory, prefixedSaveName);
+                
+                // Ensure directory exists
+                if (!Directory.Exists(_currentSaveDirectory))
+                {
+                    Directory.CreateDirectory(_currentSaveDirectory);
+                    ModLogger.Info($"Created save-specific directory: {_currentSaveDirectory}");
+                }
+            }
+            
+            return _currentSaveDirectory;
+        }
+
+        /// <summary>
+        /// Refreshes the save directory (useful when save changes)
+        /// </summary>
+        public static void RefreshSaveDirectory()
+        {
+            _currentSaveName = null;
+            _currentSaveDirectory = null;
+            _fileCache.Clear();
+            GetSaveDirectory();
+            ModLogger.Info("Refreshed save directory and cleared cache");
+        }
+
+        /// <summary>
+        /// Sanitizes a string to be safe for use as a file/directory name
+        /// </summary>
+        private static string SanitizeFileName(string fileName)
+        {
+            if (string.IsNullOrEmpty(fileName))
+                return "default";
+            
+            // Remove invalid characters
+            char[] invalidChars = Path.GetInvalidFileNameChars();
+            foreach (char c in invalidChars)
+            {
+                fileName = fileName.Replace(c, '_');
+            }
+            
+            // Remove any remaining whitespace and replace with underscore
+            fileName = fileName.Trim().Replace(" ", "_");
+            
+            // Ensure it's not empty after sanitization
+            if (string.IsNullOrEmpty(fileName))
+                return "default";
+            
+            return fileName;
+        }
 
         /// <summary>
         /// Initializes the FileUtilities singleton instance and creates the data directory if it doesn't exist.
@@ -26,25 +178,28 @@ namespace Behind_Bars.Utils
                 Instance = new FileUtilities();
             }
 
-            _dataDirectory = Path.Combine(MelonEnvironment.UserDataDirectory, "Behind-Bars");
-            if (!Directory.Exists(_dataDirectory))
+            _baseDataDirectory = Path.Combine(MelonEnvironment.UserDataDirectory, "Behind-Bars");
+            if (!Directory.Exists(_baseDataDirectory))
             {
-                Directory.CreateDirectory(_dataDirectory);
+                Directory.CreateDirectory(_baseDataDirectory);
             }
+            
+            // Initialize save-specific directory
+            GetSaveDirectory();
         }
 
         /// <summary>
-        /// Gets the mod's data directory path.
+        /// Gets the mod's data directory path (save-specific).
         /// Initializes the directory if it hasn't been set up yet.
         /// </summary>
-        /// <returns>The full path to the Behind-Bars data directory.</returns>
+        /// <returns>The full path to the save-specific Behind-Bars data directory.</returns>
         public static string GetDataDirectory()
         {
-            if (_dataDirectory == null)
+            if (_baseDataDirectory == null)
             {
                 Initialize();
             }
-            return _dataDirectory;
+            return GetSaveDirectory();
         }
 
         /// <summary>

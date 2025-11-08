@@ -86,6 +86,11 @@ namespace Behind_Bars
         public ParoleSystem? ParoleSystem => _paroleSystem;
         public FileUtilities FileUtilities => _fileUtilities;
 
+        // MelonPreferences
+        private static MelonPreferences_Category? _prefsCategory;
+        private static MelonPreferences_Entry<KeyCode>? _bailoutKeyPreference;
+        public static KeyCode BailoutKey => _bailoutKeyPreference?.Value ?? KeyCode.B;
+
         public override void OnInitializeMelon()
         {
             Instance = this;
@@ -164,6 +169,16 @@ namespace Behind_Bars
             ClassInjector.RegisterTypeInIl2Cpp<ParoleOfficer>();
             // NOTE: ParoleOfficerBehavior and PrisonNPCManager already registered above - removed duplicates
 #endif
+            // Initialize MelonPreferences
+            _prefsCategory = MelonPreferences.CreateCategory(Constants.PREF_CATEGORY);
+            _bailoutKeyPreference = _prefsCategory.CreateEntry<KeyCode>(
+                "BailoutKey",
+                KeyCode.B,
+                "Key to press for bailout payment",
+                "The key binding used to pay bail and get released early from jail"
+            );
+            ModLogger.Info($"Bailout key preference initialized: {BailoutKey}");
+
             // Initialize core systems
             HarmonyPatches.Initialize(this);
             
@@ -270,12 +285,151 @@ namespace Behind_Bars
                 // Arrest handling is centralized in HarmonyPatches; no direct listener needed here
 
                 ModLogger.Info("Player systems initialized successfully");
+                
+                // Restore parole tracking if player is on parole
+                MelonCoroutines.Start(RestoreParoleIfActive(Player.Local));
             }
             else
             {
                 ModLogger.Warn("Player.Local is null, retrying in 2 seconds...");
                 yield return new WaitForSeconds(2f);
                 MelonCoroutines.Start(InitializePlayerSystems());
+            }
+        }
+
+        /// <summary>
+        /// Restore parole tracking if the player is actively on parole when scene loads
+        /// </summary>
+        private IEnumerator RestoreParoleIfActive(Player player)
+        {
+            // Wait a moment for systems to be ready
+            yield return new WaitForSeconds(1f);
+            
+            try
+            {
+                if (_paroleSystem == null)
+                {
+                    ModLogger.Warn("ParoleSystem is null, cannot restore parole");
+                    yield break;
+                }
+                
+                // Get the player's rap sheet
+                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                if (rapSheet == null)
+                {
+                    ModLogger.Debug($"No rap sheet found for {player.name}, skipping parole restoration");
+                    yield break;
+                }
+                
+                // Check if player is on parole
+                var paroleRecord = rapSheet.CurrentParoleRecord;
+                if (paroleRecord == null || !paroleRecord.IsOnParole())
+                {
+                    ModLogger.Debug($"Player {player.name} is not on parole, skipping restoration");
+                    yield break;
+                }
+                
+                // Get remaining parole time
+                var (isParole, remainingTime) = paroleRecord.GetParoleStatus();
+                if (!isParole || remainingTime <= 0)
+                {
+                    ModLogger.Info($"Player {player.name} has expired parole, completing it");
+                    // Parole expired while away - complete it
+                    if (_paroleSystem != null)
+                    {
+                        _paroleSystem.CompleteParoleForPlayer(player);
+                    }
+                    yield break;
+                }
+                
+                // Check if tracking is already active
+                if (ParoleTimeTracker.Instance.IsTracking(player))
+                {
+                    ModLogger.Debug($"Parole tracking already active for {player.name}");
+                    yield break;
+                }
+                
+                ModLogger.Info($"Restoring parole tracking for {player.name}: {remainingTime} game minutes remaining ({GameTimeManager.FormatGameTime(remainingTime)})");
+                
+                // Restore parole tracking
+                ParoleTimeTracker.Instance.StartTracking(player, remainingTime, (p) =>
+                {
+                    ModLogger.Info($"Restored parole completed for {p.name}");
+                    if (_paroleSystem != null)
+                    {
+                        _paroleSystem.CompleteParoleForPlayer(p);
+                    }
+                });
+                
+                // Restore parole runtime record in ParoleSystem
+                float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
+                float termLength = paroleRecord.GetParoleTermLength(); // Get term length in game minutes
+                var runtimeRecord = new ParoleSystem.ParoleRuntimeRecord
+                {
+                    Player = player,
+                    Status = ParoleSystem.ParoleStatus.Active,
+                    StartGameTimeMinutes = currentGameTime - (termLength - remainingTime),
+                    DurationGameMinutes = termLength,
+                    TimeRemainingGameMinutes = remainingTime,
+                    ViolationCount = paroleRecord.GetViolationCount(),
+                    LastSearchGameTimeMinutes = 0f,
+                    NextSearchGameTimeMinutes = currentGameTime + UnityEngine.Random.Range(0.5f, 2f) // Randomize next search
+                };
+                
+                // Restore parole runtime record using reflection to access private field
+                var paroleSystemType = typeof(ParoleSystem);
+                var paroleRecordsField = paroleSystemType.GetField("_paroleRecords", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                if (paroleRecordsField != null)
+                {
+                    var paroleRecords = paroleRecordsField.GetValue(_paroleSystem) as System.Collections.Generic.Dictionary<Player, ParoleSystem.ParoleRuntimeRecord>;
+                    if (paroleRecords != null)
+                    {
+                        paroleRecords[player] = runtimeRecord;
+                        ModLogger.Info($"Restored parole runtime record for {player.name}");
+                        
+                        // Start parole monitoring coroutine using reflection
+                        var monitorMethod = paroleSystemType.GetMethod("MonitorParole", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                        if (monitorMethod != null)
+                        {
+                            var coroutine = monitorMethod.Invoke(_paroleSystem, new object[] { runtimeRecord });
+                            if (coroutine != null)
+                            {
+                                MelonCoroutines.Start(coroutine as IEnumerator);
+                                ModLogger.Info($"Restarted parole monitoring for {player.name}");
+                            }
+                        }
+                    }
+                }
+                
+                // Show parole UI
+                MelonCoroutines.Start(DelayedShowParoleUI(player));
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"Error restoring parole for {player.name}: {ex.Message}");
+                ModLogger.Error($"Stack trace: {ex.StackTrace}");
+            }
+        }
+        
+        /// <summary>
+        /// Show parole UI after a delay to ensure systems are ready
+        /// </summary>
+        private IEnumerator DelayedShowParoleUI(Player player)
+        {
+            yield return new WaitForSeconds(2f);
+            
+            if (_paroleSystem != null && BehindBarsUIManager.Instance != null)
+            {
+                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                if (rapSheet != null && rapSheet.CurrentParoleRecord != null && rapSheet.CurrentParoleRecord.IsOnParole())
+                {
+                    var (isParole, remainingTime) = rapSheet.CurrentParoleRecord.GetParoleStatus();
+                    if (isParole && remainingTime > 0)
+                    {
+                        BehindBarsUIManager.Instance.ShowParoleStatus();
+                        ModLogger.Info($"Showed parole UI for {player.name} after scene load");
+                    }
+                }
             }
         }
 

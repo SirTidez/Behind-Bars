@@ -115,20 +115,15 @@ namespace Behind_Bars.Systems
 
         public bool CanPlayerAffordBail(Player player, float bailAmount)
         {
-            // TODO: Implement actual money checking
-            // This should check the player's actual money/currency
-            bool canAfford = false;
+            // Check cash balance only (not onlineBalance)
             if (MoneyManager.Instance == null)
             {
                 ModLogger.Error("MoneyManager is not initialized. Cannot check bail affordability.");
+                return false;
             }
 
-            if (MoneyManager.Instance.onlineBalance > bailAmount || MoneyManager.Instance.cashBalance > bailAmount || MoneyManager.Instance.cashBalance + MoneyManager.Instance.onlineBalance > bailAmount)
-            {
-                canAfford = true;
-            }
-            
-            return canAfford;
+            // Only check cashBalance - bail must be paid with cash
+            return MoneyManager.Instance.cashBalance >= bailAmount;
         }
 
         public bool CanFriendsPayBail(Player player, float bailAmount)
@@ -177,36 +172,25 @@ namespace Behind_Bars.Systems
             }
             else
             {
-                // TODO: Implement player payment logic
-                // This should:
-                // 1. Deduct money from player's account
-                // 2. Show confirmation
-                // 3. Release the player
+                // Player payment - use cashBalance only
                 if (MoneyManager.Instance == null)
                 {
                     ModLogger.Error("MoneyManager is not initialized. Cannot process bail payment.");
                     yield break;
                 }
-                if (MoneyManager.Instance.onlineBalance >= bailAmount)
+                
+                // Verify player has enough cash
+                if (MoneyManager.Instance.cashBalance < bailAmount)
                 {
-                    MoneyManager.Instance.onlineBalance -= bailAmount;
-                }
-                else if (MoneyManager.Instance.cashBalance >= bailAmount)
-                {
-                    MoneyManager.Instance.ChangeCashBalance(bailAmount);
-                }
-                else if (MoneyManager.Instance.cashBalance + MoneyManager.Instance.onlineBalance >= bailAmount)
-                {
-                    float remaining = bailAmount - MoneyManager.Instance.onlineBalance;
-                    MoneyManager.Instance.onlineBalance = 0;
-                    MoneyManager.Instance.ChangeCashBalance(remaining);
-                }
-                else
-                {
-                    ModLogger.Error($"Player {player.name} cannot afford bail of ${bailAmount:F0}");
+                    ModLogger.Error($"Player {player.name} cannot afford bail of ${bailAmount:F0} (cash: ${MoneyManager.Instance.cashBalance:F0})");
                     yield break;
                 }
-                yield return new WaitForSeconds(1f);
+                
+                // Deduct from cashBalance only
+                MoneyManager.Instance.ChangeCashBalance(-bailAmount);
+                ModLogger.Info($"Deducted ${bailAmount:F0} from cash balance for {player.name} (remaining cash: ${MoneyManager.Instance.cashBalance:F0})");
+                
+                yield return new WaitForSeconds(0.5f);
                 ModLogger.Info($"Bail paid by {player.name}");
             }
 
@@ -247,6 +231,22 @@ namespace Behind_Bars.Systems
         }
 
         /// <summary>
+        /// Get the stored bail amount for a player
+        /// </summary>
+        public float GetBailAmount(Player player)
+        {
+            if (player == null) return 0f;
+
+            string playerKey = GetPlayerKey(player);
+            if (playerBailAmounts.ContainsKey(playerKey))
+            {
+                return playerBailAmounts[playerKey];
+            }
+
+            return 0f;
+        }
+
+        /// <summary>
         /// Get the last bail amount paid for a player
         /// </summary>
         private float GetLastBailAmount(Player player)
@@ -265,9 +265,9 @@ namespace Behind_Bars.Systems
         }
 
         /// <summary>
-        /// Store bail amount for a player when bail is paid
+        /// Store bail amount for a player when bail is calculated
         /// </summary>
-        private void StoreBailAmount(Player player, float amount)
+        public void StoreBailAmount(Player player, float amount)
         {
             if (player == null) return;
 
