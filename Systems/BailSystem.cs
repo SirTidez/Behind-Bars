@@ -1,5 +1,6 @@
 using System.Collections;
 using Behind_Bars.Helpers;
+using Behind_Bars.Systems.Jail;
 using UnityEngine;
 using MelonLoader;
 
@@ -23,6 +24,10 @@ namespace Behind_Bars.Systems
     {
         private const float BAIL_MULTIPLIER = 2.5f; // Bail is typically 2.5x the fine
         private const float LEVEL_SCALING_FACTOR = 0.1f; // How much player level affects bail
+
+        // Track bail amounts for each player
+        private static System.Collections.Generic.Dictionary<string, float> playerBailAmounts =
+            new System.Collections.Generic.Dictionary<string, float>();
         
         public class BailOffer
         {
@@ -110,20 +115,15 @@ namespace Behind_Bars.Systems
 
         public bool CanPlayerAffordBail(Player player, float bailAmount)
         {
-            // TODO: Implement actual money checking
-            // This should check the player's actual money/currency
-            bool canAfford = false;
+            // Check cash balance only (not onlineBalance)
             if (MoneyManager.Instance == null)
             {
                 ModLogger.Error("MoneyManager is not initialized. Cannot check bail affordability.");
+                return false;
             }
 
-            if (MoneyManager.Instance.onlineBalance > bailAmount || MoneyManager.Instance.cashBalance > bailAmount || MoneyManager.Instance.cashBalance + MoneyManager.Instance.onlineBalance > bailAmount)
-            {
-                canAfford = true;
-            }
-            
-            return canAfford;
+            // Only check cashBalance - bail must be paid with cash
+            return MoneyManager.Instance.cashBalance >= bailAmount;
         }
 
         public bool CanFriendsPayBail(Player player, float bailAmount)
@@ -166,45 +166,37 @@ namespace Behind_Bars.Systems
                 // 1. Deduct money from friend's account
                 // 2. Show confirmation to both players
                 // 3. Release the arrested player
-                
+
                 yield return new WaitForSeconds(1f);
                 ModLogger.Info($"Bail paid by friend for {player.name}");
             }
             else
             {
-                // TODO: Implement player payment logic
-                // This should:
-                // 1. Deduct money from player's account
-                // 2. Show confirmation
-                // 3. Release the player
+                // Player payment - use cashBalance only
                 if (MoneyManager.Instance == null)
                 {
                     ModLogger.Error("MoneyManager is not initialized. Cannot process bail payment.");
                     yield break;
                 }
-                if (MoneyManager.Instance.onlineBalance >= bailAmount)
+                
+                // Verify player has enough cash
+                if (MoneyManager.Instance.cashBalance < bailAmount)
                 {
-                    MoneyManager.Instance.onlineBalance -= bailAmount;
-                }
-                else if (MoneyManager.Instance.cashBalance >= bailAmount)
-                {
-                    MoneyManager.Instance.ChangeCashBalance(bailAmount);
-                }
-                else if (MoneyManager.Instance.cashBalance + MoneyManager.Instance.onlineBalance >= bailAmount)
-                {
-                    float remaining = bailAmount - MoneyManager.Instance.onlineBalance;
-                    MoneyManager.Instance.onlineBalance = 0;
-                    MoneyManager.Instance.ChangeCashBalance(remaining);
-                }
-                else
-                {
-                    ModLogger.Error($"Player {player.name} cannot afford bail of ${bailAmount:F0}");
+                    ModLogger.Error($"Player {player.name} cannot afford bail of ${bailAmount:F0} (cash: ${MoneyManager.Instance.cashBalance:F0})");
                     yield break;
                 }
-                yield return new WaitForSeconds(1f);
+                
+                // Deduct from cashBalance only
+                MoneyManager.Instance.ChangeCashBalance(-bailAmount);
+                ModLogger.Info($"Deducted ${bailAmount:F0} from cash balance for {player.name} (remaining cash: ${MoneyManager.Instance.cashBalance:F0})");
+                
+                yield return new WaitForSeconds(0.5f);
                 ModLogger.Info($"Bail paid by {player.name}");
             }
-            
+
+            // Store the bail amount for release processing
+            StoreBailAmount(player, bailAmount);
+
             // Release player from custody
             yield return ReleasePlayerOnBail(player);
         }
@@ -212,15 +204,85 @@ namespace Behind_Bars.Systems
         private IEnumerator ReleasePlayerOnBail(Player player)
         {
             ModLogger.Info($"Releasing {player.name} on bail");
-            
-            // TODO: Implement bail release mechanics
-            // This could involve:
-            // 1. Restoring player movement
-            // 2. Teleporting player to courthouse/police station
-            // 3. Setting bail conditions
-            // 4. Starting probation period if applicable
+
+            try
+            {
+                // Get the core jail system
+                var jailSystem = Core.Instance?.JailSystem;
+                if (jailSystem != null)
+                {
+                    // Use the enhanced release system for bail
+                    float bailAmount = GetLastBailAmount(player); // We'll need to track this
+                    jailSystem.InitiateEnhancedRelease(player, ReleaseManager.ReleaseType.BailPayment, bailAmount);
+
+                    ModLogger.Info($"{player.name} has been released on bail through enhanced system");
+                }
+                else
+                {
+                    ModLogger.Error("JailSystem not found - cannot process bail release");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error processing bail release: {ex.Message}");
+            }
+
             yield return new WaitForSeconds(1f);
-            ModLogger.Info($"{player.name} has been released on bail");
+        }
+
+        /// <summary>
+        /// Get the stored bail amount for a player
+        /// </summary>
+        public float GetBailAmount(Player player)
+        {
+            if (player == null) return 0f;
+
+            string playerKey = GetPlayerKey(player);
+            if (playerBailAmounts.ContainsKey(playerKey))
+            {
+                return playerBailAmounts[playerKey];
+            }
+
+            return 0f;
+        }
+
+        /// <summary>
+        /// Get the last bail amount paid for a player
+        /// </summary>
+        private float GetLastBailAmount(Player player)
+        {
+            if (player == null) return 0f;
+
+            string playerKey = GetPlayerKey(player);
+            if (playerBailAmounts.ContainsKey(playerKey))
+            {
+                float amount = playerBailAmounts[playerKey];
+                playerBailAmounts.Remove(playerKey); // Remove after use
+                return amount;
+            }
+
+            return 0f;
+        }
+
+        /// <summary>
+        /// Store bail amount for a player when bail is calculated
+        /// </summary>
+        public void StoreBailAmount(Player player, float amount)
+        {
+            if (player == null) return;
+
+            string playerKey = GetPlayerKey(player);
+            playerBailAmounts[playerKey] = amount;
+            ModLogger.Info($"Stored bail amount ${amount:F0} for {player.name}");
+        }
+
+        /// <summary>
+        /// Get unique key for player
+        /// </summary>
+        private string GetPlayerKey(Player player)
+        {
+            // Use player name for now, could be enhanced with unique ID
+            return player.name;
         }
 
         public float NegotiateBailAmount(float originalAmount, float negotiationRange, float playerSkill)

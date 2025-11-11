@@ -1,8 +1,8 @@
 ﻿<Project>
     <PropertyGroup>
         <!-- Paths and conditions -->
-        <S1MonoDir>D:\Schedule 1 Modding\Schedule I_alternate-beta</S1MonoDir>
-        <S1CPPDir>D:\Schedule 1 Modding\Schedule I_beta</S1CPPDir>
+        <S1MonoDir>D:\Schedule 1 Modding\Dev Env\tests\branches\alternate-branch\manifest_941591400057088607</S1MonoDir>
+        <S1CPPDir>D:\Schedule 1 Modding\Dev Env\tests\branches\beta-branch\manifest_4454173976231358299</S1CPPDir>
         <CommonDir>D:\Schedule 1 Modding</CommonDir>
         <RunPostBuildEvent>OnBuildSuccess</RunPostBuildEvent>
     </PropertyGroup>

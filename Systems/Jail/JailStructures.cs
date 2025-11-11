@@ -1,6 +1,14 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
+using Behind_Bars.Systems.Jail;
+
+#if !MONO
+using Il2CppScheduleOne.PlayerScripts;
+#else
+using ScheduleOne.PlayerScripts;
+#endif
 
 [System.Serializable]
 public class JailDoor
@@ -8,15 +16,18 @@ public class JailDoor
     public Transform doorHolder;
     public GameObject doorInstance;
     public Transform doorHinge;
+    public Transform doorPoint;  // Guard position point for safe door operation
 
     public string doorName;
     public DoorType doorType;
+    public DoorInteractionType interactionType;
     public DoorState currentState = DoorState.Closed;
     public bool isLocked = false;
 
     public float openAngle = -135f;  // Door opens to -135 degrees on Z axis
     public float closedAngle = 0f;
     public float animationSpeed = 2f;
+    public bool reverseDirection = false;  // If true, flips the open angle direction
 
     // Private animation state
     private float targetAngle;
@@ -30,6 +41,12 @@ public class JailDoor
         EntryDoor,
         GuardDoor,
         AreaDoor
+    }
+
+    public enum DoorInteractionType
+    {
+        PassThrough,    // Guard moves through door (Inner, Entry, Guard doors)
+        OperationOnly   // Guard only opens/closes door (Cell, Holding doors)
     }
 
     public enum DoorState
@@ -72,10 +89,10 @@ public class JailDoor
             return;
 
         currentState = DoorState.Opening;
-        targetAngle = openAngle;
+        targetAngle = reverseDirection ? -openAngle : openAngle;
         isAnimating = true;
 
-        Debug.Log($"{doorName}: Opening door");
+        Debug.Log($"{doorName}: Opening door (direction: {(reverseDirection ? "reversed" : "normal")})");
     }
 
     public void CloseDoor()
@@ -167,6 +184,31 @@ public class JailDoor
             currentAngle = closedAngle;
             doorHinge.localEulerAngles = new Vector3(0, 0, currentAngle);
         }
+
+        // Auto-determine interaction type based on door type
+        SetInteractionTypeFromDoorType();
+    }
+
+    /// <summary>
+    /// Automatically set interaction type based on door type
+    /// </summary>
+    public void SetInteractionTypeFromDoorType()
+    {
+        switch (doorType)
+        {
+            case DoorType.CellDoor:
+            case DoorType.HoldingCellDoor:
+                interactionType = DoorInteractionType.OperationOnly;
+                break;
+            case DoorType.EntryDoor:
+            case DoorType.GuardDoor:
+            case DoorType.AreaDoor:
+                interactionType = DoorInteractionType.PassThrough;
+                break;
+            default:
+                interactionType = DoorInteractionType.OperationOnly;
+                break;
+        }
     }
 
     // Legacy method for compatibility
@@ -185,6 +227,11 @@ public class JailDoor
             CloseDoor();
         }
     }
+
+    public bool IsLocked()
+    {
+        return isLocked;
+    }
 }
 
 [System.Serializable]
@@ -202,6 +249,12 @@ public class CellDetail
     public Transform cellTransform;
     public Transform cellBounds;
     public JailDoor cellDoor;
+    
+    // Bed references for sleeping functionality
+    public Transform cellBedBottom;
+    public Transform cellBedTop;
+    public JailBed bedBottomComponent;
+    public JailBed bedTopComponent;
     
     // Spawn points for arrested players
     public List<Transform> spawnPoints = new List<Transform>();
@@ -415,6 +468,304 @@ public class CellDetail
             else
                 cellDoor.UnlockDoor();
         }
+    }
+
+    /// <summary>
+    /// Check if this cell has beds available
+    /// </summary>
+    /// <returns>True if cell has at least one bed</returns>
+    public bool HasBeds()
+    {
+        return cellBedBottom != null || cellBedTop != null;
+    }
+
+    /// <summary>
+    /// Get all beds in this cell
+    /// </summary>
+    /// <returns>List of JailBed components</returns>
+    public List<JailBed> GetAllBeds()
+    {
+        var beds = new List<JailBed>();
+
+        // Check for JailBed components first (backwards compatibility)
+        if (bedBottomComponent != null)
+            beds.Add(bedBottomComponent);
+        if (bedTopComponent != null)
+            beds.Add(bedTopComponent);
+
+        // If no JailBed components found, check for completed PrisonBedInteractable
+        if (beds.Count == 0)
+        {
+            if (cellBedBottom != null)
+            {
+                var prisonBed = cellBedBottom.GetComponent<PrisonBedInteractable>();
+                if (prisonBed != null && prisonBed.IsComplete)
+                {
+                    var jailBed = cellBedBottom.GetComponent<JailBed>();
+                    if (jailBed != null)
+                        beds.Add(jailBed);
+                }
+            }
+
+            if (cellBedTop != null)
+            {
+                var prisonBed = cellBedTop.GetComponent<PrisonBedInteractable>();
+                if (prisonBed != null && prisonBed.IsComplete)
+                {
+                    var jailBed = cellBedTop.GetComponent<JailBed>();
+                    if (jailBed != null)
+                        beds.Add(jailBed);
+                }
+            }
+        }
+
+        return beds;
+    }
+
+    /// <summary>
+    /// Get the first bed in this cell (bottom bunk preferred)
+    /// </summary>
+    /// <returns>JailBed component or null if no beds</returns>
+    public JailBed GetFirstBed()
+    {
+        // Check for JailBed components first (backwards compatibility)
+        if (bedBottomComponent != null)
+            return bedBottomComponent;
+        if (bedTopComponent != null)
+            return bedTopComponent;
+
+        // Check for completed PrisonBedInteractable with JailBed (bottom preferred)
+        if (cellBedBottom != null)
+        {
+            var prisonBed = cellBedBottom.GetComponent<PrisonBedInteractable>();
+            if (prisonBed != null && prisonBed.IsComplete)
+            {
+                var jailBed = cellBedBottom.GetComponent<JailBed>();
+                if (jailBed != null)
+                    return jailBed;
+            }
+        }
+
+        if (cellBedTop != null)
+        {
+            var prisonBed = cellBedTop.GetComponent<PrisonBedInteractable>();
+            if (prisonBed != null && prisonBed.IsComplete)
+            {
+                var jailBed = cellBedTop.GetComponent<JailBed>();
+                if (jailBed != null)
+                    return jailBed;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Get all PrisonBedInteractable components in this cell
+    /// </summary>
+    /// <returns>List of PrisonBedInteractable components</returns>
+    public List<PrisonBedInteractable> GetAllPrisonBeds()
+    {
+        var beds = new List<PrisonBedInteractable>();
+
+        if (cellBedBottom != null)
+        {
+            var prisonBed = cellBedBottom.GetComponent<PrisonBedInteractable>();
+            if (prisonBed != null)
+                beds.Add(prisonBed);
+        }
+
+        if (cellBedTop != null)
+        {
+            var prisonBed = cellBedTop.GetComponent<PrisonBedInteractable>();
+            if (prisonBed != null)
+                beds.Add(prisonBed);
+        }
+
+        return beds;
+    }
+
+    /// <summary>
+    /// Reset all beds in this cell to unmade state
+    /// </summary>
+    public void ResetAllBeds()
+    {
+        var prisonBeds = GetAllPrisonBeds();
+        foreach (var bed in prisonBeds)
+        {
+            bed.ResetBed();
+        }
+    }
+
+    /// <summary>
+    /// Check if this cell is available for occupation
+    /// </summary>
+    /// <returns>True if cell is not occupied</returns>
+    public bool IsAvailable()
+    {
+        if (spawnPointOccupancy.Count > 0)
+        {
+            return spawnPointOccupancy.Any(sp => !sp.isOccupied);
+        }
+        return !isOccupied;
+    }
+
+    /// <summary>
+    /// Check if this cell has available space (for holding cells)
+    /// </summary>
+    /// <returns>True if cell has available space</returns>
+    public bool HasAvailableSpace()
+    {
+        if (spawnPointOccupancy.Count > 0)
+        {
+            return spawnPointOccupancy.Any(sp => !sp.isOccupied);
+        }
+        return !isOccupied;
+    }
+}
+
+[System.Serializable]
+public class JailStorageArea
+{
+#if MONO
+    [Header("Storage Area Components")]
+#endif
+    public Transform storageArea;
+    public Transform guardPoint;
+
+#if MONO
+    [Header("Door Controls")]
+#endif
+    public JailDoor storageHallDoor;
+    public JailDoor bookingStorageDoor;
+
+#if MONO
+    [Header("Inventory Stations")]
+#endif
+    public Transform jailInventoryPickup;        // Prison items station (JailInventoryPickupStation)
+    public Transform inventoryDropOff;           // Personal items drop-off station
+    public Transform inventoryPickup;            // Personal items pickup station (InventoryPickupStation)
+
+#if MONO
+    [Header("Storage Components")]
+#endif
+    public Transform cubbies;
+    public Transform bounds;
+    public Transform desktop;
+    public Transform equipJailSuit;
+    public Transform storageWalls;
+
+    // Component references for the stations
+    private JailInventoryPickupStation jailInventoryComponent;
+    private InventoryPickupStation inventoryPickupComponent;
+
+    public bool IsValid()
+    {
+        return storageArea != null && guardPoint != null;
+    }
+
+    /// <summary>
+    /// Initialize the storage area components
+    /// </summary>
+    public void InitializeStorageArea()
+    {
+        if (!IsValid())
+        {
+            Debug.LogError("Storage area is not valid - missing required components");
+            return;
+        }
+
+        // Initialize jail inventory pickup station (prison items)
+        if (jailInventoryPickup != null)
+        {
+            jailInventoryComponent = jailInventoryPickup.GetComponent<JailInventoryPickupStation>();
+            if (jailInventoryComponent == null)
+            {
+                jailInventoryComponent = jailInventoryPickup.gameObject.AddComponent<JailInventoryPickupStation>();
+                Debug.Log("Added JailInventoryPickupStation component to JailInventoryPickup");
+            }
+        }
+
+        // Initialize inventory pickup station (personal items return)
+        if (inventoryPickup != null)
+        {
+            inventoryPickupComponent = inventoryPickup.GetComponent<InventoryPickupStation>();
+            if (inventoryPickupComponent == null)
+            {
+                inventoryPickupComponent = inventoryPickup.gameObject.AddComponent<InventoryPickupStation>();
+                Debug.Log("Added InventoryPickupStation component to InventoryPickup");
+            }
+        }
+
+        Debug.Log("Storage area components initialized successfully");
+    }
+
+    /// <summary>
+    /// Get the jail inventory pickup station component (for prison items)
+    /// </summary>
+    public JailInventoryPickupStation GetJailInventoryPickupStation()
+    {
+        if (jailInventoryComponent == null && jailInventoryPickup != null)
+        {
+            jailInventoryComponent = jailInventoryPickup.GetComponent<JailInventoryPickupStation>();
+        }
+        return jailInventoryComponent;
+    }
+
+    /// <summary>
+    /// Get the inventory pickup station component (for personal items return)
+    /// </summary>
+    public InventoryPickupStation GetInventoryPickupStation()
+    {
+        if (inventoryPickupComponent == null && inventoryPickup != null)
+        {
+            inventoryPickupComponent = inventoryPickup.GetComponent<InventoryPickupStation>();
+        }
+        return inventoryPickupComponent;
+    }
+
+    /// <summary>
+    /// Enable jail inventory pickup for new inmates
+    /// </summary>
+    public void EnableJailInventoryPickup(Player player)
+    {
+        var station = GetJailInventoryPickupStation();
+        if (station != null)
+        {
+            station.gameObject.SetActive(true);
+            Debug.Log($"Enabled jail inventory pickup for {player.name}");
+        }
+    }
+
+    /// <summary>
+    /// Enable inventory pickup for released inmates
+    /// </summary>
+    public void EnableInventoryPickup(Player player)
+    {
+        var station = GetInventoryPickupStation();
+        if (station != null)
+        {
+            station.EnableForRelease(player);
+            Debug.Log($"Enabled inventory pickup for release of {player.name}");
+        }
+    }
+
+    /// <summary>
+    /// Check if a player needs prison items
+    /// </summary>
+    public bool PlayerNeedsPrisonItems(Player player)
+    {
+        var station = GetJailInventoryPickupStation();
+        return station != null && station.NeedsPrisonItems(player);
+    }
+
+    /// <summary>
+    /// Check if a player has personal items to retrieve
+    /// </summary>
+    public bool PlayerHasPersonalItems(Player player)
+    {
+        var station = GetInventoryPickupStation();
+        return station != null && station.HasItemsForPlayer(player);
     }
 }
 
