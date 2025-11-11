@@ -58,6 +58,28 @@ namespace Behind_Bars.Systems
             // CRITICAL: Reset all previous jail/booking/release state before starting new arrest
             ResetPlayerJailState(player);
 
+            // CRITICAL: Clear wanted status - player was just arrested, they're no longer wanted
+            try
+            {
+                var crimeDetectionSystem = CrimeDetectionSystem.Instance;
+                if (crimeDetectionSystem != null)
+                {
+                    crimeDetectionSystem.ClearAllCrimes();
+                    ModLogger.Info($"Cleared all crimes and wanted status for {player.name} - they were just arrested");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error clearing wanted status: {ex.Message}");
+            }
+
+            // Hide parole status UI - player is going to jail, not on parole
+            if (BehindBarsUIManager.Instance != null)
+            {
+                BehindBarsUIManager.Instance.HideParoleStatus();
+                ModLogger.Info($"Hid parole status UI for {player.name} - entering jail");
+            }
+
             // Inventory capture now handled in Harmony patch before any clearing happens
             // CreateInventorySnapshotIfNeeded(player); // MOVED TO HARMONY PATCH
 
@@ -1510,7 +1532,10 @@ namespace Behind_Bars.Systems
                     ModLogger.Info("Cleared all escort registrations");
                 }
 
-                // 4. Reset station states
+                // 4. Clear release grace period (player is being arrested)
+                ParoleSearchSystem.Instance.ClearReleaseTime(player);
+
+                // 5. Reset station states
                 ResetStationStates(player);
 
                 ModLogger.Info($"Jail state reset completed for {player.name}");

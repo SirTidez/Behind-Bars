@@ -7,6 +7,8 @@ using Behind_Bars.Systems.CrimeTracking;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine.UI;
+using TMPro;
+
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -421,6 +423,11 @@ namespace Behind_Bars.UI
 
         private GameObject? _bailManager;
         private BailUI? _bailUI;
+        
+        // === PAROLE CONDITIONS UI SYSTEM ===
+
+        private GameObject? _paroleConditionsManager;
+        private ParoleConditionsUI? _paroleConditionsUI;
         
         /// <summary>
         /// Show a booking notification to the player
@@ -948,6 +955,12 @@ namespace Behind_Bars.UI
                     return null;
                 }
 
+                // CRITICAL: Don't show parole status UI if player is in jail
+                if (JailTimeTracker.Instance != null && JailTimeTracker.Instance.IsTracking(player))
+                {
+                    return new ParoleStatusData { IsOnParole = false };
+                }
+
                 // Get cached rap sheet (loads from file only once)
                 var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
                 if (rapSheet == null)
@@ -1011,6 +1024,22 @@ namespace Behind_Bars.UI
                     var statusData = GetParoleStatusData();
                     if (statusData != null)
                     {
+                        // CRITICAL: Hide UI if player is in jail (GetParoleStatusData already checks this, but double-check)
+#if !MONO
+                        var player = Il2CppScheduleOne.PlayerScripts.Player.Local;
+#else
+                        var player = ScheduleOne.PlayerScripts.Player.Local;
+#endif
+                        if (player != null && JailTimeTracker.Instance != null && JailTimeTracker.Instance.IsTracking(player))
+                        {
+                            // Player is in jail - hide parole status UI
+                            if (_paroleStatusUI != null && _paroleStatusUI.IsVisible())
+                            {
+                                _paroleStatusUI.Hide();
+                            }
+                            continue;
+                        }
+
                         if (statusData.IsOnParole)
                         {
                             if (_paroleStatusUI == null)
@@ -1032,6 +1061,7 @@ namespace Behind_Bars.UI
                         }
                         else
                         {
+                            // Not on parole - hide UI
                             if (_paroleStatusUI != null && _paroleStatusUI.IsVisible())
                             {
                                 _paroleStatusUI.Hide();
@@ -1131,6 +1161,101 @@ namespace Behind_Bars.UI
         public float GetCurrentBailAmount()
         {
             return _bailUI != null ? _bailUI.GetCurrentBailAmount() : 0f;
+        }
+
+        // === PAROLE CONDITIONS UI SYSTEM ===
+
+        /// <summary>
+        /// Show parole conditions UI with release summary data
+        /// </summary>
+        public void ShowParoleConditionsUI(Player player, float bailAmountPaid, float fineAmount, float termLengthGameMinutes, LSILevel lsiLevel,
+            (int totalScore, int crimeCountScore, int severityScore, int violationScore, int pastParoleScore, LSILevel resultingLevel) lsiBreakdown,
+            (float originalSentenceTime, float timeServed) jailTimeInfo, List<string> recentCrimes, List<string> generalConditions, List<string> specialConditions)
+        {
+            try
+            {
+                // Create parole conditions UI if it doesn't exist
+                if (_paroleConditionsUI == null)
+                {
+                    CreateParoleConditionsUI();
+                }
+
+                if (_paroleConditionsUI == null)
+                {
+                    ModLogger.Error("Failed to create parole conditions UI");
+                    return;
+                }
+
+                _paroleConditionsUI.Show(bailAmountPaid, fineAmount, termLengthGameMinutes, lsiLevel, lsiBreakdown, jailTimeInfo, recentCrimes, generalConditions, specialConditions);
+                ModLogger.Info($"Showing parole conditions UI - Bail: ${bailAmountPaid:F0}, Fine: ${fineAmount:F0}, Term: {GameTimeManager.FormatGameTime(termLengthGameMinutes)}, LSI: {lsiLevel}");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error showing parole conditions UI: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Hide parole conditions UI
+        /// </summary>
+        public void HideParoleConditionsUI()
+        {
+            try
+            {
+                if (_paroleConditionsUI != null)
+                {
+                    _paroleConditionsUI.Hide();
+                    ModLogger.Debug("Hiding parole conditions UI");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error hiding parole conditions UI: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Check if parole conditions UI is currently visible
+        /// </summary>
+        public bool IsParoleConditionsUIVisible()
+        {
+            return _paroleConditionsUI != null && _paroleConditionsUI.IsVisible();
+        }
+
+        /// <summary>
+        /// Create the parole conditions UI component
+        /// </summary>
+        private void CreateParoleConditionsUI()
+        {
+            try
+            {
+                // Create a persistent manager object
+                _paroleConditionsManager = new GameObject("ParoleConditionsManager");
+                GameObject.DontDestroyOnLoad(_paroleConditionsManager);
+
+                // Add the ParoleConditionsUI component
+#if !MONO
+                // IL2CPP-safe component addition
+                var componentType = Il2CppInterop.Runtime.Il2CppType.Of<ParoleConditionsUI>();
+                var component = _paroleConditionsManager.AddComponent(componentType);
+                _paroleConditionsUI = component.Cast<ParoleConditionsUI>();
+#else
+                _paroleConditionsUI = _paroleConditionsManager.AddComponent<ParoleConditionsUI>();
+#endif
+
+                // Manually initialize the UI immediately
+                if (_paroleConditionsUI != null)
+                {
+                    _paroleConditionsUI.CreateUI();
+                    ModLogger.Info("ParoleConditionsUI CreateUI() called manually");
+                }
+
+                ModLogger.Info("ParoleConditionsUI manager initialized successfully");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error creating parole conditions UI: {ex.Message}");
+            }
         }
 
         /// <summary>

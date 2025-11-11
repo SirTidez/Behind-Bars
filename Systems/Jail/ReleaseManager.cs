@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
@@ -545,8 +546,33 @@ namespace Behind_Bars.Systems.Jail
             request.player.transform.position = request.exitPosition;
             request.player.transform.rotation = Quaternion.Euler(exitRotation);
 
-            // Complete player release (restore systems, clear flags)
+            // Complete player release (restore systems, clear flags, START PAROLE TIMER)
+            // Parole term timer starts immediately here
             CompletePlayerRelease(request.player, request.releaseType);
+
+            // Show parole conditions UI and wait for acknowledgment (if player will be on parole)
+            var rapSheet = RapSheetManager.Instance.GetRapSheet(request.player);
+            bool willBeOnParole = rapSheet != null && (rapSheet.CurrentParoleRecord != null && rapSheet.CurrentParoleRecord.IsOnParole());
+
+            // CRITICAL: Record release time IMMEDIATELY to start grace period
+            // This prevents searches from happening while the release summary UI is visible
+            // The grace period will be extended/updated after UI dismissal if needed
+            if (willBeOnParole)
+            {
+                ParoleSearchSystem.Instance.RecordReleaseTime(request.player);
+                ModLogger.Info($"Recorded release time for {request.player.name} - grace period started immediately");
+            }
+
+            if (willBeOnParole)
+            {
+                // Calculate all release summary data (bail, fine, term, LSI, crimes, conditions)
+                // Pass release type to determine if bail was paid
+                var (bailAmountPaid, fineAmount, termLength, lsiLevel, lsiBreakdown, jailTimeInfo, recentCrimes, generalConditions, specialConditions) = CalculateReleaseSummaryData(request.player, request.releaseType);
+
+                // Freeze player and show UI
+                // Grace period already started above - this prevents searches during UI display
+                MelonCoroutines.Start(WaitForParoleConditionsAcknowledgment(request.player, bailAmountPaid, fineAmount, termLength, lsiLevel, lsiBreakdown, jailTimeInfo, recentCrimes, generalConditions, specialConditions));
+            }
 
             // Release the officer
             if (request.assignedOfficer != null)
@@ -730,6 +756,25 @@ namespace Behind_Bars.Systems.Jail
                 // Restore player inventory
                 InventoryProcessor.UnlockPlayerInventory(player);
 
+                // CRITICAL: Restore player movement (may have been frozen during exit scan)
+#if !MONO
+                var playerMovement = Il2CppScheduleOne.DevUtilities.PlayerSingleton<Il2CppScheduleOne.PlayerScripts.PlayerMovement>.Instance;
+                if (playerMovement != null)
+                {
+                    playerMovement.canMove = true;
+                    playerMovement.enabled = true;
+                    ModLogger.Info($"Restored player movement for {player.name}");
+                }
+#else
+                var playerMovement = ScheduleOne.DevUtilities.PlayerSingleton<ScheduleOne.PlayerScripts.PlayerMovement>.Instance;
+                if (playerMovement != null)
+                {
+                    playerMovement.CanMove = true;
+                    playerMovement.enabled = true;
+                    ModLogger.Info($"Restored player movement for {player.name}");
+                }
+#endif
+
                 // Clear jail status
                 var jailSystem = Core.Instance?.JailSystem;
                 if (jailSystem != null)
@@ -838,10 +883,11 @@ namespace Behind_Bars.Systems.Jail
                     }
 
                     // Start parole through ParoleSystem (expects game minutes)
+                    // Don't show UI immediately - it will be shown after release summary UI is dismissed
                     var paroleSystem = Core.Instance?.ParoleSystem;
                     if (paroleSystem != null)
                     {
-                        paroleSystem.StartParole(player, paroleDuration);
+                        paroleSystem.StartParole(player, paroleDuration, showUI: false);
                         ModLogger.Info($"[PAROLE] ✓ New parole started successfully for {player.name}");
                     }
                     else
@@ -951,6 +997,451 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Debug($"[PAROLE CALC] Violation penalty for {violationCount} violations: {penalty} game minutes ({GameTimeManager.FormatGameTime(penalty)})");
 
             return penalty;
+        }
+
+        /// <summary>
+        /// Calculate all release summary data for the parole conditions UI
+        /// Returns bail amount, fine amount, parole term length, LSI level, LSI breakdown, jail time info, recent crimes, and conditions (split into general and special)
+        /// </summary>
+        public (float bailAmountPaid, float fineAmount, float termLengthGameMinutes, LSILevel lsiLevel, 
+            (int totalScore, int crimeCountScore, int severityScore, int violationScore, int pastParoleScore, LSILevel resultingLevel) lsiBreakdown,
+            (float originalSentenceTime, float timeServed) jailTimeInfo,
+            List<string> recentCrimes, List<string> generalConditions, List<string> specialConditions) CalculateReleaseSummaryData(Player player, ReleaseType releaseType)
+        {
+            try
+            {
+                // Get bail amount - check if bail was actually paid based on release type
+                float bailAmountPaid = 0f;
+                if (releaseType == ReleaseType.BailPayment)
+                {
+                    // Bail was paid - get the stored amount
+                    var bailSystem = new BailSystem();
+                    bailAmountPaid = bailSystem.GetBailAmount(player);
+                    
+                    // If stored amount is 0 but release type is BailPayment, try to get from active release request
+                    if (bailAmountPaid == 0f && activeReleases.ContainsKey(player))
+                    {
+                        bailAmountPaid = activeReleases[player].bailAmount;
+                    }
+                }
+                // If releaseType is not BailPayment, bailAmountPaid remains 0 (timed out)
+                
+                // Get fine amount and rap sheet
+                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                float fineAmount = FineCalculator.Instance.CalculateTotalFine(player, rapSheet);
+                
+                // Get LSI level and breakdown
+                LSILevel lsiLevel = LSILevel.None;
+                var lsiBreakdown = (totalScore: 0, crimeCountScore: 0, severityScore: 0, violationScore: 0, pastParoleScore: 0, resultingLevel: LSILevel.None);
+                if (rapSheet != null)
+                {
+                    lsiLevel = rapSheet.LSILevel;
+                    lsiBreakdown = rapSheet.GetLSIBreakdown();
+                }
+                
+                // Get jail time info (original sentence vs time served)
+                float originalSentenceTime = JailTimeTracker.Instance.GetOriginalSentenceTime(player);
+                float timeServed = JailTimeTracker.Instance.GetTimeServed(player);
+                
+                var jailTimeInfo = (originalSentenceTime, timeServed);
+                
+                // Get recent crimes from rap sheet (crimes added during this arrest session)
+                // Also include parole violations converted to crimes
+                // Get crimes added within the last 2 hours (should cover the arrest session)
+                List<string> recentCrimes = new List<string>();
+                if (rapSheet != null)
+                {
+                    // First, convert recent parole violations to crimes if they exist
+                    if (rapSheet.CurrentParoleRecord != null)
+                    {
+                        var violations = rapSheet.CurrentParoleRecord.GetViolations();
+                        if (violations != null && violations.Count > 0)
+                        {
+                            DateTime twoHoursAgo = DateTime.Now.AddHours(-2);
+                            foreach (var violation in violations)
+                            {
+                                // Only include violations from the last 2 hours (current arrest session)
+                                if (violation.ViolationTime >= twoHoursAgo)
+                                {
+                                    string violationName = GetViolationCrimeName(violation.ViolationType);
+                                    if (!string.IsNullOrEmpty(violationName) && !recentCrimes.Contains(violationName))
+                                    {
+                                        recentCrimes.Add(violationName);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    
+                    var allCrimes = rapSheet.GetAllCrimes();
+                    if (allCrimes != null && allCrimes.Count > 0)
+                    {
+                        // Get crimes added recently (within last 2 hours)
+                        DateTime twoHoursAgo = DateTime.Now.AddHours(-2);
+                        var recentCrimeInstances = allCrimes.Where(c => c != null && c.Timestamp >= twoHoursAgo)
+                            .OrderByDescending(c => c.Timestamp)
+                            .Take(10) // Get up to 10 most recent crimes
+                            .ToList();
+                        
+                        if (recentCrimeInstances.Count > 0)
+                        {
+                            foreach (var crime in recentCrimeInstances)
+                            {
+                                // Use GetCrimeName() helper for safe access
+                                string crimeName = crime.GetCrimeName();
+                                if (!string.IsNullOrEmpty(crimeName) && !recentCrimes.Contains(crimeName))
+                                {
+                                    recentCrimes.Add(crimeName);
+                                }
+                            }
+                        }
+                        
+                        // If no recent crimes found, fall back to last 5 crimes overall
+                        if (recentCrimes.Count == 0)
+                        {
+                            int startIndex = Math.Max(0, allCrimes.Count - 5);
+                            for (int i = startIndex; i < allCrimes.Count; i++)
+                            {
+                                var crime = allCrimes[i];
+                                // Use GetCrimeName() helper for safe access
+                                string crimeName = crime.GetCrimeName();
+                                if (!string.IsNullOrEmpty(crimeName))
+                                {
+                                    recentCrimes.Add(crimeName);
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                // Calculate parole term length
+                var (termLength, allConditions) = CalculateParoleTermLength(player);
+                
+                // Split conditions into general and special
+                var (generalConditions, specialConditions) = SplitConditionsIntoGeneralAndSpecial(player, rapSheet, allConditions);
+                
+                return (bailAmountPaid, fineAmount, termLength, lsiLevel, lsiBreakdown, jailTimeInfo, recentCrimes, generalConditions, specialConditions);
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"[RELEASE SUMMARY] Error calculating release summary data: {ex.Message}");
+                // Return defaults
+                var (termLength, allConditions) = CalculateParoleTermLength(player);
+                var (generalConditions, specialConditions) = SplitConditionsIntoGeneralAndSpecial(player, null, allConditions);
+                return (0f, 0f, termLength, LSILevel.None, (0, 0, 0, 0, 0, LSILevel.None), (0f, 0f), new List<string>(), generalConditions, specialConditions);
+            }
+        }
+
+        /// <summary>
+        /// Convert ViolationType to a crime name for display
+        /// </summary>
+        private string GetViolationCrimeName(ViolationType violationType)
+        {
+            return violationType switch
+            {
+                ViolationType.ContrabandPossession => "Parole Violation - Contraband Possession",
+                ViolationType.MissedCheckIn => "Parole Violation - Missed Check-In",
+                ViolationType.NewCrime => "Parole Violation - New Crime",
+                ViolationType.RestrictedAreaViolation => "Parole Violation - Restricted Area",
+                ViolationType.CurfewViolation => "Parole Violation - Curfew Violation",
+                ViolationType.ContactWithKnownCriminals => "Parole Violation - Contact with Known Criminals",
+                ViolationType.Other => "Parole Violation",
+                _ => "Parole Violation"
+            };
+        }
+
+        /// <summary>
+        /// Split conditions into general (for everyone) and special (based on crimes/criteria)
+        /// </summary>
+        private (List<string> generalConditions, List<string> specialConditions) SplitConditionsIntoGeneralAndSpecial(Player player, RapSheet rapSheet, List<string> allConditions)
+        {
+            var generalConditions = new List<string>
+            {
+                "Report to parole officer as required",
+                "No possession of illegal items",
+                "Comply with all search requests",
+                "Remain within designated areas"
+            };
+            
+            var specialConditions = new List<string>();
+            
+            // If we have a rap sheet, check for specific crimes that warrant special conditions
+            if (rapSheet != null)
+            {
+                var crimes = rapSheet.GetAllCrimes();
+                if (crimes != null && crimes.Count > 0)
+                {
+                    bool hasDrugCrimes = false;
+                    bool hasViolentCrimes = false;
+                    bool hasTheftCrimes = false;
+                    bool hasWeaponCrimes = false;
+                    
+                    foreach (var crime in crimes)
+                    {
+                        string crimeName = crime.GetCrimeName();
+                        string lowerName = crimeName.ToLower();
+                        
+                        // Check for drug-related crimes
+                        if (lowerName.Contains("drug") || lowerName.Contains("possession") || lowerName.Contains("trafficking"))
+                        {
+                            hasDrugCrimes = true;
+                        }
+                        
+                        // Check for violent crimes
+                        if (lowerName.Contains("assault") || lowerName.Contains("murder") || lowerName.Contains("manslaughter") || 
+                            lowerName.Contains("violence") || lowerName.Contains("battery"))
+                        {
+                            hasViolentCrimes = true;
+                        }
+                        
+                        // Check for theft crimes
+                        if (lowerName.Contains("theft") || lowerName.Contains("burglary") || lowerName.Contains("robbery") || 
+                            lowerName.Contains("steal") || lowerName.Contains("larceny"))
+                        {
+                            hasTheftCrimes = true;
+                        }
+                        
+                        // Check for weapon crimes
+                        if (lowerName.Contains("weapon") || lowerName.Contains("firearm") || lowerName.Contains("gun") || 
+                            lowerName.Contains("brandish") || lowerName.Contains("discharge"))
+                        {
+                            hasWeaponCrimes = true;
+                        }
+                    }
+                    
+                    // Add special conditions based on crime types
+                    if (hasDrugCrimes)
+                    {
+                        specialConditions.Add("Submit to random drug testing");
+                        specialConditions.Add("No association with known drug dealers");
+                    }
+                    
+                    if (hasViolentCrimes)
+                    {
+                        specialConditions.Add("Attend anger management counseling");
+                        specialConditions.Add("No contact with victims");
+                    }
+                    
+                    if (hasTheftCrimes)
+                    {
+                        specialConditions.Add("No entry into retail establishments without supervision");
+                        specialConditions.Add("Maintain employment or educational program");
+                    }
+                    
+                    if (hasWeaponCrimes)
+                    {
+                        specialConditions.Add("No possession of firearms or weapons");
+                        specialConditions.Add("Surrender all weapons to parole supervisor");
+                    }
+                }
+            }
+            
+            return (generalConditions, specialConditions);
+        }
+
+        /// <summary>
+        /// Calculate parole term length and get default conditions (for UI display before parole starts)
+        /// This duplicates the logic from StartParoleForReleasedPlayer but only calculates, doesn't start parole
+        /// </summary>
+        /// <returns>Tuple of (termLengthGameMinutes, conditionsList)</returns>
+        public (float termLengthGameMinutes, List<string> conditions) CalculateParoleTermLength(Player player)
+        {
+            try
+            {
+                // Get cached rap sheet
+                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                bool rapSheetLoaded = rapSheet != null;
+
+                if (!rapSheetLoaded)
+                {
+                    ModLogger.Warn($"[PAROLE CALC] No rap sheet found for {player.name} - using default parole term");
+                    float defaultTerm = 2880f; // 2 game days
+                    return (defaultTerm, GetDefaultParoleConditions());
+                }
+
+                // Check if player has paused parole
+                bool hasPausedParole = rapSheet.CurrentParoleRecord != null &&
+                                      rapSheet.CurrentParoleRecord.IsOnParole() &&
+                                      rapSheet.CurrentParoleRecord.IsPaused();
+
+                float termLength;
+
+                if (hasPausedParole)
+                {
+                    // Calculate extended paused parole term
+                    float pausedRemainingTime = rapSheet.CurrentParoleRecord.GetPausedRemainingTime();
+                    float additionalTime = CalculateAdditionalParoleTime(rapSheet, rapSheetLoaded);
+                    int violationCount = rapSheet.CurrentParoleRecord.GetViolationCount();
+                    float violationPenalty = CalculateViolationPenalty(violationCount);
+                    termLength = pausedRemainingTime + additionalTime + violationPenalty;
+                }
+                else
+                {
+                    // Calculate new parole term
+                    termLength = CalculateParoleDuration(rapSheet, rapSheetLoaded);
+                }
+
+                return (termLength, GetDefaultParoleConditions());
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"[PAROLE CALC] Error calculating parole term length: {ex.Message}");
+                return (2880f, GetDefaultParoleConditions()); // Default 2 game days
+            }
+        }
+
+        /// <summary>
+        /// Get default parole conditions list (placeholder for now)
+        /// </summary>
+        private List<string> GetDefaultParoleConditions()
+        {
+            return new List<string>
+            {
+                "Report to parole officer as required",
+                "No possession of illegal items",
+                "Comply with all search requests",
+                "Remain within designated areas"
+            };
+        }
+
+        /// <summary>
+        /// Freeze player movement and controls
+        /// </summary>
+        private void FreezePlayer(Player player)
+        {
+            try
+            {
+#if !MONO
+                var playerMovement = Il2CppScheduleOne.DevUtilities.PlayerSingleton<Il2CppScheduleOne.PlayerScripts.PlayerMovement>.Instance;
+                if (playerMovement != null)
+                {
+                    playerMovement.canMove = false;
+                    ModLogger.Info($"Froze player movement for {player.name}");
+                }
+#else
+                var playerMovement = ScheduleOne.DevUtilities.PlayerSingleton<ScheduleOne.PlayerScripts.PlayerMovement>.Instance;
+                if (playerMovement != null)
+                {
+                    playerMovement.CanMove = false;
+                    ModLogger.Info($"Froze player movement for {player.name}");
+                }
+#endif
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error freezing player: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Unfreeze player movement and controls
+        /// </summary>
+        private void UnfreezePlayer(Player player)
+        {
+            try
+            {
+#if !MONO
+                var playerMovement = Il2CppScheduleOne.DevUtilities.PlayerSingleton<Il2CppScheduleOne.PlayerScripts.PlayerMovement>.Instance;
+                if (playerMovement != null)
+                {
+                    playerMovement.canMove = true;
+                    ModLogger.Info($"Unfroze player movement for {player.name}");
+                }
+#else
+                var playerMovement = ScheduleOne.DevUtilities.PlayerSingleton<ScheduleOne.PlayerScripts.PlayerMovement>.Instance;
+                if (playerMovement != null)
+                {
+                    playerMovement.CanMove = true;
+                    ModLogger.Info($"Unfroze player movement for {player.name}");
+                }
+#endif
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error unfreezing player: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Wait for player to acknowledge parole conditions UI
+        /// Freezes player, shows UI, waits for dismissal, then starts grace period
+        /// </summary>
+        private IEnumerator WaitForParoleConditionsAcknowledgment(Player player, float bailAmountPaid, float fineAmount, float termLengthGameMinutes, 
+            LSILevel lsiLevel, (int totalScore, int crimeCountScore, int severityScore, int violationScore, int pastParoleScore, LSILevel resultingLevel) lsiBreakdown,
+            (float originalSentenceTime, float timeServed) jailTimeInfo, List<string> recentCrimes, List<string> generalConditions, List<string> specialConditions)
+        {
+            bool hasError = false;
+            
+            try
+            {
+                // Freeze player
+                FreezePlayer(player);
+
+                // Show UI with all release summary data
+                BehindBarsUIManager.Instance.ShowParoleConditionsUI(player, bailAmountPaid, fineAmount, termLengthGameMinutes, lsiLevel, lsiBreakdown, jailTimeInfo, recentCrimes, generalConditions, specialConditions);
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error setting up parole conditions UI: {ex.Message}");
+                hasError = true;
+            }
+
+            if (hasError)
+            {
+                UnfreezePlayer(player);
+                yield break;
+            }
+
+            // Wait for dismissal key press
+            bool dismissed = false;
+            bool keyWasPressed = false;
+
+            while (!dismissed)
+            {
+                if (Input.GetKey(Core.BailoutKey))
+                {
+                    if (!keyWasPressed)
+                    {
+                        keyWasPressed = true;
+                        dismissed = true;
+                    }
+                }
+                else
+                {
+                    keyWasPressed = false;
+                }
+
+                yield return null;
+            }
+
+            // Hide UI and start grace period
+            try
+            {
+                BehindBarsUIManager.Instance.HideParoleConditionsUI();
+
+                // IMPORTANT: Grace period was already started when release completed
+                // No need to record release time again - it's already recorded
+                // Parole term timer is already running from teleportation,
+                // and grace period for searches started immediately upon release
+
+                // Show parole status UI now that release summary UI is dismissed
+                if (BehindBarsUIManager.Instance != null)
+                {
+                    BehindBarsUIManager.Instance.ShowParoleStatus();
+                    ModLogger.Info($"Showing parole status UI for {player.name} after release summary dismissal");
+                }
+
+                // Unfreeze player
+                UnfreezePlayer(player);
+
+                ModLogger.Info($"Parole conditions acknowledged by {player.name} - parole status UI shown");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error in WaitForParoleConditionsAcknowledgment cleanup: {ex.Message}");
+                // Ensure player is unfrozen even on error
+                UnfreezePlayer(player);
+            }
         }
 
         #endregion

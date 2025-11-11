@@ -110,12 +110,30 @@ namespace Behind_Bars.Systems.Jail
                             continue;
                         }
 
-                        Type crimeType = crimeInstance.Crime.GetType();
-                        if (!crimesByType.ContainsKey(crimeType))
+                        // Use GetCrimeTypeName() for categorization (needs type name for fine lookup)
+                        Type crimeType = crimeInstance.Crime != null ? crimeInstance.Crime.GetType() : null;
+                        if (crimeType != null)
                         {
-                            crimesByType[crimeType] = new List<CrimeInstance>();
+                            if (!crimesByType.ContainsKey(crimeType))
+                            {
+                                crimesByType[crimeType] = new List<CrimeInstance>();
+                            }
+                            crimesByType[crimeType].Add(crimeInstance);
                         }
-                        crimesByType[crimeType].Add(crimeInstance);
+                        else
+                        {
+                            // If no Crime object, use type name from Description
+                            string typeName = crimeInstance.GetCrimeTypeName();
+                            ModLogger.Debug($"CrimeInstance has no Crime object, using inferred type: {typeName}");
+                            // Calculate fine directly using inferred type name
+                            float fine = 25f; // Default fine
+                            if (_baseFines.TryGetValue(typeName, out float baseFine))
+                            {
+                                fine = baseFine;
+                            }
+                            totalFine += fine * crimeInstance.Severity;
+                            ModLogger.Info($"[FINE CALC] Processed crime without Crime object: {typeName} = ${fine * crimeInstance.Severity:F2}");
+                        }
                     }
 
                     ModLogger.Info($"[FINE CALC] Processing {crimesByType.Count} unique crime types from RapSheet");
@@ -126,7 +144,16 @@ namespace Behind_Bars.Systems.Jail
                         var crimeType = crimeGroup.Key;
                         var crimeInstances = crimeGroup.Value;
                         int count = crimeInstances.Count;
-                        var firstCrime = crimeInstances[0].Crime;
+                        
+                        // Get first crime instance - Crime should not be null here since we filtered above
+                        var firstInstance = crimeInstances[0];
+                        if (firstInstance.Crime == null)
+                        {
+                            ModLogger.Warn("[FINE CALC] Found null Crime in grouped instances - skipping");
+                            continue;
+                        }
+                        
+                        var firstCrime = firstInstance.Crime;
                         string crimeName = firstCrime.GetType().Name;
 
                         ModLogger.Info($"[FINE CALC] Processing crime: {crimeName} x{count}");

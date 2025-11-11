@@ -217,10 +217,10 @@ namespace Behind_Bars.Systems.NPCs
                 // Try to load from asset bundle first, fallback to default
                 voiceDatabase = JailVoiceDatabaseFactory.CreateDefault();
 
-                // Try to load voice clips from the main Behind Bars asset bundle
-                if (Behind_Bars.Systems.AssetManager.bundle != null)
+                if (Behind_Bars.Core.CachedJailBundle != null)
                 {
-                    voiceDatabase.LoadVoiceClipsFromBundle("behind_bars.bundle", "voices");
+                    voiceDatabase.LoadVoiceClipsFromBundle("behind_bars", "voices");
+                    ModLogger.Debug("Voice clips loading temporarily disabled - testing bundle redundancy");
                 }
 
                 ModLogger.Debug($"Voice database setup complete for {gameObject.name}");

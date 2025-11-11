@@ -204,7 +204,9 @@ namespace Behind_Bars.Systems.Jail
                         // Restore player's original clothing from PersistentPlayerData
                         RestorePlayerClothing(Player.Local);
 
-                        ModLogger.Info($"Attempting to open storage - IsOpened: {storageEntity.IsOpened}, CurrentAccessor: {storageEntity.CurrentAccessor?.name ?? "null"}");
+                        // Remove any remaining jail items before opening storage
+                        MelonCoroutines.Start(RemovePrisonItems(Player.Local));
+                        ModLogger.Info($"Attempting to open storage - IsOpened: {storageEntity.IsOpened}, CurrentAccessor: {storageEntity.CurrentPlayerAccessor?.name ?? "null"}");
                         storageEntity.Open();
                         storageSessionActive = true;
                         ModLogger.Info($"Interactive storage opened for {Player.Local.name}");
@@ -275,6 +277,9 @@ namespace Behind_Bars.Systems.Jail
             storageEntity.PopulateWithPlayerItems(player);
 
             ModLogger.Info($"Storage prepared for {player.name} with {legalItems.Count} legal items - waiting for player interaction");
+
+            // Remove any jail items that might still be in inventory (early cleanup)
+            MelonCoroutines.Start(RemovePrisonItems(player));
 
             // Show instruction to interact
             if (BehindBarsUIManager.Instance != null)
@@ -681,6 +686,7 @@ namespace Behind_Bars.Systems.Jail
 
         /// <summary>
         /// Remove prison items from player inventory during release
+        /// Includes all jail items: consumables (bedroll, sheets, cup, toothbrush) and clothing (uniform, shoes, socks)
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -691,7 +697,7 @@ namespace Behind_Bars.Systems.Jail
         private IEnumerator RemovePrisonItems(Player player)
 #endif
         {
-            ModLogger.Info("Removing prison items from inventory");
+            ModLogger.Info("Removing all prison items from inventory");
 
             var inventory = PlayerSingleton<PlayerInventory>.Instance;
             if (inventory == null)
@@ -700,19 +706,27 @@ namespace Behind_Bars.Systems.Jail
                 yield break;
             }
 
-            // Prison items to remove (match JailInventoryPickupStation starter items)
+            // All prison items to remove - consumables and clothing
             var prisonItemsToRemove = new List<string>
             {
+                // Consumable items
                 "Prison Bed Roll",
                 "Prison Sheets and Pillow",
+                "Prison Sheets & Pillow", // Alternative name
                 "Prison Cup",
-                "Prison Toothbrush"
+                "Prison Toothbrush",
+                // Clothing items
+                "Prison Uniform",
+                "Prison Shoes",
+                "Prison Socks"
             };
 
             int itemsRemoved = 0;
 
             foreach (var itemName in prisonItemsToRemove)
             {
+                bool itemRemoved = false;
+                
                 // Try to remove via reflection
                 var removeMethod = inventory.GetType().GetMethod("RemoveItemByName");
                 if (removeMethod == null)
@@ -722,10 +736,22 @@ namespace Behind_Bars.Systems.Jail
 
                 if (removeMethod != null)
                 {
-                    removeMethod.Invoke(inventory, new object[] { itemName });
-                    itemsRemoved++;
-                    ModLogger.Info($"Removed prison item: {itemName}");
+                    try
+                    {
+                        removeMethod.Invoke(inventory, new object[] { itemName });
+                        itemsRemoved++;
+                        itemRemoved = true;
+                        ModLogger.Info($"Removed prison item: {itemName}");
+                    }
+                    catch (System.Exception ex)
+                    {
+                        ModLogger.Debug($"Could not remove {itemName}: {ex.Message}");
+                    }
+                }
 
+                // Yield outside of try-catch block
+                if (itemRemoved)
+                {
                     if (BehindBarsUIManager.Instance != null)
                     {
                         BehindBarsUIManager.Instance.ShowNotification(
@@ -738,7 +764,135 @@ namespace Behind_Bars.Systems.Jail
                 }
             }
 
-            ModLogger.Info($"Removed {itemsRemoved} prison items");
+            ModLogger.Info($"Removed {itemsRemoved} prison items from inventory");
+            
+            // Also check inventory slots directly for any remaining prison items
+            yield return new WaitForSeconds(0.5f);
+            CheckAndRemoveRemainingPrisonItems(inventory);
+        }
+
+        /// <summary>
+        /// Check inventory slots directly for any remaining prison items and remove them
+        /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void CheckAndRemoveRemainingPrisonItems(PlayerInventory inventory)
+        {
+            try
+            {
+                ModLogger.Info("Checking inventory slots for remaining prison items...");
+                
+                // Get inventory slots using reflection
+                var slotsProperty = inventory.GetType().GetProperty("ItemSlots");
+                if (slotsProperty == null)
+                {
+                    slotsProperty = inventory.GetType().GetProperty("Slots");
+                }
+                
+                if (slotsProperty == null)
+                {
+                    ModLogger.Debug("Could not find ItemSlots property - skipping slot-by-slot check");
+                    return;
+                }
+                
+                var slots = slotsProperty.GetValue(inventory);
+                if (slots == null)
+                {
+                    ModLogger.Debug("ItemSlots is null - skipping slot-by-slot check");
+                    return;
+                }
+                
+                // Get count property/method
+                int slotCount = 0;
+                var countProperty = slots.GetType().GetProperty("Count");
+                if (countProperty != null)
+                {
+                    slotCount = (int)countProperty.GetValue(slots);
+                }
+                else
+                {
+                    var lengthProperty = slots.GetType().GetProperty("Length");
+                    if (lengthProperty != null)
+                    {
+                        slotCount = (int)lengthProperty.GetValue(slots);
+                    }
+                }
+                
+                int itemsFound = 0;
+                var prisonItemNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+                {
+                    "Prison Bed Roll",
+                    "Prison Sheets and Pillow",
+                    "Prison Sheets & Pillow",
+                    "Prison Cup",
+                    "Prison Toothbrush",
+                    "Prison Uniform",
+                    "Prison Shoes",
+                    "Prison Socks"
+                };
+                
+                // Check each slot
+                for (int i = 0; i < slotCount; i++)
+                {
+                    try
+                    {
+                        // Get item from slot
+                        var indexer = slots.GetType().GetProperty("Item", new[] { typeof(int) });
+                        if (indexer == null)
+                        {
+                            var getMethod = slots.GetType().GetMethod("get_Item", new[] { typeof(int) });
+                            if (getMethod != null)
+                            {
+                                var slotItem = getMethod.Invoke(slots, new object[] { i });
+                                if (slotItem != null)
+                                {
+                                    // Check if item name contains "Prison"
+                                    var nameProperty = slotItem.GetType().GetProperty("Name");
+                                    if (nameProperty == null)
+                                    {
+                                        nameProperty = slotItem.GetType().GetProperty("ItemName");
+                                    }
+                                    
+                                    if (nameProperty != null)
+                                    {
+                                        var itemName = nameProperty.GetValue(slotItem)?.ToString();
+                                        if (!string.IsNullOrEmpty(itemName) && itemName.Contains("Prison", StringComparison.OrdinalIgnoreCase))
+                                        {
+                                            // Try to remove this item
+                                            var removeMethod = inventory.GetType().GetMethod("RemoveItemByName");
+                                            if (removeMethod == null)
+                                            {
+                                                removeMethod = inventory.GetType().GetMethod("RemoveItem");
+                                            }
+                                            
+                                            if (removeMethod != null)
+                                            {
+                                                removeMethod.Invoke(inventory, new object[] { itemName });
+                                                itemsFound++;
+                                                ModLogger.Info($"Found and removed remaining prison item: {itemName}");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    catch (System.Exception ex)
+                    {
+                        ModLogger.Debug($"Error checking slot {i}: {ex.Message}");
+                    }
+                }
+                
+                if (itemsFound > 0)
+                {
+                    ModLogger.Info($"Found and removed {itemsFound} additional prison items from inventory slots");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Debug($"Error checking inventory slots: {ex.Message}");
+            }
         }
 
         /// <summary>
@@ -792,6 +946,12 @@ namespace Behind_Bars.Systems.Jail
             {
                 remainingItems = storageEntity.GetRemainingItemCount();
                 ModLogger.Info($"Storage closed with {remainingItems} items remaining");
+            }
+
+            // Final check: Remove any remaining jail items from inventory
+            if (currentPlayer != null)
+            {
+                MelonCoroutines.Start(RemovePrisonItems(currentPlayer));
             }
 
             // DON'T clear items yet - player may want to re-open storage
@@ -1220,19 +1380,12 @@ namespace Behind_Bars.Systems.Jail
 
         void Update()
         {
-            // Update interaction state based on whether player has items to retrieve
+            // Update interaction state - allow access even if storage is empty (for clothing restoration)
             if (!isProcessing && !storageSessionActive && interactableObject != null)
             {
-                if (HasItemsForPlayer(Player.Local))
-                {
-                    interactableObject.SetMessage("Retrieve personal belongings");
-                    interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
-                }
-                else
-                {
-                    interactableObject.SetMessage("No items in storage");
-                    interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
-                }
+                // Always allow access to storage, even if empty - player needs to restore clothing
+                interactableObject.SetMessage("Access personal belongings storage");
+                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
             }
             else if (storageSessionActive && interactableObject != null)
             {

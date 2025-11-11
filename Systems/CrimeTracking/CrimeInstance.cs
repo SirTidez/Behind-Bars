@@ -25,6 +25,60 @@ namespace Behind_Bars.Systems.CrimeTracking
         public bool WasWitnessed => WitnessIds.Count > 0;
         public string Description { get; set; } = "";
         
+        /// <summary>
+        /// Get the crime name safely - prefers Description (user-friendly), falls back to Crime.CrimeName
+        /// This ensures we always have a readable crime name even if Crime object is null
+        /// </summary>
+        public string GetCrimeName()
+        {
+            // Prefer Description as it's the user-friendly display name
+            if (!string.IsNullOrEmpty(Description))
+            {
+                return Description;
+            }
+            
+            // Fall back to Crime.CrimeName if Description is empty
+            if (Crime != null && !string.IsNullOrEmpty(Crime.CrimeName))
+            {
+                return Crime.CrimeName;
+            }
+            
+            // Last resort fallback
+            return "Unknown Crime";
+        }
+        
+        /// <summary>
+        /// Get the crime type name (class name) for categorization - uses Crime type if available
+        /// </summary>
+        public string GetCrimeTypeName()
+        {
+            if (Crime != null)
+            {
+                return Crime.GetType().Name;
+            }
+            
+            // If no Crime object, try to infer from Description
+            if (!string.IsNullOrEmpty(Description))
+            {
+                // Map common descriptions to type names
+                return Description switch
+                {
+                    "Murder" or "Murder of a Police Officer" or "Murder of an Employee" => "Murder",
+                    "Involuntary Manslaughter" => "Manslaughter",
+                    "Assault on Civilian" => "AssaultOnCivilian",
+                    "Witness Intimidation" => "WitnessIntimidation",
+                    "Drug Possession (Low)" => "DrugPossessionLow",
+                    "Drug Possession (Moderate)" => "DrugPossessionModerate",
+                    "Drug Possession (High)" => "DrugPossessionHigh",
+                    "Drug Trafficking" => "DrugTraffickingCrime",
+                    "Illegal Weapon Possession" => "WeaponPossession",
+                    _ => Description.Replace(" ", "") // Fallback: remove spaces
+                };
+            }
+            
+            return "Unknown";
+        }
+        
         public CrimeInstance() { }
         
         public CrimeInstance(Crime crime, Vector3 location, float severity = 1.0f)
@@ -33,7 +87,8 @@ namespace Behind_Bars.Systems.CrimeTracking
             Timestamp = DateTime.Now;
             Location = location;
             Severity = severity;
-            Description = crime.CrimeName;
+            // Set Description to the user-friendly CrimeName from the Crime object
+            Description = crime != null ? crime.CrimeName : "";
         }
         
         public void AddWitness(NPC witness)

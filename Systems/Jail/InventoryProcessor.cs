@@ -596,6 +596,10 @@ namespace Behind_Bars.Systems.Jail
                             
                             if (emptySlotIndex != -1)
                             {
+                                // CRITICAL: Set equipped slot to empty slot FIRST to trigger visual refresh
+                                equippedSlotIndexProperty.SetValue(playerInventory, emptySlotIndex);
+                                ModLogger.Info($"[INVENTORY] Switched active slot to empty slot {emptySlotIndex} to refresh visual state");
+                                
                                 // Try to use a method to switch slots if available (for proper visual update)
                                 var switchSlotMethod = playerInventory.GetType().GetMethod("SwitchSlot");
                                 if (switchSlotMethod != null)
@@ -603,27 +607,18 @@ namespace Behind_Bars.Systems.Jail
                                     try
                                     {
                                         switchSlotMethod.Invoke(playerInventory, new object[] { emptySlotIndex });
-                                        ModLogger.Info($"[INVENTORY] Switched to empty slot {emptySlotIndex} using SwitchSlot method");
+                                        ModLogger.Info($"[INVENTORY] Called SwitchSlot({emptySlotIndex}) to refresh visual state");
                                     }
                                     catch (System.Exception ex)
                                     {
-                                        ModLogger.Debug($"[INVENTORY] SwitchSlot method failed, using property: {ex.Message}");
-                                        // Fallback to property
-                                        equippedSlotIndexProperty.SetValue(playerInventory, emptySlotIndex);
-                                        ModLogger.Info($"[INVENTORY] Switched active slot to empty slot {emptySlotIndex} via property");
+                                        ModLogger.Debug($"[INVENTORY] SwitchSlot method failed: {ex.Message}");
                                     }
-                                }
-                                else
-                                {
-                                    // Use property directly
-                                    equippedSlotIndexProperty.SetValue(playerInventory, emptySlotIndex);
-                                    ModLogger.Info($"[INVENTORY] Switched active slot to empty slot {emptySlotIndex} via property");
                                 }
                                 
                                 // Then set back to -1 to ensure nothing is equipped
-                                // Note: We switch to empty slot first to trigger visual update, then clear
+                                // This double-update ensures the visual state is properly refreshed
                                 equippedSlotIndexProperty.SetValue(playerInventory, -1);
-                                ModLogger.Info("[INVENTORY] Set EquippedSlotIndex to -1 after switching to empty slot");
+                                ModLogger.Info("[INVENTORY] Set EquippedSlotIndex to -1 after visual refresh");
                             }
                             else
                             {

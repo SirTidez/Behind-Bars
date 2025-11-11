@@ -220,6 +220,51 @@ namespace Behind_Bars.Systems.CrimeTracking
         #region LSI Risk Assessment
 
         /// <summary>
+        /// Get LSI calculation breakdown for display
+        /// Returns a structured breakdown of how the LSI score was calculated
+        /// </summary>
+        public (int totalScore, int crimeCountScore, int severityScore, int violationScore, int pastParoleScore, LSILevel resultingLevel) GetLSIBreakdown()
+        {
+            if (CrimesCommited == null || CrimesCommited.Count == 0)
+            {
+                return (0, 0, 0, 0, 0, LSILevel.Minimum);
+            }
+
+            int crimeCountScore = Math.Min(CrimesCommited.Count * 2, 20);
+            
+            float avgSeverity = 0f;
+            foreach (var crime in CrimesCommited)
+            {
+                avgSeverity += crime.Severity;
+            }
+            avgSeverity /= CrimesCommited.Count;
+            int severityScore = (int)(avgSeverity * 10);
+            
+            int violationScore = 0;
+            if (CurrentParoleRecord != null)
+            {
+                int violationCount = CurrentParoleRecord.GetViolationCount();
+                violationScore = Math.Min(violationCount * 5, 30);
+            }
+            
+            int pastParoleScore = 0;
+            if (PastParoleRecords != null && PastParoleRecords.Count > 0)
+            {
+                pastParoleScore = Math.Min(PastParoleRecords.Count * 10, 20);
+            }
+            
+            int totalScore = crimeCountScore + severityScore + violationScore + pastParoleScore;
+            
+            LSILevel resultingLevel;
+            if (totalScore < 20) resultingLevel = LSILevel.Minimum;
+            else if (totalScore < 40) resultingLevel = LSILevel.Medium;
+            else if (totalScore < 70) resultingLevel = LSILevel.High;
+            else resultingLevel = LSILevel.Severe;
+            
+            return (totalScore, crimeCountScore, severityScore, violationScore, pastParoleScore, resultingLevel);
+        }
+
+        /// <summary>
         /// Calculate LSI level based on rap sheet data
         /// Uses a 100-point scoring system based on:
         /// - Number of crimes (0-20 points)

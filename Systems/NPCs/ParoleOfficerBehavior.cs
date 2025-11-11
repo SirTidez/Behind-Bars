@@ -555,15 +555,39 @@ namespace Behind_Bars.Systems.NPCs
                     // Initiate search
                     ModLogger.Info($"Officer {badgeNumber}: Initiating random search on {player.name}");
 
-                    // Stop patrol temporarily and set search activity
-                    StopMovement();
+                    // CRITICAL: Freeze player movement immediately when search is initiated
+                    try
+                    {
+#if MONO
+                        var playerMovement = ScheduleOne.DevUtilities.PlayerSingleton<ScheduleOne.PlayerScripts.PlayerMovement>.Instance;
+                        if (playerMovement != null)
+                        {
+                            playerMovement.CanMove = false;
+                            ModLogger.Debug($"Froze player {player.name} movement immediately for parole search");
+                        }
+#else
+                        var playerMovement = Il2CppScheduleOne.DevUtilities.PlayerSingleton<Il2CppScheduleOne.PlayerScripts.PlayerMovement>.Instance;
+                        if (playerMovement != null)
+                        {
+                            playerMovement.canMove = false;
+                            ModLogger.Debug($"Froze player {player.name} movement immediately for parole search");
+                        }
+#endif
+                    }
+                    catch (System.Exception ex)
+                    {
+                        ModLogger.Error($"Error freezing player movement immediately: {ex.Message}");
+                    }
+
+                    // Set search activity (DO NOT call StopMovement() here - we need the officer to walk to the player)
+                    // The search coroutine will handle movement to the player
                     ChangeParoleActivity(ParoleOfficerActivity.SearchingParolee);
                     currentParolee = player;
 
                     // Show initial search notification
                     ShowSearchNotification("Parole compliance check - stay where you are", false);
 
-                    // Start search coroutine
+                    // Start search coroutine (which will handle movement to player and restore movement when done)
                     MelonCoroutines.Start(ParoleSearchSystem.Instance.PerformParoleSearch(this, player));
 
                     // Only search one player at a time

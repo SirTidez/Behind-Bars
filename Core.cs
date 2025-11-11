@@ -58,7 +58,6 @@ namespace Behind_Bars
     public class Core : MelonMod
     {
         public static Core? Instance { get; private set; }
-        public static AssetManager AssetManager { get; private set; }
 
         // Core systems
         private JailSystem? _jailSystem;
@@ -207,8 +206,8 @@ namespace Behind_Bars
             PresetParoleOfficerRoutes.InitializePatrolPoints();
             ModLogger.Info("Preset parole officer routes initialized");
 
-            AssetManager = new AssetManager();
-            AssetManager.Init();
+            //AssetManager = new AssetManager();
+            //AssetManager.Init();
 
             // Add scene change detection for cleanup
 #if !MONO
@@ -1076,66 +1075,6 @@ namespace Behind_Bars
         public BailSystem GetBailSystem() => _bailSystem!;
         public CourtSystem GetCourtSystem() => _courtSystem!;
         public ParoleSystem GetParoleSystem() => _paroleSystem!;
-
-        public void TestToiletSinkSystem()
-        {
-            ModLogger.Info("Testing ToiletSink system from Core...");
-
-            try
-            {
-                var sinkCount = ToiletSinkManager.GetToiletSinkCount();
-                ModLogger.Info($"Current toilet sink count: {sinkCount}");
-
-                var allSinks = ToiletSinkManager.GetAllToiletSinks();
-                for (int i = 0; i < allSinks.Count; i++)
-                {
-                    var sink = allSinks[i];
-                    ModLogger.Info($"ToiletSink {i}: {sink.GetDebugInfo()}");
-                }
-
-                // Test spawning another sink
-                var newSink = AssetManager.SpawnAsset<ToiletSink>(FurnitureType.ToiletSink);
-                if (newSink != null)
-                {
-                    ModLogger.Info($"Successfully spawned additional toilet sink: {newSink.GetDebugInfo()}");
-                    ModLogger.Info($"Total toilet sinks now: {ToiletSinkManager.GetToiletSinkCount()}");
-                }
-            }
-            catch (Exception e)
-            {
-                ModLogger.Error($"Error testing toilet sink system: {e.Message}");
-            }
-        }
-
-        public void TestBunkBedSystem()
-        {
-            ModLogger.Info("Testing BunkBed system from Core...");
-
-            try
-            {
-                var bedCount = BunkBedManager.GetBunkBedCount();
-                ModLogger.Info($"Current bunk bed count: {bedCount}");
-
-                var allBeds = BunkBedManager.GetAllBunkBeds();
-                for (int i = 0; i < allBeds.Count; i++)
-                {
-                    var bed = allBeds[i];
-                    ModLogger.Info($"BunkBed {i}: {bed.GetDebugInfo()}");
-                }
-
-                // Test spawning another bed
-                var newBed = AssetManager.SpawnAsset<BunkBed>(FurnitureType.BunkBed);
-                if (newBed != null)
-                {
-                    ModLogger.Info($"Successfully spawned additional bunk bed: {newBed.GetDebugInfo()}");
-                    ModLogger.Info($"Total bunk beds now: {BunkBedManager.GetBunkBedCount()}");
-                }
-            }
-            catch (Exception e)
-            {
-                ModLogger.Error($"Error testing bunk bed system: {e.Message}");
-            }
-        }
 
         // Jail Controller convenience methods
         public static bool IsJailControllerReady() => JailController != null;

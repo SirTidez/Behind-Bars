@@ -32,7 +32,17 @@ namespace Behind_Bars.Systems.Jail
             public System.Action<Player>? OnComplete { get; set; }
         }
 
+        /// <summary>
+        /// Represents a completed jail sentence (for tracking after completion)
+        /// </summary>
+        private class CompletedSentence
+        {
+            public float OriginalSentenceTime { get; set; }
+            public float TimeServed { get; set; }
+        }
+
         private Dictionary<Player, ActiveSentence> _activeSentences = new();
+        private Dictionary<Player, CompletedSentence> _completedSentences = new(); // Store sentence data for completed/stopped sentences
         private bool _isSubscribed = false;
 
         private JailTimeTracker()
@@ -96,6 +106,14 @@ namespace Behind_Bars.Systems.Jail
                 if (_activeSentences.TryGetValue(player, out var sentence))
                 {
                     ModLogger.Info($"Jail sentence completed for {player.name} ({sentence.TotalGameMinutes} game minutes served)");
+                    
+                    // Store the original sentence time and time served before removing from active tracking
+                    _completedSentences[player] = new CompletedSentence
+                    {
+                        OriginalSentenceTime = sentence.TotalGameMinutes,
+                        TimeServed = sentence.TotalGameMinutes // Full sentence served
+                    };
+                    
                     sentence.OnComplete?.Invoke(player);
                     _activeSentences.Remove(player);
                 }
@@ -140,10 +158,73 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         public void StopTracking(Player player)
         {
-            if (_activeSentences.Remove(player))
+            if (_activeSentences.TryGetValue(player, out var sentence))
             {
-                ModLogger.Info($"Stopped tracking jail sentence for {player.name}");
+                // Calculate actual time served before storing
+                float timeServed = sentence.TotalGameMinutes - sentence.RemainingGameMinutes;
+                
+                // Store both original sentence time and time served for early releases
+                _completedSentences[player] = new CompletedSentence
+                {
+                    OriginalSentenceTime = sentence.TotalGameMinutes,
+                    TimeServed = timeServed
+                };
+                
+                _activeSentences.Remove(player);
+                ModLogger.Info($"Stopped tracking jail sentence for {player.name} - served {timeServed} of {sentence.TotalGameMinutes} game minutes");
             }
+        }
+
+        /// <summary>
+        /// Get the original sentence time for a player (in game minutes)
+        /// Checks both active and completed sentences
+        /// </summary>
+        public float GetOriginalSentenceTime(Player player)
+        {
+            // First check active sentences
+            if (_activeSentences.TryGetValue(player, out var sentence))
+            {
+                return sentence.TotalGameMinutes;
+            }
+            
+            // Then check completed sentences
+            if (_completedSentences.TryGetValue(player, out var completed))
+            {
+                return completed.OriginalSentenceTime;
+            }
+            
+            return 0f;
+        }
+
+        /// <summary>
+        /// Get the actual time served for a player (in game minutes)
+        /// This is the original sentence minus remaining time
+        /// For completed sentences, returns the original sentence time
+        /// For early releases, returns the actual time served
+        /// </summary>
+        public float GetTimeServed(Player player)
+        {
+            // Check active sentences first
+            if (_activeSentences.TryGetValue(player, out var sentence))
+            {
+                return sentence.TotalGameMinutes - sentence.RemainingGameMinutes;
+            }
+            
+            // Check if this was a completed or stopped sentence
+            if (_completedSentences.TryGetValue(player, out var completed))
+            {
+                return completed.TimeServed;
+            }
+            
+            return 0f;
+        }
+
+        /// <summary>
+        /// Clear completed sentence record for a player (called after release summary is shown)
+        /// </summary>
+        public void ClearCompletedSentence(Player player)
+        {
+            _completedSentences.Remove(player);
         }
 
         /// <summary>

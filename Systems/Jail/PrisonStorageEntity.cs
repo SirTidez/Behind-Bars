@@ -104,7 +104,7 @@ namespace Behind_Bars.Systems.Jail
             if (onClosed != null)
             {
 #if MONO
-                onClosed.AddListener(HandleStorageClosed);
+                onClosed += HandleStorageClosed;
 #else
                 onClosed.AddListener(new System.Action(HandleStorageClosed));
 #endif
@@ -540,7 +540,7 @@ namespace Behind_Bars.Systems.Jail
         public override void OnOpened()
         {
             base.OnOpened();
-            ModLogger.Info($"Prison storage opened by {CurrentAccessor?.name ?? "unknown player"}");
+            ModLogger.Info($"Prison storage opened by {CurrentPlayerAccessor?.name ?? "unknown player"}");
         }
 
         /// <summary>

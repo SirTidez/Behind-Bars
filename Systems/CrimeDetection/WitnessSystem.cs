@@ -42,7 +42,7 @@ namespace Behind_Bars.Systems.CrimeDetection
             if (witness == null || crime == null || perpetrator == null)
                 return;
 
-            ModLogger.Info($"NPC {witness.name} witnessed crime: {crime.Crime.CrimeName}");
+            ModLogger.Info($"NPC {witness.name} witnessed crime: {crime.GetCrimeName()}");
 
             // Create or update witness state
             string witnessId = witness.ID;
@@ -70,7 +70,7 @@ namespace Behind_Bars.Systems.CrimeDetection
         /// </summary>
         private void HandlePoliceWitness(PoliceOfficer police, CrimeInstance crime, Player perpetrator)
         {
-            ModLogger.Info($"Police officer {police.name} witnessed {crime.Crime.CrimeName} - initiating immediate pursuit");
+            ModLogger.Info($"Police officer {police.name} witnessed {crime.GetCrimeName()} - initiating immediate pursuit");
 
             // Police respond immediately
             if (crime.Severity >= 2.0f) // Serious crimes
@@ -89,7 +89,7 @@ namespace Behind_Bars.Systems.CrimeDetection
         /// </summary>
         private void HandleCivilianWitness(NPC witness, CrimeInstance crime, Player perpetrator, WitnessState witnessState)
         {
-            ModLogger.Info($"Civilian {witness.name} witnessed {crime.Crime.CrimeName} - processing response");
+            ModLogger.Info($"Civilian {witness.name} witnessed {crime.GetCrimeName()} - processing response");
 
             // Determine witness behavior based on crime severity and witness personality
             float fearLevel = CalculateFearLevel(witness, crime);
@@ -230,11 +230,11 @@ namespace Behind_Bars.Systems.CrimeDetection
                 }
             }
 
-            ModLogger.Info($"Witness {witness.name} is calling police about {crime.Crime.CrimeName}");
+            ModLogger.Info($"Witness {witness.name} is calling police about {crime.GetCrimeName()}");
 
             // Call police through the law manager
             var lawManager = LawManager.Instance;
-            if (lawManager != null && perpetrator != null)
+            if (lawManager != null && perpetrator != null && crime.Crime != null)
             {
                 lawManager.PoliceCalled(perpetrator, crime.Crime);
 

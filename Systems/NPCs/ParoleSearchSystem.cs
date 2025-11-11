@@ -6,13 +6,17 @@ using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.CrimeDetection;
 using Behind_Bars.Systems.CrimeTracking;
+using Behind_Bars.Systems;
+using Behind_Bars.UI;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
 using Il2CppScheduleOne.DevUtilities;
+using Il2CppFishNet;
 #else
 using ScheduleOne.PlayerScripts;
 using ScheduleOne.DevUtilities;
+using FishNet;
 #endif
 
 namespace Behind_Bars.Systems.NPCs
@@ -40,14 +44,15 @@ namespace Behind_Bars.Systems.NPCs
         private Dictionary<Player, float> lastSearchTime = new Dictionary<Player, float>();
         private const float SEARCH_COOLDOWN = 120f; // 2 minutes minimum between searches
 
+        // Grace period after release before searches can occur (in game minutes)
+        private Dictionary<Player, float> releaseTime = new Dictionary<Player, float>();
+        private const float RELEASE_GRACE_PERIOD_GAME_MINUTES = 30f; // Half an in-game hour
+
         // Base detection range (used as fallback)
         private const float BASE_DETECTION_RANGE = 20f;
         
         // Distance threshold for officer to be considered "at player" for search
-        private const float SEARCH_DISTANCE_THRESHOLD = 2.5f;
-        
-        // Track player movement state during searches
-        private Dictionary<Player, bool> playerMovementState = new Dictionary<Player, bool>();
+        private const float SEARCH_DISTANCE_THRESHOLD = 1.5f;
 
         /// <summary>
         /// Get detection range based on LSI level
@@ -95,6 +100,27 @@ namespace Behind_Bars.Systems.NPCs
             if (rapSheet.CurrentParoleRecord == null || !rapSheet.CurrentParoleRecord.IsOnParole())
             {
                 return false;
+            }
+
+            // CRITICAL: Don't search if release summary UI is still visible
+            if (BehindBarsUIManager.Instance != null && BehindBarsUIManager.Instance.IsParoleConditionsUIVisible())
+            {
+                ModLogger.Debug($"Player {player.name} has release summary UI visible - skipping search");
+                return false;
+            }
+
+            // Check grace period after release - don't search immediately after release
+            if (releaseTime.ContainsKey(player))
+            {
+                float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
+                float timeSinceRelease = currentGameTime - releaseTime[player];
+                
+                if (timeSinceRelease < RELEASE_GRACE_PERIOD_GAME_MINUTES)
+                {
+                    float remainingGrace = RELEASE_GRACE_PERIOD_GAME_MINUTES - timeSinceRelease;
+                    ModLogger.Debug($"Player {player.name} is in grace period after release: {timeSinceRelease:F1} game minutes since release (grace period: {RELEASE_GRACE_PERIOD_GAME_MINUTES} game minutes, {remainingGrace:F1} remaining)");
+                    return false;
+                }
             }
 
             // Get dynamic detection range based on LSI level
@@ -145,27 +171,13 @@ namespace Behind_Bars.Systems.NPCs
             // Record search time
             lastSearchTime[player] = Time.time;
 
-            // CRITICAL: Freeze player movement immediately when search starts
-            bool wasMovable = false;
-            try
-            {
+            // Freeze player movement during search
 #if MONO
-                wasMovable = PlayerSingleton<PlayerMovement>.Instance.CanMove;
-                PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
+            PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
 #else
-                wasMovable = PlayerSingleton<PlayerMovement>.Instance.canMove;
-                PlayerSingleton<PlayerMovement>.Instance.canMove = false;
+            PlayerSingleton<PlayerMovement>.Instance.canMove = false;
 #endif
-                playerMovementState[player] = wasMovable;
-                ModLogger.Debug($"Froze player {player.name} movement for parole search");
-            }
-            catch (System.Exception ex)
-            {
-                ModLogger.Error($"Error freezing player movement: {ex.Message}");
-            }
-
-            // Stop officer movement
-            officer.StopMovement();
+            ModLogger.Debug($"Frozen player {player.name} movement for parole search");
 
             // Announce search - notification already shown in CheckForSearchOpportunities
             officer.PlayGuardVoiceCommand(
@@ -174,26 +186,93 @@ namespace Behind_Bars.Systems.NPCs
                 true
             );
 
-            ModLogger.Info($"Officer {officer.GetBadgeNumber()} initiating parole search on {player.name}");
+            ModLogger.Info($"Officer {officer.GetBadgeNumber()} initiating parole search on {player.name} - navigating to player position");
 
-            // Make officer walk to player and wait until they're close enough
+            // Make officer walk directly to player and wait until they're within 5f
+            // DO NOT call StopMovement() here - we need the officer to actually move!
+            // The activity is already set to SearchingParolee which stops patrol logic
             Vector3 playerPosition = player.transform.position;
-            officer.MoveTo(playerPosition);
-            
-            // Wait for officer to reach player (check distance and navAgent status)
-            float maxWaitTime = 10f; // Maximum wait time to prevent infinite loops
+            float maxWaitTime = 15f; // Increased wait time to allow officer to walk from detection radius
             float elapsed = 0f;
             bool officerReachedPlayer = false;
             
+            // Start moving to player immediately
+            // Ensure navAgent is enabled and ready
+            var navAgent = officer.GetComponent<UnityEngine.AI.NavMeshAgent>();
+            if (navAgent != null)
+            {
+                if (!navAgent.enabled)
+                {
+                    ModLogger.Warn($"Officer {officer.GetBadgeNumber()} navAgent is disabled - enabling it");
+                    navAgent.enabled = true;
+                }
+                
+                if (!navAgent.isOnNavMesh)
+                {
+                    ModLogger.Warn($"Officer {officer.GetBadgeNumber()} navAgent is not on NavMesh - may cause movement issues");
+                }
+            }
+            
+            bool moveStarted = officer.MoveTo(playerPosition);
+            ModLogger.Info($"Officer {officer.GetBadgeNumber()} MoveTo() called: success={moveStarted}, destination={playerPosition}, current position={officer.transform.position}, distance={Vector3.Distance(officer.transform.position, playerPosition):F2}m");
+            
+            if (!moveStarted)
+            {
+                ModLogger.Warn($"Officer {officer.GetBadgeNumber()} failed to start movement to player - navAgent may not be ready");
+            }
+            
             while (elapsed < maxWaitTime && !officerReachedPlayer)
             {
+                // Get current player position (should be frozen, but update target just in case)
+                playerPosition = player.transform.position;
                 float distance = Vector3.Distance(officer.transform.position, playerPosition);
                 
-                // Check if officer is close enough (accounting for navAgent precision)
-                var navAgent = officer.GetComponent<UnityEngine.AI.NavMeshAgent>();
-                if (distance < SEARCH_DISTANCE_THRESHOLD || 
-                    (navAgent != null && !navAgent.pathPending && navAgent.remainingDistance < SEARCH_DISTANCE_THRESHOLD))
+                // If officer is not close enough, keep moving toward player
+                if (distance > SEARCH_DISTANCE_THRESHOLD)
                 {
+                    // Update destination to player's current position (in case player moved slightly)
+                    // Only update if navAgent is not already moving or if destination changed significantly
+                    if (navAgent != null && navAgent.enabled)
+                    {
+                        // Update destination if navAgent has stopped or if we're far from target
+                        if (!navAgent.pathPending && navAgent.remainingDistance > SEARCH_DISTANCE_THRESHOLD)
+                        {
+                            bool updated = officer.MoveTo(playerPosition);
+                            if (updated)
+                            {
+                                ModLogger.Debug($"Officer {officer.GetBadgeNumber()} updated destination to player (distance: {distance:F2}m)");
+                            }
+                        }
+                        
+                        // Check if navAgent has reached destination or is close enough
+                        if (!navAgent.pathPending && navAgent.remainingDistance < SEARCH_DISTANCE_THRESHOLD)
+                        {
+                            officerReachedPlayer = true;
+                            ModLogger.Debug($"Officer {officer.GetBadgeNumber()} reached player via navAgent (remainingDistance: {navAgent.remainingDistance:F2}m, direct distance: {distance:F2}m)");
+                            break;
+                        }
+                        
+                        // Log progress every 2 seconds for debugging
+                        if (elapsed % 2f < Time.deltaTime)
+                        {
+                            ModLogger.Debug($"Officer {officer.GetBadgeNumber()} moving to player: distance={distance:F2}m, navAgent.remainingDistance={navAgent.remainingDistance:F2}m, pathPending={navAgent.pathPending}, hasPath={navAgent.hasPath}, enabled={navAgent.enabled}, isOnNavMesh={navAgent.isOnNavMesh}");
+                        }
+                    }
+                    else
+                    {
+                        // NavAgent not available - use direct distance check
+                        if (distance < SEARCH_DISTANCE_THRESHOLD)
+                        {
+                            officerReachedPlayer = true;
+                            ModLogger.Debug($"Officer {officer.GetBadgeNumber()} reached player (distance: {distance:F2}m)");
+                            break;
+                        }
+                    }
+                }
+                else
+                {
+                    // Officer is within 5f - stop movement and proceed with search
+                    officer.StopMovement();
                     officerReachedPlayer = true;
                     ModLogger.Debug($"Officer {officer.GetBadgeNumber()} reached player for search (distance: {distance:F2}m)");
                     break;
@@ -205,7 +284,9 @@ namespace Behind_Bars.Systems.NPCs
             
             if (!officerReachedPlayer)
             {
-                ModLogger.Warn($"Officer {officer.GetBadgeNumber()} did not reach player within {maxWaitTime}s, proceeding with search anyway");
+                ModLogger.Warn($"Officer {officer.GetBadgeNumber()} did not reach player within {maxWaitTime}s (final distance: {Vector3.Distance(officer.transform.position, player.transform.position):F2}m), proceeding with search anyway");
+                // Stop movement before proceeding
+                officer.StopMovement();
             }
 
             // Update notification - searching inventory
@@ -228,10 +309,11 @@ namespace Behind_Bars.Systems.NPCs
             var contrabandSystem = new ContrabandDetectionSystem(crimeDetectionSystem);
             var detectedCrimes = contrabandSystem.PerformContrabandSearch(player);
 
+            bool arrestInitiated = false;
             if (detectedCrimes != null && detectedCrimes.Count > 0)
             {
                 // Contraband found!
-                HandleContrabandFound(officer, player, detectedCrimes);
+                arrestInitiated = HandleContrabandFound(officer, player, detectedCrimes);
                 officer.ShowSearchResults(true, detectedCrimes.Count);
             }
             else
@@ -247,16 +329,27 @@ namespace Behind_Bars.Systems.NPCs
                 officer.ShowSearchResults(false);
             }
 
-            // Resume patrol after delay (notification will auto-hide)
-            yield return new WaitForSeconds(2f);
-            
-            // Restore player movement after search completes
-            RestorePlayerMovement(player);
-            
-            // If still in search activity, resume patrol
-            if (officer.GetCurrentActivity() == ParoleOfficerBehavior.ParoleOfficerActivity.SearchingParolee)
+            // Only restore player movement if arrest was NOT initiated
+            // If arrest was initiated, the arrest process will handle player state
+            if (!arrestInitiated)
             {
-                officer.StartPatrol();
+                // Resume patrol after delay (notification will auto-hide)
+                yield return new WaitForSeconds(2f);
+                
+                // Restore player movement after search completes
+                RestorePlayerMovement(player);
+                
+                // If still in search activity, resume patrol
+                if (officer.GetCurrentActivity() == ParoleOfficerBehavior.ParoleOfficerActivity.SearchingParolee)
+                {
+                    officer.StartPatrol();
+                }
+            }
+            else
+            {
+                ModLogger.Info($"Arrest initiated for {player.name} - skipping movement restoration and patrol resume");
+                // Don't restore movement - arrest process will handle it
+                // Don't resume patrol - officer is handling the arrest
             }
         }
         
@@ -267,50 +360,27 @@ namespace Behind_Bars.Systems.NPCs
         {
             if (player == null) return;
             
-            if (playerMovementState.ContainsKey(player))
+            // Check if release summary UI is visible - if so, player should remain frozen
+            bool shouldBeMovable = true;
+            if (BehindBarsUIManager.Instance != null && BehindBarsUIManager.Instance.IsParoleConditionsUIVisible())
             {
-                bool wasMovable = playerMovementState[player];
-                try
-                {
-#if MONO
-                    PlayerSingleton<PlayerMovement>.Instance.CanMove = wasMovable;
-#else
-                    PlayerSingleton<PlayerMovement>.Instance.canMove = wasMovable;
-#endif
-                    ModLogger.Debug($"Restored player {player.name} movement (wasMovable: {wasMovable})");
-                }
-                catch (System.Exception ex)
-                {
-                    ModLogger.Error($"Error restoring player movement: {ex.Message}");
-                }
-                finally
-                {
-                    playerMovementState.Remove(player);
-                }
+                shouldBeMovable = false;
+                ModLogger.Debug($"Release summary UI is visible - keeping player {player.name} frozen after search");
             }
-            else
-            {
-                // If we don't have the state, just enable movement (safety fallback)
-                try
-                {
+            
 #if MONO
-                    PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
+            PlayerSingleton<PlayerMovement>.Instance.CanMove = shouldBeMovable;
 #else
-                    PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+            PlayerSingleton<PlayerMovement>.Instance.canMove = shouldBeMovable;
 #endif
-                    ModLogger.Debug($"Restored player {player.name} movement (fallback - enabled)");
-                }
-                catch (System.Exception ex)
-                {
-                    ModLogger.Error($"Error restoring player movement (fallback): {ex.Message}");
-                }
-            }
+            ModLogger.Debug($"Restored player {player.name} movement to {shouldBeMovable}");
         }
 
         /// <summary>
         /// Handle contraband detection during search
+        /// Returns true if arrest was initiated, false otherwise
         /// </summary>
-        private void HandleContrabandFound(ParoleOfficerBehavior officer, Player player, List<CrimeInstance> crimes)
+        private bool HandleContrabandFound(ParoleOfficerBehavior officer, Player player, List<CrimeInstance> crimes)
         {
             officer.PlayGuardVoiceCommand(
                 JailNPCAudioController.GuardCommandType.Alert,
@@ -348,11 +418,95 @@ namespace Behind_Bars.Systems.NPCs
                 RapSheetManager.Instance.SaveRapSheet(player, invalidateCache: true);
             }
 
-            // Initiate arrest for parole violation
-            var jailSystem = Core.Instance?.JailSystem;
-            if (jailSystem != null)
+            // Use the game's built-in arrest methods instead of HandleImmediateArrest
+            // This should prevent the black screen issue
+            try
             {
-                MelonCoroutines.Start(jailSystem.HandleImmediateArrest(player));
+                if (player == null)
+                {
+                    ModLogger.Error("Cannot arrest - player is null");
+                    return false;
+                }
+
+                ModLogger.Info($"Initiating arrest for {player.name} due to parole violation using built-in arrest methods");
+
+                // Check if we're the server (for network games)
+                bool isServer = false;
+#if !MONO
+                var networkManager = Il2CppFishNet.InstanceFinder.NetworkManager;
+                if (networkManager != null)
+                {
+                    isServer = networkManager.IsServer;
+                }
+#else
+                var networkManager = FishNet.InstanceFinder.NetworkManager;
+                if (networkManager != null)
+                {
+                    isServer = networkManager.IsServer;
+                }
+#endif
+
+                // Call the appropriate arrest method based on network role
+                if (isServer)
+                {
+                    // Server calls Arrest_Server
+                    player.Arrest_Server();
+                    ModLogger.Info($"Called Arrest_Server() for {player.name}");
+                }
+                else
+                {
+                    // Client calls Arrest_Client
+                    player.Arrest_Client();
+                    ModLogger.Info($"Called Arrest_Client() for {player.name}");
+                }
+
+                // The Harmony patches will intercept these calls and trigger HandleImmediateArrest
+                // This ensures proper integration with the jail system while using the game's built-in methods
+                return true; // Arrest was initiated
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error calling built-in arrest methods for {player.name}: {ex.Message}");
+                ModLogger.Error($"Stack trace: {ex.StackTrace}");
+                
+                // Fallback to HandleImmediateArrest if built-in methods fail
+                var jailSystem = Core.Instance?.JailSystem;
+                if (jailSystem != null)
+                {
+                    ModLogger.Info($"Falling back to HandleImmediateArrest for {player.name}");
+                    MelonCoroutines.Start(jailSystem.HandleImmediateArrest(player));
+                    return true;
+                }
+                else
+                {
+                    ModLogger.Error("JailSystem not available - cannot initiate arrest for parole violation");
+                    return false;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Record the release time for a player (used for grace period)
+        /// Call this when parole starts after release
+        /// </summary>
+        public void RecordReleaseTime(Player player)
+        {
+            if (player == null) return;
+            
+            float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
+            releaseTime[player] = currentGameTime;
+            ModLogger.Info($"Recorded release time for {player.name}: {currentGameTime} game minutes (grace period: {RELEASE_GRACE_PERIOD_GAME_MINUTES} game minutes / {GameTimeManager.FormatGameTime(RELEASE_GRACE_PERIOD_GAME_MINUTES)})");
+        }
+
+        /// <summary>
+        /// Clear release time for a player (when parole ends or player is arrested)
+        /// </summary>
+        public void ClearReleaseTime(Player player)
+        {
+            if (player != null && releaseTime.ContainsKey(player))
+            {
+                releaseTime.Remove(player);
+                ModLogger.Debug($"Cleared release time for {player.name}");
             }
         }
 

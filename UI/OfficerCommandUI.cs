@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.UI;
 using Behind_Bars.Helpers;
+using Behind_Bars.Utils;
 using System.Collections;
 
 #if !MONO
@@ -215,6 +216,9 @@ namespace Behind_Bars.UI
                 // Start hidden
                 _commandPanel.SetActive(false);
 
+                // Apply font fixes (including emoji fallbacks) to all text components
+                TMPFontFix.FixAllTMPFonts(_commandPanel, "base");
+
                 _isInitialized = true;
                 ModLogger.Info("OfficerCommandUI created successfully at top-left");
             }
@@ -271,7 +275,7 @@ namespace Behind_Bars.UI
                 // Show escort indicator if escorting
                 if (data.IsEscorting)
                 {
-                    _escortIndicator.text = "➤ FOLLOW";
+                    _escortIndicator.text = ">> FOLLOW";
                 }
                 else
                 {
@@ -325,7 +329,7 @@ namespace Behind_Bars.UI
 
                 if (data.IsEscorting)
                 {
-                    _escortIndicator.text = "➤ FOLLOW";
+                    _escortIndicator.text = ">> FOLLOW";
                 }
                 else
                 {

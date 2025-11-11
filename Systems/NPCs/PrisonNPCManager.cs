@@ -803,8 +803,8 @@ namespace Behind_Bars.Systems.NPCs
                     badgeNumber = GenerateBadgeNumber();
                 }
 
-                // Fix appearance using existing NPCs
-                FixNPCAppearance(paroleOfficerObject, "guard");
+                // Fix appearance using NPCAppearanceManager (more reliable than searching scene)
+                FixParoleOfficerAppearance(paroleOfficerObject, firstName);
 
                 // Add ParoleOfficerBehavior component
                 var paroleBehavior = paroleOfficerObject.AddComponent<ParoleOfficerBehavior>();
@@ -940,6 +940,105 @@ namespace Behind_Bars.Systems.NPCs
             {
                 ModLogger.Error($"Error getting BaseNPC prefab: {e.Message}");
                 return null;
+            }
+        }
+
+        /// <summary>
+        /// Fix parole officer appearance using NPCAppearanceManager (more reliable than searching scene)
+        /// This ensures consistent guard appearance even when spawned before other guards
+        /// </summary>
+        private void FixParoleOfficerAppearance(GameObject npcInstance, string firstName)
+        {
+            try
+            {
+                ModLogger.Info($"🎨 Fixing parole officer appearance for {npcInstance.name} using NPCAppearanceManager");
+
+#if !MONO
+                var avatar = npcInstance.GetComponent<Il2CppScheduleOne.AvatarFramework.Avatar>();
+                if (avatar == null)
+                {
+                    avatar = npcInstance.GetComponentInChildren<Il2CppScheduleOne.AvatarFramework.Avatar>();
+                }
+#else
+                var avatar = npcInstance.GetComponent<ScheduleOne.AvatarFramework.Avatar>();
+                if (avatar == null)
+                {
+                    avatar = npcInstance.GetComponentInChildren<ScheduleOne.AvatarFramework.Avatar>();
+                }
+#endif
+
+                if (avatar == null)
+                {
+                    ModLogger.Warn($"⚠️ No Avatar component found on {npcInstance.name}, falling back to FixNPCAppearance");
+                    FixNPCAppearance(npcInstance, "guard");
+                    return;
+                }
+
+                // Use NPCAppearanceManager to get proper guard appearance (doesn't rely on existing NPCs)
+                var appearanceSettings = NPCAppearanceManager.GetAppearanceForRole(BaseNPCSpawner.NPCRole.PrisonGuard, firstName);
+                if (appearanceSettings != null)
+                {
+                    try
+                    {
+#if !MONO
+                        var avatarSettings = appearanceSettings as Il2CppScheduleOne.AvatarFramework.AvatarSettings;
+#else
+                        var avatarSettings = appearanceSettings as ScheduleOne.AvatarFramework.AvatarSettings;
+#endif
+                        if (avatarSettings != null)
+                        {
+                            // Ensure Avatar GameObject is active
+                            avatar.gameObject.SetActive(true);
+
+                            // Apply the settings to the NPC's own Avatar
+                            avatar.LoadAvatarSettings(avatarSettings);
+                            ModLogger.Info($"✓ Avatar settings loaded from NPCAppearanceManager for {npcInstance.name}");
+
+                            // Force refresh the avatar
+                            if (avatar.InitialAvatarSettings == null)
+                            {
+                                avatar.InitialAvatarSettings = avatarSettings;
+                            }
+
+                            // Try to trigger avatar refresh
+                            avatar.enabled = false;
+                            avatar.enabled = true;
+
+                            ModLogger.Info($"✓ Avatar refresh triggered for {npcInstance.name}");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        ModLogger.Error($"❌ Failed to load avatar settings from NPCAppearanceManager: {ex.Message}");
+                        // Fallback to scene search method
+                        ModLogger.Info("Falling back to FixNPCAppearance method");
+                        FixNPCAppearance(npcInstance, "guard");
+                    }
+                }
+                else
+                {
+                    ModLogger.Warn($"⚠️ NPCAppearanceManager returned null settings, falling back to FixNPCAppearance");
+                    FixNPCAppearance(npcInstance, "guard");
+                }
+
+                // Ensure avatar is active
+                if (avatar.gameObject != npcInstance)
+                {
+                    avatar.gameObject.SetActive(true);
+                }
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error fixing parole officer appearance: {e.Message}");
+                // Fallback to scene search method
+                try
+                {
+                    FixNPCAppearance(npcInstance, "guard");
+                }
+                catch (Exception fallbackEx)
+                {
+                    ModLogger.Error($"Fallback FixNPCAppearance also failed: {fallbackEx.Message}");
+                }
             }
         }
 

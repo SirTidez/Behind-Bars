@@ -29,6 +29,18 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// </summary>
         public void AddCrime(CrimeInstance crimeInstance)
         {
+            // Handle null Crime object gracefully
+            if (crimeInstance.Crime == null)
+            {
+                ModLogger.Warn($"CrimeInstance has null Crime object - Description: {crimeInstance.Description}");
+                // Still add it, but use Description for categorization
+                _allCrimes.Add(crimeInstance);
+                UpdateWantedLevel();
+                ModLogger.Info($"Added crime (no Crime object): {crimeInstance.GetCrimeName()} at {crimeInstance.Location}. " +
+                              $"Witnesses: {crimeInstance.WitnessIds.Count}. New wanted level: {CurrentWantedLevel:F2}");
+                return;
+            }
+            
             Type crimeType = crimeInstance.Crime.GetType();
             
             if (!_crimesByType.ContainsKey(crimeType))
@@ -41,7 +53,7 @@ namespace Behind_Bars.Systems.CrimeTracking
             
             UpdateWantedLevel();
             
-            ModLogger.Info($"Added crime: {crimeInstance.Crime.CrimeName} at {crimeInstance.Location}. " +
+            ModLogger.Info($"Added crime: {crimeInstance.GetCrimeName()} at {crimeInstance.Location}. " +
                           $"Witnesses: {crimeInstance.WitnessIds.Count}. New wanted level: {CurrentWantedLevel:F2}");
         }
         
@@ -87,7 +99,8 @@ namespace Behind_Bars.Systems.CrimeTracking
             
             foreach (var crime in _allCrimes)
             {
-                string crimeName = crime.Crime.GetType().Name;
+                // Use GetCrimeTypeName() for fine calculation (needs type name, not display name)
+                string crimeName = crime.GetCrimeTypeName();
                 int count = 1; // Each instance counts as 1
                 
                 // Use same fine calculation as PenaltyHandler
@@ -167,15 +180,19 @@ namespace Behind_Bars.Systems.CrimeTracking
             {
                 _allCrimes.Remove(expiredCrime);
                 
-                Type crimeType = expiredCrime.Crime.GetType();
-                if (_crimesByType.ContainsKey(crimeType))
+                // Only remove from _crimesByType if Crime object exists
+                if (expiredCrime.Crime != null)
                 {
-                    _crimesByType[crimeType].Remove(expiredCrime);
-                    
-                    // Clean up empty lists
-                    if (_crimesByType[crimeType].Count == 0)
+                    Type crimeType = expiredCrime.Crime.GetType();
+                    if (_crimesByType.ContainsKey(crimeType))
                     {
-                        _crimesByType.Remove(crimeType);
+                        _crimesByType[crimeType].Remove(expiredCrime);
+                        
+                        // Clean up empty lists
+                        if (_crimesByType[crimeType].Count == 0)
+                        {
+                            _crimesByType.Remove(crimeType);
+                        }
                     }
                 }
             }
@@ -210,7 +227,8 @@ namespace Behind_Bars.Systems.CrimeTracking
             
             foreach (var crime in _allCrimes)
             {
-                string crimeName = crime.Crime.CrimeName;
+                // Use GetCrimeName() for display (user-friendly name)
+                string crimeName = crime.GetCrimeName();
                 if (summary.ContainsKey(crimeName))
                 {
                     summary[crimeName]++;
@@ -237,9 +255,13 @@ namespace Behind_Bars.Systems.CrimeTracking
             {
                 if (crimeGroup.Value.Count > 0)
                 {
-                    // Use the first instance's crime object as the key
-                    Crime crimeKey = crimeGroup.Value[0].Crime;
-                    nativeCrimes[crimeKey] = crimeGroup.Value.Count;
+                    // Use the first instance's crime object as the key (if available)
+                    var firstInstance = crimeGroup.Value[0];
+                    if (firstInstance.Crime != null)
+                    {
+                        Crime crimeKey = firstInstance.Crime;
+                        nativeCrimes[crimeKey] = crimeGroup.Value.Count;
+                    }
                 }
             }
             

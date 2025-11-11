@@ -5,6 +5,8 @@ using Behind_Bars.UI;
 using UnityEngine;
 using MelonLoader;
 using System.Collections.Generic;
+using Behind_Bars.Systems.NPCs;
+
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
 #else
@@ -63,7 +65,7 @@ namespace Behind_Bars.Systems
         /// Start parole supervision for a player
         /// Creates runtime tracking and initializes RapSheet/LSI integration
         /// </summary>
-        public void StartParole(Player player, float durationGameMinutes = PAROLE_DURATION)
+        public void StartParole(Player player, float durationGameMinutes = PAROLE_DURATION, bool showUI = true)
         {
             ModLogger.Info($"Starting parole for {player.name} for {durationGameMinutes} game minutes ({GameTimeManager.FormatGameTime(durationGameMinutes)})");
 
@@ -100,8 +102,15 @@ namespace Behind_Bars.Systems
                 SpawnParoleOfficer();
             }
 
-            // Show parole status UI after a short delay to ensure RapSheet is initialized
-            MelonCoroutines.Start(DelayedShowParoleUI(player));
+            // NOTE: RecordReleaseTime is now called in ReleaseManager.WaitForParoleConditionsAcknowledgment()
+            // after the player dismisses the parole conditions UI. This ensures the grace period
+            // starts only after the player acknowledges their conditions, not immediately when parole starts.
+
+            // Show parole status UI after a short delay to ensure RapSheet is initialized (only if showUI is true)
+            if (showUI)
+            {
+                MelonCoroutines.Start(DelayedShowParoleUI(player));
+            }
         }
 
         /// <summary>
@@ -516,6 +525,9 @@ namespace Behind_Bars.Systems
 
             // Stop tracking with ParoleTimeTracker
             ParoleTimeTracker.Instance.StopTracking(record.Player);
+
+            // Clear release time grace period (parole is complete)
+            ParoleSearchSystem.Instance.ClearReleaseTime(record.Player);
 
             // End parole in RapSheet and archive it
             try
