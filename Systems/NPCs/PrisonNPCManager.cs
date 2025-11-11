@@ -216,13 +216,43 @@ namespace Behind_Bars.Systems.NPCs
             // Spawn guards first
             yield return SpawnGuards();
             
-            // Spawn parole officers
-            yield return SpawnParoleOfficers();
+            // NOTE: Parole officers are now spawned dynamically by DynamicParoleOfficerManager
+            // REMOVED: yield return SpawnParoleOfficers();
+            
+            // Initialize dynamic parole officer manager
+            InitializeDynamicParoleOfficerManager();
             
             // Then spawn inmates
             yield return SpawnInmates();
             
             ModLogger.Info("✓ Prison NPC initialization completed");
+        }
+
+        /// <summary>
+        /// Initialize the dynamic parole officer manager
+        /// </summary>
+        private void InitializeDynamicParoleOfficerManager()
+        {
+            try
+            {
+                ModLogger.Info("Initializing DynamicParoleOfficerManager...");
+                
+                // Create GameObject for the manager
+                GameObject managerObject = new GameObject("DynamicParoleOfficerManager");
+                managerObject.transform.SetParent(transform); // Parent to NPC manager for organization
+                
+                // Add the component
+                var manager = managerObject.AddComponent<DynamicParoleOfficerManager>();
+                
+                // Initialize it
+                manager.Initialize();
+                
+                ModLogger.Info("✓ DynamicParoleOfficerManager initialized");
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"Error initializing DynamicParoleOfficerManager: {ex.Message}");
+            }
         }
 
         /// <summary>

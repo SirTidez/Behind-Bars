@@ -22,6 +22,19 @@ namespace Behind_Bars.Systems
     /// </summary>
     public class ParoleSystem
     {
+        #region Events
+
+        /// <summary>
+        /// Event fired when parole starts for a player
+        /// </summary>
+        public static event System.Action<Player> OnParoleStarted;
+
+        /// <summary>
+        /// Event fired when parole ends for a player (completed, revoked, or expired)
+        /// </summary>
+        public static event System.Action<Player> OnParoleEnded;
+
+        #endregion
         private const float PAROLE_DURATION = 600f; // 10 minutes default
         private const float SEARCH_INTERVAL_MIN = 30f; // Minimum time between searches
         private const float SEARCH_INTERVAL_MAX = 120f; // Maximum time between searches
@@ -96,11 +109,12 @@ namespace Behind_Bars.Systems
             // Start parole monitoring
             MelonCoroutines.Start(MonitorParole(record));
 
-            // Spawn parole officer if not already present
-            if (_paroleOfficerInstance == null)
-            {
-                SpawnParoleOfficer();
-            }
+            // NOTE: Parole officer spawning is now handled by DynamicParoleOfficerManager
+            // The old SpawnParoleOfficer() call has been removed
+
+            // Emit parole started event
+            OnParoleStarted?.Invoke(player);
+            ModLogger.Debug($"ParoleSystem: Emitted OnParoleStarted event for {player.name}");
 
             // NOTE: RecordReleaseTime is now called in ReleaseManager.WaitForParoleConditionsAcknowledgment()
             // after the player dismisses the parole conditions UI. This ensures the grace period
@@ -460,6 +474,10 @@ namespace Behind_Bars.Systems
             // Remove from active parole
             _paroleRecords.Remove(record.Player);
 
+            // Emit parole ended event
+            OnParoleEnded?.Invoke(record.Player);
+            ModLogger.Debug($"ParoleSystem: Emitted OnParoleEnded event for {record.Player.name} (revoked)");
+
             // TODO: Implement revocation consequences
             // This could involve:
             // 1. Immediate arrest by parole officer
@@ -504,6 +522,10 @@ namespace Behind_Bars.Systems
                         rapSheet.ArchiveCurrentParoleRecord();
                         RapSheetManager.Instance.SaveRapSheet(player, invalidateCache: true);
                         ModLogger.Info($"Completed parole in RapSheet for {player.name}");
+                        
+                        // Emit parole ended event
+                        OnParoleEnded?.Invoke(player);
+                        ModLogger.Debug($"ParoleSystem: Emitted OnParoleEnded event for {player.name} (completed via CompleteParoleForPlayer)");
                     }
                 }
                 catch (System.Exception ex)
@@ -560,6 +582,10 @@ namespace Behind_Bars.Systems
             {
                 ModLogger.Warn($"Failed to hide parole status UI: {ex.Message}");
             }
+
+            // Emit parole ended event
+            OnParoleEnded?.Invoke(record.Player);
+            ModLogger.Debug($"ParoleSystem: Emitted OnParoleEnded event for {record.Player.name} (completed)");
 
             // TODO: Implement parole completion rewards
             // This could involve:

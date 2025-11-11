@@ -365,3 +365,5 @@ assets/discord.md
 /assets/memories
 .claude/settings.local.json
 /.serena
+/.claude
+/.serena
