@@ -38,6 +38,9 @@ namespace Behind_Bars.Systems.NPCs
 
         public static PrisonNPCManager Instance { get; private set; }
         
+        // NPC spawning status
+        public bool IsSpawningComplete { get; private set; } = false;
+        
         // NPC tracking
         private List<PrisonGuard> activeGuards = new List<PrisonGuard>();
         private List<ParoleOfficer> activeParoleOfficers = new List<ParoleOfficer>();
@@ -225,6 +228,8 @@ namespace Behind_Bars.Systems.NPCs
             // Then spawn inmates
             yield return SpawnInmates();
             
+            // Mark spawning as complete
+            IsSpawningComplete = true;
             ModLogger.Info("✓ Prison NPC initialization completed");
         }
 

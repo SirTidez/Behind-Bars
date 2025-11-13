@@ -15,11 +15,16 @@ using Il2CppScheduleOne.PlayerScripts;
 using Il2CppScheduleOne.UI.Phone;
 using Il2CppScheduleOne.DevUtilities;
 using Il2CppScheduleOne.UI;
+using Il2CppInterop.Runtime.Attributes;
+
+using Object = Il2CppInterop.Runtime.InteropTypes.UnityObjectBase;
 #else
 using ScheduleOne.PlayerScripts;
 using ScheduleOne.UI.Phone;
 using ScheduleOne.DevUtilities;
 using ScheduleOne.UI;
+
+using Object = UnityEngine.Object;
 #endif
 
 namespace Behind_Bars.UI
@@ -60,6 +65,9 @@ namespace Behind_Bars.UI
                 
                 // Initialize parole status UI
                 InitializeParoleStatusUI();
+                
+                // Initialize wanted level UI
+                InitializeWantedLevelUI();
                 
                 _isInitialized = true;
                 ModLogger.Info("✓ BehindBarsUIManager initialized successfully");
@@ -428,6 +436,82 @@ namespace Behind_Bars.UI
 
         private GameObject? _paroleConditionsManager;
         private ParoleConditionsUI? _paroleConditionsUI;
+        
+        // === WANTED LEVEL UI SYSTEM ===
+
+        private GameObject? _wantedLevelManager;
+        private WantedLevelUI? _wantedLevelUI;
+        
+        // === UPDATE NOTIFICATION SYSTEM ===
+
+        private UpdateNotificationUI? _updateNotificationUI;
+
+        /// <summary>
+        /// Show update notification UI
+        /// </summary>
+        public void ShowUpdateNotification(Utils.VersionInfo versionInfo)
+        {
+            try
+            {
+                if (versionInfo == null || string.IsNullOrEmpty(versionInfo.version))
+                {
+                    ModLogger.Error("Cannot show update notification - invalid version info");
+                    return;
+                }
+
+                // Create UpdateNotificationUI component if needed
+                if (_updateNotificationUI == null)
+                {
+                    GameObject updateUIObj = new GameObject("UpdateNotificationUIManager");
+                    Object.DontDestroyOnLoad(updateUIObj);
+                    
+#if !MONO
+                    _updateNotificationUI = updateUIObj.AddComponent<UpdateNotificationUI>();
+#else
+                    _updateNotificationUI = updateUIObj.AddComponent<UpdateNotificationUI>();
+#endif
+                }
+
+                if (_updateNotificationUI != null)
+                {
+                    _updateNotificationUI.Show(versionInfo);
+                    ModLogger.Info($"Update notification displayed for version {versionInfo.version}");
+                }
+                else
+                {
+                    ModLogger.Error("Failed to create UpdateNotificationUI component");
+                }
+            }
+            catch (System.Exception e)
+            {
+                ModLogger.Error($"Error showing update notification: {e.Message}");
+                ModLogger.Error($"Stack trace: {e.StackTrace}");
+            }
+        }
+
+        /// <summary>
+        /// Hide update notification UI
+        /// </summary>
+        public void HideUpdateNotification()
+        {
+            try
+            {
+                _updateNotificationUI?.Hide();
+            }
+            catch (System.Exception e)
+            {
+                ModLogger.Error($"Error hiding update notification: {e.Message}");
+            }
+        }
+        
+        // === LOADING SCREEN SYSTEM ===
+
+        private GameObject? _loadingScreenUI;
+        private Text? _loadingText;
+        private UnityEngine.UI.Slider? _loadingProgressBar;
+        private Text? _loadingProgressText;
+        private Text? _loadingWarningText;
+        private Text? _messageOfTheDayText;
         
         /// <summary>
         /// Show a booking notification to the player
@@ -1292,6 +1376,401 @@ namespace Behind_Bars.UI
             {
                 ModLogger.Error($"Error creating bail UI: {ex.Message}");
             }
+        }
+
+        // === WANTED LEVEL UI SYSTEM ===
+
+        /// <summary>
+        /// Initialize wanted level UI
+        /// </summary>
+        public void InitializeWantedLevelUI()
+        {
+            try
+            {
+                if (_wantedLevelUI == null)
+                {
+                    CreateWantedLevelUI();
+                }
+
+                ModLogger.Info("WantedLevelUI initialized successfully");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error initializing wanted level UI: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Create the wanted level UI component
+        /// </summary>
+        private void CreateWantedLevelUI()
+        {
+            try
+            {
+                // Create a persistent manager object
+                _wantedLevelManager = new GameObject("WantedLevelManager");
+                GameObject.DontDestroyOnLoad(_wantedLevelManager);
+
+                // Add the WantedLevelUI component
+#if !MONO
+                // IL2CPP-safe component addition
+                var componentType = Il2CppInterop.Runtime.Il2CppType.Of<WantedLevelUI>();
+                var component = _wantedLevelManager.AddComponent(componentType);
+                _wantedLevelUI = component.Cast<WantedLevelUI>();
+#else
+                _wantedLevelUI = _wantedLevelManager.AddComponent<WantedLevelUI>();
+#endif
+
+                // Manually initialize the UI immediately
+                if (_wantedLevelUI != null)
+                {
+                    _wantedLevelUI.CreateWantedLevelUI();
+                    ModLogger.Info("WantedLevelUI CreateWantedLevelUI() called manually");
+                }
+
+                ModLogger.Info("WantedLevelUI manager initialized successfully");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error creating wanted level UI: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Show detailed crime information (for debugging)
+        /// </summary>
+        public void ShowCrimeDetails()
+        {
+            _wantedLevelUI?.ShowCrimeDetails();
+        }
+
+        // === LOADING SCREEN SYSTEM ===
+
+        /// <summary>
+        /// Show loading screen with progress bar
+        /// </summary>
+        public void ShowLoadingScreen(string message = "Loading Behind Bars...")
+        {
+            try
+            {
+                if (_loadingScreenUI == null)
+                {
+                    CreateLoadingScreenUI();
+                }
+
+                if (_loadingScreenUI != null)
+                {
+                    if (_loadingText != null)
+                        _loadingText.text = message;
+                    
+                    // Update Message of the Day text in case it changed
+                    if (_messageOfTheDayText != null)
+                    {
+                        _messageOfTheDayText.text = GetMessageOfTheDay();
+                    }
+                    
+                    _loadingScreenUI.SetActive(true);
+                    ModLogger.Debug($"Showing loading screen: {message}");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error showing loading screen: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Show Message of the Day / Instructions screen (can be called anytime)
+        /// </summary>
+        public void ShowInstructions()
+        {
+            ShowLoadingScreen("Behind Bars - Instructions");
+        }
+
+        /// <summary>
+        /// Update loading progress (0.0 to 1.0)
+        /// </summary>
+        public void UpdateLoadingProgress(float progress, string statusMessage = "")
+        {
+            try
+            {
+                if (_loadingScreenUI == null || !_loadingScreenUI.activeInHierarchy)
+                    return;
+
+                progress = Mathf.Clamp01(progress);
+
+                if (_loadingProgressBar != null)
+                {
+                    _loadingProgressBar.value = progress;
+                }
+
+                if (_loadingProgressText != null)
+                {
+                    int percent = Mathf.RoundToInt(progress * 100f);
+                    _loadingProgressText.text = statusMessage != "" ? $"{statusMessage} ({percent}%)" : $"{percent}%";
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error updating loading progress: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Hide loading screen
+        /// </summary>
+        public void HideLoadingScreen()
+        {
+            try
+            {
+                if (_loadingScreenUI != null && _loadingScreenUI.activeInHierarchy)
+                {
+                    _loadingScreenUI.SetActive(false);
+                    ModLogger.Debug("Loading screen hidden");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error hiding loading screen: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Check if loading screen is currently visible
+        /// </summary>
+        public bool IsLoadingScreenVisible()
+        {
+            return _loadingScreenUI != null && _loadingScreenUI.activeInHierarchy;
+        }
+
+        /// <summary>
+        /// Create the loading screen UI elements
+        /// </summary>
+        private void CreateLoadingScreenUI()
+        {
+            try
+            {
+                // Find or create canvas using IL2CPP-safe methods
+                Canvas canvas = null;
+                
+#if !MONO
+                // IL2CPP-safe canvas finding
+                try
+                {
+                    var hudInstance = Singleton<Il2CppScheduleOne.UI.HUD>.Instance;
+                    if (hudInstance != null && hudInstance.Pointer != System.IntPtr.Zero)
+                    {
+                        canvas = hudInstance.canvas;
+                    }
+                }
+                catch (System.Exception)
+                {
+                    // HUD singleton not available
+                }
+                
+                if (canvas == null)
+                {
+                    var allCanvases = UnityEngine.Object.FindObjectsOfType<Canvas>();
+                    if (allCanvases != null && allCanvases.Length > 0)
+                    {
+                        canvas = allCanvases[0];
+                    }
+                }
+#else
+                canvas = Singleton<HUD>.Instance?.canvas;
+                if (canvas == null)
+                {
+                    canvas = UnityEngine.Object.FindObjectOfType<Canvas>();
+                }
+#endif
+                
+                if (canvas == null)
+                {
+                    ModLogger.Error("No canvas found for loading screen UI - creating overlay canvas");
+                    canvas = FindOrCreateCanvas();
+                }
+
+                if (canvas == null)
+                {
+                    ModLogger.Error("Failed to find or create canvas for loading screen UI");
+                    return;
+                }
+
+                // Create loading screen container
+                GameObject loadingGO = new GameObject("LoadingScreen");
+                loadingGO.transform.SetParent(canvas.transform, false);
+
+                // Set up RectTransform to cover full screen
+                RectTransform loadingRect = loadingGO.AddComponent<RectTransform>();
+                loadingRect.anchorMin = Vector2.zero;
+                loadingRect.anchorMax = Vector2.one;
+                loadingRect.offsetMin = Vector2.zero;
+                loadingRect.offsetMax = Vector2.zero;
+
+                // Add semi-transparent background
+                Image background = loadingGO.AddComponent<Image>();
+                background.color = new Color(0, 0, 0, 0.8f);
+
+                // Create loading text (top-center, above Message of the Day)
+                GameObject loadingTextObj = new GameObject("LoadingText");
+                loadingTextObj.transform.SetParent(loadingGO.transform, false);
+
+                RectTransform loadingTextRect = loadingTextObj.AddComponent<RectTransform>();
+                loadingTextRect.anchorMin = new Vector2(0.5f, 0.93f);
+                loadingTextRect.anchorMax = new Vector2(0.5f, 0.93f);
+                loadingTextRect.pivot = new Vector2(0.5f, 0.5f);
+                loadingTextRect.anchoredPosition = Vector2.zero;
+                loadingTextRect.sizeDelta = new Vector2(600, 50);
+
+                _loadingText = loadingTextObj.AddComponent<Text>();
+                _loadingText.text = "Loading Behind Bars...";
+                _loadingText.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+                _loadingText.fontSize = 28;
+                _loadingText.color = Color.white;
+                _loadingText.alignment = TextAnchor.MiddleCenter;
+                _loadingText.fontStyle = FontStyle.Bold;
+
+                // Create progress bar container (bottom-center)
+                GameObject progressBarContainer = new GameObject("ProgressBarContainer");
+                progressBarContainer.transform.SetParent(loadingGO.transform, false);
+
+                RectTransform progressBarRect = progressBarContainer.AddComponent<RectTransform>();
+                progressBarRect.anchorMin = new Vector2(0.5f, 0.15f);
+                progressBarRect.anchorMax = new Vector2(0.5f, 0.15f);
+                progressBarRect.pivot = new Vector2(0.5f, 0.5f);
+                progressBarRect.anchoredPosition = Vector2.zero;
+                progressBarRect.sizeDelta = new Vector2(600, 40);
+
+                // Create progress bar background
+                GameObject progressBarBG = new GameObject("ProgressBarBG");
+                progressBarBG.transform.SetParent(progressBarContainer.transform, false);
+
+                RectTransform progressBarBGRect = progressBarBG.AddComponent<RectTransform>();
+                progressBarBGRect.anchorMin = Vector2.zero;
+                progressBarBGRect.anchorMax = Vector2.one;
+                progressBarBGRect.offsetMin = new Vector2(0, 15);
+                progressBarBGRect.offsetMax = new Vector2(0, 25);
+
+                Image progressBarBGImage = progressBarBG.AddComponent<Image>();
+                progressBarBGImage.color = new Color(0.2f, 0.2f, 0.2f, 1f);
+
+                // Create progress bar fill
+                GameObject progressBarFill = new GameObject("ProgressBarFill");
+                progressBarFill.transform.SetParent(progressBarBG.transform, false);
+
+                RectTransform progressBarFillRect = progressBarFill.AddComponent<RectTransform>();
+                progressBarFillRect.anchorMin = Vector2.zero;
+                progressBarFillRect.anchorMax = new Vector2(0, 1f);
+                progressBarFillRect.offsetMin = Vector2.zero;
+                progressBarFillRect.offsetMax = Vector2.zero;
+
+                Image progressBarFillImage = progressBarFill.AddComponent<Image>();
+                progressBarFillImage.color = new Color(0.2f, 0.6f, 1f, 1f); // Blue progress bar
+
+                // Create slider component
+                _loadingProgressBar = progressBarBG.AddComponent<UnityEngine.UI.Slider>();
+                _loadingProgressBar.fillRect = progressBarFillRect;
+                _loadingProgressBar.targetGraphic = progressBarFillImage;
+                _loadingProgressBar.minValue = 0f;
+                _loadingProgressBar.maxValue = 1f;
+                _loadingProgressBar.value = 0f;
+
+                // Create progress text (below progress bar)
+                GameObject progressTextObj = new GameObject("ProgressText");
+                progressTextObj.transform.SetParent(progressBarContainer.transform, false);
+
+                RectTransform progressTextRect = progressTextObj.AddComponent<RectTransform>();
+                progressTextRect.anchorMin = Vector2.zero;
+                progressTextRect.anchorMax = Vector2.one;
+                progressTextRect.offsetMin = new Vector2(0, -5);
+                progressTextRect.offsetMax = new Vector2(0, 15);
+
+                _loadingProgressText = progressTextObj.AddComponent<Text>();
+                _loadingProgressText.text = "0%";
+                _loadingProgressText.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+                _loadingProgressText.fontSize = 14;
+                _loadingProgressText.color = Color.white;
+                _loadingProgressText.alignment = TextAnchor.MiddleCenter;
+
+                // Create Message of the Day (large centered text)
+                GameObject motdObj = new GameObject("MessageOfTheDay");
+                motdObj.transform.SetParent(loadingGO.transform, false);
+
+                RectTransform motdRect = motdObj.AddComponent<RectTransform>();
+                motdRect.anchorMin = new Vector2(0.5f, 0.35f);
+                motdRect.anchorMax = new Vector2(0.5f, 0.65f);
+                motdRect.pivot = new Vector2(0.5f, 0.5f);
+                motdRect.anchoredPosition = Vector2.zero;
+                motdRect.offsetMin = new Vector2(-500, 0);
+                motdRect.offsetMax = new Vector2(500, 0);
+
+                _messageOfTheDayText = motdObj.AddComponent<Text>();
+                _messageOfTheDayText.text = GetMessageOfTheDay();
+                _messageOfTheDayText.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+                _messageOfTheDayText.fontSize = 18;
+                _messageOfTheDayText.color = Color.white;
+                _messageOfTheDayText.alignment = TextAnchor.MiddleCenter;
+                _messageOfTheDayText.fontStyle = FontStyle.Bold;
+                _messageOfTheDayText.horizontalOverflow = HorizontalWrapMode.Wrap;
+                _messageOfTheDayText.verticalOverflow = VerticalWrapMode.Overflow;
+                _messageOfTheDayText.lineSpacing = 1.2f;
+
+                // Create warning text (bottom)
+                GameObject warningTextObj = new GameObject("WarningText");
+                warningTextObj.transform.SetParent(loadingGO.transform, false);
+
+                RectTransform warningTextRect = warningTextObj.AddComponent<RectTransform>();
+                warningTextRect.anchorMin = new Vector2(0.5f, 0.1f);
+                warningTextRect.anchorMax = new Vector2(0.5f, 0.1f);
+                warningTextRect.pivot = new Vector2(0.5f, 0.5f);
+                warningTextRect.anchoredPosition = Vector2.zero;
+                warningTextRect.sizeDelta = new Vector2(900, 30);
+
+                _loadingWarningText = warningTextObj.AddComponent<Text>();
+                _loadingWarningText.text = "Loading assets and spawning NPCs... Please wait";
+                _loadingWarningText.font = Resources.GetBuiltinResource<Font>("Arial.ttf");
+                _loadingWarningText.fontSize = 11;
+                _loadingWarningText.color = new Color(0.8f, 0.8f, 0.8f); // Light gray
+                _loadingWarningText.alignment = TextAnchor.MiddleCenter;
+
+                _loadingScreenUI = loadingGO;
+
+                // Start hidden
+                _loadingScreenUI.SetActive(false);
+
+                ModLogger.Debug("Loading screen UI created successfully");
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error creating loading screen UI: {ex.Message}");
+                ModLogger.Error($"Stack trace: {ex.StackTrace}");
+            }
+        }
+
+        /// <summary>
+        /// Get the Message of the Day content
+        /// </summary>
+        private string GetMessageOfTheDay()
+        {
+            return "BEHIND BARS - EARLY ACCESS\n\n" +
+                   "This mod is currently in early access. Bugs and issues are expected.\n\n" +
+                   "Please report any bugs or issues in the Behind Bars Discord server.\n\n" +
+                   "Note: Temporary FPS drops during initialization and asset spawning are normal and expected. " +
+                   "This is due to the mod spawning multiple NPCs and assets.\n\n" +
+                   "Door Controls:\n" +
+                   "• Alt+1: Toggle Prison Entry Door\n" +
+                   "• Alt+2: Toggle Booking Inner Door\n" +
+                   "• Alt+3: Toggle Guard Door\n" +
+                   "• Alt+4: Toggle Holding Cell Door 0\n" +
+                   "• Alt+5: Toggle Holding Cell Door 1\n\n" +
+                   "Jail Management:\n" +
+                   "• L: Emergency Lockdown (locks all doors, emergency lighting)\n" +
+                   "• U: Unlock All (unlocks all doors, normal lighting)\n" +
+                   "• O: Open All Cells\n" +
+                   "• C: Close All Cells\n" +
+                   "• H: Blackout Lighting\n" +
+                   "• N: Normal Lighting\n\n" +
+                   "• Alt+0: Show this instructions screen";
         }
     }
 }

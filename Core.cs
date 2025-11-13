@@ -50,7 +50,7 @@ using Il2CppScheduleOne.DevUtilities;
     Constants.MOD_VERSION,
     Constants.MOD_AUTHOR
 )]
-[assembly: MelonColor(1, 255, 0, 0)]
+[assembly: MelonColor(0, 255, 0, 255)]
 [assembly: MelonGame("TVGS", "Schedule I")]
 
 namespace Behind_Bars
@@ -89,6 +89,11 @@ namespace Behind_Bars
         private static MelonPreferences_Category? _prefsCategory;
         private static MelonPreferences_Entry<KeyCode>? _bailoutKeyPreference;
         public static KeyCode BailoutKey => _bailoutKeyPreference?.Value ?? KeyCode.B;
+        
+        // Update checking preferences
+        private static MelonPreferences_Entry<long>? _lastUpdateCheckEntry;
+        private static MelonPreferences_Entry<string>? _cachedLatestVersionEntry;
+        private static MelonPreferences_Entry<bool>? _enableUpdateCheckingEntry;
 
         public override void OnInitializeMelon()
         {
@@ -142,6 +147,7 @@ namespace Behind_Bars
             ClassInjector.RegisterTypeInIl2Cpp<BehindBarsUIWrapper>();
             ClassInjector.RegisterTypeInIl2Cpp<WantedLevelUI>();
             ClassInjector.RegisterTypeInIl2Cpp<OfficerCommandUI>();
+            ClassInjector.RegisterTypeInIl2Cpp<UpdateNotificationUI>();
 
             // Register Booking System Components
             ClassInjector.RegisterTypeInIl2Cpp<BookingProcess>();
@@ -177,6 +183,34 @@ namespace Behind_Bars
                 "The key binding used to pay bail and get released early from jail"
             );
             ModLogger.Info($"Bailout key preference initialized: {BailoutKey}");
+            
+            // Initialize update checking preferences
+            _lastUpdateCheckEntry = _prefsCategory.CreateEntry<long>(
+                "LastUpdateCheck",
+                0,
+                "Last update check timestamp",
+                "Unix timestamp of last update check"
+            );
+            _cachedLatestVersionEntry = _prefsCategory.CreateEntry<string>(
+                "CachedLatestVersion",
+                "",
+                "Cached latest version",
+                "Cached version from last check"
+            );
+            _enableUpdateCheckingEntry = _prefsCategory.CreateEntry<bool>(
+                "EnableUpdateChecking",
+                Constants.ENABLE_UPDATE_CHECKING,
+                "Enable update checking",
+                "Check for mod updates on menu load"
+            );
+            
+            // Initialize UpdateChecker with preferences
+            Utils.UpdateChecker.InitializePreferences(
+                _lastUpdateCheckEntry,
+                _cachedLatestVersionEntry,
+                _enableUpdateCheckingEntry
+            );
+            ModLogger.Info("Update checking preferences initialized");
 
             // Initialize core systems
             HarmonyPatches.Initialize(this);
@@ -195,8 +229,7 @@ namespace Behind_Bars
 
             _bailSystem = new BailSystem();
             
-            // Initialize crime detection UI
-            CrimeUIManager.Instance.Initialize();
+            // Note: BehindBarsUIManager (including WantedLevelUI) initialization moved to OnSceneWasLoaded to avoid initializing in menu
             _courtSystem = new CourtSystem();
             _paroleSystem = new ParoleSystem();
             FileUtilities.Initialize();
@@ -228,11 +261,8 @@ namespace Behind_Bars
             {
                 if (sceneName == "Main")
                 {
-                    // Initialize UI system
-                    MelonCoroutines.Start(InitializeUISystem());
-                    
-                    // Load and setup jail from asset bundle (simplified approach)
-                    MelonCoroutines.Start(SetupJail());
+                    // Show loading screen and coordinate all loading phases
+                    MelonCoroutines.Start(LoadModWithProgress());
                 }
             }
             catch (Exception e)
@@ -241,13 +271,174 @@ namespace Behind_Bars
             }
         }
 
+        /// <summary>
+        /// Master loading coroutine that shows progress and coordinates all loading phases
+        /// </summary>
+        private IEnumerator LoadModWithProgress()
+        {
+            // Show loading screen immediately
+            BehindBarsUIManager.Instance.ShowLoadingScreen("Loading Behind Bars Mod...");
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0f, "Initializing...");
+
+            yield return new WaitForSeconds(0.1f); // Small delay to ensure UI is visible
+
+            // Phase 1: UI System Initialization (0-20%)
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.05f, "Waiting for UI systems...");
+            yield return new WaitForSeconds(0.2f);
+
+            // Wait for essential systems to be ready
+#if !MONO
+            while (true)
+            {
+                try
+                {
+                    var instance = PlayerSingleton<AppsCanvas>.Instance;
+                    if (instance != null && instance.Pointer != System.IntPtr.Zero)
+                        break;
+                }
+                catch
+                {
+                    // Instance is null or not ready
+                }
+                yield return null;
+            }
+#else
+            while (PlayerSingleton<AppsCanvas>.Instance == null)
+            {
+                yield return null;
+            }
+#endif
+
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.10f, "Initializing UI manager...");
+            yield return new WaitForSeconds(0.5f);
+
+            try
+            {
+                BehindBarsUIManager.Instance.Initialize();
+                ModLogger.Info("✓ Behind Bars UI system initialized successfully");
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error initializing UI system: {e.Message}");
+            }
+
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.20f, "UI system ready");
+
+            // Phase 2: Jail Setup and Asset Spawning (20-70%)
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.25f, "Loading asset bundle...");
+            yield return new WaitForSeconds(0.2f);
+
+            // Start jail setup in parallel
+            var setupJailCoroutine = SetupJail();
+            MelonCoroutines.Start(setupJailCoroutine);
+
+            // Track jail setup progress (simulated - actual progress depends on SetupJail implementation)
+            float jailProgress = 0.25f;
+            while (setupJailCoroutine.MoveNext())
+            {
+                // Increment progress gradually during jail setup
+                jailProgress = Mathf.Min(jailProgress + 0.01f, 0.70f);
+                BehindBarsUIManager.Instance.UpdateLoadingProgress(jailProgress, "Spawning jail assets...");
+                yield return setupJailCoroutine.Current;
+            }
+
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.70f, "Jail setup complete");
+
+            // Phase 3: Wait for NPC Spawning (70-90%)
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.75f, "Spawning NPCs...");
+            yield return new WaitForSeconds(0.5f);
+
+            // Wait for PrisonNPCManager to finish spawning all NPCs
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.80f, "Spawning guards and inmates...");
+            
+            var npcManager = Systems.NPCs.PrisonNPCManager.Instance;
+            if (npcManager != null)
+            {
+                // Wait for NPC spawning to complete
+                float npcProgress = 0.80f;
+                int maxWaitSeconds = 30; // Wait up to 30 seconds for NPC spawning
+                int waitSeconds = 0;
+                
+                while (!npcManager.IsSpawningComplete && waitSeconds < maxWaitSeconds)
+                {
+                    // Increment progress gradually
+                    npcProgress = Mathf.Min(npcProgress + 0.002f, 0.90f);
+                    BehindBarsUIManager.Instance.UpdateLoadingProgress(npcProgress, "Spawning NPCs...");
+                    
+                    yield return new WaitForSeconds(0.5f);
+                    waitSeconds++;
+                }
+                
+                if (npcManager.IsSpawningComplete)
+                {
+                    ModLogger.Info("✓ NPC spawning completed");
+                }
+                else
+                {
+                    ModLogger.Warn("NPC spawning timeout - proceeding anyway");
+                }
+            }
+            else
+            {
+                // NPC Manager not ready yet, wait a bit
+                ModLogger.Warn("PrisonNPCManager not found - waiting for initialization");
+                yield return new WaitForSeconds(3f);
+            }
+
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.90f, "NPCs spawned");
+
+            // Phase 4: Player Systems Initialization (90-100%)
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.92f, "Initializing player systems...");
+            yield return new WaitForSeconds(0.3f);
+
+            // Wait for player to be ready
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.94f, "Waiting for player...");
+            
+            // Start player systems initialization
+            MelonCoroutines.Start(InitializePlayerSystems());
+            
+            // Simulate progress while player systems initialize
+            float playerProgress = 0.94f;
+            for (int i = 0; i < 20; i++) // Wait up to 2 seconds for player systems
+            {
+                playerProgress = Mathf.Min(playerProgress + 0.002f, 0.98f);
+                BehindBarsUIManager.Instance.UpdateLoadingProgress(playerProgress, "Setting up player systems...");
+                yield return new WaitForSeconds(0.1f);
+            }
+
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.98f, "Finalizing...");
+            yield return new WaitForSeconds(0.5f);
+
+            // Complete
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(1.0f, "Complete!");
+            yield return new WaitForSeconds(1.0f); // Show completion message for 1 second
+
+            // Hide loading screen
+            BehindBarsUIManager.Instance.HideLoadingScreen();
+            ModLogger.Info("✓ Behind Bars mod loading complete");
+        }
+
         public override void OnSceneWasLoaded(int buildIndex, string sceneName)
         {
             ModLogger.Debug($"Scene loaded: {sceneName}");
+            
+            // Check for updates when entering Menu scene (always check on first load, ignore cache)
+            if (sceneName == "Menu" && _enableUpdateCheckingEntry?.Value == true)
+            {
+                ModLogger.Info("Menu scene loaded - checking for updates (first load check)");
+                MelonCoroutines.Start(Utils.UpdateChecker.CheckForUpdatesAsync(forceCheck: false));
+            }
+            
             if (sceneName == "Main")
             {
                 ModLogger.Debug("Main scene loaded, initializing player systems");
                 MelonCoroutines.Start(InitializePlayerSystems());
+            }
+            else if (sceneName != "Menu" && sceneName != "Loading")
+            {
+                // Initialize BehindBarsUIManager (includes wanted level UI) when entering any game scene (not Main menu, Menu, or Loading)
+                ModLogger.Info($"Initializing BehindBarsUIManager for scene: {sceneName}");
+                BehindBarsUIManager.Instance.Initialize();
             }
         }
 
@@ -1239,7 +1430,7 @@ namespace Behind_Bars
                 // F9 key - Show crime details (debug)
                 if (Input.GetKeyDown(KeyCode.F9))
                 {
-                    CrimeUIManager.Instance.ShowCrimeDetails();
+                    BehindBarsUIManager.Instance.ShowCrimeDetails();
                 }
 
                 // F6 key - Quick 10-second jail sentence for release testing
@@ -1258,6 +1449,23 @@ namespace Behind_Bars
                 if (Input.GetKeyDown(KeyCode.F12))
                 {
                     TestSpawnNPCWithAvatar();
+                }
+
+                // Alt+0 key - Show/hide instructions screen (Message of the Day)
+                if (Input.GetKey(KeyCode.LeftAlt) && Input.GetKeyDown(KeyCode.Alpha0))
+                {
+                    if (BehindBarsUIManager.Instance != null)
+                    {
+                        // Toggle instructions screen
+                        if (BehindBarsUIManager.Instance.IsLoadingScreenVisible())
+                        {
+                            BehindBarsUIManager.Instance.HideLoadingScreen();
+                        }
+                        else
+                        {
+                            BehindBarsUIManager.Instance.ShowInstructions();
+                        }
+                    }
                 }
             }
             catch (Exception e)
@@ -1534,6 +1742,7 @@ namespace Behind_Bars
                     {
                         BehindBarsUIManager.Instance.DestroyJailInfoUI();
                     }
+                    
                 }
             }
             catch (Exception e)
