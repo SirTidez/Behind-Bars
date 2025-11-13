@@ -1,5 +1,5 @@
 {
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Current release:\n- Jail system with booking process\n- Bail and court systems\n- Parole with officer patrols\n- Dynamic NPC interactions (TEST FILE ONLY)",
   "release_date": "2025-11-13",
   "download_url": "https://github.com/SirTidez/Behind-Bars/releases/latest",
