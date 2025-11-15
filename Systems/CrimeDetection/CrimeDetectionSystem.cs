@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using Behind_Bars.Helpers;
+using Behind_Bars.Utils;
 using Behind_Bars.Systems.Crimes;
 using Behind_Bars.Systems.CrimeTracking;
 
@@ -120,7 +121,7 @@ namespace Behind_Bars.Systems.CrimeDetection
                     if (closestWitness is PoliceOfficer policeWitness)
                     {
                         // Immediate police response
-                        policeWitness.BeginFootPursuit_Networked(perpetrator.NetworkObject.ObjectId.ToString());
+                        NetworkHelper.TryBeginFootPursuit(policeWitness, perpetrator);
                     }
                     else
                     {
@@ -179,7 +180,7 @@ namespace Behind_Bars.Systems.CrimeDetection
                 var policeWitnesses = witnesses.OfType<PoliceOfficer>();
                 foreach (var policeWitness in policeWitnesses)
                 {
-                    policeWitness.BeginFootPursuit_Networked(perpetrator.NetworkObject.ObjectId.ToString());
+                    NetworkHelper.TryBeginFootPursuit(policeWitness, perpetrator);
                 }
             }
             

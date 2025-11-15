@@ -56,27 +56,27 @@ namespace Behind_Bars.Systems.CrimeDetection
         {
             var detectedCrimes = new List<CrimeInstance>();
             
-            ModLogger.Info($"[CONTRABAND DEBUG] Starting contraband search for player: {player?.name}");
+            ModLogger.Debug($"Starting contraband search for player: {player?.name}");
             
             if (player == null)
             {
-                ModLogger.Error("[CONTRABAND DEBUG] Player is null!");
+                ModLogger.Debug("Player is null!");
                 return detectedCrimes;
             }
             
             if (player.Inventory == null)
             {
-                ModLogger.Error("[CONTRABAND DEBUG] Player.Inventory is null!");
+                ModLogger.Debug("Player.Inventory is null!");
                 return detectedCrimes;
             }
             
-            ModLogger.Info($"[CONTRABAND DEBUG] Player: {player.name}, Inventory exists: {player.Inventory != null}");
+            ModLogger.Debug($"Player: {player.name}, Inventory exists: {player.Inventory != null}");
             
             // Fallback: try to use the player.Inventory array directly since PlayerInventory component isn't accessible
             var inventory = player.Inventory;
             if (inventory != null && inventory.Length > 0)
             {
-                ModLogger.Info($"[CONTRABAND DEBUG] Using Player.Inventory array with {inventory.Length} slots");
+                ModLogger.Debug($"Using Player.Inventory array with {inventory.Length} slots");
                 var inventorySlotsFromArray = new List<ItemSlot>();
                 foreach (var slot in inventory)
                 {
@@ -86,7 +86,7 @@ namespace Behind_Bars.Systems.CrimeDetection
             }
             else
             {
-                ModLogger.Error("[CONTRABAND DEBUG] Player.Inventory array is null/empty!");
+                ModLogger.Debug("Player.Inventory array is null/empty!");
                 return detectedCrimes;
             }
         }
@@ -101,12 +101,12 @@ namespace Behind_Bars.Systems.CrimeDetection
             {
                 if (slot?.ItemInstance == null)
                 {
-                    ModLogger.Info($"[CONTRABAND DEBUG] Empty slot or null item instance");
+                    ModLogger.Debug("Empty slot or null item instance");
                     continue;
                 }
                     
                 var itemInstance = slot.ItemInstance;
-                ModLogger.Info($"[CONTRABAND DEBUG] Checking item: {itemInstance?.GetType().Name}");
+                ModLogger.Debug($"Checking item: {itemInstance?.GetType().Name}");
                 
                 // Check if it's a product (drug)
                 if (itemInstance is ProductItemInstance productInstance)
@@ -131,7 +131,7 @@ namespace Behind_Bars.Systems.CrimeDetection
                 else if (itemInstance != null)
                 {
                     string itemTypeName = itemInstance.GetType().Name;
-                    ModLogger.Info($"[CONTRABAND DEBUG] Checking for drugs in item type: '{itemTypeName}'");
+                    ModLogger.Debug($"Checking for drugs in item type: '{itemTypeName}'");
                     
                     // Check for various drug types by name
                     bool isWeed = itemTypeName.Contains("Weed") || itemTypeName.Equals("WeedInstance", StringComparison.OrdinalIgnoreCase);
@@ -141,7 +141,7 @@ namespace Behind_Bars.Systems.CrimeDetection
                     
                     if (isWeed || isCocaine || isHeroin || isMeth)
                     {
-                        ModLogger.Info($"[CONTRABAND DEBUG] ✓ FOUND DRUG: {itemTypeName}");
+                        ModLogger.Debug($"✓ FOUND DRUG: {itemTypeName}");
                         
                         // Determine drug severity
                         Crime drugCrime;
@@ -165,7 +165,7 @@ namespace Behind_Bars.Systems.CrimeDetection
                         drugsByType[drugLevel] += 1;
                         totalDrugQuantity += 1;
                         
-                        ModLogger.Info($"[CONTRABAND DEBUG] Added drug possession charge for {itemTypeName}");
+                        ModLogger.Debug($"Added drug possession charge for {itemTypeName}");
                         continue; // Move to next item
                     }
                 }
@@ -263,27 +263,27 @@ namespace Behind_Bars.Systems.CrimeDetection
                 return ELegalStatus.Legal;
 
             // First check the actual instance type - most reliable method
-            ModLogger.Info($"[CONTRABAND DEBUG] Checking ProductItemInstance type: {productInstance.GetType().Name}");
+            ModLogger.Debug($"Checking ProductItemInstance type: {productInstance.GetType().Name}");
             
             if (productInstance is WeedInstance weedInstance)
             {
                 int amount = weedInstance.Amount;
-                ModLogger.Info($"[CONTRABAND DEBUG] ✓ DETECTED WeedInstance as contraband! Amount: {amount}");
+                ModLogger.Debug($"✓ DETECTED WeedInstance as contraband! Amount: {amount}");
                 
                 // Determine severity based on amount
                 if (amount >= 50)
                 {
-                    ModLogger.Info($"[CONTRABAND DEBUG] Large weed amount ({amount}) = HIGH SEVERITY (trafficking level)");
+                    ModLogger.Debug($"Large weed amount ({amount}) = HIGH SEVERITY (trafficking level)");
                     return ELegalStatus.HighSeverityDrug;
                 }
                 else if (amount >= 20)
                 {
-                    ModLogger.Info($"[CONTRABAND DEBUG] Moderate weed amount ({amount}) = MODERATE SEVERITY (dealing level)");
+                    ModLogger.Debug($"Moderate weed amount ({amount}) = MODERATE SEVERITY (dealing level)");
                     return ELegalStatus.ModerateSeverityDrug;
                 }
                 else
                 {
-                    ModLogger.Info($"[CONTRABAND DEBUG] Small weed amount ({amount}) = LOW SEVERITY (personal use)");
+                    ModLogger.Debug($"Small weed amount ({amount}) = LOW SEVERITY (personal use)");
                     return ELegalStatus.LowSeverityDrug;
                 }
             }
@@ -294,19 +294,19 @@ namespace Behind_Bars.Systems.CrimeDetection
             
             if (instanceType.Contains("Cocaine"))
             {
-                ModLogger.Info($"[CONTRABAND DEBUG] ✓ DETECTED {instanceType} Amount: {drugAmount}");
+                ModLogger.Debug($"✓ DETECTED {instanceType} Amount: {drugAmount}");
                 // Cocaine is always high severity, but amount affects trafficking charges later
                 return drugAmount >= 10 ? ELegalStatus.HighSeverityDrug : ELegalStatus.ModerateSeverityDrug;
             }
             else if (instanceType.Contains("Heroin"))
             {
-                ModLogger.Info($"[CONTRABAND DEBUG] ✓ DETECTED {instanceType} Amount: {drugAmount}");
+                ModLogger.Debug($"✓ DETECTED {instanceType} Amount: {drugAmount}");
                 // Heroin is always high severity due to danger, regardless of amount
                 return ELegalStatus.HighSeverityDrug;
             }
             else if (instanceType.Contains("Meth"))
             {
-                ModLogger.Info($"[CONTRABAND DEBUG] ✓ DETECTED {instanceType} Amount: {drugAmount}");
+                ModLogger.Debug($"✓ DETECTED {instanceType} Amount: {drugAmount}");
                 // Meth severity based on amount
                 return drugAmount >= 15 ? ELegalStatus.HighSeverityDrug : ELegalStatus.ModerateSeverityDrug;
             }
@@ -315,12 +315,12 @@ namespace Behind_Bars.Systems.CrimeDetection
             if (productInstance.Definition is ProductDefinition productDef)
             {
                 var productName = productDef.name.ToLower();
-                ModLogger.Info($"[CONTRABAND DEBUG] Checking product definition name: '{productName}'");
+                ModLogger.Debug($"Checking product definition name: '{productName}'");
                 
                 // Check for common drug names in definition
                 if (productName.Contains("weed") || productName.Contains("cannabis") || productName.Contains("marijuana"))
                 {
-                    ModLogger.Info($"[CONTRABAND DEBUG] ✓ DETECTED weed by definition name!");
+                    ModLogger.Debug($"✓ DETECTED weed by definition name!");
                     return ELegalStatus.LowSeverityDrug;
                 }
                 else if (productName.Contains("cocaine") || productName.Contains("coke"))
@@ -338,10 +338,10 @@ namespace Behind_Bars.Systems.CrimeDetection
             }
             else
             {
-                ModLogger.Info($"[CONTRABAND DEBUG] No ProductDefinition found for {instanceType}");
+                ModLogger.Debug($"No ProductDefinition found for {instanceType}");
             }
             
-            ModLogger.Info($"[CONTRABAND DEBUG] {instanceType} determined to be legal");
+            ModLogger.Debug($"{instanceType} determined to be legal");
             return ELegalStatus.Legal;
         }
         

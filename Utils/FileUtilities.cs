@@ -46,7 +46,7 @@ namespace Behind_Bars.Utils
                     string saveName = NetworkSingleton<GameManager>.Instance.OrganisationName;
                     if (!string.IsNullOrEmpty(saveName) && saveName != "Game")
                     {
-                        ModLogger.Info($"Got organization name from GameManager: {saveName}");
+                        ModLogger.Debug($"Got organization name from GameManager: {saveName}");
                         return saveName;
                     }
                 }
@@ -56,7 +56,7 @@ namespace Behind_Bars.Utils
                     string saveName = NetworkSingleton<GameManager>.Instance.OrganisationName;
                     if (!string.IsNullOrEmpty(saveName) && saveName != "Game")
                     {
-                        ModLogger.Info($"Got organization name from GameManager: {saveName}");
+                        ModLogger.Debug($"Got organization name from GameManager: {saveName}");
                         return saveName;
                     }
                 }

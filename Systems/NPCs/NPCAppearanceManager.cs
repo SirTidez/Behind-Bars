@@ -41,7 +41,7 @@ namespace Behind_Bars.Systems.NPCs
                 var employeeSettings = GetEmployeeManagerAppearance(role);
                 if (employeeSettings != null)
                 {
-                    ModLogger.Info($"✓ Using EmployeeManager appearance for {role}");
+                    ModLogger.Debug($"✓ Using EmployeeManager appearance for {role}");
                     return employeeSettings;
                 }
 
@@ -119,7 +119,7 @@ namespace Behind_Bars.Systems.NPCs
                             break;
                     }
 
-                    ModLogger.Info($"✓ Generated {role} appearance from EmployeeManager (male: {male}, index: {index})");
+                    ModLogger.Debug($"✓ Generated {role} appearance from EmployeeManager (male: {male}, index: {index})");
                     return copiedSettings;
                 }
                 else

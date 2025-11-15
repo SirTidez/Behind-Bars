@@ -611,8 +611,8 @@ namespace Behind_Bars.Systems.CrimeTracking
                 if (PastParoleRecords == null)
                     PastParoleRecords = new List<ParoleRecord>();
 
-                ModLogger.Info($"Rap sheet loaded for {Player.name}: {GetCrimeCount()} crimes, {PastParoleRecords.Count} past parole records");
-                ModLogger.Info($"[LSI] Loaded LSI data - Level: {LSILevel}, Last Assessment: {LastLSIAssessment}");
+                ModLogger.Debug($"Rap sheet loaded for {Player.name}: {GetCrimeCount()} crimes, {PastParoleRecords.Count} past parole records");
+                ModLogger.Debug($"[LSI] Loaded LSI data - Level: {LSILevel}, Last Assessment: {LastLSIAssessment}");
                 return true;
             }
             catch (Exception ex)

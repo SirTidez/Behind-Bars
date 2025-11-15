@@ -54,7 +54,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                ModLogger.Info($"🎯 Spawning BaseNPC for {role}: {firstName} {lastName} at {position}");
+                ModLogger.Debug($"🎯 Spawning BaseNPC for {role}: {firstName} {lastName} at {position}");
 
                 // Get the BaseNPC prefab
                 var baseNPCPrefab = GetBaseNPCPrefab();
@@ -74,7 +74,7 @@ namespace Behind_Bars.Systems.NPCs
 
                 // Set name immediately
                 npcInstance.name = $"{role}_{firstName}_{lastName}";
-                ModLogger.Info($"✓ BaseNPC instantiated: {npcInstance.name}");
+                ModLogger.Debug($"✓ BaseNPC instantiated: {npcInstance.name}");
 
                 // Get the NPC component (BaseNPC should have this automatically)
                 var npcComponent = npcInstance.GetComponent<NPC>();
@@ -85,7 +85,7 @@ namespace Behind_Bars.Systems.NPCs
                     npcComponent.LastName = lastName;
                     npcComponent.ID = $"{role.ToString().ToLower()}_{Guid.NewGuid().ToString().Substring(0, 8)}";
 
-                    ModLogger.Info($"✓ NPC component configured: {npcComponent.FirstName} {npcComponent.LastName} (ID: {npcComponent.ID})");
+                    ModLogger.Debug($"✓ NPC component configured: {npcComponent.FirstName} {npcComponent.LastName} (ID: {npcComponent.ID})");
                 }
                 else
                 {
@@ -107,7 +107,7 @@ namespace Behind_Bars.Systems.NPCs
                 // Final positioning and activation
                 FinalizeNPCSpawn(npcInstance, position);
 
-                ModLogger.Info($"🎉 Successfully spawned {role} NPC: {firstName} {lastName}");
+                ModLogger.Debug($"🎉 Successfully spawned {role} NPC: {firstName} {lastName}");
                 return npcInstance;
             }
             catch (Exception e)
@@ -152,7 +152,7 @@ namespace Behind_Bars.Systems.NPCs
                     return null;
                 }
 
-                ModLogger.Info($"✓ Found BaseNPC prefab: '{prefab.name}' at index {BASE_NPC_PREFAB_ID}");
+                ModLogger.Debug($"✓ Found BaseNPC prefab: '{prefab.name}' at index {BASE_NPC_PREFAB_ID}");
                 return prefab.gameObject;
             }
             catch (Exception e)
@@ -170,7 +170,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                ModLogger.Info($"🎨 Fixing appearance for {npcInstance.name}...");
+                ModLogger.Debug($"🎨 Fixing appearance for {npcInstance.name}...");
 
                 // Get the NPC component
                 var npcComponent = npcInstance.GetComponent<NPC>();
@@ -217,7 +217,7 @@ namespace Behind_Bars.Systems.NPCs
                 }
                 else
                 {
-                    ModLogger.Info($"Found existing Avatar component on {npcInstance.name}");
+                    ModLogger.Debug($"Found existing Avatar component on {npcInstance.name}");
                     npcComponent.Avatar = npcAvatar;
                 }
 
@@ -241,7 +241,7 @@ namespace Behind_Bars.Systems.NPCs
 
                                 // Apply the settings to the NPC's own Avatar
                                 npcAvatar.LoadAvatarSettings(avatarSettings);
-                                ModLogger.Info($"✓ Avatar settings loaded for {npcInstance.name}");
+                                ModLogger.Debug($"✓ Avatar settings loaded for {npcInstance.name}");
 
                                 // Force refresh the avatar
                                 if (npcAvatar.InitialAvatarSettings == null)
@@ -253,7 +253,7 @@ namespace Behind_Bars.Systems.NPCs
                                 npcAvatar.enabled = false;
                                 npcAvatar.enabled = true;
 
-                                ModLogger.Info($"✓ Avatar refresh triggered for {npcInstance.name}");
+                                ModLogger.Debug($"✓ Avatar refresh triggered for {npcInstance.name}");
                             }
                             catch (Exception e)
                             {
@@ -270,7 +270,7 @@ namespace Behind_Bars.Systems.NPCs
                     ApplyPredefinedCharacterCustomizations(npcAvatar, firstName, role);
                 }
 
-                ModLogger.Info($"✓ Appearance fix attempt completed for {npcInstance.name}");
+                ModLogger.Debug($"✓ Appearance fix attempt completed for {npcInstance.name}");
             }
             catch (Exception e)
             {
@@ -300,15 +300,15 @@ namespace Behind_Bars.Systems.NPCs
                 {
                     case "dre":
                         ApplyDreCustomizations(npcAvatar);
-                        ModLogger.Info($"✓ Applied Dre's predefined customizations");
+                        ModLogger.Debug($"✓ Applied Dre's predefined customizations");
                         break;
                     case "tidez":
                         // Future: Add Tidez customizations here
-                        ModLogger.Info($"✓ Tidez detected (no specific customizations yet)");
+                        ModLogger.Debug($"✓ Tidez detected (no specific customizations yet)");
                         break;
                     case "spec":
                         // Future: Add Spec customizations here
-                        ModLogger.Info($"✓ Spec detected (no specific customizations yet)");
+                        ModLogger.Debug($"✓ Spec detected (no specific customizations yet)");
                         break;
                 }
             }
@@ -500,7 +500,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                ModLogger.Info($"🔧 Adding jail behaviors for {role} on {npcInstance.name}...");
+                ModLogger.Debug($"🔧 Adding jail behaviors for {role} on {npcInstance.name}...");
 
                 switch (role)
                 {
@@ -519,7 +519,7 @@ namespace Behind_Bars.Systems.NPCs
                         break;
                 }
 
-                ModLogger.Info($"✓ Jail behaviors added to {npcInstance.name}");
+                ModLogger.Debug($"✓ Jail behaviors added to {npcInstance.name}");
             }
             catch (Exception e)
             {
@@ -550,7 +550,7 @@ namespace Behind_Bars.Systems.NPCs
                 badgeNumber = $"G{UnityEngine.Random.Range(1000, 9999)}";
             }
 
-            ModLogger.Info($"✓ GuardBehavior added to {npcInstance.name} with assignment {assignment}");
+            ModLogger.Debug($"✓ GuardBehavior added to {npcInstance.name} with assignment {assignment}");
         }
 
         /// <summary>
@@ -567,7 +567,7 @@ namespace Behind_Bars.Systems.NPCs
                 ModLogger.Debug($"Adding inmate behavior wrapper to {npcInstance.name}");
             }
 
-            ModLogger.Info($"✓ Inmate behavior configured for {npcInstance.name}");
+            ModLogger.Debug($"✓ Inmate behavior configured for {npcInstance.name}");
         }
 
         /// <summary>
@@ -583,7 +583,7 @@ namespace Behind_Bars.Systems.NPCs
                 testController.usePatrolMode = true;
             }
 
-            ModLogger.Info($"✓ TestNPCController added to {npcInstance.name}");
+                ModLogger.Debug($"✓ TestNPCController added to {npcInstance.name}");
         }
 
         /// <summary>
@@ -623,7 +623,7 @@ namespace Behind_Bars.Systems.NPCs
                 if (networkManager != null && networkManager.IsServer)
                 {
                     networkManager.ServerManager.Spawn(networkObject);
-                    ModLogger.Info($"✓ {npcInstance.name} spawned on network");
+                    ModLogger.Debug($"✓ {npcInstance.name} spawned on network");
                 }
             }
             catch (Exception e)
@@ -653,7 +653,7 @@ namespace Behind_Bars.Systems.NPCs
                     {
                         navAgent.Warp(hit.position);
                         navAgent.enabled = true;
-                        ModLogger.Info($"✓ {npcInstance.name} positioned on NavMesh at {hit.position}");
+                        ModLogger.Debug($"✓ {npcInstance.name} positioned on NavMesh at {hit.position}");
                     }
                     else
                     {
@@ -664,7 +664,7 @@ namespace Behind_Bars.Systems.NPCs
                 // Ensure the NPC is active
                 npcInstance.SetActive(true);
 
-                ModLogger.Info($"✓ {npcInstance.name} finalized and activated");
+                ModLogger.Debug($"✓ {npcInstance.name} finalized and activated");
             }
             catch (Exception e)
             {
@@ -677,7 +677,7 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         public static GameObject TestSpawnBaseNPC(Vector3 position)
         {
-            ModLogger.Info($"🧪 Testing BaseNPC spawn at {position}");
+            ModLogger.Debug($"🧪 Testing BaseNPC spawn at {position}");
             return SpawnJailNPC(NPCRole.TestNPC, position, "TestNPC", "BaseNPC", "TEST");
         }
 

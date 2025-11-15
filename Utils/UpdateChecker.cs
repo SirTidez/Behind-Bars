@@ -143,26 +143,21 @@ namespace Behind_Bars.Utils
             string url = Constants.GITHUB_VERSION_URL;
             ModLogger.Debug($"Fetching version from: {url}");
 
-            using (UnityWebRequest request = UnityWebRequest.Get(url))
+            UnityWebRequest request = UnityWebRequest.Get(url);
+            request.timeout = 30;
+            yield return request.SendWebRequest();
+            if (request.result == UnityWebRequest.Result.Success)
             {
-                // Set timeout to 30 seconds
-                request.timeout = 30;
-                
-                yield return request.SendWebRequest();
-
-                if (request.result == UnityWebRequest.Result.Success)
-                {
-                    string jsonText = request.downloadHandler.text;
-                    ModLogger.Debug($"Received JSON response: {jsonText.Substring(0, Math.Min(200, jsonText.Length))}...");
+                string jsonText = request.downloadHandler.text;
+                ModLogger.Debug($"Received JSON response: {jsonText.Substring(0, Math.Min(200, jsonText.Length))}...");
                     
-                    VersionInfo? versionInfo = ParseVersionInfo(jsonText);
-                    callback(versionInfo);
-                }
-                else
-                {
-                    ModLogger.Warn($"Update check failed: {request.error} (HTTP {request.responseCode})");
-                    callback(null);
-                }
+                VersionInfo versionInfo = ParseVersionInfo(jsonText);
+                callback(versionInfo);
+            }
+            else
+            {
+                ModLogger.Warn($"Update check failed: {request.error} (HTTP {request.responseCode})");
+                callback(null);
             }
         }
 

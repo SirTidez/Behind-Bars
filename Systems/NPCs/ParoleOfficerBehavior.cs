@@ -179,7 +179,7 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             shiftStartTime = Time.time;
-            ModLogger.Info($"ParoleOfficerBehavior initialized: {role} officer {badgeNumber} at {assignment}");
+            ModLogger.Debug($"ParoleOfficerBehavior initialized: {role} officer {badgeNumber} at {assignment}");
         }
 
         public void Initialize(ParoleOfficerBehavior.ParoleOfficerAssignment guardAssignment, string badge = "")
@@ -315,12 +315,12 @@ namespace Behind_Bars.Systems.NPCs
                 case ParoleOfficerRole.SupervisingOfficer:
                     // TODO: Implement police station enter/exit logic for supervising officer. Officer should remain at station entrance and handle intake processing.
                     ChangeParoleActivity(ParoleOfficerActivity.MonitoringArea);
-                    ModLogger.Info($"Guard {badgeNumber} set as supervising officer at {assignment}");
+                    ModLogger.Debug($"Guard {badgeNumber} set as supervising officer at {assignment}");
                     break;
                 case ParoleOfficerRole.PatrolOfficer:
                     ChangeParoleActivity(ParoleOfficerActivity.Patrolling);
                     string routeName = AssignmentToRouteMap.ContainsKey(assignment) ? AssignmentToRouteMap[assignment] : "unknown";
-                    ModLogger.Info($"Guard {badgeNumber} assigned to patrol {assignment} on route {routeName}");
+                    ModLogger.Debug($"Guard {badgeNumber} assigned to patrol {assignment} on route {routeName}");
                     StartPatrol();
                     break;
                 default:
@@ -344,7 +344,7 @@ namespace Behind_Bars.Systems.NPCs
                     {
                         // Assign the preset route
                         patrolRoute = presetRoute;
-                        ModLogger.Info($"Guard {badgeNumber} assigned to patrol route: {routeName} with {presetRoute.points.Length} waypoints");
+                        ModLogger.Debug($"Guard {badgeNumber} assigned to patrol route: {routeName} with {presetRoute.points.Length} waypoints");
                         
                         // Convert Vector3[] to Transform list for existing patrol logic
                         // Create temporary GameObjects with Transform components
@@ -740,7 +740,7 @@ namespace Behind_Bars.Systems.NPCs
             ParoleOfficerActivity oldActivity = currentActivity;
             currentActivity = newActivity;
 
-            ModLogger.Info($"ParoleOfficer {badgeNumber}: {oldActivity} → {newActivity}");
+            ModLogger.Debug($"ParoleOfficer {badgeNumber}: {oldActivity} → {newActivity}");
 
             // Update officer command notification
             UpdateOfficerCommandNotification(newActivity);

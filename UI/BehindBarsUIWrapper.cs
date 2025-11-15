@@ -142,7 +142,7 @@ namespace Behind_Bars.UI
                 }
 
                 _isInitialized = true;
-                ModLogger.Info("✓ BehindBarsUI components initialized successfully");
+                ModLogger.Debug("✓ BehindBarsUI components initialized successfully");
             }
             catch (Exception e)
             {

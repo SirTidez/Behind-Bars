@@ -156,7 +156,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                ModLogger.Info("DynamicParoleOfficerManager: Initializing...");
+                ModLogger.Debug("DynamicParoleOfficerManager: Initializing...");
 
                 // Initialize state
                 activeOfficers = new Dictionary<ParoleOfficerAssignment, ParoleOfficerBehavior>();
@@ -213,7 +213,7 @@ namespace Behind_Bars.Systems.NPCs
                 }
 
                 isInitialized = true;
-                ModLogger.Info("DynamicParoleOfficerManager: Initialized successfully");
+                ModLogger.Debug("DynamicParoleOfficerManager: Initialized successfully");
             }
             catch (Exception ex)
             {
@@ -400,7 +400,7 @@ namespace Behind_Bars.Systems.NPCs
 
                     if (wasOnParole != isPlayerOnParole)
                     {
-                        ModLogger.Info($"DynamicParoleOfficerManager: Parole status changed to {(isPlayerOnParole ? "ON" : "OFF")} for {currentPlayer.name}");
+                        ModLogger.Debug($"DynamicParoleOfficerManager: Parole status changed to {(isPlayerOnParole ? "ON" : "OFF")} for {currentPlayer.name}");
                         
                         if (isPlayerOnParole)
                         {
@@ -436,7 +436,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             if (player == null || player != currentPlayer) return;
 
-            ModLogger.Info($"DynamicParoleOfficerManager: Parole started for {player.name}");
+            ModLogger.Debug($"DynamicParoleOfficerManager: Parole started for {player.name}");
             isPlayerOnParole = true;
 
             // Spawn supervising officer immediately
@@ -453,7 +453,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             if (player == null || player != currentPlayer) return;
 
-            ModLogger.Info($"DynamicParoleOfficerManager: Parole ended for {player.name}");
+            ModLogger.Debug($"DynamicParoleOfficerManager: Parole ended for {player.name}");
             isPlayerOnParole = false;
 
             // Despawn all officers
@@ -608,7 +608,7 @@ namespace Behind_Bars.Systems.NPCs
                     var behavior = paroleOfficer.GetComponent<ParoleOfficerBehavior>();
                     activeOfficers[assignment] = behavior;
                     spawnedAssignments.Add(assignment);
-                    ModLogger.Info($"DynamicParoleOfficerManager: ✓ Spawned {assignment} officer {badge}");
+                    ModLogger.Debug($"DynamicParoleOfficerManager: ✓ Spawned {assignment} officer {badge}");
                 }
                 else
                 {
@@ -639,7 +639,7 @@ namespace Behind_Bars.Systems.NPCs
                     // Destroy the GameObject
                     if (behavior.gameObject != null)
                     {
-                        ModLogger.Info($"DynamicParoleOfficerManager: Despawning {assignment} officer");
+                        ModLogger.Debug($"DynamicParoleOfficerManager: Despawning {assignment} officer");
                         Destroy(behavior.gameObject);
                     }
                 }

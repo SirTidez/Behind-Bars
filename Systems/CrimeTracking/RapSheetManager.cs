@@ -22,7 +22,7 @@ namespace Behind_Bars.Systems.CrimeTracking
 
         private RapSheetManager()
         {
-            ModLogger.Info("RapSheetManager initialized");
+            ModLogger.Debug("RapSheetManager initialized");
         }
 
         /// <summary>

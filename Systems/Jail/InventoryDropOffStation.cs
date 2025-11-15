@@ -93,7 +93,7 @@ namespace Behind_Bars.Systems.Jail
             interactableObject.onInteractStart.AddListener(OnInteractStart);
 #endif
             
-            ModLogger.Info("InteractableObject component configured with event listeners");
+            ModLogger.Debug("InteractableObject component configured with event listeners");
         }
         
         private void OnInteractStart()

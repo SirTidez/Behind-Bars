@@ -95,7 +95,7 @@ namespace Behind_Bars.Systems.Jail
             // Find booking stations if not assigned
             FindBookingStations();
             
-            ModLogger.Info($"BookingProcess initialized - Mugshot: {mugshotStation != null}, Scanner: {scannerStation != null}, InventoryDropOff: {inventoryDropOffStation != null}");
+            ModLogger.Debug($"BookingProcess initialized - Mugshot: {mugshotStation != null}, Scanner: {scannerStation != null}, InventoryDropOff: {inventoryDropOffStation != null}");
         }
         
         void FindBookingStations()
@@ -114,7 +114,7 @@ namespace Behind_Bars.Systems.Jail
                 if (inventoryDropOffStation != null)
                 {
                     inventoryDropOffStation.gameObject.SetActive(false);
-                    ModLogger.Info("InventoryDropOffStation disabled - replaced by prison gear pickup system");
+                    ModLogger.Debug("InventoryDropOffStation disabled - replaced by prison gear pickup system");
                 }
             }
                 
@@ -893,7 +893,7 @@ namespace Behind_Bars.Systems.Jail
                 int cellNumber = cellManager.AssignPlayerToCell(currentPlayer);
                 if (cellNumber >= 0)
                 {
-                    ModLogger.Info($"Player {currentPlayer.name} assigned to cell {cellNumber}");
+                    ModLogger.Debug($"Player {currentPlayer.name} assigned to cell {cellNumber}");
                     
                     if (BehindBarsUIManager.Instance != null)
                     {

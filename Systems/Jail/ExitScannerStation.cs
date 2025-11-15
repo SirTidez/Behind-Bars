@@ -88,14 +88,14 @@ namespace Behind_Bars.Systems.Jail
 
         void Start()
         {
-            ModLogger.Info("ExitScannerStation Start() called");
+            ModLogger.Debug("ExitScannerStation Start() called");
 
             // Set up InteractableObject component for IL2CPP compatibility
             SetupInteractableComponent();
-            ModLogger.Info("ExitScannerStation interaction setup completed");
+            ModLogger.Debug("ExitScannerStation interaction setup completed");
 
             // Setup based on scanner mode
-            ModLogger.Info($"ExitScannerStation using palm scanner mode: {useNewPalmScanner}");
+            ModLogger.Debug($"ExitScannerStation using palm scanner mode: {useNewPalmScanner}");
             if (useNewPalmScanner)
             {
                 SetupPalmScannerComponents();
@@ -111,7 +111,7 @@ namespace Behind_Bars.Systems.Jail
                 scanTarget = transform.Find("ScanTarget");
                 if (scanTarget != null)
                 {
-                    ModLogger.Info($"Found ExitScanner ScanTarget: {scanTarget.name}");
+                    ModLogger.Debug($"Found ExitScanner ScanTarget: {scanTarget.name}");
                 }
                 else
                 {
@@ -127,7 +127,7 @@ namespace Behind_Bars.Systems.Jail
                     ikTarget = draggable.Find("IkTarget");
                     if (ikTarget != null)
                     {
-                        ModLogger.Info($"Found ExitScanner IkTarget: {ikTarget.name} at position {ikTarget.position}");
+                        ModLogger.Debug($"Found ExitScanner IkTarget: {ikTarget.name} at position {ikTarget.position}");
                         ikTarget.position = scanTarget.position + Vector3.up * 0.1f;
                         SetupIkTargetVisualizer();
                     }
@@ -152,7 +152,7 @@ namespace Behind_Bars.Systems.Jail
             if (interactableObject == null)
             {
                 interactableObject = gameObject.AddComponent<InteractableObject>();
-                ModLogger.Info("Added InteractableObject component to ExitScannerStation");
+                ModLogger.Debug("Added InteractableObject component to ExitScannerStation");
             }
 
             // Configure the interaction - DISABLED by default, only enabled during release
@@ -170,7 +170,7 @@ namespace Behind_Bars.Systems.Jail
 
         private void SetupPalmScannerComponents()
         {
-            ModLogger.Info("Setting up palm scanner components for ExitScannerStation");
+            ModLogger.Debug("Setting up palm scanner components for ExitScannerStation");
 
             // Find interaction camera - looking in Interaction child
             if (interactionCamera == null)
@@ -185,7 +185,7 @@ namespace Behind_Bars.Systems.Jail
                         if (interactionCamera != null)
                         {
                             interactionCamera.enabled = false;
-                            ModLogger.Info("Found interaction camera for exit scanner");
+                            ModLogger.Debug("Found interaction camera for exit scanner");
                         }
                         else
                         {
@@ -212,7 +212,7 @@ namespace Behind_Bars.Systems.Jail
                     palmModel = palmScanner.gameObject;
                     originalPalmPosition = palmModel.transform.position;
                     // DON'T disable PalmScanner - keep it visible
-                    ModLogger.Info($"Found palm model for exit scanner: {palmModel.name} at {originalPalmPosition}");
+                    ModLogger.Debug($"Found palm model for exit scanner: {palmModel.name} at {originalPalmPosition}");
                 }
                 else
                 {
@@ -237,7 +237,7 @@ namespace Behind_Bars.Systems.Jail
                             {
                                 // Hide imgScanEffect initially like working scanner
                                 scanEffect.gameObject.SetActive(false);
-                                ModLogger.Info("Found scan effect image for exit scanner (hidden initially)");
+                                ModLogger.Debug("Found scan effect image for exit scanner (hidden initially)");
                             }
                         }
                     }
@@ -255,7 +255,7 @@ namespace Behind_Bars.Systems.Jail
                 scannerAudio = GetComponent<AudioSource>();
                 if (scannerAudio != null)
                 {
-                    ModLogger.Info("Found AudioSource for exit scanner");
+                    ModLogger.Debug("Found AudioSource for exit scanner");
                 }
                 else
                 {
@@ -263,13 +263,13 @@ namespace Behind_Bars.Systems.Jail
                 }
             }
 
-            ModLogger.Info($"Palm scanner setup complete - Camera: {interactionCamera != null}, Palm: {palmModel != null}, Audio: {scannerAudio != null}");
+            ModLogger.Debug($"Palm scanner setup complete - Camera: {interactionCamera != null}, Palm: {palmModel != null}, Audio: {scannerAudio != null}");
         }
 
         private void SetupOldIKComponents()
         {
             // Old IK system setup (same as original scanner)
-            ModLogger.Info("Setting up old IK system for exit scanner");
+            ModLogger.Debug("Setting up old IK system for exit scanner");
         }
 
         private void SetupIkTargetVisualizer()
@@ -286,7 +286,7 @@ namespace Behind_Bars.Systems.Jail
                 {
                     ikTargetRenderer.material.color = Color.green;
                 }
-                ModLogger.Info("Created IkTarget visualizer for exit scanner");
+                ModLogger.Debug("Created IkTarget visualizer for exit scanner");
             }
         }
 
@@ -952,7 +952,7 @@ namespace Behind_Bars.Systems.Jail
                         if (securitySlots != null)
                         {
                             securitySlots.gameObject.SetActive(true);
-                            ModLogger.Info("Enabled SecuritySlots on exit door for visual difference");
+                            ModLogger.Debug("Enabled SecuritySlots on exit door for visual difference");
                         }
                         else
                         {
@@ -978,7 +978,7 @@ namespace Behind_Bars.Systems.Jail
                 if (jailController?.exitScanner?.exitDoor != null)
                 {
                     EnableSecuritySlots(jailController.exitScanner.exitDoor);
-                    ModLogger.Info("Enabled exit door security slats at startup");
+                    ModLogger.Debug("Enabled exit door security slats at startup");
                 }
                 else
                 {

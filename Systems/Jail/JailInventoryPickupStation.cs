@@ -62,7 +62,7 @@ namespace Behind_Bars.Systems.Jail
         {
             // Set up InteractableObject component for IL2CPP compatibility
             SetupInteractableComponent();
-            ModLogger.Info("JailInventoryPickupStation interaction setup completed");
+            ModLogger.Debug("JailInventoryPickupStation interaction setup completed");
 
             // Find storage location if not assigned
             if (storageLocation == null)
@@ -75,7 +75,7 @@ namespace Behind_Bars.Systems.Jail
                     storage.transform.SetParent(transform);
                     storage.transform.localPosition = Vector3.zero;
                     storageLocation = storage.transform;
-                    ModLogger.Info("Created default StorageLocation for prison items");
+                    ModLogger.Debug("Created default StorageLocation for prison items");
                 }
             }
 
@@ -90,11 +90,11 @@ namespace Behind_Bars.Systems.Jail
             if (interactableObject == null)
             {
                 interactableObject = gameObject.AddComponent<InteractableObject>();
-                ModLogger.Info("Added InteractableObject component to JailInventoryPickupStation");
+                ModLogger.Debug("Added InteractableObject component to JailInventoryPickupStation");
             }
             else
             {
-                ModLogger.Info("Found existing InteractableObject component on JailInventoryPickupStation");
+                ModLogger.Debug("Found existing InteractableObject component on JailInventoryPickupStation");
             }
             
             // Configure the interaction
@@ -111,7 +111,7 @@ namespace Behind_Bars.Systems.Jail
             interactableObject.onInteractStart.AddListener(OnInteractStart);
 #endif
             
-            ModLogger.Info("JailInventoryPickupStation InteractableObject component configured with event listeners");
+            ModLogger.Debug("JailInventoryPickupStation InteractableObject component configured with event listeners");
         }
         
         private void OnInteractStart()

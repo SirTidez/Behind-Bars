@@ -160,7 +160,7 @@ namespace Behind_Bars.UI
                 CreateButtonBar();
 
                 _isInitialized = true;
-                ModLogger.Info("✓ UpdateNotificationUI created successfully");
+                ModLogger.Debug("✓ UpdateNotificationUI created successfully");
             }
             catch (System.Exception e)
             {

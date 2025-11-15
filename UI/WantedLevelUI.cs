@@ -2,13 +2,15 @@ using UnityEngine;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.CrimeDetection;
 using Behind_Bars.Harmony;
-using ScheduleOne.DevUtilities;
+
 
 #if !MONO
 using Il2CppTMPro;
+using Il2CppScheduleOne.DevUtilities;
 using Il2CppScheduleOne.UI;
 #else
 using TMPro;
+using ScheduleOne.DevUtilities;
 using ScheduleOne.UI;
 #endif
 
@@ -65,7 +67,7 @@ namespace Behind_Bars.UI
             
             try
             {
-                ModLogger.Info("Creating WantedLevelUI...");
+                ModLogger.Debug("Creating WantedLevelUI...");
                 
                 // Find canvas using IL2CPP-safe methods (similar to notification system)
                 Canvas mainCanvas = null;
@@ -167,7 +169,7 @@ namespace Behind_Bars.UI
                 _crimeCountText.alignment = TextAlignmentOptions.Center;
                 
                 _isInitialized = true;
-                ModLogger.Info($"✓ WantedLevelUI created successfully on canvas '{mainCanvas.name}'");
+                ModLogger.Debug($"✓ WantedLevelUI created successfully on canvas '{mainCanvas.name}'");
                 
                 // Do an initial update to show current wanted level
                 UpdateWantedDisplay();

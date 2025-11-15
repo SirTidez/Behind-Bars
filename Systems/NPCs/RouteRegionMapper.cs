@@ -89,7 +89,7 @@ namespace Behind_Bars.Systems.NPCs
                 // Note: PoliceStationSupervisor is not region-based, always spawned when on parole
 
                 isInitialized = true;
-                ModLogger.Info("RouteRegionMapper: Initialized successfully");
+                ModLogger.Debug("RouteRegionMapper: Initialized successfully");
                 LogMappings();
             }
             catch (Exception ex)
@@ -218,6 +218,7 @@ namespace Behind_Bars.Systems.NPCs
         #endregion
     }
 }
+
 
 
 

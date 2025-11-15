@@ -7,24 +7,21 @@ using Behind_Bars.Systems.CrimeTracking;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine.UI;
-using TMPro;
-
+using Object = UnityEngine.Object;
 
 #if !MONO
+using Il2CppTMPro;
 using Il2CppScheduleOne.PlayerScripts;
 using Il2CppScheduleOne.UI.Phone;
 using Il2CppScheduleOne.DevUtilities;
 using Il2CppScheduleOne.UI;
 using Il2CppInterop.Runtime.Attributes;
-
-using Object = Il2CppInterop.Runtime.InteropTypes.UnityObjectBase;
 #else
+using TMPro;
 using ScheduleOne.PlayerScripts;
 using ScheduleOne.UI.Phone;
 using ScheduleOne.DevUtilities;
 using ScheduleOne.UI;
-
-using Object = UnityEngine.Object;
 #endif
 
 namespace Behind_Bars.UI
@@ -55,7 +52,7 @@ namespace Behind_Bars.UI
 
             try
             {
-                ModLogger.Info("Initializing BehindBarsUIManager...");
+                ModLogger.Debug("Initializing BehindBarsUIManager...");
                 
                 // Initialize font caching first
                 InitializeFontCache();
@@ -70,7 +67,7 @@ namespace Behind_Bars.UI
                 InitializeWantedLevelUI();
                 
                 _isInitialized = true;
-                ModLogger.Info("✓ BehindBarsUIManager initialized successfully");
+                ModLogger.Debug("✓ BehindBarsUIManager initialized successfully");
             }
             catch (System.Exception e)
             {
@@ -105,7 +102,7 @@ namespace Behind_Bars.UI
             }
             
             // List all available fonts for debugging
-            if (Constants.DEBUG_LOGGING)
+            if (Core.EnableDebugLogging)
             {
                 TMPFontFix.ListAllGameFonts();
             }
@@ -118,7 +115,7 @@ namespace Behind_Bars.UI
         {
             try
             {
-                ModLogger.Info("Loading BehindBarsUI prefab from asset bundle...");
+                ModLogger.Debug("Loading BehindBarsUI prefab from asset bundle...");
                 
                 // Use the cached jail bundle which contains the UI prefab
                 var bundle = Core.CachedJailBundle;
@@ -142,7 +139,7 @@ namespace Behind_Bars.UI
 
                 if (_uiPrefab != null)
                 {
-                    ModLogger.Info($"✓ Loaded BehindBarsUI prefab: {_uiPrefab.name}");
+                    ModLogger.Debug($"✓ Loaded BehindBarsUI prefab: {_uiPrefab.name}");
                 }
                 else
                 {
@@ -276,7 +273,7 @@ namespace Behind_Bars.UI
                 ModLogger.Debug("Starting UI update coroutine");
                 MelonLoader.MelonCoroutines.Start(UpdateUIAfterFrame(crime, timeInfo, bailInfo, jailTimeSeconds, bailAmount));
 
-                ModLogger.Info($"✓ Jail info UI created in overlay canvas '{canvas.name}' with sorting order {canvas.sortingOrder}");
+                ModLogger.Debug($"✓ Jail info UI created in overlay canvas '{canvas.name}' with sorting order {canvas.sortingOrder}");
             }
             catch (System.Exception e)
             {
@@ -872,7 +869,7 @@ namespace Behind_Bars.UI
                     ModLogger.Info("OfficerCommandUI CreateUI() called manually");
                 }
 
-                ModLogger.Info("OfficerCommandUI manager initialized successfully");
+                ModLogger.Debug("OfficerCommandUI manager initialized successfully");
             }
             catch (System.Exception ex)
             {
@@ -898,7 +895,7 @@ namespace Behind_Bars.UI
                 {
                     // Start update coroutine
                     _paroleStatusUpdateCoroutine = MelonLoader.MelonCoroutines.Start(UpdateParoleStatusCoroutine()) as Coroutine;
-                    ModLogger.Info("Parole status UI update coroutine started");
+                    ModLogger.Debug("Parole status UI update coroutine started");
                 }
             }
             catch (System.Exception ex)
@@ -932,10 +929,10 @@ namespace Behind_Bars.UI
                 if (_paroleStatusUI != null)
                 {
                     _paroleStatusUI.CreateUI();
-                    ModLogger.Info("ParoleStatusUI CreateUI() called manually");
+                    ModLogger.Debug("ParoleStatusUI CreateUI() called manually");
                 }
 
-                ModLogger.Info("ParoleStatusUI manager initialized successfully");
+                ModLogger.Debug("ParoleStatusUI manager initialized successfully");
             }
             catch (System.Exception ex)
             {
@@ -1334,7 +1331,7 @@ namespace Behind_Bars.UI
                     ModLogger.Info("ParoleConditionsUI CreateUI() called manually");
                 }
 
-                ModLogger.Info("ParoleConditionsUI manager initialized successfully");
+                ModLogger.Debug("ParoleConditionsUI manager initialized successfully");
             }
             catch (System.Exception ex)
             {
@@ -1370,7 +1367,7 @@ namespace Behind_Bars.UI
                     ModLogger.Info("BailUI CreateUI() called manually");
                 }
 
-                ModLogger.Info("BailUI manager initialized successfully");
+                ModLogger.Debug("BailUI manager initialized successfully");
             }
             catch (System.Exception ex)
             {
@@ -1392,7 +1389,7 @@ namespace Behind_Bars.UI
                     CreateWantedLevelUI();
                 }
 
-                ModLogger.Info("WantedLevelUI initialized successfully");
+                ModLogger.Debug("WantedLevelUI initialized successfully");
             }
             catch (System.Exception ex)
             {
@@ -1425,10 +1422,10 @@ namespace Behind_Bars.UI
                 if (_wantedLevelUI != null)
                 {
                     _wantedLevelUI.CreateWantedLevelUI();
-                    ModLogger.Info("WantedLevelUI CreateWantedLevelUI() called manually");
+                    ModLogger.Debug("WantedLevelUI CreateWantedLevelUI() called manually");
                 }
 
-                ModLogger.Info("WantedLevelUI manager initialized successfully");
+                ModLogger.Debug("WantedLevelUI manager initialized successfully");
             }
             catch (System.Exception ex)
             {

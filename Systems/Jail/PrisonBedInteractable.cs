@@ -74,7 +74,7 @@ namespace Behind_Bars.Systems.Jail
 
         private void InitializeBedSetup()
         {
-            ModLogger.Info($"Initializing prison bed setup for {(isTopBunk ? "top bunk" : "bottom bunk")} in {cellName}");
+            ModLogger.Debug($"Initializing prison bed setup for {(isTopBunk ? "top bunk" : "bottom bunk")} in {cellName}");
                         
             // Set up interaction component
             SetupInteractableComponent();
@@ -85,7 +85,7 @@ namespace Behind_Bars.Systems.Jail
             // Force initial visual update to ensure everything starts hidden
             UpdateBedVisuals();
             
-            ModLogger.Info($"Prison bed setup initialized at stage {setupStage}");
+            ModLogger.Debug($"Prison bed setup initialized at stage {setupStage}");
         }
                 
         private GameObject[] GetChildGameObjects(Transform parent)
@@ -120,7 +120,7 @@ namespace Behind_Bars.Systems.Jail
             if (interactableObject == null)
             {
                 interactableObject = gameObject.AddComponent<InteractableObject>();
-                ModLogger.Info("Added InteractableObject component to prison bed");
+                ModLogger.Debug("Added InteractableObject component to prison bed");
             }
             
             // Configure the interaction
@@ -135,7 +135,7 @@ namespace Behind_Bars.Systems.Jail
             interactableObject.onInteractStart.AddListener(OnInteractStart);
 #endif
             
-            ModLogger.Info("Prison bed InteractableObject component configured");
+            ModLogger.Debug("Prison bed InteractableObject component configured");
         }
         
         public int SetupStage

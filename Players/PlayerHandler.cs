@@ -47,7 +47,7 @@ namespace Behind_Bars.Players
 #else
             player.onArrested.AddListener(OnArrested);
 #endif
-            ModLogger.Info($"PlayerHandler initialized for {player.name}");
+            ModLogger.Debug($"PlayerHandler initialized for {player.name}");
         }
 
         private void OnArrested()

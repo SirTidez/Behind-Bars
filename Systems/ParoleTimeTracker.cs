@@ -51,7 +51,7 @@ namespace Behind_Bars.Systems
             var gameTimeManager = GameTimeManager.Instance;
             gameTimeManager.OnGameMinuteChanged += OnGameMinuteChanged;
             _isSubscribed = true;
-            ModLogger.Info("ParoleTimeTracker subscribed to game time events");
+            ModLogger.Debug("ParoleTimeTracker subscribed to game time events");
         }
 
         /// <summary>
@@ -130,7 +130,7 @@ namespace Behind_Bars.Systems
             };
 
             _activeParoles[player] = parole;
-            ModLogger.Info($"Started tracking parole for {player.name}: {paroleGameMinutes} game minutes ({GameTimeManager.FormatGameTime(paroleGameMinutes)})");
+            ModLogger.Debug($"Started tracking parole for {player.name}: {paroleGameMinutes} game minutes ({GameTimeManager.FormatGameTime(paroleGameMinutes)})");
         }
 
         /// <summary>

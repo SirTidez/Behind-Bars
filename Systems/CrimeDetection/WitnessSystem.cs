@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using Behind_Bars.Helpers;
+using Behind_Bars.Utils;
 using Behind_Bars.Systems.CrimeTracking;
 using MelonLoader;
 using Behind_Bars.Systems.Crimes;
@@ -75,12 +76,12 @@ namespace Behind_Bars.Systems.CrimeDetection
             // Police respond immediately
             if (crime.Severity >= 2.0f) // Serious crimes
             {
-                police.BeginFootPursuit_Networked(perpetrator.NetworkObject.ToString());
+                NetworkHelper.TryBeginFootPursuit(police, perpetrator);
             }
             else
             {
                 // For minor crimes, just investigate
-                police.BeginBodySearch_Networked(perpetrator.NetworkObject.ToString());
+                NetworkHelper.TryBeginBodySearch(police, perpetrator);
             }
         }
 

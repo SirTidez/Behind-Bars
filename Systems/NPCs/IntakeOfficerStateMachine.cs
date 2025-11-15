@@ -133,14 +133,14 @@ namespace Behind_Bars.Systems.NPCs
 
             // Restore intake state after base initialization
             currentState = savedState;
-            ModLogger.Info($"IntakeOfficer: Restored state to {currentState} after base initialization");
+            ModLogger.Debug($"IntakeOfficer: Restored state to {currentState} after base initialization");
 
             InitializeStations();
             FindGuardPost();
             SubscribeToEvents();
             InitializeDialogueSystem();
 
-            ModLogger.Info($"IntakeOfficerStateMachine initialized for {gameObject.name}");
+            ModLogger.Debug($"IntakeOfficerStateMachine initialized for {gameObject.name}");
         }
 
         protected override void InitializeNPC()
@@ -160,11 +160,11 @@ namespace Behind_Bars.Systems.NPCs
             {
                 // Add SecurityDoorBehavior component to this IntakeOfficer
                 var securityDoor = gameObject.AddComponent<SecurityDoorBehavior>();
-                ModLogger.Info("IntakeOfficer: Added SecurityDoorBehavior component for automated door operations");
+                ModLogger.Debug("IntakeOfficer: Added SecurityDoorBehavior component for automated door operations");
             }
             else
             {
-                ModLogger.Info("IntakeOfficer: SecurityDoorBehavior component already attached");
+                ModLogger.Debug("IntakeOfficer: SecurityDoorBehavior component already attached");
             }
         }
 
@@ -1626,7 +1626,7 @@ namespace Behind_Bars.Systems.NPCs
                 assignedCellNumber = cellManager.AssignPlayerToCell(currentPrisoner);
                 if (assignedCellNumber >= 0)
                 {
-                    ModLogger.Info($"Assigned prisoner to cell {assignedCellNumber}");
+                    ModLogger.Debug($"Assigned prisoner to cell {assignedCellNumber}");
                 }
                 else
                 {

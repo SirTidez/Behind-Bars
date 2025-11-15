@@ -215,7 +215,7 @@ namespace Behind_Bars.UI
                 _statusPanel.SetActive(false);
 
                 _isInitialized = true;
-                ModLogger.Info("ParoleStatusUI created successfully at right side, vertically centered");
+                ModLogger.Debug("ParoleStatusUI created successfully at right side, vertically centered");
                 ModLogger.Debug($"ParoleStatusUI: Panel active = {_statusPanel.activeSelf}, Alpha = {_canvasGroup.alpha}");
             }
             catch (System.Exception ex)
@@ -275,7 +275,7 @@ namespace Behind_Bars.UI
 
             try
             {
-                ModLogger.Info($"ParoleStatusUI: Showing status for parole - IsOnParole: {data.IsOnParole}");
+                ModLogger.Debug($"ParoleStatusUI: Showing status for parole - IsOnParole: {data.IsOnParole}");
 
                 // Check if panel is already visible - if so, just update without fading
                 bool wasVisible = _statusPanel.activeSelf && _canvasGroup.alpha > 0.9f;

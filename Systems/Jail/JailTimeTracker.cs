@@ -63,7 +63,7 @@ namespace Behind_Bars.Systems.Jail
             var gameTimeManager = GameTimeManager.Instance;
             gameTimeManager.OnGameMinuteChanged += OnGameMinuteChanged;
             _isSubscribed = true;
-            ModLogger.Info("JailTimeTracker subscribed to game time events");
+            ModLogger.Debug("JailTimeTracker subscribed to game time events");
         }
 
         /// <summary>

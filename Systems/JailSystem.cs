@@ -307,13 +307,13 @@ namespace Behind_Bars.Systems
         /// </summary>
         public void Initialize()
         {
-            ModLogger.Info("Initializing JailSystem components");
+            ModLogger.Debug("Initializing JailSystem components");
 
             // Find the inventory pickup station
             _inventoryPickupStation = UnityEngine.Object.FindObjectOfType<InventoryPickupStation>();
             if (_inventoryPickupStation != null)
             {
-                ModLogger.Info("Found existing InventoryPickupStation reference");
+                ModLogger.Debug("Found existing InventoryPickupStation reference");
             }
             else
             {
@@ -324,7 +324,7 @@ namespace Behind_Bars.Systems
                 _inventoryPickupStation = UnityEngine.Object.FindObjectOfType<InventoryPickupStation>();
                 if (_inventoryPickupStation != null)
                 {
-                    ModLogger.Info("InventoryPickupStation successfully created and found");
+                    ModLogger.Debug("InventoryPickupStation successfully created and found");
                 }
                 else
                 {
@@ -362,7 +362,7 @@ namespace Behind_Bars.Systems
                 {
                     // Use the inventoryDropOff location for both intake drops and release pickups
                     stationPosition = jailController.storage.inventoryDropOff.position;
-                    ModLogger.Info($"Positioning InventoryPickupStation at inventoryDropOff: {stationPosition}");
+                    ModLogger.Debug($"Positioning InventoryPickupStation at inventoryDropOff: {stationPosition}");
                 }
                 else if (jailController?.booking?.guardSpawns != null && jailController.booking.guardSpawns.Count > 0)
                 {
@@ -379,7 +379,7 @@ namespace Behind_Bars.Systems
                 // Add the InventoryPickupStation component
                 _inventoryPickupStation = stationObject.AddComponent<InventoryPickupStation>();
 
-                ModLogger.Info($"Created InventoryPickupStation at position {stationPosition}");
+                ModLogger.Debug($"Created InventoryPickupStation at position {stationPosition}");
             }
             catch (System.Exception e)
             {

@@ -127,7 +127,7 @@ namespace Behind_Bars.Systems.NPCs
                 lastRegionCheckTime = Time.time;
                 isInitialized = true;
 
-                ModLogger.Info($"PlayerLocationTracker initialized for player {trackedPlayer.name} in region {currentRegion}");
+                ModLogger.Debug($"PlayerLocationTracker initialized for player {trackedPlayer.name} in region {currentRegion}");
             }
             catch (Exception ex)
             {

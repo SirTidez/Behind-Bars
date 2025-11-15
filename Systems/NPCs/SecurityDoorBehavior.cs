@@ -102,7 +102,7 @@ namespace Behind_Bars.Systems.NPCs
                 navAgent.speed = timingConfig.approachSpeed;
             }
 
-            ModLogger.Info($"SecurityDoorBehavior initialized for {gameObject.name}");
+            ModLogger.Debug($"SecurityDoorBehavior initialized for {gameObject.name}");
         }
 
         /// <summary>
@@ -241,7 +241,7 @@ namespace Behind_Bars.Systems.NPCs
                 if (transition.door == null)
                     ModLogger.Warn($"Could not find door: {transition.doorName}");
                 else
-                    ModLogger.Info($"✓ SecurityDoor resolved: {transition.doorName} with entry: {transition.entryPoint?.name} exit: {transition.exitPoint?.name}");
+                    ModLogger.Debug($"✓ SecurityDoor resolved: {transition.doorName} with entry: {transition.entryPoint?.name} exit: {transition.exitPoint?.name}");
             }
         }
 

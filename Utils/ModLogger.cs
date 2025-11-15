@@ -1,5 +1,6 @@
 using MelonLoader;
 using System;
+using Behind_Bars;
 
 namespace Behind_Bars.Helpers
 {
@@ -12,7 +13,11 @@ namespace Behind_Bars.Helpers
 
         public static void Debug(string message)
         {
-            MelonLogger.Msg($"[DEBUG] {message}");
+            // Only log debug messages if debug logging is enabled in config
+            if (Core.EnableDebugLogging)
+            {
+                MelonLogger.Msg($"[DEBUG] {message}");
+            }
         }
 
         public static void Error(string message)

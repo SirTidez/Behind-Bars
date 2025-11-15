@@ -59,14 +59,14 @@ namespace Behind_Bars.Systems.Jail
             if (networkObject == null)
             {
                 networkObject = gameObject.AddComponent<NetworkObject>();
-                ModLogger.Info("Added NetworkObject component to PrisonStorageEntity");
+                ModLogger.Debug("Added NetworkObject component to PrisonStorageEntity");
             }
 
             // Set as local-only (no actual networking)
             try
             {
                 networkObject.enabled = true;
-                ModLogger.Info("NetworkObject configured for local-only storage");
+                ModLogger.Debug("NetworkObject configured for local-only storage");
             }
             catch (System.Exception ex)
             {
@@ -110,7 +110,7 @@ namespace Behind_Bars.Systems.Jail
 #endif
             }
 
-            ModLogger.Info($"PrisonStorageEntity initialized with {ItemSlots.Count} slots (local-only mode)");
+            ModLogger.Debug($"PrisonStorageEntity initialized with {ItemSlots.Count} slots (local-only mode)");
         }
 
 #if !MONO

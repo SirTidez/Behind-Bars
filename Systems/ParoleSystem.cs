@@ -206,7 +206,7 @@ namespace Behind_Bars.Systems
         /// </summary>
         private IEnumerator MonitorParole(ParoleRuntimeRecord record)
         {
-            ModLogger.Info($"Monitoring parole for {record.Player.name}");
+            ModLogger.Debug($"Monitoring parole for {record.Player.name}");
 
             while (record.Status == ParoleStatus.Active)
             {
@@ -244,7 +244,7 @@ namespace Behind_Bars.Systems
         /// </summary>
         private IEnumerator ConductRandomSearch(ParoleRuntimeRecord record)
         {
-            ModLogger.Info($"Conducting random search on {record.Player.name}");
+            ModLogger.Debug($"Conducting random search on {record.Player.name}");
 
             // Check if parole officer is close enough
             if (_paroleOfficerInstance != null && record.Player != null)

@@ -66,7 +66,7 @@ namespace Behind_Bars.Systems.Jail
                 if (patrolPoint != null)
                 {
                     patrolPoints.Add(patrolPoint);
-                    ModLogger.Info($"✓ Registered patrol point: {pointName}");
+                    ModLogger.Debug($"✓ Registered patrol point: {pointName}");
                 }
                 else
                 {
@@ -74,7 +74,7 @@ namespace Behind_Bars.Systems.Jail
                 }
             }
 
-            ModLogger.Info($"✓ Initialized {patrolPoints.Count} patrol points in JailPatrolManager");
+            ModLogger.Debug($"✓ Initialized {patrolPoints.Count} patrol points in JailPatrolManager");
         }
 
         public List<Transform> GetPatrolPoints()
