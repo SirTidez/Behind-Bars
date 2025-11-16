@@ -113,6 +113,26 @@ namespace Behind_Bars.UI
         /// </summary>
         private void LoadUIPrefab()
         {
+            LoadUIPrefabInternal();
+        }
+
+        /// <summary>
+        /// Retry loading the UI prefab (public method for retry after bundle is loaded)
+        /// </summary>
+        public void RetryLoadUIPrefab()
+        {
+            if (_uiPrefab == null)
+            {
+                ModLogger.Debug("Retrying to load UI prefab...");
+                LoadUIPrefabInternal();
+            }
+        }
+
+        /// <summary>
+        /// Internal method to load the UI prefab from the asset bundle
+        /// </summary>
+        private void LoadUIPrefabInternal()
+        {
             try
             {
                 ModLogger.Debug("Loading BehindBarsUI prefab from asset bundle...");
@@ -122,6 +142,7 @@ namespace Behind_Bars.UI
                 if (bundle == null)
                 {
                     ModLogger.Error("Jail asset bundle not loaded - cannot load UI prefab");
+                    ModLogger.Debug("Will retry when bundle becomes available");
                     return;
                 }
 

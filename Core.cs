@@ -322,7 +322,26 @@ namespace Behind_Bars
             }
 #endif
 
-            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.10f, "Initializing UI manager...");
+            // Load asset bundle BEFORE initializing UI manager (UI prefab is in the bundle)
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.10f, "Loading asset bundle...");
+            yield return new WaitForSeconds(0.2f);
+            
+            // Load the behind-bars bundle and cache it
+            if (CachedJailBundle == null)
+            {
+                ModLogger.Debug("Loading jail asset bundle for UI prefab...");
+                CachedJailBundle = Utils.AssetBundleUtils.LoadAssetBundle("Behind_Bars.behind_bars");
+                if (CachedJailBundle == null)
+                {
+                    ModLogger.Error("Failed to load behind-bars bundle - UI prefab will not be available");
+                }
+                else
+                {
+                    ModLogger.Debug("✓ Jail asset bundle loaded successfully");
+                }
+            }
+
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.15f, "Initializing UI manager...");
             yield return new WaitForSeconds(0.5f);
 
             try
@@ -338,7 +357,7 @@ namespace Behind_Bars
             BehindBarsUIManager.Instance.UpdateLoadingProgress(0.20f, "UI system ready");
 
             // Phase 2: Jail Setup and Asset Spawning (20-70%)
-            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.25f, "Loading asset bundle...");
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.25f, "Setting up jail...");
             yield return new WaitForSeconds(0.2f);
 
             // Start jail setup in parallel
@@ -731,6 +750,9 @@ namespace Behind_Bars
                 ModLogger.Error("Failed to load behind-bars bundle");
                 yield break;
             }
+
+            // Safety: Retry loading UI prefab now that bundle is confirmed loaded
+            BehindBarsUIManager.Instance.RetryLoadUIPrefab();
 
             // Debug: List all assets in the bundle
             var allAssets = jailBundle.GetAllAssetNames();
