@@ -1552,7 +1552,7 @@ namespace Behind_Bars.Systems.NPCs
                     int assignedCell = cellAssignmentManager.GetPlayerCellNumber(player);
                     if (assignedCell >= 0)
                     {
-                        ModLogger.Info($"ReleaseOfficer {badgeNumber}: Player {player.name} assigned to cell {assignedCell}");
+                        ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Player {player.name} assigned to cell {assignedCell}");
                         return assignedCell;
                     }
                 }

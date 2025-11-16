@@ -1423,16 +1423,16 @@ namespace Behind_Bars.Systems.Jail
                 // Parole term timer is already running from teleportation,
                 // and grace period for searches started immediately upon release
 
+                // Unfreeze player
+                UnfreezePlayer(player);
+
                 // Show parole status UI now that release summary UI is dismissed
                 if (BehindBarsUIManager.Instance != null)
                 {
                     BehindBarsUIManager.Instance.ShowParoleStatus();
                     ModLogger.Debug($"Showing parole status UI for {player.name} after release summary dismissal");
                 }
-
-                // Unfreeze player
-                UnfreezePlayer(player);
-
+                
                 ModLogger.Info($"Parole conditions acknowledged by {player.name} - parole status UI shown");
             }
             catch (System.Exception ex)

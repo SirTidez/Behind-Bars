@@ -119,12 +119,6 @@ namespace Behind_Bars.Systems
             // NOTE: RecordReleaseTime is now called in ReleaseManager.WaitForParoleConditionsAcknowledgment()
             // after the player dismisses the parole conditions UI. This ensures the grace period
             // starts only after the player acknowledges their conditions, not immediately when parole starts.
-
-            // Show parole status UI after a short delay to ensure RapSheet is initialized (only if showUI is true)
-            if (showUI)
-            {
-                MelonCoroutines.Start(DelayedShowParoleUI(player));
-            }
         }
 
         /// <summary>
@@ -175,29 +169,6 @@ namespace Behind_Bars.Systems
             catch (System.Exception ex)
             {
                 ModLogger.Error($"[LSI] Error initializing parole tracking for {player.name}: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Delayed show parole UI to ensure RapSheet is initialized
-        /// </summary>
-        private IEnumerator DelayedShowParoleUI(Player player)
-        {
-            // Wait a frame to ensure RapSheet initialization is complete
-            yield return new WaitForSeconds(0.5f);
-
-            try
-            {
-                var uiManager = BehindBarsUIManager.Instance;
-                if (uiManager != null)
-                {
-                    uiManager.ShowParoleStatus();
-                    ModLogger.Info($"Parole status UI shown for {player.name}");
-                }
-            }
-            catch (System.Exception ex)
-            {
-                ModLogger.Warn($"Failed to show parole status UI: {ex.Message}");
             }
         }
 

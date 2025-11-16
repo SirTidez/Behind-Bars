@@ -1058,7 +1058,8 @@ namespace Behind_Bars.UI
                 }
 
                 // CRITICAL: Don't show parole status UI if player is in jail
-                if (JailTimeTracker.Instance != null && JailTimeTracker.Instance.IsTracking(player))
+                // Use IsInJail to check jail status (set immediately on arrest, before sentence tracking starts)
+                if (JailTimeTracker.Instance != null && JailTimeTracker.Instance.IsInJail(player))
                 {
                     return new ParoleStatusData { IsOnParole = false };
                 }
@@ -1132,7 +1133,8 @@ namespace Behind_Bars.UI
 #else
                         var player = ScheduleOne.PlayerScripts.Player.Local;
 #endif
-                        if (player != null && JailTimeTracker.Instance != null && JailTimeTracker.Instance.IsTracking(player))
+                        // Use IsInJail to check jail status (set immediately on arrest, before sentence tracking starts)
+                        if (player != null && JailTimeTracker.Instance != null && JailTimeTracker.Instance.IsInJail(player))
                         {
                             // Player is in jail - hide parole status UI
                             if (_paroleStatusUI != null && _paroleStatusUI.IsVisible())

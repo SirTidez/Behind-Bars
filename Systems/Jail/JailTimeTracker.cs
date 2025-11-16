@@ -43,6 +43,7 @@ namespace Behind_Bars.Systems.Jail
 
         private Dictionary<Player, ActiveSentence> _activeSentences = new();
         private Dictionary<Player, CompletedSentence> _completedSentences = new(); // Store sentence data for completed/stopped sentences
+        private HashSet<Player> _inJailStatus = new(); // Track if player is actively in jail (separate from sentence tracking)
         private bool _isSubscribed = false;
 
         private JailTimeTracker()
@@ -263,6 +264,61 @@ namespace Behind_Bars.Systems.Jail
         {
             return _activeSentences.Count;
         }
+
+        #region Jail Status Tracking
+
+        /// <summary>
+        /// Mark a player as being in jail
+        /// Called immediately when arrest begins, before sentence tracking starts
+        /// </summary>
+        public void SetInJail(Player player)
+        {
+            if (player == null)
+            {
+                ModLogger.Warn("Cannot set jail status for null player");
+                return;
+            }
+
+            if (!_inJailStatus.Contains(player))
+            {
+                _inJailStatus.Add(player);
+                ModLogger.Info($"Marked player {player.name} as in jail");
+            }
+        }
+
+        /// <summary>
+        /// Clear jail status for a player
+        /// Called when player is released from jail
+        /// </summary>
+        public void ClearInJail(Player player)
+        {
+            if (player == null)
+            {
+                ModLogger.Warn("Cannot clear jail status for null player");
+                return;
+            }
+
+            if (_inJailStatus.Remove(player))
+            {
+                ModLogger.Info($"Cleared jail status for player {player.name}");
+            }
+        }
+
+        /// <summary>
+        /// Check if a player is actively in jail
+        /// This is separate from sentence tracking - tracks jail status from arrest to release
+        /// </summary>
+        public bool IsInJail(Player player)
+        {
+            if (player == null)
+            {
+                return false;
+            }
+
+            return _inJailStatus.Contains(player);
+        }
+
+        #endregion
     }
 }
 

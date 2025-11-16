@@ -154,7 +154,18 @@ namespace Behind_Bars.Systems.Jail
                         }
                         
                         var firstCrime = firstInstance.Crime;
-                        string crimeName = firstCrime.GetType().Name;
+                        // Use GetCrimeTypeName() to properly extract crime type from Description
+                        // This handles cases where Crime object is base class but Description has actual type
+                        string crimeName = firstInstance.GetCrimeTypeName();
+                        
+                        // If GetCrimeTypeName() returned "Crime" (base class), prefer Description
+                        // Description contains the actual crime type name
+                        if (crimeName == "Crime" && !string.IsNullOrEmpty(firstInstance.Description))
+                        {
+                            // Try to map Description to crime type name
+                            crimeName = MapDescriptionToCrimeTypeName(firstInstance.Description);
+                            ModLogger.Info($"[FINE CALC] Crime object is base class, using Description '{firstInstance.Description}' -> mapped to '{crimeName}'");
+                        }
 
                         ModLogger.Info($"[FINE CALC] Processing crime: {crimeName} x{count}");
 
@@ -320,6 +331,45 @@ namespace Behind_Bars.Systems.Jail
             }
 
             return _baseFines.TryGetValue(crimeClassName, out float fine) ? fine : 25f;
+        }
+
+        /// <summary>
+        /// Map Description (user-friendly name) to crime type name (class name) for fine lookup
+        /// </summary>
+        private string MapDescriptionToCrimeTypeName(string description)
+        {
+            // Map common descriptions to type names that match _baseFines dictionary
+            return description switch
+            {
+                "Murder" or "Murder of a Police Officer" or "Murder of an Employee" => "Murder",
+                "Involuntary Manslaughter" => "Manslaughter",
+                "Assault on Civilian" => "AssaultOnCivilian",
+                "Assault" => "Assault",
+                "Deadly Assault" => "DeadlyAssault",
+                "Assault on Officer" => "AssaultOnOfficer",
+                "Theft" => "Theft",
+                "Vehicle Theft" => "VehicleTheft",
+                "Burglary" => "Burglary",
+                "Witness Intimidation" => "WitnessIntimidation",
+                "Drug Possession (Low)" => "DrugPossessionLow",
+                "Drug Possession (Moderate)" => "DrugPossessionModerate",
+                "Drug Possession (High)" => "DrugPossessionHigh",
+                "Drug Trafficking" => "DrugTraffickingCrime",
+                "Illegal Weapon Possession" => "WeaponPossession",
+                "Evading Arrest" => "EvadingArrest",
+                "Evading" => "Evading",
+                "Failure to Comply" => "FailureToComply",
+                "Hit and Run" => "HitAndRun",
+                "Trespassing" => "Trespassing",
+                "Vandalism" => "Vandalism",
+                "Public Intoxication" => "PublicIntoxication",
+                "Disturbing Peace" => "DisturbingPeace",
+                "Speeding" => "Speeding",
+                "Reckless Driving" => "RecklessDriving",
+                "Brandishing Weapon" => "BrandishingWeapon",
+                "Discharge Firearm" => "DischargeFirearm",
+                _ => description.Replace(" ", "").Replace("(", "").Replace(")", "") // Fallback: remove spaces and parentheses
+            };
         }
     }
 }

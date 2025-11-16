@@ -777,7 +777,7 @@ namespace Behind_Bars.Systems
             yield return SendPlayerToHoldingCellForProcessing(player, sentence);
 
             // Then move to main jail cell
-            yield return TransferToMainJailCell(player, sentence);
+            //yield return TransferToMainJailCell(player, sentence);
         }
 
         private IEnumerator SendPlayerToHoldingCellForProcessing(Player player, JailSentence sentence)
@@ -845,7 +845,8 @@ namespace Behind_Bars.Systems
             holdingCell.cellDoor.UnlockDoor();
         }
 
-        private IEnumerator TransferToMainJailCell(Player player, JailSentence sentence)
+        // SirTidez: Commented out for testing 11/16/25
+        /*private IEnumerator TransferToMainJailCell(Player player, JailSentence sentence)
         {
             ModLogger.Info($"Transferring player {player.name} to main jail cell");
 
@@ -856,8 +857,25 @@ namespace Behind_Bars.Systems
                 yield break;
             }
 
-            // Find available main jail cell
-            var mainCell = GetAvailableMainCell(jailController);
+            // Check if player already has a cell assigned (from booking process)
+            JailCell mainCell = null;
+            var cellManager = CellAssignmentManager.Instance;
+            if (cellManager != null)
+            {
+                int assignedCellNumber = cellManager.GetPlayerCellNumber(player);
+                if (assignedCellNumber >= 0 && assignedCellNumber < jailController.cells.Count)
+                {
+                    mainCell = jailController.cells[assignedCellNumber];
+                    ModLogger.Info($"Using already-assigned cell {assignedCellNumber} for {player.name}");
+                }
+            }
+
+            // If no cell was assigned, find an available main jail cell
+            if (mainCell == null)
+            {
+                mainCell = GetAvailableMainCell(jailController);
+            }
+
             if (mainCell == null)
             {
                 ModLogger.Error("No main cells available, keeping in holding cell");
@@ -909,7 +927,7 @@ namespace Behind_Bars.Systems
 
             // Use enhanced release system for time served
             SafeInitiateEnhancedRelease(player, ReleaseManager.ReleaseType.TimeServed);
-        }
+        }*/
 
         private CellDetail GetAvailableHoldingCell(JailController jailController)
         {
