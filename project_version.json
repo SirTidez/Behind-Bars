@@ -1,8 +1,8 @@
 {
-  "version": "alpha-1.0.1",
-  "description": "Behind Bars - Alpha 1.0.1\n\nExpands the after-arrest experience in Schedule I with a complete criminal justice system:\n\n• Full jail facility with booking process (mugshots, fingerprinting, cell assignment)\n• Bail system with negotiation and payment mechanics\n• Court system for plea bargaining and sentencing\n• Parole system with officer patrols and random searches\n• Dynamic prison NPCs (guards, inmates, intake/release officers)\n• Crime tracking and wanted level display\n• Time-based sentences with early release options\n• Persistent player data across sessions\n\nThis is an early alpha build. Expect bugs and active development!",
-  "release_date": "2025-11-13",
+  "version": "alpha-1.0.2",
+  "description": "Behind Bars - Alpha 1.0.2\n\nRecent Updates:\n• Improved jail status tracking and crime type mapping for more accurate UI and logic separation\n• Refactored UI asset bundle loading with retry logic for better reliability\n• Enhanced FineCalculator to better map crime descriptions to type names\n• Updated jail status checks and removed delayed parole UI logic\n• Improved cell assignment debug logging\n\nExpands the after-arrest experience in Schedule I with a complete criminal justice system:\n\n• Full jail facility with booking process (mugshots, fingerprinting, cell assignment)\n• Bail system with negotiation and payment mechanics\n• Court system for plea bargaining and sentencing\n• Parole system with officer patrols and random searches\n• Dynamic prison NPCs (guards, inmates, intake/release officers)\n• Crime tracking and wanted level display\n• Time-based sentences with early release options\n• Persistent player data across sessions\n\nThis is an early alpha build. Expect bugs and active development!",
+  "release_date": "2025-01-13",
   "download_url": "",
-  "changelog_url": "https://github.com/SirTidez/Behind-Bars"
+  "changelog_url": "https://github.com/SirTidez/Behind-Bars/blob/parole-development/CHANGELOG.md"
 }
 
