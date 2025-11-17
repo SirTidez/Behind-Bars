@@ -18,10 +18,10 @@ namespace Behind_Bars.Systems.Jail
         private static FineCalculator? _instance;
         public static FineCalculator Instance => _instance ??= new FineCalculator();
 
-        // Base fine amounts (from plan - significantly increased)
+        // Base fine amounts (reduced to prevent excessive scaling)
         private readonly Dictionary<string, float> _baseFines = new()
         {
-            // Minor crimes (keep current)
+            // Minor crimes
             { "Trespassing", 25f },
             { "Vandalism", 50f },
             { "PublicIntoxication", 50f },
@@ -36,35 +36,38 @@ namespace Behind_Bars.Systems.Jail
             { "WeaponPossession", 50f },
             { "IllegalWeaponPossession", 50f },
 
-            // Moderate crimes (3-5x increase)
-            { "Theft", 200f },
-            { "VehicleTheft", 500f },
-            { "Assault", 300f },
-            { "AssaultOnCivilian", 400f },
-            { "VehicularAssault", 400f },
-            { "DrugPossessionModerate", 100f },
-            { "PossessingModerateSeverityDrug", 100f },
-            { "Evading", 300f },
-            { "EvadingArrest", 300f },
-            { "FailureToComply", 300f },
-            { "HitAndRun", 600f },
-            { "ViolatingCurfew", 200f },
+            // Moderate crimes (reduced from previous values)
+            { "Theft", 100f },              // Reduced from 200f
+            { "VehicleTheft", 250f },       // Reduced from 500f
+            { "Assault", 150f },            // Reduced from 300f
+            { "AssaultOnCivilian", 200f },  // Reduced from 400f
+            { "VehicularAssault", 200f },   // Reduced from 400f
+            { "DrugPossessionModerate", 75f }, // Reduced from 100f
+            { "PossessingModerateSeverityDrug", 75f },
+            { "Evading", 150f },            // Reduced from 300f
+            { "EvadingArrest", 150f },
+            { "FailureToComply", 150f },   // Reduced from 300f
+            { "HitAndRun", 300f },         // Reduced from 600f
+            { "ViolatingCurfew", 100f },   // Reduced from 200f
 
-            // Major crimes (5-10x increase)
-            { "DeadlyAssault", 1000f },
-            { "AssaultOnOfficer", 2500f },
-            { "Burglary", 1500f },
-            { "DrugPossessionHigh", 500f },
-            { "PossessingHighSeverityDrug", 500f },
-            { "DrugTraffickingCrime", 2000f },
-            { "DrugTrafficking", 2000f },
-            { "AttemptingToSell", 1500f },
-            { "WitnessIntimidation", 1500f },
+            // Major crimes (reduced from previous values)
+            { "DeadlyAssault", 500f },      // Reduced from 1000f
+            { "AssaultOnOfficer", 1000f },  // Reduced from 2500f
+            { "Burglary", 750f },           // Reduced from 1500f
+            { "DrugPossessionHigh", 250f }, // Reduced from 500f
+            { "PossessingHighSeverityDrug", 250f },
+            { "DrugTraffickingCrime", 1000f }, // Reduced from 2000f
+            { "DrugTrafficking", 1000f },
+            { "AttemptingToSell", 750f },  // Reduced from 1500f
+            { "WitnessIntimidation", 750f }, // Reduced from 1500f
 
-            // Severe crimes (10-20x increase)
-            { "Manslaughter", 5000f },
-            { "Murder", 15000f } // Default for civilian, will be overridden by victim type
+            // Severe crimes (reduced from previous values)
+            { "Manslaughter", 2500f },      // Reduced from 5000f
+            { "Murder", 7500f }             // Reduced from 15000f (default for civilian, will be overridden by victim type)
         };
+        
+        // Maximum fine cap to prevent excessive scaling
+        private const float MAX_TOTAL_FINE = 50000f; // Cap total fines at $50,000
 
         private FineCalculator() { }
 
@@ -287,35 +290,43 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Info("[FINE CALC] No rap sheet available - skipping repeat offender multiplier");
             }
 
+            // Apply maximum fine cap to prevent excessive scaling
+            if (totalFine > MAX_TOTAL_FINE)
+            {
+                ModLogger.Info($"[FINE CALC] Fine capped from ${totalFine:F2} to ${MAX_TOTAL_FINE:F2}");
+                totalFine = MAX_TOTAL_FINE;
+            }
+
             ModLogger.Info($"[FINE CALC] Final calculated total fine: ${totalFine:F2}");
             return totalFine;
         }
 
         /// <summary>
-        /// Get fine amount for Murder based on victim type
+        /// Get fine amount for Murder based on victim type (reduced values)
         /// </summary>
         private float GetMurderFine(string victimType)
         {
             return victimType switch
             {
-                "Police" => 25000f,
-                "Employee" => 20000f,
-                "Civilian" => 15000f,
-                _ => 15000f
+                "Police" => 12500f,    // Reduced from 25000f
+                "Employee" => 10000f,  // Reduced from 20000f
+                "Civilian" => 7500f,   // Reduced from 15000f
+                _ => 7500f
             };
         }
 
         /// <summary>
-        /// Get repeat offender multiplier for fines
+        /// Get repeat offender multiplier for fines (reduced scaling)
         /// </summary>
         private float GetRepeatOffenderMultiplier(int offenseCount)
         {
             return offenseCount switch
             {
-                1 => 1.0f, // First offense - no penalty
-                2 => 1.25f, // +25% for 2nd offense
-                3 => 1.5f,  // +50% for 3rd offense
-                _ => 2.0f   // +100% for 4+ offenses
+                1 => 1.0f,   // First offense - no penalty
+                2 => 1.15f,  // +15% for 2nd offense (reduced from 25%)
+                3 => 1.3f,   // +30% for 3rd offense (reduced from 50%)
+                4 => 1.5f,   // +50% for 4th offense
+                _ => 2.0f    // +100% for 5+ offenses (cap at 2x)
             };
         }
 

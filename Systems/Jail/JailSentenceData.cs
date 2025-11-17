@@ -40,6 +40,11 @@ namespace Behind_Bars.Systems.Jail
         public float WitnessMultiplier { get; set; } = 1.0f;
 
         /// <summary>
+        /// Parole violation multiplier applied (if player was on parole when arrested)
+        /// </summary>
+        public float ParoleViolationMultiplier { get; set; } = 1.0f;
+
+        /// <summary>
         /// Global multiplier applied
         /// </summary>
         public float GlobalMultiplier { get; set; } = 1.0f;
@@ -62,7 +67,7 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         public string GetBreakdown()
         {
-            return $"Base: {BaseSentenceMinutes}m × Severity: {SeverityMultiplier} × Repeat: {RepeatOffenderMultiplier} × Witness: {WitnessMultiplier} × Global: {GlobalMultiplier} = {TotalGameMinutes}m";
+            return $"Base: {BaseSentenceMinutes}m × Severity: {SeverityMultiplier} × Repeat: {RepeatOffenderMultiplier} × Witness: {WitnessMultiplier} × Parole: {ParoleViolationMultiplier} × Global: {GlobalMultiplier} = {TotalGameMinutes}m";
         }
     }
 

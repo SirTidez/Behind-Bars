@@ -55,9 +55,12 @@ namespace Behind_Bars.Systems
         {
             ModLogger.Info($"Processing IMMEDIATE arrest for player: {player.name}");
 
+            // CRITICAL: Check if player is on parole and record violation BEFORE any other processing
+            RecordParoleViolationIfNeeded(player);
+
             // CRITICAL: Reset all previous jail/booking/release state before starting new arrest
             ResetPlayerJailState(player);
-
+            player.CrimeData.SetPursuitLevel(PlayerCrimeData.EPursuitLevel.None);
             // CRITICAL: Clear wanted status - player was just arrested, they're no longer wanted
             try
             {
@@ -73,7 +76,7 @@ namespace Behind_Bars.Systems
                 ModLogger.Error($"Error clearing wanted status: {ex.Message}");
             }
 
-            // Hide parole status UI - player is going to jail, not on parole
+            // Hide parole status UI - player is going to jail, not staying on parole
             if (BehindBarsUIManager.Instance != null)
             {
                 BehindBarsUIManager.Instance.HideParoleStatus();
@@ -227,14 +230,73 @@ namespace Behind_Bars.Systems
 
         private JailSeverity DetermineSeverityFromCrimeData(object crimeData)
         {
-            // Calculate based on total crime fine amount (like PenaltyHandler does)
-            float totalFine = CalculateTotalCrimeFines(Player.Local);
+            // Calculate severity based on actual crime charges, not fine amounts
+            var player = Player.Local;
+            if (player == null) return JailSeverity.Moderate;
 
-            // Convert fine amount to severity levels
-            if (totalFine <= 100f) return JailSeverity.Minor;        // Traffic violations, small stuff
-            if (totalFine <= 300f) return JailSeverity.Moderate;     // Moderate crimes  
-            if (totalFine <= 800f) return JailSeverity.Major;        // Serious crimes
-            return JailSeverity.Severe;                              // Major criminal activity
+            // Get crimes from both enhanced detection system and native system
+            var allCrimeTypes = new System.Collections.Generic.HashSet<string>();
+            
+            // Get crimes from enhanced detection system
+            var crimeDetectionSystem = HarmonyPatches.GetCrimeDetectionSystem();
+            if (crimeDetectionSystem != null)
+            {
+                var crimeSummary = crimeDetectionSystem.GetCrimeSummary();
+                foreach (var crimeEntry in crimeSummary)
+                {
+                    allCrimeTypes.Add(crimeEntry.Key);
+                }
+            }
+
+            // Get crimes from native system
+            if (player.CrimeData?.Crimes != null)
+            {
+                foreach (var crimeEntry in player.CrimeData.Crimes)
+                {
+                    if (crimeEntry.Key != null)
+                    {
+                        string crimeName = crimeEntry.Key.GetType().Name;
+                        allCrimeTypes.Add(crimeName);
+                    }
+                }
+            }
+
+            // Determine severity based on most serious crime present
+            // Check for severe crimes first
+            foreach (var crimeType in allCrimeTypes)
+            {
+                if (crimeType == "Murder" || crimeType == "Manslaughter")
+                {
+                    return JailSeverity.Severe;
+                }
+            }
+
+            // Check for major crimes
+            foreach (var crimeType in allCrimeTypes)
+            {
+                if (crimeType == "DeadlyAssault" || crimeType == "AssaultOnOfficer" || 
+                    crimeType == "Burglary" || crimeType == "DrugTrafficking" || 
+                    crimeType == "DrugTraffickingCrime" || crimeType == "WitnessIntimidation")
+                {
+                    return JailSeverity.Major;
+                }
+            }
+
+            // Check for moderate crimes
+            foreach (var crimeType in allCrimeTypes)
+            {
+                if (crimeType == "Theft" || crimeType == "VehicleTheft" || 
+                    crimeType == "Assault" || crimeType == "AssaultOnCivilian" || 
+                    crimeType == "VehicularAssault" || crimeType == "HitAndRun" ||
+                    crimeType == "Evading" || crimeType == "EvadingArrest" ||
+                    crimeType == "FailureToComply")
+                {
+                    return JailSeverity.Moderate;
+                }
+            }
+
+            // Default to minor for traffic violations and small infractions
+            return JailSeverity.Minor;
         }
 
         /// <summary>
@@ -258,12 +320,21 @@ namespace Behind_Bars.Systems
             // Get RapSheet for sentence calculation
             var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
             
+            // Check if player was on parole when arrested (for sentence multiplier)
+            bool wasOnParole = false;
+            if (rapSheet?.CurrentParoleRecord != null)
+            {
+                wasOnParole = rapSheet.CurrentParoleRecord.IsOnParole();
+                ModLogger.Info($"[SENTENCE CALC] Player was on parole at time of arrest: {wasOnParole}");
+            }
+            
             // Calculate fine using FineCalculator (independent from sentence)
             float actualFine = CalculateTotalCrimeFines(player);
             sentence.FineAmount = actualFine;
 
             // Calculate sentence using CrimeSentenceCalculator (in game minutes)
-            var sentenceData = CrimeSentenceCalculator.Instance.CalculateSentence(player, rapSheet);
+            // Pass parole status so it can apply appropriate multiplier
+            var sentenceData = CrimeSentenceCalculator.Instance.CalculateSentence(player, rapSheet, wasOnParole);
             
             // Convert game minutes to real-time seconds for JailTime
             // 1 game minute = 1 real second, so conversion is 1:1
@@ -280,7 +351,7 @@ namespace Behind_Bars.Systems
             
             ModLogger.Info($"[SENTENCE CALC] Calculated sentence: {sentenceData.FormattedSentence}");
             ModLogger.Info($"[SENTENCE CALC] TotalGameMinutes: {sentenceData.TotalGameMinutes}, JailTime (game minutes): {jailTimeInSeconds}");
-            ModLogger.Info($"[SENTENCE CALC] Base: {sentenceData.BaseSentenceMinutes}, Severity: {sentenceData.SeverityMultiplier}, Repeat: {sentenceData.RepeatOffenderMultiplier}, Witness: {sentenceData.WitnessMultiplier}, Global: {sentenceData.GlobalMultiplier}");
+            ModLogger.Info($"[SENTENCE CALC] Base: {sentenceData.BaseSentenceMinutes}, Severity: {sentenceData.SeverityMultiplier}, Repeat: {sentenceData.RepeatOffenderMultiplier}, Witness: {sentenceData.WitnessMultiplier}, Parole: {sentenceData.ParoleViolationMultiplier}, Global: {sentenceData.GlobalMultiplier}");
         }
 
         private float GetPlayerLevelMultiplier(Player player)
@@ -1561,6 +1632,60 @@ namespace Behind_Bars.Systems
             catch (System.Exception ex)
             {
                 ModLogger.Error($"Error resetting jail state for {player.name}: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Record a parole violation if the player was on parole when arrested
+        /// </summary>
+        private void RecordParoleViolationIfNeeded(Player player)
+        {
+            try
+            {
+                // Get rap sheet to check parole status
+                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                if (rapSheet == null)
+                {
+                    ModLogger.Debug($"[PAROLE VIOLATION] No rap sheet found for {player.name} - skipping violation check");
+                    return;
+                }
+
+                // Check if player is currently on parole
+                if (rapSheet.CurrentParoleRecord != null && rapSheet.CurrentParoleRecord.IsOnParole())
+                {
+                    ModLogger.Info($"[PAROLE VIOLATION] Player {player.name} was on parole at time of arrest - recording violation");
+
+                    // Create violation record for being arrested while on parole
+                    var arrestViolation = new ViolationRecord(
+                        ViolationType.NewCrime,
+                        $"Arrested and charged with new crimes while on parole supervision. Location: {player.transform.position}",
+                        3.0f // High severity - being arrested is a serious violation
+                    );
+
+                    // Add violation to parole record
+                    bool violationAdded = rapSheet.CurrentParoleRecord.AddViolation(arrestViolation);
+                    
+                    if (violationAdded)
+                    {
+                        ModLogger.Info($"[PAROLE VIOLATION] Successfully recorded parole violation for {player.name}. Total violations: {rapSheet.CurrentParoleRecord.GetViolationCount()}");
+                        
+                        // Update LSI level since violations affect risk assessment
+                        rapSheet.UpdateLSILevel();
+                        ModLogger.Info($"[PAROLE VIOLATION] Updated LSI level after violation: {rapSheet.LSILevel}");
+                    }
+                    else
+                    {
+                        ModLogger.Warn($"[PAROLE VIOLATION] Failed to add violation to parole record for {player.name}");
+                    }
+                }
+                else
+                {
+                    ModLogger.Debug($"[PAROLE VIOLATION] Player {player.name} is not on parole - no violation to record");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"[PAROLE VIOLATION] Error recording parole violation for {player.name}: {ex.Message}");
             }
         }
 

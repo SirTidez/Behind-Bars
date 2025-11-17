@@ -32,9 +32,9 @@ namespace Behind_Bars.Systems.CrimeDetection
         private ContrabandDetectionSystem _contrabandDetectionSystem;
         
         // Detection settings
-        public float MurderDetectionRadius = 25f;
-        public float AssaultDetectionRadius = 15f;
-        public float WeaponDetectionRadius = 30f;
+        public float MurderDetectionRadius = 50f;
+        public float AssaultDetectionRadius = 30f;
+        public float WeaponDetectionRadius = 65f;
         
         public CrimeRecord CrimeRecord => _crimeRecord;
         public ContrabandDetectionSystem ContrabandDetection => _contrabandDetectionSystem;
