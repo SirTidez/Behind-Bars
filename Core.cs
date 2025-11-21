@@ -51,6 +51,7 @@ using Il2CppScheduleOne.DevUtilities;
     Constants.MOD_AUTHOR
 )]
 [assembly: MelonColor(0, 255, 0, 255)]
+[assembly: MelonAdditionalCredits("Dreous - Jail Scripting and Unity work | Spec - Assets")]
 [assembly: MelonGame("TVGS", "Schedule I")]
 
 namespace Behind_Bars
