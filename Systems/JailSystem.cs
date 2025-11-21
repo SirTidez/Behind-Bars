@@ -17,11 +17,13 @@ using Il2CppScheduleOne.PlayerScripts;
 using Il2CppScheduleOne.AvatarFramework;
 using Il2CppScheduleOne.DevUtilities;
 using Il2CppScheduleOne.UI;
+using Il2CppScheduleOne.Law;
 #else
 using ScheduleOne.AvatarFramework;
 using ScheduleOne.DevUtilities;
 using ScheduleOne.UI;
 using ScheduleOne.PlayerScripts;
+using ScheduleOne.Law;
 #endif
 
 namespace Behind_Bars.Systems
@@ -60,22 +62,94 @@ namespace Behind_Bars.Systems
 
             // CRITICAL: Reset all previous jail/booking/release state before starting new arrest
             ResetPlayerJailState(player);
-            player.CrimeData.SetPursuitLevel(PlayerCrimeData.EPursuitLevel.None);
-            // CRITICAL: Clear wanted status - player was just arrested, they're no longer wanted
-            try
+            
+            // CRITICAL: Sync crimes from player.CrimeData.Crimes to CrimeDetectionSystem BEFORE clearing
+            // This ensures crimes are tracked even if they were added by the game's native system
+            
+            //TODO: Commented out crime syncting for now, should be handled by Harmony patch instead
+            /*try
             {
                 var crimeDetectionSystem = CrimeDetectionSystem.Instance;
-                if (crimeDetectionSystem != null)
+                if (crimeDetectionSystem != null && player.CrimeData != null && player.CrimeData.Crimes != null)
                 {
-                    crimeDetectionSystem.ClearAllCrimes();
-                    ModLogger.Info($"Cleared all crimes and wanted status for {player.name} - they were just arrested");
+                    int syncedCount = 0;
+                    
+                    foreach (var crimeEntry in player.CrimeData.Crimes)
+                    {
+                        if (crimeEntry.Key != null)
+                        {
+                            var crime = crimeEntry.Key;
+                            int count = crimeEntry.Value;
+                            
+                            // Add each crime instance to CrimeDetectionSystem
+                            for (int i = 0; i < count; i++)
+                            {
+                                var crimeInstance = new CrimeTracking.CrimeInstance(
+                                    crime: crime,
+                                    location: player.transform.position,
+                                    severity: CalculateCrimeSeverityForSync(crime)
+                                );
+                                crimeDetectionSystem.CrimeRecord.AddCrime(crimeInstance);
+                                syncedCount++;
+                            }
+                        }
+                    }
+                    
+                    if (syncedCount > 0)
+                    {
+                        ModLogger.Info($"[CRIME SYNC] Synced {syncedCount} crimes from player.CrimeData.Crimes to CrimeDetectionSystem");
+                    }
                 }
             }
             catch (System.Exception ex)
             {
-                ModLogger.Error($"Error clearing wanted status: {ex.Message}");
+                ModLogger.Error($"[CRIME SYNC] Error syncing crimes: {ex.Message}");
+            }*/
+            
+            // CRITICAL: DO NOT clear crimes here - they need to be logged to RapSheet first
+            // Crimes will be cleared AFTER they've been logged and used for sentence calculation
+            // The clearing happens in LogCrimesToRapSheet after crimes are saved
+            try
+            {
+                ModLogger.Info($"[RAP SHEET] Logging arrest to rap sheet for {player.name}");
+                
+                // DEBUG: Log CrimeData state BEFORE processing
+                if (player.CrimeData != null)
+                {
+                    ModLogger.Info($"[RAP SHEET] [DEBUG] CrimeData is not null");
+                    if (player.CrimeData.Crimes != null)
+                    {
+                        ModLogger.Info($"[RAP SHEET] [DEBUG] CrimeData.Crimes is not null, Count: {player.CrimeData.Crimes.Count}");
+                        if (player.CrimeData.Crimes.Count > 0)
+                        {
+                            foreach (var crimeEntry in player.CrimeData.Crimes)
+                            {
+                                ModLogger.Info($"[RAP SHEET] [DEBUG] Crime in CrimeData: {crimeEntry.Key?.CrimeName ?? "NULL"} (Value: {crimeEntry.Value})");
+                            }
+                        }
+                    }
+                    else
+                    {
+                        ModLogger.Warn($"[RAP SHEET] [DEBUG] CrimeData.Crimes is NULL!");
+                    }
+                }
+                else
+                {
+                    ModLogger.Warn($"[RAP SHEET] [DEBUG] CrimeData is NULL!");
+                }
+                //TODO: Added clearing player crimes
+                player.CrimeData.ClearCrimes();
+                
+                Behind_Bars.Harmony.HarmonyPatches.LogCrimesToRapSheet(player);
+                CrimeDetectionSystem.Instance.CrimeRecord.ClearWantedLevel();
             }
-
+            catch (Exception ex)
+            {
+                ModLogger.Error($"[RAP SHEET] Error logging to rap sheet: {ex.Message}\nStack trace: {ex.StackTrace}");
+            }
+            
+            player.CrimeData.SetPursuitLevel(PlayerCrimeData.EPursuitLevel.None);
+            
             // Hide parole status UI - player is going to jail, not staying on parole
             if (BehindBarsUIManager.Instance != null)
             {
@@ -107,8 +181,8 @@ namespace Behind_Bars.Systems
             // sentence.JailTime is in game minutes
             // 1 game day = 1440 game minutes (24 hours * 60 minutes)
             const float ONE_GAME_DAY_MINUTES = 1440f;
-
-            if (sentence.JailTime < ONE_GAME_DAY_MINUTES)
+            yield return ProcessPlayerToJail(player, sentence);
+            /*if (sentence.JailTime < ONE_GAME_DAY_MINUTES)
             {
                 // Short sentence - send directly to holding cell
                 ModLogger.Info($"Short sentence ({sentence.JailTime} game minutes < {ONE_GAME_DAY_MINUTES} game minutes / {GameTimeManager.FormatGameTime(sentence.JailTime)}) - sending to holding cell");
@@ -119,7 +193,7 @@ namespace Behind_Bars.Systems
                 // Long sentence - start in holding cell, then process to main cell
                 ModLogger.Info($"Long sentence ({sentence.JailTime} game minutes >= {ONE_GAME_DAY_MINUTES} game minutes / {GameTimeManager.FormatGameTime(sentence.JailTime)}) - processing to main jail cell");
                 yield return ProcessPlayerToJail(player, sentence);
-            }
+            }*/
         }
 
         /// <summary>
@@ -354,6 +428,42 @@ namespace Behind_Bars.Systems
             ModLogger.Info($"[SENTENCE CALC] Base: {sentenceData.BaseSentenceMinutes}, Severity: {sentenceData.SeverityMultiplier}, Repeat: {sentenceData.RepeatOffenderMultiplier}, Witness: {sentenceData.WitnessMultiplier}, Parole: {sentenceData.ParoleViolationMultiplier}, Global: {sentenceData.GlobalMultiplier}");
         }
 
+        /// <summary>
+        /// Calculate crime severity for syncing crimes from player.CrimeData.Crimes
+        /// Uses the same logic as CrimeSentenceCalculator.CalculateCrimeSeverity
+        /// </summary>
+        private float CalculateCrimeSeverityForSync(Crime crime)
+        {
+            if (crime == null)
+                return 1.5f; // Default moderate severity
+            
+            string crimeName = crime.GetType().Name;
+
+            return crimeName switch
+            {
+                // Minor crimes
+                "Speeding" or "Trespassing" or "DisturbingPeace" => 1.0f,
+                "Vandalism" or "PublicIntoxication" or "DrugPossessionLow" => 1.0f,
+                "RecklessDriving" or "DischargeFirearm" => 1.5f,
+
+                // Moderate crimes
+                "Theft" or "Assault" => 1.5f,
+                "VehicleTheft" or "AssaultOnCivilian" => 2.0f,
+                "HitAndRun" => 2.5f,
+
+                // Major crimes
+                "DeadlyAssault" or "Burglary" => 3.0f,
+                "AssaultOnOfficer" or "WitnessIntimidation" => 3.5f,
+                "DrugTraffickingCrime" => 4.0f,
+
+                // Severe crimes
+                "Manslaughter" => 4.0f,
+                "Murder" => 4.0f,
+
+                _ => 1.5f // Default moderate severity
+            };
+        }
+
         private float GetPlayerLevelMultiplier(Player player)
         {
             // TODO: Implement actual level-based calculation
@@ -575,17 +685,35 @@ namespace Behind_Bars.Systems
                 yield break;
             }
 
-            // Calculate and store bail amount
+            // Get bail amount from Core BailSystem (where it was stored during booking)
             float bailAmount = 0f;
-            var bailSystem = new BailSystem();
-            float fineAmount = CalculateTotalCrimeFines(player);
+            var bailSystem = Core.Instance?.BailSystem;
             
-            if (fineAmount > 0)
+            if (bailSystem != null)
             {
-                var bailOffer = bailSystem.CalculateBailAmount(player, fineAmount);
-                bailAmount = bailOffer.Amount;
-                bailSystem.StoreBailAmount(player, bailAmount);
-                ModLogger.Info($"[BAIL] Calculated bail amount: ${bailAmount:F0} for {player.name} (based on fine: ${fineAmount:F0})");
+                // First try to get the stored bail amount (set during booking)
+                bailAmount = bailSystem.GetBailAmount(player);
+                
+                // If no bail was stored, calculate it now (fallback for direct jail entry)
+                if (bailAmount <= 0)
+                {
+                    float fineAmount = CalculateTotalCrimeFines(player);
+                    if (fineAmount > 0)
+                    {
+                        var bailOffer = bailSystem.CalculateBailAmount(player, fineAmount);
+                        bailAmount = bailOffer.Amount;
+                        bailSystem.StoreBailAmount(player, bailAmount);
+                        ModLogger.Info($"[BAIL] Calculated bail amount: ${bailAmount:F0} for {player.name} (based on fine: ${fineAmount:F0})");
+                    }
+                }
+                else
+                {
+                    ModLogger.Info($"[BAIL] Retrieved stored bail amount: ${bailAmount:F0} for {player.name}");
+                }
+            }
+            else
+            {
+                ModLogger.Warn("[BAIL] BailSystem not available - bail payment will not work");
             }
 
             bool sentenceComplete = false;
@@ -609,7 +737,7 @@ namespace Behind_Bars.Systems
             }
 
             // Show bail UI if player can afford it
-            if (bailAmount > 0 && bailSystem.CanPlayerAffordBail(player, bailAmount))
+            if (bailAmount > 0 && bailSystem != null && bailSystem.CanPlayerAffordBail(player, bailAmount))
             {
                 BehindBarsUIManager.Instance.ShowBailUI(bailAmount);
                 ModLogger.Info($"[BAIL] Showing bail UI for {player.name}: ${bailAmount:F0}");
@@ -624,6 +752,8 @@ namespace Behind_Bars.Systems
             float lastBailCheck = 0f;
             const float bailCheckInterval = 1f; // Check cash balance every second
             bool bailKeyWasPressed = false; // Track previous frame key state to detect key press
+            
+            ModLogger.Info($"[BAIL DEBUG] Starting bail key detection loop - checking for key {Core.BailoutKey} every {checkInterval}s");
             
             while (!sentenceComplete && !bailPaid)
             {
@@ -655,7 +785,13 @@ namespace Behind_Bars.Systems
                 bool bailKeyJustPressed = bailKeyCurrentlyPressed && !bailKeyWasPressed;
                 bailKeyWasPressed = bailKeyCurrentlyPressed;
                 
-                if (bailAmount > 0 && bailKeyJustPressed)
+                // Debug: Log key press detection
+                if (bailKeyJustPressed)
+                {
+                    ModLogger.Info($"[BAIL DEBUG] Key {Core.BailoutKey} pressed! bailAmount: {bailAmount}, bailSystem: {(bailSystem != null ? "available" : "null")}");
+                }
+                
+                if (bailAmount > 0 && bailKeyJustPressed && bailSystem != null)
                 {
                     if (bailSystem.CanPlayerAffordBail(player, bailAmount))
                     {
@@ -697,7 +833,7 @@ namespace Behind_Bars.Systems
                 {
                     lastBailCheck = currentTime;
                     
-                    if (bailAmount > 0)
+                    if (bailAmount > 0 && bailSystem != null)
                     {
                         bool canAfford = bailSystem.CanPlayerAffordBail(player, bailAmount);
                         bool uiVisible = BehindBarsUIManager.Instance.IsBailUIVisible();
@@ -1209,6 +1345,22 @@ namespace Behind_Bars.Systems
                 catch (System.Exception ex)
                 {
                     ModLogger.Debug($"Error clearing jail UI: {ex.Message}");
+                }
+
+                // CRITICAL: Clear crimes from both native and enhanced systems (player has been released)
+                // This is the ONLY place crimes should be cleared - after release, not during arrest
+                if (player.CrimeData != null)
+                {
+                    player.CrimeData.ClearCrimes();
+                    ModLogger.Info($"[CRIME CLEAR] Cleared crimes from native system - player {player.name} has been released");
+                }
+
+                // Also clear crimes from our enhanced crime detection system
+                var crimeDetectionSystem = HarmonyPatches.GetCrimeDetectionSystem();
+                if (crimeDetectionSystem != null)
+                {
+                    crimeDetectionSystem.ClearAllCrimes();
+                    ModLogger.Info($"[CRIME CLEAR] Cleared crimes from enhanced system - player {player.name} has been released");
                 }
 
                 ModLogger.Info($"Jail status cleared for {player.name}");

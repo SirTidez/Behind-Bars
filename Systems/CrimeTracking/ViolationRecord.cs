@@ -1,7 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Text;
-using Newtonsoft.Json;
+using Behind_Bars.Utils.Saveable;
 
 namespace Behind_Bars.Systems.CrimeTracking
 {
@@ -21,40 +21,72 @@ namespace Behind_Bars.Systems.CrimeTracking
     }
 
     /// <summary>
-    /// Records a specific parole violation incident
+    /// Records a specific parole violation incident.
+    /// Uses SaveableField attributes for automatic serialization by SaveableSerializer.
     /// </summary>
     [Serializable]
     public class ViolationRecord
     {
-        [JsonProperty("violationType")]
-        public ViolationType ViolationType;
+        [SaveableField("violationType")]
+        private ViolationType _violationType;
 
-        [JsonProperty("violationTime")]
-        public DateTime ViolationTime;
+        [SaveableField("violationTime")]
+        private DateTime _violationTime;
 
-        [JsonProperty("details")]
-        public string Details;
+        [SaveableField("details")]
+        private string _details;
 
-        [JsonProperty("severity")]
-        public float Severity = 1.0f;
+        [SaveableField("severity")]
+        private float _severity = 1.0f;
 
-        [JsonProperty("locationDescription")]
-        public string LocationDescription;
+        [SaveableField("locationDescription")]
+        private string _locationDescription;
+
+        // Properties for safe access
+        public ViolationType ViolationType
+        {
+            get => _violationType;
+            set => _violationType = value;
+        }
+
+        public DateTime ViolationTime
+        {
+            get => _violationTime;
+            set => _violationTime = value;
+        }
+
+        public string Details
+        {
+            get => _details ?? "";
+            set => _details = value ?? "";
+        }
+
+        public float Severity
+        {
+            get => _severity;
+            set => _severity = value;
+        }
+
+        public string LocationDescription
+        {
+            get => _locationDescription ?? "";
+            set => _locationDescription = value ?? "";
+        }
 
         public ViolationRecord()
         {
-            ViolationTime = DateTime.Now;
-            Details = "";
-            LocationDescription = "";
+            _violationTime = DateTime.Now;
+            _details = "";
+            _locationDescription = "";
         }
 
         public ViolationRecord(ViolationType type, string details, float severity = 1.0f)
         {
-            ViolationType = type;
-            ViolationTime = DateTime.Now;
-            Details = details;
-            Severity = severity;
-            LocationDescription = "";
+            _violationType = type;
+            _violationTime = DateTime.Now;
+            _details = details ?? "";
+            _severity = severity;
+            _locationDescription = "";
         }
     }
 }

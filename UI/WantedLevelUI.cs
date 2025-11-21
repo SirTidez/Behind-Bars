@@ -209,7 +209,7 @@ namespace Behind_Bars.UI
                 }
                 
                 // Show panel only if player has crimes or wanted level
-                bool shouldShow = wantedLevel > 0.1f || totalCrimes > 0;
+                bool shouldShow = wantedLevel > 0.1f;
                 
                 if (_wantedPanel != null)
                     _wantedPanel.SetActive(shouldShow);

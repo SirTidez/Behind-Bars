@@ -52,34 +52,33 @@ namespace Behind_Bars.Players
 
         private void OnArrested()
         {
-            if (Player == null) return;
+            /*if (Player == null) return;
             
-            ModLogger.Info($"Player {Player.name} arrested - processing arrest sequence");
-            
-            // Update arrest tracking
-            LastArrestTime = DateTime.Now;
-            ArrestCount++;
-            IsCurrentlyArrested = true;
-            
-            // Store crime data for processing
-            LastCrimeData = Player.CrimeData;
-            
-            // Create criminal record entry
-            var record = new CriminalRecord
-            {
-                ArrestTime = LastArrestTime,
-                CrimeData = LastCrimeData,
-                ArrestNumber = ArrestCount,
-                Location = Player.transform.position
-            };
-            
-            CriminalHistory.Add(record);
-            
-            // Log arrest details
-            ModLogger.Info($"Arrest #{ArrestCount} for {Player.name} at {LastArrestTime}");
-            
-            // The actual arrest processing is now handled by the Core class
-            // which will coordinate with the JailSystem
+                ModLogger.Info($"Player {Player.name} arrested - processing arrest sequence");
+                
+                // Update arrest tracking
+                LastArrestTime = DateTime.Now;
+                ArrestCount++;
+                IsCurrentlyArrested = true;
+                
+                // Store crime data for processing
+                LastCrimeData = Player.CrimeData;
+                
+                // Create criminal record entry
+                var record = new CriminalRecord
+                {
+                    ArrestTime = LastArrestTime,
+                    CrimeData = LastCrimeData,
+                    ArrestNumber = ArrestCount,
+                    Location = Player.transform.position
+                };
+                
+                CriminalHistory.Add(record);
+                
+                // Log arrest details
+                ModLogger.Info($"Arrest #{ArrestCount} for {Player.name} at {LastArrestTime}");
+                */
+                
         }
 
         public void OnReleasedFromJail(float jailTimeServed, float finePaid = 0f)

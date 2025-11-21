@@ -1075,9 +1075,10 @@ namespace Behind_Bars.Systems.Jail
                     var allCrimes = rapSheet.GetAllCrimes();
                     if (allCrimes != null && allCrimes.Count > 0)
                     {
-                        // Get crimes added recently (within last 2 hours)
-                        DateTime twoHoursAgo = DateTime.Now.AddHours(-2);
-                        var recentCrimeInstances = allCrimes.Where(c => c != null && c.Timestamp >= twoHoursAgo)
+                        // Get crimes added recently (within last 2 game hours = 120 game minutes)
+                        float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
+                        float twoGameHoursAgo = currentGameTime - 120f; // 2 game hours = 120 game minutes
+                        var recentCrimeInstances = allCrimes.Where(c => c != null && c.Timestamp >= twoGameHoursAgo)
                             .OrderByDescending(c => c.Timestamp)
                             .Take(10) // Get up to 10 most recent crimes
                             .ToList();

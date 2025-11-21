@@ -371,3 +371,6 @@ assets/discord.md
 /.cursor/rules
 /assets/discord
 /assets/plans
+assets/game_rip
+.vscode/launch.json
+Behind Bars.csproj.DotSettings

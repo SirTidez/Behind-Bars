@@ -158,8 +158,8 @@ namespace Behind_Bars.Systems
                 {
                     ModLogger.Info($"[LSI] Parole tracking initialized for {player.name} - LSI Level: {rapSheet.LSILevel}");
 
-                    // Save the updated rap sheet and invalidate cache
-                    RapSheetManager.Instance.SaveRapSheet(player, invalidateCache: true);
+                    // Mark rap sheet as changed - game's save system handles saving automatically
+                    RapSheetManager.Instance.MarkRapSheetChanged(player);
                 }
                 else
                 {
@@ -419,7 +419,7 @@ namespace Behind_Bars.Systems
                     rapSheet.CurrentParoleRecord.EndParole();
                     // Move current parole record to past records
                     rapSheet.ArchiveCurrentParoleRecord();
-                    RapSheetManager.Instance.SaveRapSheet(record.Player, invalidateCache: true);
+                    RapSheetManager.Instance.MarkRapSheetChanged(record.Player);
                 }
             }
             catch (System.Exception ex)
@@ -491,7 +491,7 @@ namespace Behind_Bars.Systems
                     {
                         rapSheet.CurrentParoleRecord.EndParole();
                         rapSheet.ArchiveCurrentParoleRecord();
-                        RapSheetManager.Instance.SaveRapSheet(player, invalidateCache: true);
+                        RapSheetManager.Instance.MarkRapSheetChanged(player);
                         ModLogger.Info($"Completed parole in RapSheet for {player.name}");
                         
                         // Emit parole ended event
@@ -531,7 +531,7 @@ namespace Behind_Bars.Systems
                     rapSheet.CurrentParoleRecord.EndParole();
                     // Move current parole record to past records
                     rapSheet.ArchiveCurrentParoleRecord();
-                    RapSheetManager.Instance.SaveRapSheet(record.Player, invalidateCache: true);
+                    RapSheetManager.Instance.MarkRapSheetChanged(record.Player);
                 }
             }
             catch (System.Exception ex)

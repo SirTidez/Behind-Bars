@@ -414,8 +414,8 @@ namespace Behind_Bars.Systems.NPCs
                     rapSheet.UpdateLSILevel();
                 }
 
-                // Save the updated rap sheet and invalidate cache
-                RapSheetManager.Instance.SaveRapSheet(player, invalidateCache: true);
+                // Mark rap sheet as changed - game's save system handles saving automatically
+                RapSheetManager.Instance.MarkRapSheetChanged(player);
             }
 
             // Use the game's built-in arrest methods instead of HandleImmediateArrest

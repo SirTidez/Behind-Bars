@@ -179,7 +179,7 @@ namespace Behind_Bars.Systems.Jail
             {
                 ModLogger.Info($"Player {Player.Local.name} interacting with InventoryPickupStation");
 
-                // Show notification about items (but don't block if no items - player can still change clothes)
+                // Show notification about items (block if no items, only change clothes)
                 if (legalItems == null || legalItems.Count == 0)
                 {
                     if (BehindBarsUIManager.Instance != null)
@@ -188,6 +188,8 @@ namespace Behind_Bars.Systems.Jail
                             "No personal items in storage - you can still change clothes",
                             NotificationType.Instruction
                         );
+                        RestorePlayerClothing(Player.Local);
+                        return;
                     }
                     ModLogger.Info("No items in storage, but allowing access for clothing change");
                 }
@@ -196,8 +198,11 @@ namespace Behind_Bars.Systems.Jail
                 if (storageEntity != null)
                 {
                     // Unlock cursor BEFORE opening storage (prevents cursor lock issues)
-                    UnityEngine.Cursor.lockState = CursorLockMode.None;
-                    UnityEngine.Cursor.visible = true;
+                    //UnityEngine.Cursor.lockState = CursorLockMode.None;
+                    //UnityEngine.Cursor.visible = true;
+                    var playerCamera = PlayerSingleton<PlayerCamera>.Instance;
+                    playerCamera.FreeMouse();
+                    Singleton<HUD>.Instance.SetCrosshairVisible(false);
 
                     try
                     {

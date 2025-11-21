@@ -11,6 +11,7 @@ using Il2CppFishNet.Object;
 using Il2CppScheduleOne.NPCs;
 using Il2CppScheduleOne.AvatarFramework;
 using Il2CppScheduleOne.Employees;
+using Il2CppScheduleOne;
 using Avatar = Il2CppScheduleOne.AvatarFramework.Avatar;
 #else
 using FishNet;
@@ -20,6 +21,7 @@ using FishNet.Object;
 using ScheduleOne.Employees;
 using ScheduleOne.NPCs;
 using ScheduleOne.AvatarFramework;
+using ScheduleOne;
 using Avatar = ScheduleOne.AvatarFramework.Avatar;
 #endif
 
@@ -74,10 +76,31 @@ namespace Behind_Bars.Systems.NPCs
 
                 // Set name immediately
                 npcInstance.name = $"{role}_{firstName}_{lastName}";
+                
+                // Ensure GameObject is active before trying to access components
+                npcInstance.SetActive(true);
+                
                 ModLogger.Debug($"✓ BaseNPC instantiated: {npcInstance.name}");
 
-                // Get the NPC component (BaseNPC should have this automatically)
+                // Log all components on the instantiated prefab for debugging
+                var allComponents = npcInstance.GetComponents<Component>();
+                ModLogger.Debug($"📋 Components found on {npcInstance.name}: {allComponents.Length} components");
+                foreach (var comp in allComponents)
+                {
+                    if (comp != null)
+                    {
+                        ModLogger.Debug($"  - {comp.GetType().Name}");
+                    }
+                }
+
+                // Get the NPC component - try both direct and in children
                 var npcComponent = npcInstance.GetComponent<NPC>();
+                if (npcComponent == null)
+                {
+                    ModLogger.Debug("⚠️ NPC component not found on root, checking children...");
+                    npcComponent = npcInstance.GetComponentInChildren<NPC>();
+                }
+                
                 if (npcComponent != null)
                 {
                     // Configure the NPC's basic properties
@@ -89,7 +112,12 @@ namespace Behind_Bars.Systems.NPCs
                 }
                 else
                 {
-                    ModLogger.Warn("⚠️ No NPC component found on BaseNPC - this is unexpected");
+                    ModLogger.Error("⚠️ No NPC component found on BaseNPC - checking prefab structure...");
+                    // Log all child objects to help debug
+                    LogChildHierarchy(npcInstance, 0);
+                    ModLogger.Error("❌ Cannot proceed without NPC component - NPC will not spawn correctly");
+                    UnityEngine.Object.Destroy(npcInstance);
+                    return null;
                 }
 
                 // Apply appearance fixes (this is crucial - fixes the "marshmallow man" issue)
@@ -119,7 +147,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Get the BaseNPC prefab from FishNet's prefab collection
+        /// Get the BaseNPC prefab by searching through NetworkObject spawnable prefabs by name (S1API method)
+        /// This matches how S1API finds the BaseNPC prefab
         /// </summary>
         private static GameObject GetBaseNPCPrefab()
         {
@@ -132,32 +161,42 @@ namespace Behind_Bars.Systems.NPCs
                     return null;
                 }
 
-                var prefabObjects = networkManager.GetPrefabObjects<PrefabObjects>(0, false);
-                if (prefabObjects == null)
+                // Get spawnable prefabs collection (S1API method)
+                var spawnablePrefabs = networkManager.GetPrefabObjects<PrefabObjects>(0, false);
+                if (spawnablePrefabs == null)
                 {
                     ModLogger.Error("No prefab objects collection found");
                     return null;
                 }
 
-                if (BASE_NPC_PREFAB_ID >= prefabObjects.GetObjectCount())
+                int count = spawnablePrefabs.GetObjectCount();
+                ModLogger.Debug($"🔍 Searching through {count} NetworkObject prefabs for 'BaseNPC'...");
+
+                // Look for "BaseNPC" prefab (S1API method)
+                NetworkObject chosen = null;
+                for (int i = 0; i < count; i++)
                 {
-                    ModLogger.Error($"BaseNPC prefab ID {BASE_NPC_PREFAB_ID} is out of range (max: {prefabObjects.GetObjectCount() - 1})");
-                    return null;
+                    NetworkObject obj = spawnablePrefabs.GetObject(true, i);
+                    if (obj != null && obj.gameObject != null && obj.gameObject.name == "BaseNPC")
+                    {
+                        chosen = obj;
+                        break;
+                    }
                 }
 
-                var prefab = prefabObjects.GetObject(true, BASE_NPC_PREFAB_ID);
-                if (prefab == null)
+                if (chosen != null && chosen.gameObject != null)
                 {
-                    ModLogger.Error($"BaseNPC prefab at index {BASE_NPC_PREFAB_ID} is null");
-                    return null;
+                    ModLogger.Debug($"✓ Found BaseNPC prefab: '{chosen.gameObject.name}'");
+                    return chosen.gameObject;
                 }
 
-                ModLogger.Debug($"✓ Found BaseNPC prefab: '{prefab.name}' at index {BASE_NPC_PREFAB_ID}");
-                return prefab.gameObject;
+                ModLogger.Error("❌ BaseNPC prefab not found in NetworkObject spawnable prefabs");
+                return null;
             }
             catch (Exception e)
             {
                 ModLogger.Error($"Error getting BaseNPC prefab: {e.Message}");
+                ModLogger.Error($"Stack trace: {e.StackTrace}");
                 return null;
             }
         }
@@ -176,12 +215,28 @@ namespace Behind_Bars.Systems.NPCs
                 var npcComponent = npcInstance.GetComponent<NPC>();
                 if (npcComponent == null)
                 {
+                    npcComponent = npcInstance.GetComponentInChildren<NPC>();
+                }
+                
+                if (npcComponent == null)
+                {
                     ModLogger.Error("❌ No NPC component found - cannot set appearance");
                     return;
                 }
 
                 // Try to find the Avatar component on the NPC or its children
-                var npcAvatar = npcInstance.GetComponentInChildren<Avatar>();
+                var npcAvatar = npcInstance.GetComponent<Avatar>();
+                if (npcAvatar == null)
+                {
+                    npcAvatar = npcInstance.GetComponentInChildren<Avatar>();
+                }
+                
+                // Also check if NPC component has Avatar reference set
+                if (npcAvatar == null && npcComponent.Avatar != null)
+                {
+                    npcAvatar = npcComponent.Avatar;
+                    ModLogger.Debug($"✓ Found Avatar via NPC.Avatar reference on {npcInstance.name}");
+                }
 
                 if (npcAvatar == null)
                 {
@@ -669,6 +724,22 @@ namespace Behind_Bars.Systems.NPCs
             catch (Exception e)
             {
                 ModLogger.Error($"Error finalizing NPC spawn: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Log the hierarchy of child GameObjects for debugging
+        /// </summary>
+        private static void LogChildHierarchy(GameObject obj, int depth)
+        {
+            if (obj == null) return;
+            
+            string indent = new string(' ', depth * 2);
+            ModLogger.Debug($"{indent}{obj.name} (Components: {obj.GetComponents<Component>().Length})");
+            
+            foreach (Transform child in obj.transform)
+            {
+                LogChildHierarchy(child.gameObject, depth + 1);
             }
         }
 
