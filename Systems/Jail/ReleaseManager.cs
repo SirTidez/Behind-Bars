@@ -289,7 +289,8 @@ namespace Behind_Bars.Systems.Jail
                 {
                     string cleanupReason = isStuck ? "timeout" : officerMissing ? "missing officer" : "officer idle";
                     ModLogger.Debug($"Forcing cleanup of stuck release for {player.name} - Reason: {cleanupReason}, Age: {(DateTime.Now - existingRequest.releaseTime).TotalMinutes:F1} minutes, Officer: {existingRequest.assignedOfficer?.GetBadgeNumber() ?? "none"}");
-                    FailRelease(existingRequest, $"Stuck release cleanup: {cleanupReason}");
+                    if (!isStuck)
+                        FailRelease(existingRequest, $"Stuck release cleanup: {cleanupReason}");
                 }
                 else
                 {
