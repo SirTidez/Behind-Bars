@@ -41,6 +41,21 @@ namespace Behind_Bars.Systems.CrimeTracking
         [SaveableField("pausedRemainingTime")]
         private float pausedRemainingTime; // Now stores game time (game minutes)
 
+        [SaveableField("lastCheckInGameTime")]
+        private float lastCheckInGameTime; // Last check-in time (game minutes)
+
+        [SaveableField("checkInCount")]
+        private int checkInCount; // Total number of check-ins
+
+        [SaveableField("missedCheckIns")]
+        private int missedCheckIns; // Number of missed check-ins
+
+        [SaveableField("complianceScore")]
+        private float complianceScore; // Compliance score (0-100)
+
+        [SaveableField("lastInteractionGameTime")]
+        private float lastInteractionGameTime; // Last interaction with officer (game minutes)
+
         // Non-Serialized fields
         [NonSerialized]
         private Player player;
@@ -51,6 +66,11 @@ namespace Behind_Bars.Systems.CrimeTracking
         public ParoleRecord()
         {
             this.paroleViolations = new List<ViolationRecord>();
+            this.checkInCount = 0;
+            this.missedCheckIns = 0;
+            this.complianceScore = 100f; // Start with perfect compliance
+            this.lastCheckInGameTime = 0f;
+            this.lastInteractionGameTime = 0f;
         }
 
         /// <summary>
@@ -61,6 +81,11 @@ namespace Behind_Bars.Systems.CrimeTracking
         {
             this.player = player;
             this.paroleViolations = new List<ViolationRecord>();
+            this.checkInCount = 0;
+            this.missedCheckIns = 0;
+            this.complianceScore = 100f; // Start with perfect compliance
+            this.lastCheckInGameTime = 0f;
+            this.lastInteractionGameTime = 0f;
             // Game's save system handles loading automatically - no manual file loading needed
         }
 
@@ -382,6 +407,185 @@ namespace Behind_Bars.Systems.CrimeTracking
 
             // Format using GameTimeManager
             return GameTimeManager.FormatGameTime(remaining);
+        }
+
+        #endregion
+
+        #region Check-In Methods
+
+        /// <summary>
+        /// Record a check-in for the parolee
+        /// </summary>
+        /// <returns>True if check-in was recorded successfully</returns>
+        public bool RecordCheckIn()
+        {
+            if (!isOnParole)
+            {
+                ModLogger.Warn($"Player {player.name} is not on parole. Cannot record check-in.");
+                return false;
+            }
+
+            float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
+            lastCheckInGameTime = currentGameTime;
+            lastInteractionGameTime = currentGameTime;
+            checkInCount++;
+
+            // Update compliance score based on check-in (positive factor)
+            complianceScore = Mathf.Min(100f, complianceScore + 2f);
+
+            ModLogger.Info($"Recorded check-in for {player.name}. Total check-ins: {checkInCount}");
+            // Game's save system handles saving automatically
+            return true;
+        }
+
+        /// <summary>
+        /// Get the last check-in time
+        /// </summary>
+        /// <returns>Last check-in time in game minutes, or 0 if never checked in</returns>
+        public float GetLastCheckInGameTime()
+        {
+            return lastCheckInGameTime;
+        }
+
+        /// <summary>
+        /// Get the total number of check-ins
+        /// </summary>
+        /// <returns>Check-in count</returns>
+        public int GetCheckInCount()
+        {
+            return checkInCount;
+        }
+
+        /// <summary>
+        /// Record a missed check-in
+        /// </summary>
+        public void RecordMissedCheckIn()
+        {
+            missedCheckIns++;
+            // Decrease compliance score for missed check-in
+            complianceScore = Mathf.Max(0f, complianceScore - 5f);
+            ModLogger.Info($"Recorded missed check-in for {player.name}. Total missed: {missedCheckIns}");
+            // Game's save system handles saving automatically
+        }
+
+        /// <summary>
+        /// Get the number of missed check-ins
+        /// </summary>
+        /// <returns>Missed check-in count</returns>
+        public int GetMissedCheckIns()
+        {
+            return missedCheckIns;
+        }
+
+        #endregion
+
+        #region Compliance Methods
+
+        /// <summary>
+        /// Calculate compliance score based on various factors
+        /// </summary>
+        /// <returns>Compliance score (0-100)</returns>
+        public float CalculateComplianceScore()
+        {
+            float score = 100f;
+
+            // Deduct points for violations
+            int violationCount = GetViolationCount();
+            score -= violationCount * 10f; // -10 points per violation
+
+            // Deduct points for missed check-ins
+            score -= missedCheckIns * 5f; // -5 points per missed check-in
+
+            // Ensure score stays in valid range
+            complianceScore = Mathf.Clamp(score, 0f, 100f);
+            return complianceScore;
+        }
+
+        /// <summary>
+        /// Get the current compliance score
+        /// </summary>
+        /// <returns>Compliance score (0-100)</returns>
+        public float GetComplianceScore()
+        {
+            // Recalculate if needed
+            CalculateComplianceScore();
+            return complianceScore;
+        }
+
+        /// <summary>
+        /// Update compliance score directly
+        /// </summary>
+        /// <param name="newScore">New compliance score (will be clamped to 0-100)</param>
+        public void UpdateComplianceScore(float newScore)
+        {
+            complianceScore = Mathf.Clamp(newScore, 0f, 100f);
+            ModLogger.Debug($"Updated compliance score for {player.name} to {complianceScore}");
+            // Game's save system handles saving automatically
+        }
+
+        /// <summary>
+        /// Adjust compliance score by a delta amount
+        /// </summary>
+        /// <param name="delta">Amount to adjust (positive or negative)</param>
+        public void AdjustComplianceScore(float delta)
+        {
+            complianceScore = Mathf.Clamp(complianceScore + delta, 0f, 100f);
+            ModLogger.Debug($"Adjusted compliance score for {player.name} by {delta} to {complianceScore}");
+            // Game's save system handles saving automatically
+        }
+
+        #endregion
+
+        #region Interaction Methods
+
+        /// <summary>
+        /// Record an interaction with the supervising officer
+        /// </summary>
+        public void RecordInteraction()
+        {
+            float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
+            lastInteractionGameTime = currentGameTime;
+            // Game's save system handles saving automatically
+        }
+
+        /// <summary>
+        /// Get the last interaction time
+        /// </summary>
+        /// <returns>Last interaction time in game minutes, or 0 if never interacted</returns>
+        public float GetLastInteractionGameTime()
+        {
+            return lastInteractionGameTime;
+        }
+
+        #endregion
+
+        #region Conditions Methods
+
+        /// <summary>
+        /// Get a summary of parole conditions for display
+        /// </summary>
+        /// <returns>Formatted string with parole conditions</returns>
+        public string GetConditionsSummary()
+        {
+            if (!isOnParole)
+            {
+                return "Not on parole";
+            }
+
+            var (isParole, remainingTime) = GetParoleStatus();
+            if (!isParole)
+            {
+                return "Parole expired";
+            }
+
+            string summary = $"Parole Conditions:\n";
+            summary += $"Duration: {GameTimeManager.FormatGameTime(paroleTermLengthInSeconds)}\n";
+            summary += $"Remaining: {GetRemainingTimeFormatted()}\n";
+            summary += $"Check-ins: {checkInCount} (Missed: {missedCheckIns})\n";
+            summary += $"Violations: {GetViolationCount()}\n";
+            summary += $"Compliance Score: {complianceScore:F1}/100";
+
+            return summary;
         }
 
         #endregion

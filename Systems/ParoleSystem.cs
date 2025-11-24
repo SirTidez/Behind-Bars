@@ -116,9 +116,40 @@ namespace Behind_Bars.Systems
             OnParoleStarted?.Invoke(player);
             ModLogger.Debug($"ParoleSystem: Emitted OnParoleStarted event for {player.name}");
 
+            // Notify supervising officer to start intake process
+            NotifySupervisingOfficerOfParoleStart(player);
+
             // NOTE: RecordReleaseTime is now called in ReleaseManager.WaitForParoleConditionsAcknowledgment()
             // after the player dismisses the parole conditions UI. This ensures the grace period
             // starts only after the player acknowledges their conditions, not immediately when parole starts.
+        }
+
+        /// <summary>
+        /// Notify supervising officer that a player has started parole
+        /// </summary>
+        private void NotifySupervisingOfficerOfParoleStart(Player player)
+        {
+            try
+            {
+                var npcManager = PrisonNPCManager.Instance;
+                if (npcManager != null)
+                {
+                    var supervisingOfficer = npcManager.GetSupervisingOfficer();
+                    if (supervisingOfficer != null)
+                    {
+                        supervisingOfficer.HandleParoleIntake(player);
+                        ModLogger.Debug($"Notified supervising officer of parole start for {player.name}");
+                    }
+                    else
+                    {
+                        ModLogger.Debug($"Supervising officer not available yet for {player.name} - will be handled when spawned");
+                    }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error notifying supervising officer of parole start: {ex.Message}");
+            }
         }
 
         /// <summary>
@@ -366,6 +397,9 @@ namespace Behind_Bars.Systems
         {
             ModLogger.Info($"Handling parole violation for {record.Player.name}");
 
+            // Notify supervising officer if available
+            NotifySupervisingOfficerOfViolation(record.Player, "Contraband found during search");
+
             // Determine violation severity
             if (record.ViolationCount >= 3)
             {
@@ -397,6 +431,30 @@ namespace Behind_Bars.Systems
 
                 // TODO: Show violation warning to player
                 yield return new WaitForSeconds(1f);
+            }
+        }
+
+        /// <summary>
+        /// Notify supervising officer of a violation
+        /// </summary>
+        private void NotifySupervisingOfficerOfViolation(Player player, string violationType)
+        {
+            try
+            {
+                var npcManager = PrisonNPCManager.Instance;
+                if (npcManager != null)
+                {
+                    var supervisingOfficer = npcManager.GetSupervisingOfficer();
+                    if (supervisingOfficer != null)
+                    {
+                        supervisingOfficer.HandleViolation(player, violationType);
+                        ModLogger.Debug($"Notified supervising officer of violation '{violationType}' for {player.name}");
+                    }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error notifying supervising officer of violation: {ex.Message}");
             }
         }
 

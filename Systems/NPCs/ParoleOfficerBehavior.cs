@@ -5,8 +5,10 @@ using System.Linq;
 using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
+using Behind_Bars.Systems.CrimeTracking;
 using Behind_Bars.Systems.Jail;
 using Behind_Bars.UI;
+using ScheduleOne.VoiceOver;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -98,6 +100,7 @@ namespace Behind_Bars.Systems.NPCs
         private SecurityDoorBehavior doorBehavior;
         private JailNPCAudioController audioController;
         private JailNPCDialogueController dialogueController;
+        private StationaryBehavior stationaryBehavior;
         private Transform assignedSpawnPoint;
         private int currentPatrolIndex = 0;
         private float lastPatrolTime = 0f;
@@ -234,12 +237,144 @@ namespace Behind_Bars.Systems.NPCs
                 {
                     ModLogger.Warn($"Guard {badgeNumber}: No JailNPCDialogueController found");
                 }
+                else
+                {
+                    // Initialize parole-specific dialogue states for supervising officer
+                    if (role == ParoleOfficerRole.SupervisingOfficer)
+                    {
+                        InitializeParoleDialogueStates();
+                    }
+                }
 
                 ModLogger.Debug($"Guard {badgeNumber}: Audio components initialized");
             }
             catch (Exception e)
             {
                 ModLogger.Error($"Error initializing audio components for guard {badgeNumber}: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Initialize stationary behavior for supervising officer
+        /// </summary>
+        private void InitializeStationaryBehavior()
+        {
+            try
+            {
+                // Get or add StationaryBehavior component
+                stationaryBehavior = GetComponent<StationaryBehavior>();
+                if (stationaryBehavior == null)
+                {
+                    stationaryBehavior = gameObject.AddComponent<StationaryBehavior>();
+                }
+
+                // Set stationary position to police station entrance (first waypoint of PoliceStation route)
+                var policeStationRoute = PresetParoleOfficerRoutes.GetRoute("PoliceStation");
+                if (policeStationRoute != null && policeStationRoute.points != null && policeStationRoute.points.Length > 0)
+                {
+                    Vector3 entrancePosition = policeStationRoute.points[0];
+                    stationaryBehavior.SetStationaryPosition(entrancePosition);
+                    ModLogger.Debug($"Supervising Officer {badgeNumber}: Set stationary position to police station entrance: {entrancePosition}");
+                }
+                else
+                {
+                    // Fallback to current position
+                    stationaryBehavior.SetStationaryPosition(transform.position);
+                    ModLogger.Warn($"Supervising Officer {badgeNumber}: Could not find PoliceStation route, using current position as stationary");
+                }
+
+                // Initialize check-in system for supervising officer
+                if (checkInSystem == null)
+                {
+                    checkInSystem = GetComponent<ParoleCheckInSystem>();
+                    if (checkInSystem == null)
+                    {
+                        checkInSystem = gameObject.AddComponent<ParoleCheckInSystem>();
+                        ModLogger.Debug($"Supervising Officer {badgeNumber}: Added ParoleCheckInSystem component");
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error initializing stationary behavior for supervising officer {badgeNumber}: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Initialize parole-specific dialogue states for supervising officer
+        /// </summary>
+        private void InitializeParoleDialogueStates()
+        {
+            if (dialogueController == null) return;
+
+            try
+            {
+                // Parole intake states
+                dialogueController.AddStateDialogue("Idle", "Standing by for parole intake.",
+                    new[] { "Waiting for parolees.", "On duty.", "Ready for processing." }, true, EVOLineType.Greeting);
+
+                dialogueController.AddStateDialogue("DetectingParolee", "I see you're starting parole.",
+                    new[] { "Welcome to parole supervision.", "Let's get you processed." }, true, EVOLineType.Greeting);
+
+                dialogueController.AddStateDialogue("GreetingParolee", "Welcome. I'm your supervising officer. Let's get you processed.",
+                    new[] { "Follow me.", "This way.", "Let's begin." }, true, EVOLineType.Greeting);
+
+                dialogueController.AddStateDialogue("ReviewingConditions", "Let me review your parole conditions with you.",
+                    new[] { "Here are your conditions.", "Pay attention.", "These are important." }, true, EVOLineType.Command);
+
+                dialogueController.AddStateDialogue("IssuingParoleCard", "Here's your parole card. Keep it with you at all times.",
+                    new[] { "Don't lose this.", "Keep it safe.", "You'll need this." }, true, EVOLineType.Command);
+
+                dialogueController.AddStateDialogue("FinalizingIntake", "You're all set. Remember to check in regularly.",
+                    new[] { "Stay compliant.", "See you at check-ins.", "Good luck." }, true, EVOLineType.Greeting);
+
+                // Check-in states
+                dialogueController.AddStateDialogue("CheckInGreeting", "Good to see you. Let's do your check-in.",
+                    new[] { "Time for your check-in.", "Let's review your status." }, true, EVOLineType.Greeting);
+
+                dialogueController.AddStateDialogue("CheckInReviewing", "Let me review your compliance record.",
+                    new[] { "Checking your record.", "Reviewing your status." }, true, EVOLineType.Greeting);
+
+                dialogueController.AddStateDialogue("CheckInCompliant", "You're doing well. Keep it up.",
+                    new[] { "Good job.", "Stay compliant.", "Keep up the good work." }, true, EVOLineType.Greeting);
+
+                dialogueController.AddStateDialogue("CheckInWarning", "I've noticed some concerns. Stay compliant.",
+                    new[] { "Be careful.", "Don't slip up.", "Watch yourself." }, true, EVOLineType.Angry);
+
+                dialogueController.AddStateDialogue("CheckInComplete", "Check-in complete. See you next time.",
+                    new[] { "Until next time.", "Stay out of trouble." }, true, EVOLineType.Acknowledge);
+
+                // Violation states
+                dialogueController.AddStateDialogue("ViolationDetected", "I need to speak with you about a violation.",
+                    new[] { "We have a problem.", "This is serious." }, true, EVOLineType.Alerted);
+
+                dialogueController.AddStateDialogue("ViolationExplaining", "You violated your parole conditions.",
+                    new[] { "This is unacceptable.", "You know the rules." }, true, EVOLineType.Angry);
+
+                dialogueController.AddStateDialogue("ViolationWarning", "This is a warning. Don't let it happen again.",
+                    new[] { "One more strike.", "Be careful." }, true, EVOLineType.Angry);
+
+                dialogueController.AddStateDialogue("ViolationEscalating", "This is serious. Your parole may be revoked.",
+                    new[] { "This is your last chance.", "One more violation and you're done." }, true, EVOLineType.Angry);
+
+                dialogueController.AddStateDialogue("ViolationComplete", "Violation recorded. Stay compliant.",
+                    new[] { "Don't let it happen again.", "Watch yourself." }, true, EVOLineType.Command);
+
+                // Conditions review states
+                dialogueController.AddStateDialogue("ConditionsRequest", "You want to review your conditions?",
+                    new[] { "Sure, let's go over them.", "Of course." }, true, EVOLineType.Greeting);
+
+                dialogueController.AddStateDialogue("ConditionsExplaining", "Here are your parole conditions...",
+                    new[] { "Pay attention.", "These are important." }, true, EVOLineType.Command);
+
+                dialogueController.AddStateDialogue("ConditionsComplete", "Any questions about your conditions?",
+                    new[] { "Need clarification?", "Understood?" }, true, EVOLineType.Greeting);
+
+                ModLogger.Debug($"Supervising Officer {badgeNumber}: Initialized parole dialogue states");
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error initializing parole dialogue states for supervising officer {badgeNumber}: {e.Message}");
             }
         }
 
@@ -313,7 +448,8 @@ namespace Behind_Bars.Systems.NPCs
             switch (role)
             {
                 case ParoleOfficerRole.SupervisingOfficer:
-                    // TODO: Implement police station enter/exit logic for supervising officer. Officer should remain at station entrance and handle intake processing.
+                    // Initialize stationary behavior for supervising officer
+                    InitializeStationaryBehavior();
                     ChangeParoleActivity(ParoleOfficerActivity.MonitoringArea);
                     ModLogger.Debug($"Guard {badgeNumber} set as supervising officer at {assignment}");
                     break;
@@ -598,11 +734,14 @@ namespace Behind_Bars.Systems.NPCs
 
         #endregion
 
-        #region Intake Officer Logic
+        #region Parole Intake Logic
 
-        private IntakeOfficerStateMachine intakeStateMachine;
+        private ParoleIntakeStateMachine paroleIntakeStateMachine;
 
-        public void StartIntakeProcess(Player parolee)
+        /// <summary>
+        /// Start parole intake process for a parolee
+        /// </summary>
+        public void HandleParoleIntake(Player parolee)
         {
             if (role != ParoleOfficerRole.SupervisingOfficer)
             {
@@ -610,36 +749,37 @@ namespace Behind_Bars.Systems.NPCs
                 return;
             }
 
-            // Play intake command
-            if (dialogueController != null)
+            // Initialize parole intake state machine if not already present
+            if (paroleIntakeStateMachine == null)
             {
-                dialogueController.SendGuardCommand(JailNPCAudioController.GuardCommandType.Follow,
-                    "Follow me for processing.", true);
-            }
-
-            // Initialize intake state machine if not already present
-            if (intakeStateMachine == null)
-            {
-                intakeStateMachine = GetComponent<IntakeOfficerStateMachine>();
-                if (intakeStateMachine == null)
+                paroleIntakeStateMachine = GetComponent<ParoleIntakeStateMachine>();
+                if (paroleIntakeStateMachine == null)
                 {
-                    intakeStateMachine = gameObject.AddComponent<IntakeOfficerStateMachine>();
+                    paroleIntakeStateMachine = gameObject.AddComponent<ParoleIntakeStateMachine>();
                 }
             }
 
-            // Delegate to intake state machine
-            if (intakeStateMachine != null)
+            // Delegate to parole intake state machine
+            if (paroleIntakeStateMachine != null)
             {
-                intakeStateMachine.ForceStartIntake(parolee);
+                paroleIntakeStateMachine.StartParoleIntake(parolee);
                 isProcessingIntake = true;
                 ChangeParoleActivity(ParoleOfficerActivity.ProcessingIntake);
                 currentParolee = parolee;
-                ModLogger.Info($"Guard {badgeNumber} delegating intake process to state machine for {parolee.name}");
+                ModLogger.Info($"Supervising Officer {badgeNumber} starting parole intake for {parolee.name}");
             }
             else
             {
-                ModLogger.Error($"Failed to create IntakeOfficerStateMachine for guard {badgeNumber}");
+                ModLogger.Error($"Failed to create ParoleIntakeStateMachine for supervising officer {badgeNumber}");
             }
+        }
+
+        /// <summary>
+        /// Start intake process (legacy method - redirects to HandleParoleIntake)
+        /// </summary>
+        public void StartIntakeProcess(Player parolee)
+        {
+            HandleParoleIntake(parolee);
         }
 
         /// <summary>
@@ -647,18 +787,7 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         public bool IsIntakeProcessingActive()
         {
-            return intakeStateMachine != null && intakeStateMachine.IsProcessingIntake();
-        }
-
-        /// <summary>
-        /// Handle door triggers during intake escort (delegates to state machine)
-        /// </summary>
-        public void HandleIntakeDoorTrigger(string triggerName)
-        {
-            if (intakeStateMachine != null && role == ParoleOfficerRole.SupervisingOfficer)
-            {
-                intakeStateMachine.HandleDoorTrigger(triggerName);
-            }
+            return paroleIntakeStateMachine != null && paroleIntakeStateMachine.IsProcessingIntake();
         }
 
         #endregion
@@ -671,6 +800,22 @@ namespace Behind_Bars.Systems.NPCs
 
             float distance = Vector3.Distance(transform.position, currentParolee.transform.position);
             UpdateParoleeCompliance(distance);
+        }
+
+        /// <summary>
+        /// Get compliance score for a parolee
+        /// </summary>
+        public float GetComplianceScore(Player parolee)
+        {
+            if (parolee == null) return 0f;
+
+            var rapSheet = RapSheetManager.Instance.GetRapSheet(parolee);
+            if (rapSheet?.CurrentParoleRecord != null)
+            {
+                return rapSheet.CurrentParoleRecord.GetComplianceScore();
+            }
+
+            return 0f;
         }
 
         private void UpdateParoleeCompliance(float distance)
@@ -757,8 +902,8 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private void UpdateOfficerCommandNotification(ParoleOfficerActivity activity)
         {
-            // Don't show notifications for intake processing - IntakeOfficerStateMachine handles those
-            if (activity == ParoleOfficerActivity.ProcessingIntake && intakeStateMachine != null)
+            // Don't show notifications for intake processing - ParoleIntakeStateMachine handles those
+            if (activity == ParoleOfficerActivity.ProcessingIntake && paroleIntakeStateMachine != null)
             {
                 return;
             }
@@ -1008,6 +1153,229 @@ namespace Behind_Bars.Systems.NPCs
 
         #endregion
 
+        #region Supervising Officer Methods
+
+        private ParoleCheckInSystem checkInSystem;
+
+        /// <summary>
+        /// Handle check-in for a parolee
+        /// </summary>
+        public void HandleCheckIn(Player parolee)
+        {
+            if (role != ParoleOfficerRole.SupervisingOfficer)
+            {
+                ModLogger.Warn($"Guard {badgeNumber} is not a supervising officer");
+                return;
+            }
+
+            // Get or add check-in system
+            if (checkInSystem == null)
+            {
+                checkInSystem = GetComponent<ParoleCheckInSystem>();
+                if (checkInSystem == null)
+                {
+                    checkInSystem = gameObject.AddComponent<ParoleCheckInSystem>();
+                }
+            }
+
+            if (checkInSystem != null)
+            {
+                checkInSystem.InitiateCheckIn(parolee);
+                ModLogger.Info($"Supervising Officer {badgeNumber} handling check-in for {parolee.name}");
+            }
+        }
+
+        /// <summary>
+        /// Handle violation for a parolee
+        /// </summary>
+        public void HandleViolation(Player parolee, string violationType)
+        {
+            if (role != ParoleOfficerRole.SupervisingOfficer)
+            {
+                ModLogger.Warn($"Guard {badgeNumber} is not a supervising officer");
+                return;
+            }
+
+            if (parolee == null)
+            {
+                ModLogger.Warn("ParoleOfficerBehavior: Cannot handle violation, parolee is null");
+                return;
+            }
+
+            ModLogger.Info($"Supervising Officer {badgeNumber} handling violation '{violationType}' for {parolee.name}");
+
+            // Start violation dialogue
+            StartCoroutine(ProcessViolation(parolee, violationType));
+        }
+
+        /// <summary>
+        /// Process violation with dialogue
+        /// </summary>
+        private IEnumerator ProcessViolation(Player parolee, string violationType)
+        {
+            // Update dialogue to violation detected
+            if (dialogueController != null)
+            {
+                dialogueController.UpdateGreetingForState("ViolationDetected");
+                dialogueController.SendContextualMessage("greeting");
+            }
+
+            // Face the parolee
+            if (parolee != null)
+            {
+                LookAt(parolee.transform.position);
+            }
+
+            yield return new WaitForSeconds(2f);
+
+            // Explain violation
+            if (dialogueController != null)
+            {
+                dialogueController.UpdateGreetingForState("ViolationExplaining");
+                dialogueController.SendContextualMessage("interaction");
+            }
+
+            yield return new WaitForSeconds(2f);
+
+            // Get parole record
+            var rapSheet = RapSheetManager.Instance.GetRapSheet(parolee);
+            if (rapSheet?.CurrentParoleRecord != null)
+            {
+                var paroleRecord = rapSheet.CurrentParoleRecord;
+                int violationCount = paroleRecord.GetViolationCount();
+                float complianceScore = paroleRecord.GetComplianceScore();
+
+                // Determine severity and response
+                string responseState;
+                if (violationCount >= 3 || complianceScore < 30f)
+                {
+                    responseState = "ViolationEscalating";
+                }
+                else
+                {
+                    responseState = "ViolationWarning";
+                }
+
+                // Update dialogue
+                if (dialogueController != null)
+                {
+                    dialogueController.UpdateGreetingForState(responseState);
+                    dialogueController.SendContextualMessage("interaction");
+                }
+
+                // Adjust compliance score (violation already added to record by ParoleSystem)
+                paroleRecord.AdjustComplianceScore(-10f); // Deduct 10 points for violation
+                RapSheetManager.Instance.MarkRapSheetChanged(parolee);
+
+                yield return new WaitForSeconds(2f);
+
+                // Complete violation processing
+                if (dialogueController != null)
+                {
+                    dialogueController.UpdateGreetingForState("ViolationComplete");
+                }
+
+                yield return new WaitForSeconds(2f);
+            }
+
+            // Return to idle
+            if (dialogueController != null)
+            {
+                dialogueController.UpdateGreetingForState("Idle");
+            }
+
+            // Return to entrance position if stationary
+            if (stationaryBehavior != null)
+            {
+                stationaryBehavior.ReturnToPosition();
+            }
+        }
+
+        /// <summary>
+        /// Review conditions with a parolee
+        /// </summary>
+        public void ReviewConditions(Player parolee)
+        {
+            if (role != ParoleOfficerRole.SupervisingOfficer)
+            {
+                ModLogger.Warn($"Guard {badgeNumber} is not a supervising officer");
+                return;
+            }
+
+            if (parolee == null)
+            {
+                ModLogger.Warn("ParoleOfficerBehavior: Cannot review conditions, parolee is null");
+                return;
+            }
+
+            ModLogger.Info($"Supervising Officer {badgeNumber} reviewing conditions with {parolee.name}");
+
+            // Start conditions review dialogue
+            StartCoroutine(ProcessConditionsReview(parolee));
+        }
+
+        /// <summary>
+        /// Process conditions review with dialogue
+        /// </summary>
+        private IEnumerator ProcessConditionsReview(Player parolee)
+        {
+            // Update dialogue to conditions request
+            if (dialogueController != null)
+            {
+                dialogueController.UpdateGreetingForState("ConditionsRequest");
+                dialogueController.SendContextualMessage("greeting");
+            }
+
+            // Face the parolee
+            if (parolee != null)
+            {
+                LookAt(parolee.transform.position);
+            }
+
+            yield return new WaitForSeconds(2f);
+
+            // Explain conditions
+            if (dialogueController != null)
+            {
+                dialogueController.UpdateGreetingForState("ConditionsExplaining");
+                dialogueController.SendContextualMessage("interaction");
+            }
+
+            // Get conditions summary
+            var rapSheet = RapSheetManager.Instance.GetRapSheet(parolee);
+            if (rapSheet?.CurrentParoleRecord != null)
+            {
+                string conditionsSummary = rapSheet.CurrentParoleRecord.GetConditionsSummary();
+                ModLogger.Info($"Conditions for {parolee.name}: {conditionsSummary}");
+
+                // Could display conditions in UI here if needed
+            }
+
+            yield return new WaitForSeconds(3f);
+
+            // Complete conditions review
+            if (dialogueController != null)
+            {
+                dialogueController.UpdateGreetingForState("ConditionsComplete");
+            }
+
+            yield return new WaitForSeconds(2f);
+
+            // Return to idle
+            if (dialogueController != null)
+            {
+                dialogueController.UpdateGreetingForState("Idle");
+            }
+
+            // Return to entrance position if stationary
+            if (stationaryBehavior != null)
+            {
+                stationaryBehavior.ReturnToPosition();
+            }
+        }
+
+        #endregion
+
         #region Door Integration
 
         private void OnTriggerEnter(Collider other)
@@ -1016,10 +1384,12 @@ namespace Behind_Bars.Systems.NPCs
             var doorTrigger = other.GetComponent<DoorTriggerHandler>();
             if (doorTrigger != null && doorBehavior != null)
             {
-                if (role == ParoleOfficerRole.SupervisingOfficer && intakeStateMachine != null && intakeStateMachine.IsProcessingIntake())
+                if (role == ParoleOfficerRole.SupervisingOfficer && paroleIntakeStateMachine != null && paroleIntakeStateMachine.IsProcessingIntake())
                 {
-                    // Let intake state machine handle door triggers during intake
-                    intakeStateMachine.HandleDoorTrigger(other.name);
+                    // Parole intake doesn't typically need door handling, but handle if needed
+                    // For now, use standard door behavior
+                    bool escorting = currentActivity == ParoleOfficerActivity.EscortingParolee;
+                    doorBehavior.HandleDoorTrigger(other.name, escorting, currentParolee);
                 }
                 else
                 {
@@ -1071,7 +1441,7 @@ namespace Behind_Bars.Systems.NPCs
         public ParoleOfficerActivity GetCurrentActivity() => currentActivity;
         public string GetBadgeNumber() => badgeNumber;
         public bool IsOnDuty() => isOnDuty;
-        public bool IsProcessingIntake() => intakeStateMachine != null ? intakeStateMachine.IsProcessingIntake() : isProcessingIntake;
+        public bool IsProcessingIntake() => paroleIntakeStateMachine != null ? paroleIntakeStateMachine.IsProcessingIntake() : isProcessingIntake;
         public Player GetCurrentParolee() => currentParolee;
         public float GetOfficerPatience() => officerPatience;
 
@@ -1159,9 +1529,9 @@ namespace Behind_Bars.Systems.NPCs
                 }
 
                 // If supervising officer, interrupt intake process
-                if (role == ParoleOfficerRole.SupervisingOfficer && intakeStateMachine != null)
+                if (role == ParoleOfficerRole.SupervisingOfficer && paroleIntakeStateMachine != null)
                 {
-                    intakeStateMachine.StopIntakeProcess();
+                    paroleIntakeStateMachine.StopIntakeProcess();
                     ModLogger.Info($"Supervising Officer {badgeNumber}: Intake process interrupted due to attack");
                 }
 

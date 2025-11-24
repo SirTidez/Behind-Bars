@@ -375,3 +375,8 @@ assets/game_rip
 .vscode/launch.json
 Behind Bars.csproj.DotSettings
 /assets/plan
+assets/S1API
+assets/S1API_NPC_Initialization_Analysis.md
+assets/S1API_NPC_Relationships_Diagram.md
+assets/S1API_NPC_Classes_Analysis.md
+assets/S1API_Integration_Summary.md

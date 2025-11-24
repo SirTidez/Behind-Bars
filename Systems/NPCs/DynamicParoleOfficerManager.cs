@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
+using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.CrimeTracking;
 using Behind_Bars.Systems;
@@ -439,11 +440,31 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Debug($"DynamicParoleOfficerManager: Parole started for {player.name}");
             isPlayerOnParole = true;
 
-            // Spawn supervising officer immediately
-            SpawnSupervisingOfficer();
-
             // Update officer spawning based on current location
+            // This will ensure supervising officer is spawned via EnsureSupervisingOfficer()
             UpdateOfficerSpawning();
+
+            // Notify supervising officer to start intake (with delay to allow spawning)
+            MelonCoroutines.Start(DelayedIntakeNotification(player));
+        }
+
+        /// <summary>
+        /// Delay intake notification to allow supervising officer to spawn
+        /// </summary>
+        private IEnumerator DelayedIntakeNotification(Player player)
+        {
+            yield return new WaitForSeconds(2f); // Wait 2 seconds for officer to spawn
+
+            var supervisingOfficer = PrisonNPCManager.Instance?.GetSupervisingOfficer();
+            if (supervisingOfficer != null)
+            {
+                supervisingOfficer.HandleParoleIntake(player);
+                ModLogger.Debug($"DynamicParoleOfficerManager: Triggered intake for {player.name}");
+            }
+            else
+            {
+                ModLogger.Debug($"DynamicParoleOfficerManager: Supervising officer not available for intake");
+            }
         }
 
         /// <summary>
