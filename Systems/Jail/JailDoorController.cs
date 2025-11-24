@@ -27,10 +27,7 @@ namespace Behind_Bars.Systems.Jail
 #if MONO
         [Header("Control Keys")]
 #endif
-        public KeyCode emergencyLockdownKey = KeyCode.L;
-        public KeyCode unlockAllKey = KeyCode.U;
-        public KeyCode openAllCellsKey = KeyCode.O;
-        public KeyCode closeAllCellsKey = KeyCode.C;
+        public KeyCode modifierKey = KeyCode.LeftAlt;
 
 #if MONO
         [Header("Test Door References")]
@@ -48,26 +45,6 @@ namespace Behind_Bars.Systems.Jail
         {
             UpdateDoorAnimations();
             HandleDoorKeyboardShortcuts();
-
-            if (Input.GetKeyDown(emergencyLockdownKey))
-            {
-                EmergencyLockdown();
-            }
-
-            if (Input.GetKeyDown(unlockAllKey))
-            {
-                UnlockAll();
-            }
-
-            if (Input.GetKeyDown(openAllCellsKey))
-            {
-                OpenAllCells();
-            }
-
-            if (Input.GetKeyDown(closeAllCellsKey))
-            {
-                CloseAllCells();
-            }
         }
 
         public void Initialize(List<CellDetail> prisonCells, List<CellDetail> holdingCells, BookingArea bookingArea, JailController controller = null)
@@ -83,27 +60,27 @@ namespace Behind_Bars.Systems.Jail
 
         void HandleDoorKeyboardShortcuts()
         {
-            if (Input.GetKey(KeyCode.LeftAlt) && Input.GetKeyDown(KeyCode.Alpha1))
+            if (Input.GetKey(modifierKey) && Input.GetKeyDown(KeyCode.Alpha1))
             {
                 ToggleBookingDoor(booking.prisonEntryDoor, "Prison Enter Door");
             }
 
-            if (Input.GetKey(KeyCode.LeftAlt) && Input.GetKeyDown(KeyCode.Alpha2))
+            if (Input.GetKey(modifierKey) && Input.GetKeyDown(KeyCode.Alpha2))
             {
                 ToggleBookingDoor(booking.bookingInnerDoor, "Booking Inner Door");
             }
 
-            if (Input.GetKey(KeyCode.LeftAlt) && Input.GetKeyDown(KeyCode.Alpha3))
+            if (Input.GetKey(modifierKey) && Input.GetKeyDown(KeyCode.Alpha3))
             {
                 ToggleBookingDoor(booking.guardDoor, "Guard Door");
             }
 
-            if (Input.GetKey(KeyCode.LeftAlt) && Input.GetKeyDown(KeyCode.Alpha4))
+            if (Input.GetKey(modifierKey) && Input.GetKeyDown(KeyCode.Alpha4))
             {
                 ToggleDoor(holdingCellDoor0, "Holding Cell Door 0");
             }
 
-            if (Input.GetKey(KeyCode.LeftAlt) && Input.GetKeyDown(KeyCode.Alpha5))
+            if (Input.GetKey(modifierKey) && Input.GetKeyDown(KeyCode.Alpha5))
             {
                 ToggleDoor(holdingCellDoor1, "Holding Cell Door 1");
             }

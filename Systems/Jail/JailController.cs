@@ -52,6 +52,7 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     public bool showDebugInfo = false;
     public float cameraDownwardAngle = 15f;
 
+    public KeyCode modifierKey = KeyCode.LeftAlt;
     public KeyCode emergencyLockdownKey = KeyCode.L;
     public KeyCode unlockAllKey = KeyCode.U;
     public KeyCode openAllCellsKey = KeyCode.O;
@@ -87,28 +88,28 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     void HandleLightingKeyBindings()
     {
         // Guard control inputs (restored from old version)
-        if (Input.GetKeyDown(emergencyLockdownKey))
+        if (Input.GetKey(modifierKey) && Input.GetKeyDown(emergencyLockdownKey))
         {
             EmergencyLockdown();
         }
 
-        if (Input.GetKeyDown(unlockAllKey))
+        if (Input.GetKey(modifierKey) && Input.GetKeyDown(unlockAllKey))
         {
             UnlockAll();
         }
 
-        if (Input.GetKeyDown(openAllCellsKey))
+        if (Input.GetKey(modifierKey) && Input.GetKeyDown(openAllCellsKey))
         {
             OpenAllCells();
         }
 
-        if (Input.GetKeyDown(closeAllCellsKey))
+        if (Input.GetKey(modifierKey) && Input.GetKeyDown(closeAllCellsKey))
         {
             CloseAllCells();
         }
 
         // Additional lighting controls
-        if (Input.GetKeyDown(blackoutKey))
+        if (Input.GetKey(modifierKey) && Input.GetKeyDown(blackoutKey))
         {
             ModLogger.Info("Blackout key pressed");
             if (lightingController == null)
@@ -120,7 +121,7 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
             ModLogger.Info("Blackout command sent");
         }
 
-        if (Input.GetKeyDown(normalLightingKey))
+        if (Input.GetKey(modifierKey) && Input.GetKeyDown(normalLightingKey))
         {
             ModLogger.Info("Normal lighting key pressed");
             if (lightingController == null)
@@ -177,6 +178,7 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         // Set prefab references before initializing door controller
         doorController.jailDoorPrefab = jailDoorPrefab;
         doorController.steelDoorPrefab = steelDoorPrefab;
+        doorController.modifierKey = modifierKey;
         doorController.Initialize(cellManager.cells, cellManager.holdingCells, areaManager.GetBooking(), this);
 
         lightingController.Initialize(transform);

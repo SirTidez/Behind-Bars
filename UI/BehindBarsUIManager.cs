@@ -1784,12 +1784,12 @@ namespace Behind_Bars.UI
                    "• Alt+4: Toggle Holding Cell Door 0\n" +
                    "• Alt+5: Toggle Holding Cell Door 1\n\n" +
                    "Jail Management:\n" +
-                   "• L: Emergency Lockdown (locks all doors, emergency lighting)\n" +
-                   "• U: Unlock All (unlocks all doors, normal lighting)\n" +
-                   "• O: Open All Cells\n" +
-                   "• C: Close All Cells\n" +
-                   "• H: Blackout Lighting\n" +
-                   "• N: Normal Lighting\n\n" +
+                   "• Alt+L: Emergency Lockdown (locks all doors, emergency lighting)\n" +
+                   "• Alt+U: Unlock All (unlocks all doors, normal lighting)\n" +
+                   "• Alt+O: Open All Cells\n" +
+                   "• Alt+C: Close All Cells\n" +
+                   "• Alt+H: Blackout Lighting\n" +
+                   "• Alt+N: Normal Lighting\n\n" +
                    "• Alt+0: Show this instructions screen";
         }
     }
