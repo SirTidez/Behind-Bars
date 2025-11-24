@@ -1,0 +1,120 @@
+using System;
+using System.Collections.Generic;
+using UnityEngine.Events;
+using UnityEngine.EventSystems;
+
+namespace Behind_Bars.Utils
+{
+    /// <summary>
+    /// Cross-compatible event helper for subscribing/unsubscribing Unity events.
+    /// Based on S1API EventHelper for IL2CPP/Mono compatibility.
+    /// </summary>
+    public static class EventHelper
+    {
+        /// <summary>
+        /// Tracking for subscribed actions.
+        /// </summary>
+        private static readonly Dictionary<Action, Delegate> SubscribedActions = new Dictionary<Action, Delegate>();
+
+        /// <summary>
+        /// Adds a listener to the event, as well as the subscription list.
+        /// </summary>
+        /// <param name="listener">The action / method you want to subscribe.</param>
+        /// <param name="unityEvent">The event you want to subscribe to.</param>
+        public static void AddListener(Action listener, UnityEvent unityEvent)
+        {
+            if (listener == null || unityEvent == null)
+                return;
+            
+            if (SubscribedActions.ContainsKey(listener))
+                return;
+
+#if !MONO
+            // On IL2CPP prefer System.Action to avoid UnityAction .ctor issues
+            System.Action wrapped = new System.Action(listener);
+            unityEvent.AddListener(wrapped);
+#else
+            UnityAction wrapped = new UnityAction(listener);
+            unityEvent.AddListener(wrapped);
+#endif
+            SubscribedActions.Add(listener, wrapped);
+        }
+
+        /// <summary>
+        /// Removes a listener from the event, as well as the subscription list.
+        /// </summary>
+        /// <param name="listener">The action / method you want to unsubscribe.</param>
+        /// <param name="unityEvent">The event you want to unsubscribe from.</param>
+        public static void RemoveListener(Action listener, UnityEvent unityEvent)
+        {
+            if (listener == null || unityEvent == null)
+                return;
+            
+            if (!SubscribedActions.TryGetValue(listener, out Delegate wrappedAction))
+                return;
+            
+            SubscribedActions.Remove(listener);
+            
+            if (wrappedAction == null)
+                return;
+                
+#if !MONO
+            if (wrappedAction is System.Action sys)
+                unityEvent.RemoveListener(sys);
+#else
+            if (wrappedAction is UnityAction ua)
+                unityEvent.RemoveListener(ua);
+#endif
+        }
+
+        /// <summary>
+        /// Adds a listener for UnityEvent<T> in an IL2CPP-safe manner.
+        /// </summary>
+        public static void AddListener<T>(Action<T> listener, UnityEvent<T> unityEvent)
+        {
+            if (listener == null || unityEvent == null)
+                return;
+
+            if (SubscribedGenericActions.ContainsKey(listener))
+                return;
+
+#if !MONO
+            // Use System.Action<T> wrapper for IL2CPP
+            System.Action<T> wrapped = new System.Action<T>(listener);
+            unityEvent.AddListener(wrapped);
+#else
+            UnityAction<T> wrapped = new UnityAction<T>(listener);
+            unityEvent.AddListener(wrapped);
+#endif
+            SubscribedGenericActions.Add(listener, wrapped);
+        }
+
+        /// <summary>
+        /// Removes a listener for UnityEvent<T> added via AddListener<T>.
+        /// </summary>
+        public static void RemoveListener<T>(Action<T> listener, UnityEvent<T> unityEvent)
+        {
+            if (listener == null || unityEvent == null)
+                return;
+
+            if (!SubscribedGenericActions.TryGetValue(listener, out Delegate wrapped))
+                return;
+
+#if !MONO
+            if (wrapped is System.Action<T> sys)
+                unityEvent.RemoveListener(sys);
+#else
+            if (wrapped is UnityAction<T> ua)
+                unityEvent.RemoveListener(ua);
+#endif
+            SubscribedGenericActions.Remove(listener);
+        }
+
+        /// <summary>
+        /// Tracking for subscribed generic actions.
+        /// Maps Action<T> to UnityAction<T> instances for safe remove on IL2CPP.
+        /// </summary>
+        private static readonly Dictionary<Delegate, Delegate> SubscribedGenericActions = new Dictionary<Delegate, Delegate>();
+    }
+}
+

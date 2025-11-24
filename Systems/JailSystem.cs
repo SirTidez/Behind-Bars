@@ -752,6 +752,7 @@ namespace Behind_Bars.Systems
             float lastBailCheck = 0f;
             const float bailCheckInterval = 1f; // Check cash balance every second
             bool bailKeyWasPressed = false; // Track previous frame key state to detect key press
+            int lastLoggedHour = -1; // Track last logged game hour to prevent duplicate logs
             
             ModLogger.Info($"[BAIL DEBUG] Starting bail key detection loop - checking for key {Core.BailoutKey} every {checkInterval}s");
             
@@ -851,11 +852,16 @@ namespace Behind_Bars.Systems
                     }
                 }
 
-                // Check remaining time for logging
+                // Check remaining time for logging (log once per game hour, prevent duplicates)
                 float remaining = JailTimeTracker.Instance.GetRemainingTime(player);
-                if (remaining > 0 && Mathf.FloorToInt(remaining) % 60 == 0) // Log every game hour
+                if (remaining > 0)
                 {
-                    ModLogger.Debug($"[JAIL TRACKING] Remaining: {JailTimeTracker.Instance.GetFormattedRemainingTime(player)}");
+                    int currentHour = Mathf.FloorToInt(remaining / 60f); // Convert to game hours
+                    if (currentHour != lastLoggedHour && remaining % 60f < 1f) // Log when crossing to a new hour
+                    {
+                        lastLoggedHour = currentHour;
+                        ModLogger.Debug($"[JAIL TRACKING] Remaining: {JailTimeTracker.Instance.GetFormattedRemainingTime(player)}");
+                    }
                 }
             }
 

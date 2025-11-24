@@ -3,7 +3,7 @@
         <!-- Paths and conditions -->
         <S1MonoDir>C:\Program Files (x86)\Steam\steamapps\common\Schedule I</S1MonoDir>
         <S1CPPDir>D:\Schedule 1 Modding\Dev Env\tests\branches\beta-branch\manifest_4454173976231358299</S1CPPDir>
-        <CommonDir>D:\Schedule 1 Modding</CommonDir>
+        <CommonDir>D:\Schedule 1 Modding\TestAssemblies</CommonDir>
         <RunPostBuildEvent>OnBuildSuccess</RunPostBuildEvent>
     </PropertyGroup>
 </Project>

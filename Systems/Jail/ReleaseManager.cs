@@ -289,7 +289,7 @@ namespace Behind_Bars.Systems.Jail
                 {
                     string cleanupReason = isStuck ? "timeout" : officerMissing ? "missing officer" : "officer idle";
                     ModLogger.Debug($"Forcing cleanup of stuck release for {player.name} - Reason: {cleanupReason}, Age: {(DateTime.Now - existingRequest.releaseTime).TotalMinutes:F1} minutes, Officer: {existingRequest.assignedOfficer?.GetBadgeNumber() ?? "none"}");
-                    if (!isStuck)
+                    if (!officerIdle)
                         FailRelease(existingRequest, $"Stuck release cleanup: {cleanupReason}");
                 }
                 else
@@ -554,6 +554,15 @@ namespace Behind_Bars.Systems.Jail
             // Show parole conditions UI and wait for acknowledgment (if player will be on parole)
             var rapSheet = RapSheetManager.Instance.GetRapSheet(request.player);
             bool willBeOnParole = rapSheet != null && (rapSheet.CurrentParoleRecord != null && rapSheet.CurrentParoleRecord.IsOnParole());
+
+            // CRITICAL: Stop tracking jail time BEFORE calculating release summary
+            // This ensures time served is captured correctly at the moment of release
+            // Do this for ALL releases, not just parole releases
+            if (JailTimeTracker.Instance != null && JailTimeTracker.Instance.IsTracking(request.player))
+            {
+                JailTimeTracker.Instance.StopTracking(request.player);
+                ModLogger.Debug($"Stopped jail time tracking for {request.player.name} before release summary calculation");
+            }
 
             // CRITICAL: Record release time IMMEDIATELY to start grace period
             // This prevents searches from happening while the release summary UI is visible

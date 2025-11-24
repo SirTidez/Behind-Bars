@@ -5,6 +5,7 @@ using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.Jail;
+using Behind_Bars.Systems.Dialogue;
 using Behind_Bars.UI;
 
 #if !MONO
@@ -12,12 +13,14 @@ using Il2CppScheduleOne.PlayerScripts;
 using Il2CppScheduleOne.NPCs;
 using Il2CppScheduleOne.AvatarFramework;
 using Il2CppScheduleOne.Interaction;
+using Il2CppScheduleOne.Dialogue;
 using Il2CppInterop.Runtime.Attributes;
 #else
 using ScheduleOne.PlayerScripts;
 using ScheduleOne.NPCs;
 using ScheduleOne.AvatarFramework;
 using ScheduleOne.Interaction;
+using ScheduleOne.Dialogue;
 #endif
 
 namespace Behind_Bars.Systems.NPCs
@@ -71,8 +74,12 @@ namespace Behind_Bars.Systems.NPCs
         private JailNPCAudioController audioController;
         private JailNPCDialogueController dialogueController;
 
-        // Guard interaction for ready confirmation
-        private InteractableObject guardInteraction;
+        // Dialogue system for ready-to-leave interaction
+        private DialogueHandler dialogueHandler;
+        private DialogueController baseDialogueController;
+        private NPCDialogueWrapper npcDialogueWrapper;
+        private const string READY_TO_LEAVE_CONTAINER_NAME = "ReleaseOfficer_ReadyToLeave";
+        private bool dialogueContainerRegistered = false;
         private bool readyInteractionEnabled = false;
 
         // Door management
@@ -241,6 +248,10 @@ namespace Behind_Bars.Systems.NPCs
                     new[] { "You're released.", "Freedom awaits.", "Your time is served." });
 
                 dialogueController.UpdateGreetingForState("Idle");
+                
+                // NEW: Set up dialogue container for ready-to-leave interaction
+                SetupReadyToLeaveDialogue();
+                
                 ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Dialogue system configured");
             }
             catch (Exception e)
@@ -249,80 +260,305 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Sets up the dialogue container for the "ready to leave" interaction
+        /// Returns true if setup was successful, false otherwise
+        /// </summary>
+        private bool SetupReadyToLeaveDialogue()
+        {
+            try
+            {
+                // CRITICAL: ReleaseOfficerBehavior might be on a child GameObject
+                // We need to find the root NPC GameObject first, then search for dialogue components
+                GameObject rootNPCGameObject = GetRootNPCGameObject();
+                
+                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: ReleaseOfficerBehavior is on GameObject: {gameObject.name}");
+                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Root NPC GameObject: {rootNPCGameObject.name}");
+                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Are they the same? {gameObject == rootNPCGameObject}");
+                
+                // Get DialogueHandler and DialogueController components from root NPC GameObject
+                // Use GetComponentInChildren to match S1API - components might be on child objects (like Avatar)
+                dialogueHandler = rootNPCGameObject.GetComponentInChildren<DialogueHandler>(true);
+                baseDialogueController = rootNPCGameObject.GetComponentInChildren<DialogueController>(true);
+                
+                if (dialogueHandler != null)
+                {
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Found DialogueHandler on: {dialogueHandler.gameObject.name} (parent: {dialogueHandler.transform.parent?.name ?? "root"})");
+                }
+                if (baseDialogueController != null)
+                {
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Found DialogueController on: {baseDialogueController.gameObject.name} (parent: {baseDialogueController.transform.parent?.name ?? "root"})");
+                }
+                
+                // Initialize NPCDialogueWrapper for easier dialogue management - use root NPC GameObject
+                npcDialogueWrapper = new NPCDialogueWrapper(rootNPCGameObject);
+                
+                // If components don't exist, try to add them to root NPC GameObject (for guards created without DirectNPCBuilder)
+                if (dialogueHandler == null)
+                {
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: DialogueHandler not found, attempting to add component to root NPC GameObject");
+                    try
+                    {
+#if !MONO
+                        dialogueHandler = rootNPCGameObject.AddComponent<Il2CppScheduleOne.Dialogue.DialogueHandler>();
+#else
+                        dialogueHandler = rootNPCGameObject.AddComponent<ScheduleOne.Dialogue.DialogueHandler>();
+#endif
+                        if (dialogueHandler == null)
+                        {
+                            ModLogger.Error($"ReleaseOfficer {badgeNumber}: AddComponent returned null for DialogueHandler");
+                            return false;
+                        }
+                        ModLogger.Info($"ReleaseOfficer {badgeNumber}: ✅ Added DialogueHandler component to root NPC GameObject");
+                    }
+                    catch (Exception ex)
+                    {
+                        ModLogger.Error($"ReleaseOfficer {badgeNumber}: Exception adding DialogueHandler: {ex.Message}\n{ex.StackTrace}");
+                        return false;
+                    }
+                }
+                else
+                {
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: DialogueHandler already exists");
+                }
+                
+                if (baseDialogueController == null)
+                {
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: DialogueController not found, attempting to add component to root NPC GameObject");
+                    try
+                    {
+#if !MONO
+                        baseDialogueController = rootNPCGameObject.AddComponent<Il2CppScheduleOne.Dialogue.DialogueController>();
+#else
+                        baseDialogueController = rootNPCGameObject.AddComponent<ScheduleOne.Dialogue.DialogueController>();
+#endif
+                        if (baseDialogueController == null)
+                        {
+                            ModLogger.Error($"ReleaseOfficer {badgeNumber}: AddComponent returned null for DialogueController");
+                            return false;
+                        }
+                        baseDialogueController.DialogueEnabled = true;
+                        baseDialogueController.UseDialogueBehaviour = true;
+                        ModLogger.Info($"ReleaseOfficer {badgeNumber}: ✅ Added DialogueController component");
+                    }
+                    catch (Exception ex)
+                    {
+                        ModLogger.Error($"ReleaseOfficer {badgeNumber}: Exception adding DialogueController: {ex.Message}\n{ex.StackTrace}");
+                        return false;
+                    }
+                }
+                else
+                {
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: DialogueController already exists");
+                }
+
+                // Build the dialogue container
+                // NOTE: S1API examples use "ENTRY" as the start node label - the dialogue system may expect this
+                var builder = new DialogueContainerBuilder();
+                
+                builder.AddNode("ENTRY", "Collect your personal items. Tell me when you're ready to leave.", choices =>
+                {
+                    choices.Add("ready", "I'm ready to leave.", "confirm");
+                    choices.Add("not_ready", "Not yet.", "end");
+                });
+                
+                builder.AddNode("confirm", "Good. Time to leave. Follow me.", choices =>
+                {
+                    choices.Add("acknowledge", "Let's go.", "end");
+                });
+                
+                builder.AddNode("end", "", null); // End node with no choices
+                
+                builder.SetAllowExit(true);
+                
+                // Build and register the container
+                var container = builder.Build(READY_TO_LEAVE_CONTAINER_NAME);
+                
+                // Register with DialogueHandler
+                if (dialogueHandler.dialogueContainers == null)
+                {
+#if !MONO
+                    dialogueHandler.dialogueContainers = new Il2CppSystem.Collections.Generic.List<DialogueContainer>();
+#else
+                    dialogueHandler.dialogueContainers = new System.Collections.Generic.List<DialogueContainer>();
+#endif
+                }
+                
+                dialogueHandler.dialogueContainers.Add(container);
+                dialogueContainerRegistered = true;
+                
+                // Register choice listener for "acknowledge" choice ("Let's go") - this triggers movement to exit scanner
+                DialogueChoiceListener.Register(dialogueHandler, "acknowledge", OnPlayerAcknowledgeDialogueChoice);
+                
+                ModLogger.Info($"ReleaseOfficer {badgeNumber}: Ready-to-leave dialogue container registered successfully");
+                return true;
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"ReleaseOfficer {badgeNumber}: Error setting up ready-to-leave dialogue: {e.Message}\n{e.StackTrace}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Called when player selects "Let's go" (acknowledge) in dialogue
+        /// THIS IS THE ONLY PLACE that triggers movement to exit scanner
+        /// The release officer will NOT move until this choice is selected
+        /// 
+        /// Dialogue flow:
+        ///   1. Player selects "I'm ready to leave" -> advances to confirm node (no action needed)
+        ///   2. Player selects "Let's go" -> THIS method is called -> triggers movement to exit scanner
+        /// </summary>
+        private void OnPlayerAcknowledgeDialogueChoice()
+        {
+            if (currentReleaseState != ReleaseState.WaitingAtStorage)
+            {
+                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Acknowledge dialogue choice triggered but not in WaitingAtStorage state");
+                return;
+            }
+
+            ModLogger.Info($"ReleaseOfficer {badgeNumber}: Player selected 'Let's go' - proceeding to exit scanner");
+
+            // CRITICAL: End the dialogue FIRST before proceeding with any logic
+            // This prevents the blank dialogue screen from freezing the officer
+            try
+            {
+                if (npcDialogueWrapper != null)
+                {
+                    npcDialogueWrapper.End();
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Dialogue ended via NPCDialogueWrapper");
+                }
+                else if (dialogueHandler != null)
+                {
+                    dialogueHandler.EndDialogue();
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Dialogue ended via DialogueHandler");
+                }
+                else
+                {
+                    ModLogger.Warn($"ReleaseOfficer {badgeNumber}: Cannot end dialogue - both npcDialogueWrapper and dialogueHandler are null");
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"ReleaseOfficer {badgeNumber}: Error ending dialogue: {ex.Message}");
+            }
+
+            // Finalize inventory processing now that player is done with storage
+            FinalizeInventoryPickup();
+
+            // Disable the dialogue override
+            DisableReadyToLeaveDialogue();
+
+            // CRITICAL: This is the ONLY place that triggers movement to exit scanner
+            // The release officer will wait at storage until player selects "Let's go"
+            OnPlayerConfirmedReady();
+        }
+
         private string GenerateBadgeNumber()
         {
             return $"R{UnityEngine.Random.Range(1000, 9999)}";
         }
 
+        /// <summary>
+        /// Gets the root NPC GameObject - handles case where ReleaseOfficerBehavior might be on a child object
+        /// </summary>
+        private GameObject GetRootNPCGameObject()
+        {
+            // First, check if we're on the root (has NPC component)
+            if (npcComponent != null && npcComponent.gameObject == gameObject)
+            {
+                return gameObject;
+            }
+            
+            // If npcComponent is null, try to find it
+            if (npcComponent == null)
+            {
+                // Try to get from this GameObject first
+                npcComponent = GetComponent<NPC>();
+                if (npcComponent != null)
+                {
+                    return gameObject;
+                }
+                
+                // Try parent
+                npcComponent = GetComponentInParent<NPC>(true);
+                if (npcComponent != null)
+                {
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Found NPC component on parent: {npcComponent.gameObject.name}");
+                    return npcComponent.gameObject;
+                }
+            }
+            else
+            {
+                // npcComponent exists but might be on parent
+                if (npcComponent.gameObject != gameObject)
+                {
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: NPC component is on different GameObject: {npcComponent.gameObject.name}");
+                    return npcComponent.gameObject;
+                }
+            }
+            
+            // Fallback: return this GameObject (shouldn't happen, but safety check)
+            ModLogger.Warn($"ReleaseOfficer {badgeNumber}: Could not find root NPC GameObject, using current GameObject");
+            return gameObject;
+        }
+
         private void SetupGuardInteraction()
         {
-            // COMPLETELY REMOVE the base NPC dialog interaction
-            var baseInteractions = GetComponents<InteractableObject>();
-            foreach (var interaction in baseInteractions)
+            // Get root NPC GameObject first
+            GameObject rootNPCGameObject = GetRootNPCGameObject();
+            
+            // S1API pattern: Ensure InteractableObject exists and is linked to NPC.intObj
+            // Use GetComponentInChildren to match S1API - InteractableObject might be on child object
+            var interactable = rootNPCGameObject.GetComponentInChildren<InteractableObject>(true);
+            if (interactable == null)
             {
-                ModLogger.Info($"ReleaseOfficer {badgeNumber}: Destroying base InteractableObject component");
-                Destroy(interaction);
+                interactable = rootNPCGameObject.AddComponent<InteractableObject>();
+                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Added InteractableObject component to root NPC GameObject");
             }
-
-            // Also disable DialogueController if it exists (causes the "Hi" dialog)
-            var dialogueControllers = GetComponents<MonoBehaviour>();
-            foreach (var component in dialogueControllers)
+            
+            // Link InteractableObject to base NPC component if available (S1API pattern)
+            // Ensure we have npcComponent reference
+            if (npcComponent == null)
             {
-                if (component.GetType().Name.Contains("DialogueController") && !component.GetType().Name.Contains("JailNPC"))
+                npcComponent = rootNPCGameObject.GetComponent<NPC>();
+            }
+            
+            if (npcComponent != null && interactable != null)
+            {
+                try
                 {
-                    component.enabled = false;
-                    ModLogger.Info($"ReleaseOfficer {badgeNumber}: Disabled base DialogueController: {component.GetType().Name}");
+#if !MONO
+                    npcComponent.intObj = interactable;
+#else
+                    // Use reflection for Mono
+                    var intObjField = typeof(NPC).GetField("intObj", 
+                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                    intObjField?.SetValue(npcComponent, interactable);
+#endif
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Linked InteractableObject to NPC.intObj");
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Could not link InteractableObject to NPC.intObj: {ex.Message}");
                 }
             }
 
-            // Create a new child GameObject for the interaction prompt (positioned at chest/head level)
-            var interactionPoint = new GameObject("ReleaseOfficerInteraction");
-            interactionPoint.transform.SetParent(transform);
-            interactionPoint.transform.localPosition = new Vector3(0f, 1.5f, 0f); // Position at chest height
-
-            // Add a trigger collider for the interaction to work
-            var interactionCollider = interactionPoint.AddComponent<SphereCollider>();
-            interactionCollider.radius = 1.5f; // Interaction radius
-            interactionCollider.isTrigger = true;
-
-            // Add InteractableObject to the child GameObject
-            guardInteraction = interactionPoint.AddComponent<InteractableObject>();
-            ModLogger.Info($"ReleaseOfficer {badgeNumber}: Added InteractableObject at proper height with collider");
-
-            // Configure interaction (disabled by default)
-            guardInteraction.SetMessage("Tell guard you're ready to leave");
-            guardInteraction.SetInteractionType(InteractableObject.EInteractionType.Key_Press);
-            guardInteraction.SetInteractableState(InteractableObject.EInteractableState.Invalid); // Disabled initially
-
-#if !MONO
-            // IL2CPP safe event subscription
-            guardInteraction.onInteractStart.AddListener((System.Action)OnPlayerReadyInteraction);
-#else
-            // Mono event subscription
-            guardInteraction.onInteractStart.AddListener(OnPlayerReadyInteraction);
-#endif
-
-            ModLogger.Info($"ReleaseOfficer {badgeNumber}: Guard interaction configured and disabled by default");
-        }
-
-        private void OnPlayerReadyInteraction()
-        {
-            if (!readyInteractionEnabled || currentReleaseState != ReleaseState.WaitingAtStorage)
+            // Keep DialogueController enabled - we need it for dialogue system
+            // Use GetComponentInChildren to match S1API - might be on child object
+            // Search from root NPC GameObject
+            var dialogueControllers = rootNPCGameObject.GetComponentsInChildren<DialogueController>(true);
+            foreach (var controller in dialogueControllers)
             {
-                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Ready interaction triggered but not enabled or wrong state");
-                return;
+                if (controller != null && !controller.GetType().Name.Contains("JailNPC"))
+                {
+                    controller.DialogueEnabled = true;
+                    controller.UseDialogueBehaviour = true;
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Configured DialogueController for custom dialogue on: {controller.gameObject.name}");
+                }
             }
 
-            ModLogger.Info($"ReleaseOfficer {badgeNumber}: Player confirmed ready to leave storage");
-
-            // Finalize inventory processing now that player is done with storage
-            FinalizeInventoryPickup();
-
-            // Disable the interaction
-            DisableGuardReadyInteraction();
-
-            // Proceed to exit scanner
-            OnPlayerConfirmedReady();
+            ModLogger.Info($"ReleaseOfficer {badgeNumber}: Guard interaction setup complete - using dialogue system");
         }
 
         /// <summary>
@@ -384,6 +620,36 @@ namespace Behind_Bars.Systems.NPCs
             if (!isInitialized) return;
 
             base.Update();
+            
+            // Continuously ensure custom dialogue container stays active and greetings stay disabled
+            if (readyInteractionEnabled && baseDialogueController != null)
+            {
+                // Ensure all greeting overrides stay disabled
+                if (baseDialogueController.GreetingOverrides != null)
+                {
+                    foreach (var greetingOverride in baseDialogueController.GreetingOverrides)
+                    {
+                        if (greetingOverride.ShouldShow)
+                        {
+                            greetingOverride.ShouldShow = false;
+                            ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Disabled re-enabled greeting override in Update()");
+                        }
+                    }
+                }
+                
+                // Ensure container is still first in the list
+                if (dialogueHandler != null && dialogueHandler.dialogueContainers != null && dialogueHandler.dialogueContainers.Count > 0)
+                {
+                    var targetContainer = dialogueHandler.dialogueContainers.Find(c => c != null && c.name == READY_TO_LEAVE_CONTAINER_NAME);
+                    if (targetContainer != null && dialogueHandler.dialogueContainers[0] != targetContainer)
+                    {
+                        dialogueHandler.dialogueContainers.Remove(targetContainer);
+                        dialogueHandler.dialogueContainers.Insert(0, targetContainer);
+                        ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Re-ensured container is first in Update()");
+                    }
+                }
+            }
+            
             UpdateReleaseStateMachine();
         }
 
@@ -582,6 +848,24 @@ namespace Behind_Bars.Systems.NPCs
         private void UpdateDialogueForState(ReleaseState state)
         {
             if (dialogueController == null) return;
+
+            // CRITICAL: Skip ALL greeting updates when override container is active
+            // The dialogue system may prioritize greeting overrides over containers, so we must prevent any greeting updates
+            if (readyInteractionEnabled)
+            {
+                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Skipping greeting update - override container is active (readyInteractionEnabled=true)");
+                
+                // Also ensure greeting overrides stay cleared
+                if (baseDialogueController != null && baseDialogueController.GreetingOverrides != null)
+                {
+                    foreach (var greetingOverride in baseDialogueController.GreetingOverrides)
+                    {
+                        greetingOverride.ShouldShow = false;
+                    }
+                }
+                
+                return;
+            }
 
             string dialogueState = state switch
             {
@@ -1334,13 +1618,246 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private void EnableGuardReadyInteraction()
         {
-            if (guardInteraction == null) return;
-
+            if (readyInteractionEnabled) return;
+            
             readyInteractionEnabled = true;
-            guardInteraction.SetMessage("Tell guard you're ready to leave");
-            guardInteraction.SetInteractableState(InteractableObject.EInteractableState.Default);
+            
+            // Enable dialogue container override instead of InteractableObject
+            EnableReadyToLeaveDialogue();
+            
+            ModLogger.Info($"ReleaseOfficer {badgeNumber}: Ready-to-leave dialogue enabled");
+        }
 
-            ModLogger.Info($"ReleaseOfficer {badgeNumber}: Enabled 'ready to leave' interaction");
+        /// <summary>
+        /// Enables the ready-to-leave dialogue container override
+        /// Attempts lazy initialization if components weren't ready during setup
+        /// </summary>
+        private void EnableReadyToLeaveDialogue()
+        {
+            ModLogger.Debug($"ReleaseOfficer {badgeNumber}: EnableReadyToLeaveDialogue called - containerRegistered={dialogueContainerRegistered}");
+            
+            // Try lazy initialization if dialogue container wasn't registered yet
+            if (!dialogueContainerRegistered)
+            {
+                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Dialogue container not registered, attempting lazy initialization");
+                if (!SetupReadyToLeaveDialogue())
+                {
+                    ModLogger.Error($"ReleaseOfficer {badgeNumber}: Lazy initialization failed - dialogue will not be available");
+                    // Don't return - try to continue anyway in case components exist but container registration failed
+                }
+            }
+            
+            // Ensure components are still valid (re-check even if we just set them up)
+                if (baseDialogueController == null)
+                {
+                    // Get root NPC GameObject and search from there
+                    GameObject rootNPCGameObject = GetRootNPCGameObject();
+                    baseDialogueController = rootNPCGameObject.GetComponentInChildren<DialogueController>(true);
+                    if (baseDialogueController == null)
+                    {
+                        ModLogger.Error($"ReleaseOfficer {badgeNumber}: Cannot enable dialogue - DialogueController not found on root NPC GameObject after setup attempt");
+                        return;
+                    }
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Found DialogueController on root NPC GameObject: {baseDialogueController.gameObject.name}");
+                }
+            
+            if (dialogueHandler == null)
+            {
+                // Use GetComponentInChildren to match S1API - DialogueHandler might be on child object
+                dialogueHandler = GetComponentInChildren<DialogueHandler>(true);
+                if (dialogueHandler == null)
+                {
+                    ModLogger.Error($"ReleaseOfficer {badgeNumber}: Cannot enable dialogue - DialogueHandler not found after setup attempt");
+                    return;
+                }
+            }
+            
+            // Verify container exists
+            if (dialogueHandler.dialogueContainers == null || dialogueHandler.dialogueContainers.Count == 0)
+            {
+                ModLogger.Warn($"ReleaseOfficer {badgeNumber}: DialogueHandler has no containers registered - attempting to rebuild");
+                if (!SetupReadyToLeaveDialogue())
+                {
+                    ModLogger.Error($"ReleaseOfficer {badgeNumber}: Failed to rebuild dialogue container");
+                    return;
+                }
+            }
+            
+            try
+            {
+                // Find the container in the handler
+                DialogueContainer targetContainer = null;
+                if (dialogueHandler.dialogueContainers != null)
+                {
+                    foreach (var container in dialogueHandler.dialogueContainers)
+                    {
+                        if (container != null && container.name == READY_TO_LEAVE_CONTAINER_NAME)
+                        {
+                            targetContainer = container;
+                            break;
+                        }
+                    }
+                }
+                
+                if (targetContainer == null)
+                {
+                    ModLogger.Warn($"ReleaseOfficer {badgeNumber}: Container '{READY_TO_LEAVE_CONTAINER_NAME}' not found. Available containers: {GetContainerNames()}");
+                    // Try one more time to set up
+                    if (SetupReadyToLeaveDialogue())
+                    {
+                        // Try to find it again
+                        if (dialogueHandler.dialogueContainers != null)
+                        {
+                            foreach (var container in dialogueHandler.dialogueContainers)
+                            {
+                                if (container != null && container.name == READY_TO_LEAVE_CONTAINER_NAME)
+                                {
+                                    targetContainer = container;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (targetContainer == null)
+                    {
+                        ModLogger.Error($"ReleaseOfficer {badgeNumber}: Failed to find or create dialogue container after retry");
+                        return;
+                    }
+                }
+                
+                // Ensure container is properly registered and FIRST in DialogueHandler's list
+                // The dialogue system may check dialogueContainers list and use the first available container
+                if (dialogueHandler.dialogueContainers != null)
+                {
+                    // Remove our container if it exists elsewhere in the list
+                    dialogueHandler.dialogueContainers.Remove(targetContainer);
+                    
+                    // Add it as the FIRST container (index 0) - this ensures it's selected first
+                    dialogueHandler.dialogueContainers.Insert(0, targetContainer);
+                    
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Container '{READY_TO_LEAVE_CONTAINER_NAME}' set as FIRST in dialogueContainers list (index 0)");
+                    
+                    // Verify container structure
+                    if (targetContainer.DialogueNodeData != null)
+                    {
+                        ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Container has {targetContainer.DialogueNodeData.Count} nodes");
+                        foreach (var node in targetContainer.DialogueNodeData)
+                        {
+                            if (node != null)
+                            {
+                                ModLogger.Debug($"ReleaseOfficer {badgeNumber}:   - Node '{node.DialogueNodeLabel}': '{node.DialogueText}' ({node.choices?.Length ?? 0} choices)");
+                            }
+                        }
+                    }
+                    
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: dialogueContainers list now has {dialogueHandler.dialogueContainers.Count} container(s). First: {(dialogueHandler.dialogueContainers.Count > 0 && dialogueHandler.dialogueContainers[0] != null ? dialogueHandler.dialogueContainers[0].name : "null")}");
+                }
+                
+                // CRITICAL: Disable ALL greeting overrides - greetings take precedence over containers!
+                // The dialogue system checks greetings first, so we must disable them all
+                if (baseDialogueController.GreetingOverrides != null)
+                {
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Disabling {baseDialogueController.GreetingOverrides.Count} greeting overrides");
+                    foreach (var greetingOverride in baseDialogueController.GreetingOverrides)
+                    {
+                        greetingOverride.ShouldShow = false;
+                    }
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: All greeting overrides disabled");
+                }
+                
+                // Ensure DialogueController is properly configured to use containers
+                baseDialogueController.DialogueEnabled = true;
+                baseDialogueController.UseDialogueBehaviour = true;
+                
+                // Use NPCDialogueWrapper.UseContainerOnInteract() - this is the correct S1API way!
+                bool success = npcDialogueWrapper.UseContainerOnInteract(READY_TO_LEAVE_CONTAINER_NAME);
+                if (success)
+                {
+                    ModLogger.Info($"ReleaseOfficer {badgeNumber}: ✅ UseContainerOnInteract succeeded - container '{READY_TO_LEAVE_CONTAINER_NAME}' set as override");
+                }
+                else
+                {
+                    ModLogger.Warn($"ReleaseOfficer {badgeNumber}: ⚠️ UseContainerOnInteract failed - falling back to manual SetOverrideContainer");
+                    // Fallback to manual method
+                    baseDialogueController.SetOverrideContainer(targetContainer);
+                }
+                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: DialogueController - DialogueEnabled={baseDialogueController.DialogueEnabled}, UseDialogueBehaviour={baseDialogueController.UseDialogueBehaviour}");
+                
+                // Verify override was set using reflection
+                try
+                {
+                    var overrideField = typeof(DialogueController).GetField("overrideContainer", 
+                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
+                    var overrideProperty = overrideField == null ? typeof(DialogueController).GetProperty("OverrideContainer", 
+                        System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public) : null;
+                    
+                    DialogueContainer verifiedOverride = null;
+                    if (overrideField != null)
+                    {
+                        verifiedOverride = overrideField.GetValue(baseDialogueController) as DialogueContainer;
+                    }
+                    else if (overrideProperty != null)
+                    {
+                        verifiedOverride = overrideProperty.GetValue(baseDialogueController) as DialogueContainer;
+                    }
+                    
+                    if (verifiedOverride != null && verifiedOverride.name == READY_TO_LEAVE_CONTAINER_NAME)
+                    {
+                        ModLogger.Info($"ReleaseOfficer {badgeNumber}: ✅ Enabled ready-to-leave dialogue override successfully (verified override container: {verifiedOverride.name})");
+                    }
+                    else
+                    {
+                        ModLogger.Warn($"ReleaseOfficer {badgeNumber}: ⚠️ SetOverrideContainer called but verification shows: {(verifiedOverride != null ? verifiedOverride.name : "null")}");
+                    }
+                }
+                catch (Exception verifyEx)
+                {
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Could not verify override container: {verifyEx.Message}");
+                    ModLogger.Info($"ReleaseOfficer {badgeNumber}: ✅ Enabled ready-to-leave dialogue override successfully");
+                }
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"ReleaseOfficer {badgeNumber}: Error enabling ready-to-leave dialogue: {e.Message}\n{e.StackTrace}");
+            }
+        }
+        
+        /// <summary>
+        /// Helper method to get container names for debugging
+        /// </summary>
+        private string GetContainerNames()
+        {
+            if (dialogueHandler?.dialogueContainers == null)
+                return "null";
+            
+            var names = new System.Collections.Generic.List<string>();
+            foreach (var container in dialogueHandler.dialogueContainers)
+            {
+                if (container != null)
+                    names.Add(container.name);
+                else
+                    names.Add("null");
+            }
+            return string.Join(", ", names);
+        }
+
+        /// <summary>
+        /// Disables the ready-to-leave dialogue container override
+        /// </summary>
+        private void DisableReadyToLeaveDialogue()
+        {
+            if (baseDialogueController == null) return;
+            
+            try
+            {
+                baseDialogueController.SetOverrideContainer(null);
+                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Disabled ready-to-leave dialogue override");
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"ReleaseOfficer {badgeNumber}: Error disabling ready-to-leave dialogue: {e.Message}");
+            }
         }
 
         /// <summary>
@@ -1381,12 +1898,14 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private void DisableGuardReadyInteraction()
         {
-            if (guardInteraction == null) return;
-
+            if (!readyInteractionEnabled) return;
+            
             readyInteractionEnabled = false;
-            guardInteraction.SetInteractableState(InteractableObject.EInteractableState.Invalid);
-
-            ModLogger.Info($"ReleaseOfficer {badgeNumber}: Disabled 'ready to leave' interaction");
+            
+            // Disable dialogue container override
+            DisableReadyToLeaveDialogue();
+            
+            ModLogger.Info($"ReleaseOfficer {badgeNumber}: Ready-to-leave dialogue disabled");
         }
 
         /// <summary>
@@ -1400,11 +1919,15 @@ namespace Behind_Bars.Systems.NPCs
                 return;
             }
 
-            ModLogger.Info($"ReleaseOfficer {badgeNumber}: OnInventoryPickupComplete called - waiting for player confirmation");
+            ModLogger.Info($"ReleaseOfficer {badgeNumber}: OnInventoryPickupComplete called - waiting for player to select 'Let's go' in dialogue");
 
-            // NEW: Don't auto-proceed - wait for player to interact with guard
-            // The interaction was already enabled in EnableGuardReadyInteraction()
-            // Player must walk up to guard and press E to confirm "I'm ready to leave"
+            // CRITICAL: Don't auto-proceed - wait for player to interact with guard and select "Let's go"
+            // The dialogue interaction was already enabled in EnableGuardReadyInteraction()
+            // Player must:
+            //   1. Walk up to guard and press E to open dialogue
+            //   2. Select "I'm ready to leave" (moves to confirm node - no movement triggered)
+            //   3. Select "Let's go" (THIS triggers movement to exit scanner via OnPlayerAcknowledgeDialogueChoice)
+            // Movement will NOT happen until step 3 is completed
         }
 
 #if !MONO

@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Collections;
+using System.Linq;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.CrimeTracking;
 using UnityEngine;
@@ -45,10 +46,15 @@ namespace Behind_Bars.Systems.Jail
         private Dictionary<Player, CompletedSentence> _completedSentences = new(); // Store sentence data for completed/stopped sentences
         private HashSet<Player> _inJailStatus = new(); // Track if player is actively in jail (separate from sentence tracking)
         private bool _isSubscribed = false;
+        
+        // Real-time tracking fallback (in case game time events don't fire)
+        private Dictionary<Player, float> _sentenceStartTimes = new(); // Real-time when sentence started
+        private object? _realTimeUpdateCoroutine = null;
 
         private JailTimeTracker()
         {
             SubscribeToGameTimeEvents();
+            StartRealTimeTracking(); // Start real-time fallback tracking
         }
 
         /// <summary>
@@ -117,6 +123,94 @@ namespace Behind_Bars.Systems.Jail
                     
                     sentence.OnComplete?.Invoke(player);
                     _activeSentences.Remove(player);
+                    _sentenceStartTimes.Remove(player); // Clean up real-time tracking
+                }
+            }
+        }
+        
+        /// <summary>
+        /// Start real-time tracking coroutine as a fallback
+        /// This ensures time is tracked even if game time events don't fire
+        /// </summary>
+        private void StartRealTimeTracking()
+        {
+            if (_realTimeUpdateCoroutine != null)
+            {
+                return; // Already started
+            }
+            
+            _realTimeUpdateCoroutine = MelonCoroutines.Start(RealTimeUpdateLoop());
+            ModLogger.Debug("JailTimeTracker real-time tracking fallback started");
+        }
+        
+        /// <summary>
+        /// Real-time update loop that decrements sentences every real second
+        /// This is a fallback in case game time events don't fire correctly
+        /// 1 real second = 1 game minute
+        /// </summary>
+        private IEnumerator RealTimeUpdateLoop()
+        {
+            while (true)
+            {
+                yield return new WaitForSeconds(1f); // Update every real second
+                
+                // Update all active sentences using real-time tracking
+                var completedSentences = new List<Player>();
+                float currentTime = Time.time;
+                
+                foreach (var kvp in _activeSentences.ToList())
+                {
+                    Player player = kvp.Key;
+                    ActiveSentence sentence = kvp.Value;
+                    
+                    // Calculate elapsed real-time since sentence started
+                    if (_sentenceStartTimes.TryGetValue(player, out float startTime))
+                    {
+                        float elapsedRealSeconds = currentTime - startTime;
+                        float elapsedGameMinutes = elapsedRealSeconds; // 1 real second = 1 game minute
+                        
+                        // Update remaining time based on elapsed time
+                        float expectedRemaining = sentence.TotalGameMinutes - elapsedGameMinutes;
+                        
+                        // Only update if the real-time calculation shows less remaining time
+                        // This prevents time from going backwards if game time events are also firing
+                        if (expectedRemaining < sentence.RemainingGameMinutes)
+                        {
+                            sentence.RemainingGameMinutes = Mathf.Max(0f, expectedRemaining);
+                            ModLogger.Debug($"[JAIL TRACKING] Real-time update for {player.name}: {sentence.RemainingGameMinutes:F1} game minutes remaining (elapsed: {elapsedGameMinutes:F1} game minutes)");
+                        }
+                    }
+                    else
+                    {
+                        // No start time recorded - use game time event decrement only
+                        // This shouldn't happen, but handle gracefully
+                        ModLogger.Warn($"[JAIL TRACKING] No start time recorded for {player.name} - using game time events only");
+                    }
+                    
+                    if (sentence.RemainingGameMinutes <= 0f)
+                    {
+                        completedSentences.Add(player);
+                    }
+                }
+                
+                // Trigger completion callbacks for sentences that completed via real-time tracking
+                foreach (var player in completedSentences)
+                {
+                    if (_activeSentences.TryGetValue(player, out var sentence))
+                    {
+                        ModLogger.Info($"Jail sentence completed (real-time tracking) for {player.name} ({sentence.TotalGameMinutes} game minutes served)");
+                        
+                        // Store the original sentence time and time served before removing from active tracking
+                        _completedSentences[player] = new CompletedSentence
+                        {
+                            OriginalSentenceTime = sentence.TotalGameMinutes,
+                            TimeServed = sentence.TotalGameMinutes // Full sentence served
+                        };
+                        
+                        sentence.OnComplete?.Invoke(player);
+                        _activeSentences.Remove(player);
+                        _sentenceStartTimes.Remove(player);
+                    }
                 }
             }
         }
@@ -151,6 +245,7 @@ namespace Behind_Bars.Systems.Jail
             };
 
             _activeSentences[player] = sentence;
+            _sentenceStartTimes[player] = Time.time; // Record start time for real-time tracking
             ModLogger.Info($"Started tracking jail sentence for {player.name}: {sentenceGameMinutes} game minutes ({GameTimeManager.FormatGameTime(sentenceGameMinutes)})");
         }
 
@@ -164,6 +259,12 @@ namespace Behind_Bars.Systems.Jail
                 // Calculate actual time served before storing
                 float timeServed = sentence.TotalGameMinutes - sentence.RemainingGameMinutes;
                 
+                // Log detailed information for debugging
+                ModLogger.Debug($"[JAIL TRACKING] StopTracking called for {player.name}:");
+                ModLogger.Debug($"  Total sentence: {sentence.TotalGameMinutes} game minutes ({GameTimeManager.FormatGameTime(sentence.TotalGameMinutes)})");
+                ModLogger.Debug($"  Remaining: {sentence.RemainingGameMinutes} game minutes ({GameTimeManager.FormatGameTime(sentence.RemainingGameMinutes)})");
+                ModLogger.Debug($"  Time served: {timeServed} game minutes ({GameTimeManager.FormatGameTime(timeServed)})");
+                
                 // Store both original sentence time and time served for early releases
                 _completedSentences[player] = new CompletedSentence
                 {
@@ -172,7 +273,12 @@ namespace Behind_Bars.Systems.Jail
                 };
                 
                 _activeSentences.Remove(player);
-                ModLogger.Info($"Stopped tracking jail sentence for {player.name} - served {timeServed} of {sentence.TotalGameMinutes} game minutes");
+                _sentenceStartTimes.Remove(player); // Clean up real-time tracking
+                ModLogger.Info($"Stopped tracking jail sentence for {player.name} - served {timeServed:F1} of {sentence.TotalGameMinutes:F1} game minutes ({GameTimeManager.FormatGameTime(timeServed)} / {GameTimeManager.FormatGameTime(sentence.TotalGameMinutes)})");
+            }
+            else
+            {
+                ModLogger.Warn($"StopTracking called for {player.name} but no active sentence found");
             }
         }
 
@@ -202,21 +308,39 @@ namespace Behind_Bars.Systems.Jail
         /// This is the original sentence minus remaining time
         /// For completed sentences, returns the original sentence time
         /// For early releases, returns the actual time served
+        /// Uses real-time tracking as fallback if game time events aren't working
         /// </summary>
         public float GetTimeServed(Player player)
         {
             // Check active sentences first
             if (_activeSentences.TryGetValue(player, out var sentence))
             {
-                return sentence.TotalGameMinutes - sentence.RemainingGameMinutes;
+                // Try to calculate from real-time tracking first (more reliable)
+                float timeServed = 0f;
+                if (_sentenceStartTimes.TryGetValue(player, out float startTime))
+                {
+                    float elapsedRealSeconds = Time.time - startTime;
+                    float elapsedGameMinutes = elapsedRealSeconds; // 1 real second = 1 game minute
+                    timeServed = Mathf.Min(elapsedGameMinutes, sentence.TotalGameMinutes);
+                    ModLogger.Debug($"[JAIL TRACKING] GetTimeServed (active, real-time) for {player.name}: {timeServed:F1} game minutes ({GameTimeManager.FormatGameTime(timeServed)}) - elapsed: {elapsedRealSeconds:F1} real seconds");
+                }
+                else
+                {
+                    // Fallback to game time event calculation
+                    timeServed = sentence.TotalGameMinutes - sentence.RemainingGameMinutes;
+                    ModLogger.Debug($"[JAIL TRACKING] GetTimeServed (active, game-time) for {player.name}: {timeServed:F1} game minutes ({GameTimeManager.FormatGameTime(timeServed)})");
+                }
+                return timeServed;
             }
             
             // Check if this was a completed or stopped sentence
             if (_completedSentences.TryGetValue(player, out var completed))
             {
+                ModLogger.Debug($"[JAIL TRACKING] GetTimeServed (completed) for {player.name}: {completed.TimeServed:F1} game minutes ({GameTimeManager.FormatGameTime(completed.TimeServed)})");
                 return completed.TimeServed;
             }
             
+            ModLogger.Warn($"[JAIL TRACKING] GetTimeServed for {player.name}: No tracking data found, returning 0");
             return 0f;
         }
 
