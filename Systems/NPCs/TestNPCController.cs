@@ -487,7 +487,7 @@ namespace Behind_Bars.Systems.NPCs
                     {
                         string pathStatus = navAgent.hasPath ? 
                             $"Path: {navAgent.path.corners.Length} corners, Status: {navAgent.pathStatus}" : "No path";
-                        ModLogger.Info($"TestNPC: Pos={transform.position:F1}, Target={target.position:F1}, " +
+                        ModLogger.Debug($"TestNPC: Pos={transform.position:F1}, Target={target.position:F1}, " +
                                      $"Dist={distanceToTarget:F1}, Speed={navAgent.velocity.magnitude:F1}, {pathStatus}");
                         lastDebugTime = Time.time;
                     }

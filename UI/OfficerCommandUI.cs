@@ -220,7 +220,7 @@ namespace Behind_Bars.UI
                 TMPFontFix.FixAllTMPFonts(_commandPanel, "base");
 
                 _isInitialized = true;
-                ModLogger.Info("OfficerCommandUI created successfully at top-left");
+                ModLogger.Debug("OfficerCommandUI created successfully at top-left");
             }
             catch (System.Exception ex)
             {

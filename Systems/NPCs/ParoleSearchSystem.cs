@@ -408,14 +408,12 @@ namespace Behind_Bars.Systems.NPCs
                         ViolationTime = DateTime.Now,
                         Details = $"Found {crimes.Count} contraband items during parole search"
                     };
-                    rapSheet.CurrentParoleRecord.AddViolation(violation);
+                    rapSheet.AddParoleViolation(violation); // Use helper method that marks RapSheet as changed
 
                     // Re-assess LSI level after violation
                     rapSheet.UpdateLSILevel();
                 }
-
-                // Save the updated rap sheet and invalidate cache
-                RapSheetManager.Instance.SaveRapSheet(player, invalidateCache: true);
+                RapSheetManager.Instance.MarkRapSheetChanged(player);
             }
 
             // Use the game's built-in arrest methods instead of HandleImmediateArrest

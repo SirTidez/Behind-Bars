@@ -39,12 +39,12 @@ namespace Behind_Bars.Systems.Jail
             {
                 if (_instance == null)
                 {
-                    MelonLogger.Msg("[ReleaseManager] Creating singleton instance");
+                    ModLogger.Debug("[ReleaseManager] Creating singleton instance");
                     var go = new GameObject("ReleaseManager");
                     go.SetActive(true); // Ensure GameObject is active
                     _instance = go.AddComponent<ReleaseManager>();
                     DontDestroyOnLoad(go);
-                    MelonLogger.Msg("[ReleaseManager] Singleton instance created successfully");
+                    ModLogger.Debug("[ReleaseManager] Singleton instance created successfully");
                 }
                 return _instance;
             }
@@ -132,16 +132,16 @@ namespace Behind_Bars.Systems.Jail
 
         void Awake()
         {
-            MelonLogger.Msg("[ReleaseManager] Awake() called");
+            ModLogger.Debug("[ReleaseManager] Awake() called");
             if (_instance == null)
             {
                 _instance = this;
                 DontDestroyOnLoad(gameObject);
-                MelonLogger.Msg("[ReleaseManager] Instance set in Awake()");
+                ModLogger.Debug("[ReleaseManager] Instance set in Awake()");
             }
             else if (_instance != this)
             {
-                MelonLogger.Msg("[ReleaseManager] Destroying duplicate instance");
+                ModLogger.Debug("[ReleaseManager] Destroying duplicate instance");
                 Destroy(gameObject);
                 return;
             }
@@ -149,11 +149,11 @@ namespace Behind_Bars.Systems.Jail
 
         void Start()
         {
-            MelonLogger.Msg("[ReleaseManager] Start() called, beginning initialization");
+            ModLogger.Debug("[ReleaseManager] Start() called, beginning initialization");
             InitializeExitPoint();
             InitializeOfficers();
-            ModLogger.Info("ReleaseManager initialized");
-            MelonLogger.Msg("[ReleaseManager] Initialization complete");
+            ModLogger.Debug("ReleaseManager initialized");
+            ModLogger.Debug("[ReleaseManager] Initialization complete");
         }
 
         private void InitializeExitPoint()
@@ -169,7 +169,7 @@ namespace Behind_Bars.Systems.Jail
                     if (exitTransform != null)
                     {
                         prisonExitPoint = exitTransform;
-                        ModLogger.Info($"Found prison exit point at {prisonExitPoint.position}");
+                        ModLogger.Debug($"Found prison exit point at {prisonExitPoint.position}");
                     }
                     else
                     {
@@ -198,7 +198,7 @@ namespace Behind_Bars.Systems.Jail
             // DON'T create release officers during initialization to avoid interfering with intake guards
             // Release officers will be created on-demand when actually needed
 
-            ModLogger.Info($"ReleaseManager found {availableOfficers.Count} existing release officers");
+            ModLogger.Debug($"ReleaseManager found {availableOfficers.Count} existing release officers");
         }
 
         private void CreateReleaseOfficerFromGuardSpawn()
@@ -236,7 +236,7 @@ namespace Behind_Bars.Systems.Jail
                         {
                             releaseOfficer.SetAvailable(true);
                             availableOfficers.Add(releaseOfficer);
-                            ModLogger.Info($"✅ Added ReleaseOfficerBehavior to existing Booking1 guard: {releaseOfficer.GetBadgeNumber()}");
+                            ModLogger.Debug($"✅ Added ReleaseOfficerBehavior to existing Booking1 guard: {releaseOfficer.GetBadgeNumber()}");
                         }
                     }
                     else
@@ -246,7 +246,7 @@ namespace Behind_Bars.Systems.Jail
                         {
                             availableOfficers.Add(existingReleaseOfficer);
                         }
-                        ModLogger.Info($"✅ Using existing release officer: {existingReleaseOfficer.GetBadgeNumber()}");
+                        ModLogger.Debug($"✅ Using existing release officer: {existingReleaseOfficer.GetBadgeNumber()}");
                     }
                 }
                 else
@@ -288,7 +288,7 @@ namespace Behind_Bars.Systems.Jail
                 if (isStuck || officerMissing || officerIdle)
                 {
                     string cleanupReason = isStuck ? "timeout" : officerMissing ? "missing officer" : "officer idle";
-                    ModLogger.Info($"Forcing cleanup of stuck release for {player.name} - Reason: {cleanupReason}, Age: {(DateTime.Now - existingRequest.releaseTime).TotalMinutes:F1} minutes, Officer: {existingRequest.assignedOfficer?.GetBadgeNumber() ?? "none"}");
+                    ModLogger.Debug($"Forcing cleanup of stuck release for {player.name} - Reason: {cleanupReason}, Age: {(DateTime.Now - existingRequest.releaseTime).TotalMinutes:F1} minutes, Officer: {existingRequest.assignedOfficer?.GetBadgeNumber() ?? "none"}");
                     FailRelease(existingRequest, $"Stuck release cleanup: {cleanupReason}");
                 }
                 else
@@ -307,7 +307,7 @@ namespace Behind_Bars.Systems.Jail
             // Get items to return (legal items only)
             releaseRequest.itemsToReturn = GetLegalItemsForReturn(player);
 
-            ModLogger.Info($"Initiating {releaseType} release for {player.name}");
+            ModLogger.Debug($"Initiating {releaseType} release for {player.name}");
 
             // Try to assign an officer immediately
             if (TryAssignOfficer(releaseRequest))
@@ -321,7 +321,7 @@ namespace Behind_Bars.Systems.Jail
             {
                 // Queue the release if no officers available
                 releaseQueue.Enqueue(releaseRequest);
-                ModLogger.Info($"Release for {player.name} queued - no officers available");
+                ModLogger.Debug($"Release for {player.name} queued - no officers available");
 
                 // Notify player they're being processed
                 if (BehindBarsUIManager.Instance != null)
@@ -340,7 +340,7 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         public void EmergencyRelease(Player player)
         {
-            ModLogger.Info($"Emergency release for {player.name}");
+            ModLogger.Debug($"Emergency release for {player.name}");
 
             // Skip escort process and teleport directly
             var exitPosition = GetPlayerExitPosition(player);
@@ -366,11 +366,11 @@ namespace Behind_Bars.Systems.Jail
 
         private bool TryAssignOfficer(ReleaseRequest request)
         {
-            ModLogger.Info($"TryAssignOfficer: Looking for available officers - total officers: {availableOfficers.Count}");
+            ModLogger.Debug($"TryAssignOfficer: Looking for available officers - total officers: {availableOfficers.Count}");
 
             foreach (var officer in availableOfficers)
             {
-                ModLogger.Info($"TryAssignOfficer: Checking officer {officer?.GetBadgeNumber()} - Available: {officer?.IsAvailable()}");
+                ModLogger.Debug($"TryAssignOfficer: Checking officer {officer?.GetBadgeNumber()} - Available: {officer?.IsAvailable()}");
 
                 if (officer != null && officer.IsAvailable())
                 {
@@ -382,7 +382,7 @@ namespace Behind_Bars.Systems.Jail
                     officer.OnEscortFailed += (player, reason) => HandleEscortFailed(request, player, reason);
                     officer.OnStatusUpdate += (player, state) => HandleStatusUpdate(request, player, state);
 
-                    ModLogger.Info($"SUCCESS: Assigned officer {officer.GetBadgeNumber()} to release {request.player.name}");
+                    ModLogger.Debug($"SUCCESS: Assigned officer {officer.GetBadgeNumber()} to release {request.player.name}");
                     return true;
                 }
             }
@@ -392,7 +392,7 @@ namespace Behind_Bars.Systems.Jail
             // If no officer available, try to create one NOW (on-demand)
             if (availableOfficers.Count == 0)
             {
-                ModLogger.Info("No release officers available - creating one on-demand");
+                ModLogger.Debug("No release officers available - creating one on-demand");
                 CreateReleaseOfficerFromGuardSpawn();
 
                 // Try again with newly created officer
@@ -408,7 +408,7 @@ namespace Behind_Bars.Systems.Jail
                         officer.OnEscortFailed += (player, reason) => HandleEscortFailed(request, player, reason);
                         officer.OnStatusUpdate += (player, state) => HandleStatusUpdate(request, player, state);
 
-                        ModLogger.Info($"Assigned newly created officer {officer.GetBadgeNumber()} to release {request.player.name}");
+                        ModLogger.Debug($"Assigned newly created officer {officer.GetBadgeNumber()} to release {request.player.name}");
                         return true;
                     }
                 }
@@ -419,7 +419,7 @@ namespace Behind_Bars.Systems.Jail
 
         private void StartReleaseProcess(ReleaseRequest request)
         {
-            ModLogger.Info($"Starting release process for {request.player.name}");
+            ModLogger.Debug($"Starting release process for {request.player.name}");
             request.status = ReleaseStatus.GuardDispatched;
 
             // Start the escort sequence
@@ -439,7 +439,7 @@ namespace Behind_Bars.Systems.Jail
         private IEnumerator ReleaseProcessCoroutine(ReleaseRequest request)
         {
             // NEW STATE MACHINE APPROACH: Simply start the Release Officer and let it handle the entire process
-            ModLogger.Info($"Starting Release Officer state machine for {request.player.name}");
+            ModLogger.Debug($"Starting Release Officer state machine for {request.player.name}");
             request.status = ReleaseStatus.GuardDispatched;
 
             // Start the Release Officer's state machine - it will handle everything
@@ -460,7 +460,7 @@ namespace Behind_Bars.Systems.Jail
                 yield return new WaitForSeconds(1f);
             }
 
-            ModLogger.Info($"Release process coroutine completed with status: {request.status}");
+            ModLogger.Debug($"Release process coroutine completed with status: {request.status}");
         }
 
 #if !MONO
@@ -493,13 +493,13 @@ namespace Behind_Bars.Systems.Jail
             Vector3 storageLocation = GetStorageLocationForWaiting();
             const float exitDistance = 8f; // Player must be 8+ meters from storage to be considered "exited"
 
-            ModLogger.Info($"Waiting for {request.player.name} to move away from storage area (>{exitDistance}m from {storageLocation})");
+            ModLogger.Debug($"Waiting for {request.player.name} to move away from storage area (>{exitDistance}m from {storageLocation})");
 
             if (request.assignedOfficer != null)
             {
                 // Tell the officer to stay at storage and wait
                 request.assignedOfficer.ChangeReleaseState(ReleaseOfficerBehavior.ReleaseState.WaitingAtStorage);
-                ModLogger.Info($"Officer {request.assignedOfficer.GetBadgeNumber()} waiting at storage for player to exit");
+                ModLogger.Debug($"Officer {request.assignedOfficer.GetBadgeNumber()} waiting at storage for player to exit");
             }
 
             while (Time.time - startTime < timeout)
@@ -528,14 +528,14 @@ namespace Behind_Bars.Systems.Jail
 
         private void CompleteRelease(ReleaseRequest request)
         {
-            ModLogger.Info($"Completing release for {request.player.name}");
+            ModLogger.Debug($"Completing release for {request.player.name}");
             request.status = ReleaseStatus.Completed;
 
             // CRITICAL: Hide officer command notification before teleporting player
             if (BehindBarsUIManager.Instance != null)
             {
                 BehindBarsUIManager.Instance.HideOfficerCommand();
-                ModLogger.Info($"Hidden officer command notification for {request.player.name}");
+                ModLogger.Debug($"Hidden officer command notification for {request.player.name}");
             }
 
             // CRITICAL: Clear ALL escort registrations for this player to prevent conflicts
@@ -560,7 +560,7 @@ namespace Behind_Bars.Systems.Jail
             if (willBeOnParole)
             {
                 ParoleSearchSystem.Instance.RecordReleaseTime(request.player);
-                ModLogger.Info($"Recorded release time for {request.player.name} - grace period started immediately");
+                ModLogger.Debug($"Recorded release time for {request.player.name} - grace period started immediately");
             }
 
             if (willBeOnParole)
@@ -590,7 +590,7 @@ namespace Behind_Bars.Systems.Jail
             // Fire event
             OnReleaseCompleted?.Invoke(request.player, request.releaseType);
 
-            ModLogger.Info($"Release completed for {request.player.name} - all escorts cleared");
+            ModLogger.Debug($"Release completed for {request.player.name} - all escorts cleared");
         }
 
         private void FailRelease(ReleaseRequest request, string reason)
@@ -616,7 +616,6 @@ namespace Behind_Bars.Systems.Jail
 
             // Fire event
             OnReleaseFailed?.Invoke(request.player, reason);
-
             // Notify player
             if (BehindBarsUIManager.Instance != null)
             {
@@ -626,7 +625,7 @@ namespace Behind_Bars.Systems.Jail
                 );
             }
 
-            ModLogger.Info($"Release failed for {request.player.name} - all escorts cleared");
+            ModLogger.Debug($"Release failed for {request.player.name} - all escorts cleared");
         }
 
         private void ProcessQueuedReleases()
@@ -802,14 +801,14 @@ namespace Behind_Bars.Systems.Jail
                 if (persistentData != null)
                 {
                     persistentData.ClearPlayerSnapshot(player);
-                    ModLogger.Info($"Cleared persistent storage snapshot after successful release for {player.name}");
+                    ModLogger.Debug($"Cleared persistent storage snapshot after successful release for {player.name}");
                 }
 
                 // Start parole supervision for ALL releases (bail and time-served)
                 // Bailing out doesn't allow you to skip parole - it only gets you out of jail quicker
                 StartParoleForReleasedPlayer(player);
 
-                ModLogger.Info($"Player release completed for {player.name} via {releaseType} - all systems cleared");
+                ModLogger.Debug($"Player release completed for {player.name} via {releaseType} - all systems cleared");
 
             }
             catch (System.Exception ex)
@@ -826,7 +825,7 @@ namespace Behind_Bars.Systems.Jail
         {
             try
             {
-                ModLogger.Info($"[PAROLE] === Processing Parole for Released Player: {player.name} ===");
+                ModLogger.Debug($"[PAROLE] === Processing Parole for Released Player: {player.name} ===");
 
                 // Get cached rap sheet (loads from file only once)
                 var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
@@ -846,7 +845,7 @@ namespace Behind_Bars.Systems.Jail
                 {
                     // RESUME AND EXTEND paused parole
                     float pausedRemainingTime = rapSheet.CurrentParoleRecord.GetPausedRemainingTime(); // In game minutes
-                    ModLogger.Info($"[PAROLE] Player has paused parole with {pausedRemainingTime} game minutes ({GameTimeManager.FormatGameTime(pausedRemainingTime)}) remaining");
+                    ModLogger.Debug($"[PAROLE] Player has paused parole with {pausedRemainingTime} game minutes ({GameTimeManager.FormatGameTime(pausedRemainingTime)}) remaining");
 
                     // Calculate additional time from new crimes (in game minutes)
                     float additionalTime = CalculateAdditionalParoleTime(rapSheet, rapSheetLoaded);
@@ -855,20 +854,20 @@ namespace Behind_Bars.Systems.Jail
                     int violationCount = rapSheet.CurrentParoleRecord.GetViolationCount();
                     float violationPenalty = CalculateViolationPenalty(violationCount);
 
-                    ModLogger.Info($"[PAROLE] Additional time from new crimes: {additionalTime} game minutes ({GameTimeManager.FormatGameTime(additionalTime)})");
-                    ModLogger.Info($"[PAROLE] Violation penalty: {violationPenalty} game minutes ({GameTimeManager.FormatGameTime(violationPenalty)}) for {violationCount} violations");
+                    ModLogger.Debug($"[PAROLE] Additional time from new crimes: {additionalTime} game minutes ({GameTimeManager.FormatGameTime(additionalTime)})");
+                    ModLogger.Debug($"[PAROLE] Violation penalty: {violationPenalty} game minutes ({GameTimeManager.FormatGameTime(violationPenalty)}) for {violationCount} violations");
 
-                    // Extend the paused parole
+                    // Extend the paused parole using helper method that marks RapSheet as changed
                     float totalAdditional = additionalTime + violationPenalty;
-                    rapSheet.CurrentParoleRecord.ExtendPausedParole(totalAdditional);
+                    rapSheet.ExtendPausedParole(totalAdditional);
 
                     float newTotalTime = pausedRemainingTime + totalAdditional;
                     float newGameDays = newTotalTime / (60f * 24f); // Convert game minutes to game days
-                    ModLogger.Info($"[PAROLE] New total parole time: {newTotalTime} game minutes ({newGameDays:F1} game days / {GameTimeManager.FormatGameTime(newTotalTime)})");
+                    ModLogger.Debug($"[PAROLE] New total parole time: {newTotalTime} game minutes ({newGameDays:F1} game days / {GameTimeManager.FormatGameTime(newTotalTime)})");
 
-                    // Resume parole
-                    rapSheet.CurrentParoleRecord.ResumeParole();
-                    ModLogger.Info($"[PAROLE] ✓ Paused parole resumed and extended for {player.name}");
+                    // Resume parole using helper method that marks RapSheet as changed
+                    rapSheet.ResumeParole();
+                    ModLogger.Debug($"[PAROLE] ✓ Paused parole resumed and extended for {player.name}");
                 }
                 else
                 {
@@ -876,10 +875,10 @@ namespace Behind_Bars.Systems.Jail
                     float paroleDuration = CalculateParoleDuration(rapSheet, rapSheetLoaded); // Returns game minutes
                     float gameDays = paroleDuration / (60f * 24f); // Convert game minutes to game days
 
-                    ModLogger.Info($"[PAROLE] Starting new parole term: {paroleDuration} game minutes ({gameDays:F1} game days / {GameTimeManager.FormatGameTime(paroleDuration)})");
+                    ModLogger.Debug($"[PAROLE] Starting new parole term: {paroleDuration} game minutes ({gameDays:F1} game days / {GameTimeManager.FormatGameTime(paroleDuration)})");
                     if (rapSheet != null)
                     {
-                        ModLogger.Info($"[PAROLE] Crime count: {rapSheet.GetCrimeCount()}, LSI Level: {rapSheet.LSILevel}");
+                        ModLogger.Debug($"[PAROLE] Crime count: {rapSheet.GetCrimeCount()}, LSI Level: {rapSheet.LSILevel}");
                     }
 
                     // Start parole through ParoleSystem (expects game minutes)
@@ -888,7 +887,7 @@ namespace Behind_Bars.Systems.Jail
                     if (paroleSystem != null)
                     {
                         paroleSystem.StartParole(player, paroleDuration, showUI: false);
-                        ModLogger.Info($"[PAROLE] ✓ New parole started successfully for {player.name}");
+                        ModLogger.Debug($"[PAROLE] ✓ New parole started successfully for {player.name}");
                     }
                     else
                     {
@@ -896,7 +895,7 @@ namespace Behind_Bars.Systems.Jail
                     }
                 }
 
-                ModLogger.Info($"[PAROLE] === Parole Processing Complete ===");
+                ModLogger.Debug($"[PAROLE] === Parole Processing Complete ===");
             }
             catch (System.Exception ex)
             {
@@ -1076,9 +1075,10 @@ namespace Behind_Bars.Systems.Jail
                     var allCrimes = rapSheet.GetAllCrimes();
                     if (allCrimes != null && allCrimes.Count > 0)
                     {
-                        // Get crimes added recently (within last 2 hours)
-                        DateTime twoHoursAgo = DateTime.Now.AddHours(-2);
-                        var recentCrimeInstances = allCrimes.Where(c => c != null && c.Timestamp >= twoHoursAgo)
+                        // Get crimes added recently (within last 2 game hours = 120 game minutes)
+                        float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
+                        float twoGameHoursAgo = currentGameTime - 120f; // 2 game hours = 120 game minutes
+                        var recentCrimeInstances = allCrimes.Where(c => c != null && c.Timestamp >= twoGameHoursAgo)
                             .OrderByDescending(c => c.Timestamp)
                             .Take(10) // Get up to 10 most recent crimes
                             .ToList();
@@ -1424,16 +1424,16 @@ namespace Behind_Bars.Systems.Jail
                 // Parole term timer is already running from teleportation,
                 // and grace period for searches started immediately upon release
 
+                // Unfreeze player
+                UnfreezePlayer(player);
+
                 // Show parole status UI now that release summary UI is dismissed
                 if (BehindBarsUIManager.Instance != null)
                 {
                     BehindBarsUIManager.Instance.ShowParoleStatus();
-                    ModLogger.Info($"Showing parole status UI for {player.name} after release summary dismissal");
+                    ModLogger.Debug($"Showing parole status UI for {player.name} after release summary dismissal");
                 }
-
-                // Unfreeze player
-                UnfreezePlayer(player);
-
+                
                 ModLogger.Info($"Parole conditions acknowledged by {player.name} - parole status UI shown");
             }
             catch (System.Exception ex)
@@ -1463,7 +1463,7 @@ namespace Behind_Bars.Systems.Jail
             if (!availableOfficers.Contains(officer))
             {
                 availableOfficers.Add(officer);
-                ModLogger.Info($"Registered release officer: {officer.GetBadgeNumber()}");
+                ModLogger.Debug($"Registered release officer: {officer.GetBadgeNumber()}");
             }
         }
 
@@ -1472,7 +1472,7 @@ namespace Behind_Bars.Systems.Jail
             if (availableOfficers.Contains(officer))
             {
                 availableOfficers.Remove(officer);
-                ModLogger.Info($"Unregistered release officer: {officer.GetBadgeNumber()}");
+                ModLogger.Debug($"Unregistered release officer: {officer.GetBadgeNumber()}");
             }
         }
 
@@ -1486,18 +1486,18 @@ namespace Behind_Bars.Systems.Jail
                 if (activeReleases.ContainsKey(player))
                 {
                     var request = activeReleases[player];
-                    ModLogger.Info($"Cancelling active release for {player.name} (Status: {request.status})");
+                    ModLogger.Debug($"Cancelling active release for {player.name} (Status: {request.status})");
 
                     // Free up the assigned officer
                     if (request.assignedOfficer != null)
                     {
                         request.assignedOfficer.SetAvailable(true);
-                        ModLogger.Info($"Freed officer {request.assignedOfficer.GetBadgeNumber()} from cancelled release");
+                        ModLogger.Debug($"Freed officer {request.assignedOfficer.GetBadgeNumber()} from cancelled release");
                     }
 
                     // Remove from active releases
                     activeReleases.Remove(player);
-                    ModLogger.Info($"Removed {player.name} from active releases");
+                    ModLogger.Debug($"Removed {player.name} from active releases");
                 }
                 else
                 {
@@ -1525,7 +1525,7 @@ namespace Behind_Bars.Systems.Jail
                 if (request.assignedOfficer != null)
                 {
                     request.assignedOfficer.OnInventoryPickupComplete(player);
-                    ModLogger.Info($"Notified Release Officer {request.assignedOfficer.GetBadgeNumber()} that inventory pickup is complete");
+                    ModLogger.Debug($"Notified Release Officer {request.assignedOfficer.GetBadgeNumber()} that inventory pickup is complete");
                 }
                 else
                 {
@@ -1552,7 +1552,7 @@ namespace Behind_Bars.Systems.Jail
                 if (request.assignedOfficer != null)
                 {
                     request.assignedOfficer.OnPlayerConfirmedReady();
-                    ModLogger.Info($"Notified Release Officer {request.assignedOfficer.GetBadgeNumber()} of player confirmation");
+                    ModLogger.Debug($"Notified Release Officer {request.assignedOfficer.GetBadgeNumber()} of player confirmation");
                 }
                 else
                 {
@@ -1573,7 +1573,7 @@ namespace Behind_Bars.Systems.Jail
             if (activeReleases.ContainsKey(player))
             {
                 var request = activeReleases[player];
-                ModLogger.Info($"Exit scan completed for {player.name} - completing entire release process");
+                ModLogger.Debug($"Exit scan completed for {player.name} - completing entire release process");
 
                 // Complete the release immediately (player has been teleported by ExitScannerStation)
                 CompleteRelease(request);
@@ -1595,7 +1595,7 @@ namespace Behind_Bars.Systems.Jail
                 return;
             }
 
-            ModLogger.Info($"Release Officer completed escort for {player.name}");
+            ModLogger.Debug($"Release Officer completed escort for {player.name}");
             CompleteRelease(request);
         }
 
@@ -1638,7 +1638,7 @@ namespace Behind_Bars.Systems.Jail
             if (newStatus != request.status)
             {
                 request.status = newStatus;
-                ModLogger.Info($"Release status updated for {player.name}: {newStatus}");
+                ModLogger.Debug($"Release status updated for {player.name}: {newStatus}");
             }
         }
 

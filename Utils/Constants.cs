@@ -8,7 +8,7 @@ namespace Behind_Bars.Helpers
         public const string MOD_ID = "Behind_Bars";
         public const string MOD_NAME = "Behind Bars";
         public const string MOD_AUTHOR = "SirTidez";
-        public const string MOD_VERSION = "1.0.0";
+        public const string MOD_VERSION = "alpha-1.0.5";
         public const string MOD_DESCRIPTION = "Expands the after-arrest experience in Schedule I with jail, bail, court, and parole systems";
 
         /// <summary>
@@ -80,5 +80,21 @@ namespace Behind_Bars.Helpers
         public const bool ENABLE_DEBUG_LOGGING = true;
         public const bool DEBUG_LOGGING = false;
         public const bool ENABLE_TEST_MODE = false;
+        
+        /// <summary>
+        /// Update checking constants
+        /// </summary>
+        public const string GITHUB_USERNAME = "SirTidez";
+        public const string GITHUB_REPO = "Behind-Bars";
+        public const string GITHUB_BRANCH = "parole-development";
+        public const string VERSION_FILE_PATH = "project_version.json";
+        public const float UPDATE_CHECK_INTERVAL_HOURS = 24f;
+        public const bool ENABLE_UPDATE_CHECKING = true;
+
+        /// <summary>
+        /// Build GitHub raw URL for version file
+        /// </summary>
+        public static string GITHUB_VERSION_URL => 
+            $"https://raw.githubusercontent.com/{GITHUB_USERNAME}/{GITHUB_REPO}/{GITHUB_BRANCH}/{VERSION_FILE_PATH}";
     }
 }

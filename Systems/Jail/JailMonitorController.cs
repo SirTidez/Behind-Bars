@@ -227,7 +227,7 @@ namespace Behind_Bars.Systems.Jail
 
             AutoDiscoverAndAssignMonitors(jailRoot);
 
-            ModLogger.Info($"✓ Monitor system initialized with {monitorAssignments.Count} assignments");
+            ModLogger.Debug($"✓ Monitor system initialized with {monitorAssignments.Count} assignments");
         }
 
         void AutoDiscoverAndAssignMonitors(Transform jailRoot)
@@ -252,18 +252,18 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Warn("RotatingMonitors folder not found at Monitors/RotatingMonitors/");
             }
 
-            ModLogger.Info($"Auto-discovery completed: {monitorAssignments.Count} monitors assigned");
+            ModLogger.Debug($"Auto-discovery completed: {monitorAssignments.Count} monitors assigned");
         }
 
         void SetupStaticMonitors(Transform staticMonitorsParent)
         {
             var staticCameras = securityCameras.Where(c => c.cameraType == SecurityCamera.CameraType.MainView).ToList();
 
-            ModLogger.Info($"Found {staticCameras.Count} static cameras for {staticMonitorsParent.childCount} static monitors");
+            ModLogger.Debug($"Found {staticCameras.Count} static cameras for {staticMonitorsParent.childCount} static monitors");
 
             foreach (var cam in staticCameras)
             {
-                ModLogger.Info($"  Static camera: {cam.cameraName} (type: {cam.cameraType})");
+                ModLogger.Debug($"  Static camera: {cam.cameraName} (type: {cam.cameraType})");
             }
 
             int successfulAssignments = 0;

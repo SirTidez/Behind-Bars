@@ -40,7 +40,7 @@ namespace Behind_Bars.Systems.Jail
             if (Instance == null)
             {
                 Instance = this;
-                ModLogger.Info("CellAssignmentManager initialized");
+                ModLogger.Debug("CellAssignmentManager initialized");
             }
             else
             {
@@ -72,8 +72,8 @@ namespace Behind_Bars.Systems.Jail
                 int detectedCells = jailController.cells.Count;
                 // Use all available cells up to 36
                 totalCells = Math.Min(detectedCells, MAX_USABLE_CELLS);
-                ModLogger.Info($"Found {detectedCells} cells in jail structure, using {totalCells} (0-{totalCells-1}) total cells");
-                ModLogger.Info($"Players restricted to cells 0-{MAX_PLAYER_CELLS-1}, NPCs can use all cells 0-{totalCells-1}");
+                ModLogger.Debug($"Found {detectedCells} cells in jail structure, using {totalCells} (0-{totalCells-1}) total cells");
+                ModLogger.Debug($"Players restricted to cells 0-{MAX_PLAYER_CELLS-1}, NPCs can use all cells 0-{totalCells-1}");
             }
 
             // Initialize all cells as empty
@@ -91,7 +91,7 @@ namespace Behind_Bars.Systems.Jail
                 };
             }
 
-            ModLogger.Info($"✓ Initialized cell tracking for {totalCells} cells");
+            ModLogger.Debug($"✓ Initialized cell tracking for {totalCells} cells");
         }
 
         /// <summary>
@@ -111,7 +111,7 @@ namespace Behind_Bars.Systems.Jail
             if (playerCellAssignments.ContainsKey(playerId))
             {
                 int existingCell = playerCellAssignments[playerId];
-                ModLogger.Info($"Player {player.name} already assigned to cell {existingCell}");
+                ModLogger.Debug($"Player {player.name} already assigned to cell {existingCell}");
                 return existingCell;
             }
 
@@ -127,7 +127,7 @@ namespace Behind_Bars.Systems.Jail
             if (AssignOccupantToCell(cellNumber, playerId, $"Player: {player.name}"))
             {
                 playerCellAssignments[playerId] = cellNumber;
-                ModLogger.Info($"✓ Assigned player {player.name} to cell {cellNumber}");
+                ModLogger.Debug($"✓ Assigned player {player.name} to cell {cellNumber}");
                 return cellNumber;
             }
 
@@ -149,7 +149,7 @@ namespace Behind_Bars.Systems.Jail
             if (npcCellAssignments.ContainsKey(npcId))
             {
                 int existingCell = npcCellAssignments[npcId];
-                ModLogger.Info($"NPC {npcName} already assigned to cell {existingCell}");
+                ModLogger.Debug($"NPC {npcName} already assigned to cell {existingCell}");
                 return existingCell;
             }
 
@@ -165,7 +165,7 @@ namespace Behind_Bars.Systems.Jail
             if (AssignOccupantToCell(cellNumber, npcId, $"NPC: {npcName}"))
             {
                 npcCellAssignments[npcId] = cellNumber;
-                ModLogger.Info($"✓ Assigned NPC {npcName} to cell {cellNumber}");
+                ModLogger.Debug($"✓ Assigned NPC {npcName} to cell {cellNumber}");
                 return cellNumber;
             }
 
@@ -185,7 +185,7 @@ namespace Behind_Bars.Systems.Jail
                 int cellNumber = playerCellAssignments[playerId];
                 RemoveOccupantFromCell(cellNumber, playerId);
                 playerCellAssignments.Remove(playerId);
-                ModLogger.Info($"✓ Released player {player.name} from cell {cellNumber}");
+                ModLogger.Debug($"✓ Released player {player.name} from cell {cellNumber}");
             }
         }
 
@@ -201,7 +201,7 @@ namespace Behind_Bars.Systems.Jail
                 int cellNumber = npcCellAssignments[npcId];
                 RemoveOccupantFromCell(cellNumber, npcId);
                 npcCellAssignments.Remove(npcId);
-                ModLogger.Info($"✓ Released NPC {npcName} from cell {cellNumber}");
+                ModLogger.Debug($"✓ Released NPC {npcName} from cell {cellNumber}");
             }
         }
 
@@ -409,7 +409,7 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         public void LogCellAssignments()
         {
-            ModLogger.Info("=== CURRENT CELL ASSIGNMENTS ===");
+            ModLogger.Debug("=== CURRENT CELL ASSIGNMENTS ===");
 
             int occupiedCells = cellOccupancy.Values.Count(c => c.occupants.Count > 0);
             int totalOccupants = cellOccupancy.Values.Sum(c => c.occupants.Count);
@@ -419,16 +419,16 @@ namespace Behind_Bars.Systems.Jail
             int npcCellsUsed = cellOccupancy.Where(c => c.Key > 11 && c.Value.occupants.Count > 0).Count();
             int floorLevelCellsUsed = cellOccupancy.Where(c => c.Key >= 18 && c.Value.occupants.Count > 0).Count();
 
-            ModLogger.Info($"Occupied cells: {occupiedCells}/{totalCells}, Total occupants: {totalOccupants}");
-            ModLogger.Info($"Player cells (0-11) used: {playerCellsUsed}, NPC cells (12+) used: {npcCellsUsed}");
-            ModLogger.Info($"Floor-level cells (18+) used: {floorLevelCellsUsed}");
+            ModLogger.Debug($"Occupied cells: {occupiedCells}/{totalCells}, Total occupants: {totalOccupants}");
+            ModLogger.Debug($"Player cells (0-11) used: {playerCellsUsed}, NPC cells (12+) used: {npcCellsUsed}");
+            ModLogger.Debug($"Floor-level cells (18+) used: {floorLevelCellsUsed}");
 
             foreach (var kvp in cellOccupancy.Where(c => c.Value.occupants.Count > 0))
             {
                 var cell = kvp.Value;
                 string occupantList = string.Join(", ", cell.occupantNames);
                 string cellType = cell.cellNumber <= 11 ? "[PLAYER]" : (cell.cellNumber >= 18 ? "[FLOOR]" : "[MID]");
-                ModLogger.Info($"Cell {cell.cellNumber} {cellType}: {occupantList} ({cell.occupants.Count}/{cell.maxOccupants})");
+                ModLogger.Debug($"Cell {cell.cellNumber} {cellType}: {occupantList} ({cell.occupants.Count}/{cell.maxOccupants})");
             }
         }
 

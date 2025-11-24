@@ -37,7 +37,7 @@ namespace Behind_Bars.Systems.NPCs
             if (npcHealth != null)
             {
                 lastHealth = npcHealth.Health;
-                ModLogger.Info($"NPCAttackMonitor: Initialized for {gameObject.name} with health: {lastHealth}");
+                ModLogger.Debug($"NPCAttackMonitor: Initialized for {gameObject.name} with health: {lastHealth}");
             }
         }
 

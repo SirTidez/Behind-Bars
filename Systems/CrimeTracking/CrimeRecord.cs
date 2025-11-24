@@ -168,6 +168,11 @@ namespace Behind_Bars.Systems.CrimeTracking
             
             CurrentWantedLevel = Mathf.Clamp(wantedLevel, 0f, 10f); // Cap at 10
         }
+
+        public void ClearWantedLevel()
+        {
+            CurrentWantedLevel = 0f;
+        }
         
         /// <summary>
         /// Remove expired crimes from the record

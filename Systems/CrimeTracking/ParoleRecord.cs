@@ -1,6 +1,6 @@
 ﻿using Behind_Bars.Helpers;
 using Behind_Bars.Utils;
-using Newtonsoft.Json;
+using Behind_Bars.Utils.Saveable;
 using System;
 using System.Collections.Generic;
 using UnityEngine;
@@ -15,23 +15,30 @@ namespace Behind_Bars.Systems.CrimeTracking
 {
     /// <summary>
     /// Represents a parole record for a player, tracking parole status, violations, and time periods.
+    /// Uses SaveableField attributes for automatic serialization by SaveableSerializer.
     /// </summary>
     [Serializable]
     public class ParoleRecord
     {
-        [JsonProperty("isOnParole")]
+        [SaveableField("isOnParole")]
         private bool isOnParole;
-        [JsonProperty("paroleStartTime")]
+
+        [SaveableField("paroleStartTime")]
         private float paroleStartTime; // Now stores game time (game minutes)
-        [JsonProperty("paroleEndTime")]
+
+        [SaveableField("paroleEndTime")]
         private float paroleEndTime; // Now stores game time (game minutes)
-        [JsonProperty("paroleTermLengthInSeconds")]
+
+        [SaveableField("paroleTermLengthInSeconds")]
         private float paroleTermLengthInSeconds; // Kept for JSON compatibility, but now stores game minutes
-        [JsonProperty("paroleViolations")]
+
+        [SaveableField("paroleViolations")]
         private List<ViolationRecord> paroleViolations;
-        [JsonProperty("isPaused")]
+
+        [SaveableField("isPaused")]
         private bool isPaused;
-        [JsonProperty("pausedRemainingTime")]
+
+        [SaveableField("pausedRemainingTime")]
         private float pausedRemainingTime; // Now stores game time (game minutes)
 
         // Non-Serialized fields
@@ -39,13 +46,11 @@ namespace Behind_Bars.Systems.CrimeTracking
         private Player player;
 
         /// <summary>
-        /// Parameterless constructor for JSON deserialization
+        /// Parameterless constructor for serialization
         /// </summary>
-        [JsonConstructor]
         public ParoleRecord()
         {
             this.paroleViolations = new List<ViolationRecord>();
-            // Don't load from file during JSON deserialization
         }
 
         /// <summary>
@@ -56,7 +61,7 @@ namespace Behind_Bars.Systems.CrimeTracking
         {
             this.player = player;
             this.paroleViolations = new List<ViolationRecord>();
-            LoadRecordFromFile();
+            // Game's save system handles loading automatically - no manual file loading needed
         }
 
         /// <summary>
@@ -121,7 +126,7 @@ namespace Behind_Bars.Systems.CrimeTracking
             paroleEndTime = paroleStartTime + termLengthInGameMinutes;
 
             ModLogger.Info($"Started parole for {player.name}. Term: {termLengthInGameMinutes} game minutes ({GameTimeManager.FormatGameTime(termLengthInGameMinutes)}). Ends at game time: {paroleEndTime}");
-            SaveRecordToFile();
+            // Game's save system handles saving automatically - no manual file saving needed
             return true;
         }
 
@@ -141,7 +146,7 @@ namespace Behind_Bars.Systems.CrimeTracking
             float actualEndGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
 
             ModLogger.Info($"Ended parole for {player.name}. Was scheduled to end at game time: {paroleEndTime}, actually ended at game time: {actualEndGameTime}");
-            SaveRecordToFile();
+            // Game's save system handles saving automatically - no manual file saving needed
             return true;
         }
 
@@ -200,7 +205,7 @@ namespace Behind_Bars.Systems.CrimeTracking
             isPaused = true;
 
             ModLogger.Info($"[PAROLE] Paused parole for {player.name}. Remaining time preserved: {pausedRemainingTime} game minutes ({GameTimeManager.FormatGameTime(pausedRemainingTime)})");
-            SaveRecordToFile();
+            // Game's save system handles saving automatically - no manual file saving needed
             return true;
         }
 
@@ -224,7 +229,7 @@ namespace Behind_Bars.Systems.CrimeTracking
             paroleTermLengthInSeconds = pausedRemainingTime; // Store in game minutes
 
             ModLogger.Info($"[PAROLE] Resumed parole for {player.name}. Remaining time: {pausedRemainingTime} game minutes ({GameTimeManager.FormatGameTime(pausedRemainingTime)})");
-            SaveRecordToFile();
+            // Game's save system handles saving automatically - no manual file saving needed
             return true;
         }
 
@@ -245,7 +250,7 @@ namespace Behind_Bars.Systems.CrimeTracking
             pausedRemainingTime += additionalGameMinutes;
 
             ModLogger.Info($"[PAROLE] Extended paused parole for {player.name} by {additionalGameMinutes} game minutes ({GameTimeManager.FormatGameTime(additionalGameMinutes)}). New remaining time: {pausedRemainingTime} game minutes ({GameTimeManager.FormatGameTime(pausedRemainingTime)})");
-            SaveRecordToFile();
+            // Game's save system handles saving automatically - no manual file saving needed
             return true;
         }
 
@@ -309,7 +314,7 @@ namespace Behind_Bars.Systems.CrimeTracking
 
             paroleViolations.Add(violation);
             ModLogger.Info($"Added violation to {player.name}'s parole record. Total violations: {paroleViolations.Count}");
-            SaveRecordToFile();
+            // Game's save system handles saving automatically - no manual file saving needed
             return true;
         }
 
@@ -323,7 +328,7 @@ namespace Behind_Bars.Systems.CrimeTracking
                 int count = paroleViolations.Count;
                 paroleViolations.Clear();
                 ModLogger.Info($"Cleared {count} violations from {player.name}'s parole record.");
-                SaveRecordToFile();
+                // Game's save system handles saving automatically - no manual file saving needed
             }
         }
 
@@ -381,102 +386,6 @@ namespace Behind_Bars.Systems.CrimeTracking
 
         #endregion
 
-        #region File Operations
-
-        /// <summary>
-        /// Saves the parole record to file.
-        /// </summary>
-        /// <returns>True if the save was successful, false otherwise.</returns>
-        public bool SaveRecordToFile()
-        {
-            if (FileUtilities.Instance == null)
-            {
-                ModLogger.Warn($"Failed to save parole record: FileUtilities instance is null for {player.name}!");
-                return false;
-            }
-
-            var settings = new JsonSerializerSettings
-            {
-                MissingMemberHandling = MissingMemberHandling.Ignore,
-                NullValueHandling = NullValueHandling.Ignore,
-                Formatting = Formatting.Indented
-            };
-
-            bool success = FileUtilities.AddOrUpdateFile($"{player.name}-parolerecord.json", JsonConvert.SerializeObject(this, settings));
-            
-            if (success)
-            {
-                ModLogger.Info($"Saved parole record for {player.name} to file!");
-            }
-            
-            return success;
-        }
-
-        /// <summary>
-        /// Loads the parole record from file.
-        /// </summary>
-        /// <returns>True if the load was successful, false otherwise.</returns>
-        public bool LoadRecordFromFile()
-        {
-            if (player == null)
-            {
-                ModLogger.Warn("Cannot load parole record: Player reference is null");
-                return false;
-            }
-
-            if (FileUtilities.Instance == null)
-            {
-                ModLogger.Warn($"Failed to load parole record: FileUtilities instance is null for {player.name}!");
-                return false;
-            }
-
-            var allLoadedFiles = FileUtilities.AllLoadedFiles();
-            if (allLoadedFiles == null)
-            {
-                ModLogger.Warn($"Failed to load parole record: AllLoadedFiles() returned null for {player.name}!");
-                return false;
-            }
-
-            if (!allLoadedFiles.TryGetValue($"{player.name}-parolerecord.json", out string json))
-            {
-                ModLogger.Info($"No existing parole record found for {player.name}. Initializing new record.");
-
-                // Initialize default values
-                isOnParole = false;
-                paroleStartTime = 0f;
-                paroleEndTime = 0f;
-                paroleTermLengthInSeconds = 0f;
-                isPaused = false;
-                pausedRemainingTime = 0f;
-
-                if (paroleViolations == null)
-                {
-                    paroleViolations = new List<ViolationRecord>();
-                }
-
-                return false;
-            }
-
-            try
-            {
-                var settings = new JsonSerializerSettings
-                {
-                    MissingMemberHandling = MissingMemberHandling.Ignore,
-                    NullValueHandling = NullValueHandling.Ignore
-                };
-
-                JsonConvert.PopulateObject(json, this, settings);
-                
-                ModLogger.Info($"Parole record loaded for {player.name}");
-                return true;
-            }
-            catch (Exception ex)
-            {
-                ModLogger.Warn($"Error attempting to deserialize parole record for {player.name}: {ex.Message}");
-                return false;
-            }
-        }
-
-        #endregion
+        // Serialization is handled automatically by SaveableSerializer via SaveableField attributes
     }
 }

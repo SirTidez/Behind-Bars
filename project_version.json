@@ -1,0 +1,8 @@
+{
+  "version": "alpha-1.0.5",
+  "description": "Fixed save system - RapSheet and ParoleRecord now save/load correctly",
+  "release_date": "2025-11-23",
+  "download_url": "",
+  "changelog_url": "https://github.com/SirTidez/Behind-Bars/blob/parole-development/CHANGELOG.md"
+}
+

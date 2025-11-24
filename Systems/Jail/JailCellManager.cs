@@ -47,7 +47,7 @@ namespace Behind_Bars.Systems.Jail
             SetupCellBeds();
             InitializeHoldingCellSpawnPoints();
 
-            ModLogger.Info($"✓ Cell Manager initialized: {cells.Count} prison cells, {holdingCells.Count} holding cells");
+            ModLogger.Debug($"✓ Cell Manager initialized: {cells.Count} prison cells, {holdingCells.Count} holding cells");
         }
 
         void DiscoverCells(Transform jailRoot)
@@ -60,7 +60,7 @@ namespace Behind_Bars.Systems.Jail
                 return;
             }
 
-            ModLogger.Info($"Found Cells parent with {cellsParent.childCount} children");
+            ModLogger.Debug($"Found Cells parent with {cellsParent.childCount} children");
 
             for (int j = 0; j < cellsParent.childCount; j++)
             {
@@ -94,7 +94,7 @@ namespace Behind_Bars.Systems.Jail
                 if (cell.IsValid())
                 {
                     cells.Add(cell);
-                    ModLogger.Info($"✓ Successfully added {cell.cellName}");
+                    ModLogger.Debug($"✓ Successfully added {cell.cellName}");
                 }
                 else
                 {
@@ -102,7 +102,7 @@ namespace Behind_Bars.Systems.Jail
                 }
             }
 
-            ModLogger.Info($"Discovered {cells.Count} prison cells total");
+            ModLogger.Debug($"Discovered {cells.Count} prison cells total");
         }
 
         void DiscoverHoldingCells(Transform jailRoot)
@@ -115,7 +115,7 @@ namespace Behind_Bars.Systems.Jail
                 return;
             }
 
-            ModLogger.Info($"Found HoldingCells parent with {holdingCellsParent.childCount} children");
+            ModLogger.Debug($"Found HoldingCells parent with {holdingCellsParent.childCount} children");
 
             for (int j = 0; j < holdingCellsParent.childCount; j++)
             {
@@ -165,7 +165,7 @@ namespace Behind_Bars.Systems.Jail
                 if (holdingCell.IsValid())
                 {
                     holdingCells.Add(holdingCell);
-                    ModLogger.Info($"✓ Successfully added {holdingCell.cellName} with {holdingCell.spawnPoints.Count} spawn points");
+                    ModLogger.Debug($"✓ Successfully added {holdingCell.cellName} with {holdingCell.spawnPoints.Count} spawn points");
                 }
                 else
                 {
@@ -173,7 +173,7 @@ namespace Behind_Bars.Systems.Jail
                 }
             }
 
-            ModLogger.Info($"Pattern-based discovery completed. Found {holdingCells.Count} holding cells.");
+            ModLogger.Debug($"Pattern-based discovery completed. Found {holdingCells.Count} holding cells.");
 
             if (holdingCells.Count == 0)
             {
@@ -229,7 +229,7 @@ namespace Behind_Bars.Systems.Jail
                 }
             }
 
-            ModLogger.Info($"DiscoverHoldingCells completed. Found {holdingCells.Count} holding cells.");
+            ModLogger.Debug($"DiscoverHoldingCells completed. Found {holdingCells.Count} holding cells.");
         }
 
         Transform FindDoorHolder(Transform parent, string holderName)
@@ -334,7 +334,7 @@ namespace Behind_Bars.Systems.Jail
                     bedInteractable.bedSheet = prisonBedContainer.Find("BedSheet");
                     bedInteractable.pillow = prisonBedContainer.Find("Pillow");
 
-                    ModLogger.Info($"✓ Found bed components in PrisonBed container");
+                    ModLogger.Debug($"✓ Found bed components in PrisonBed container");
                 }
                 else
                 {
@@ -356,7 +356,7 @@ namespace Behind_Bars.Systems.Jail
                 cell.bedTopComponent = null;
             }
 
-            ModLogger.Info($"✓ Setup {bedType} bed with PrisonBedInteractable: {bedTransform.name} in {cell.cellName}");
+            ModLogger.Debug($"✓ Setup {bedType} bed with PrisonBedInteractable: {bedTransform.name} in {cell.cellName}");
         }
 
         GameObject InstantiatePrisonBedPrefab(Transform bedTransform)
@@ -380,7 +380,7 @@ namespace Behind_Bars.Systems.Jail
                     instance.transform.localRotation = Quaternion.identity;
                     instance.transform.localScale = Vector3.one;
 
-                    ModLogger.Info($"✓ Instantiated PrisonBedInteractable prefab");
+                    ModLogger.Debug($"✓ Instantiated PrisonBedInteractable prefab");
                     return instance;
                 }
                 else
@@ -420,7 +420,7 @@ namespace Behind_Bars.Systems.Jail
                     }
                 }
 
-                ModLogger.Info($"✓ Initialized {holdingCell.spawnPointOccupancy.Count} spawn points for {holdingCell.cellName}");
+                ModLogger.Debug($"✓ Initialized {holdingCell.spawnPointOccupancy.Count} spawn points for {holdingCell.cellName}");
             }
         }
 

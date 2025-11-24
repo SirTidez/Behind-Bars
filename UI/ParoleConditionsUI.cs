@@ -497,7 +497,7 @@ namespace Behind_Bars.UI
                 TMPFontFix.FixAllTMPFonts(_mainPanel, "base");
 
                 _isInitialized = true;
-                ModLogger.Info("ParoleConditionsUI created successfully");
+                ModLogger.Debug("ParoleConditionsUI created successfully");
             }
             catch (System.Exception ex)
             {

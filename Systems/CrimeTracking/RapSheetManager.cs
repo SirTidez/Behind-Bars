@@ -1,6 +1,7 @@
+using System;
 using System.Collections.Generic;
+using System.IO;
 using Behind_Bars.Helpers;
-using Behind_Bars.Utils;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -11,22 +12,27 @@ using ScheduleOne.PlayerScripts;
 namespace Behind_Bars.Systems.CrimeTracking
 {
     /// <summary>
-    /// Manages cached RapSheet instances to avoid repeated file loads
+    /// Manages RapSheet instances. Caches instances to prevent repeated creation and registration.
     /// </summary>
     public class RapSheetManager
     {
         private static RapSheetManager _instance;
         public static RapSheetManager Instance => _instance ??= new RapSheetManager();
 
-        private Dictionary<Player, RapSheet> _rapSheetCache = new Dictionary<Player, RapSheet>();
+        /// <summary>
+        /// Cache of RapSheet instances by player name.
+        /// Prevents creating multiple instances for the same player.
+        /// </summary>
+        private readonly Dictionary<string, RapSheet> _rapSheetCache = new Dictionary<string, RapSheet>();
 
         private RapSheetManager()
         {
-            ModLogger.Info("RapSheetManager initialized");
+            ModLogger.Debug("RapSheetManager initialized");
         }
 
         /// <summary>
-        /// Get or create a RapSheet for a player. Caches the instance after first load.
+        /// Get or create a RapSheet for a player.
+        /// Returns cached instance if available, otherwise creates and caches a new one.
         /// </summary>
         public RapSheet GetRapSheet(Player player)
         {
@@ -36,83 +42,145 @@ namespace Behind_Bars.Systems.CrimeTracking
                 return null;
             }
 
-            // Check cache first
-            if (_rapSheetCache.TryGetValue(player, out RapSheet cachedSheet))
+            string playerName = player.name;
+            
+            // Check cache first to avoid creating duplicate instances
+            if (_rapSheetCache.TryGetValue(playerName, out RapSheet cachedRapSheet))
             {
-                // Verify the cached sheet is still valid (player reference matches)
-                if (cachedSheet != null && cachedSheet.Player == player)
+                // Update player reference in case it changed
+                if (cachedRapSheet.Player != player)
                 {
-                    return cachedSheet;
+                    cachedRapSheet.Player = player;
+                }
+                
+                // Return cached instance - no need to log every time
+                return cachedRapSheet;
+            }
+
+            // Check if we should load from save data first
+            bool shouldLoadFromSave = false;
+            string savePath = null;
+            try
+            {
+                var loadManager = ScheduleOne.Persistence.LoadManager.Instance;
+                if (loadManager != null && !string.IsNullOrEmpty(loadManager.LoadedGameFolderPath))
+                {
+                    // RapSheet saves to Modded/Saveables/BehindBars/{PlayerName}/
+                    savePath = Path.Combine(loadManager.LoadedGameFolderPath, "Modded", "Saveables", "BehindBars", playerName);
+                    shouldLoadFromSave = Directory.Exists(savePath);
+                    ModLogger.Debug($"[RAP SHEET] Checking save path for {playerName}: {savePath} (exists: {shouldLoadFromSave})");
                 }
                 else
                 {
-                    // Cache entry is stale, remove it
-                    _rapSheetCache.Remove(player);
+                    ModLogger.Debug($"[RAP SHEET] LoadManager not available or no loaded game folder path for {playerName}");
                 }
             }
-
-            // Create new rap sheet and load from file
-            var rapSheet = new RapSheet(player);
-            
-            // Try to load existing rap sheet
-            if (!rapSheet.LoadRapSheet())
+            catch (Exception ex)
             {
-                // No existing rap sheet - initialize new one
-                ModLogger.Debug($"No existing rap sheet found for {player.name}, creating new one");
-                rapSheet.InmateID = rapSheet.GenerateInmateID();
-                if (rapSheet.CrimesCommited == null)
-                    rapSheet.CrimesCommited = new List<CrimeInstance>();
-                if (rapSheet.PastParoleRecords == null)
-                    rapSheet.PastParoleRecords = new List<ParoleRecord>();
+                ModLogger.Warn($"[RAP SHEET] Error checking save path for {playerName}: {ex.Message}");
             }
+            
+            // Create new rap sheet only if not in cache
+            // Skip OnLoaded() if we're going to load data - LoadInternal() will call it
+            // This will auto-register with SaveManager
+            // RapSheet constructor calls InitializeSaveable() which registers with SaveManager
+            var rapSheet = new RapSheet(player, skipOnLoaded: shouldLoadFromSave);
+            
+            // Load from save data if available
+            // The Loader.Load() will be called by the game's save system, but we need to trigger it manually
+            // since RapSheet is not auto-discovered (it's per-player, not singleton)
+            if (shouldLoadFromSave && !string.IsNullOrEmpty(savePath))
+            {
+                try
+                {
+                    ModLogger.Debug($"[RAP SHEET] Loading RapSheet data for {playerName} from {savePath}");
+                    rapSheet.LoadInternal(savePath);
+                    int loadedCrimeCount = rapSheet.CrimesCommited?.Count ?? 0;
+                    bool hasParoleRecord = rapSheet.CurrentParoleRecord != null;
+                    ModLogger.Debug($"[RAP SHEET] Successfully loaded RapSheet data for {playerName} - Crimes: {loadedCrimeCount}, HasParoleRecord: {hasParoleRecord}, LSI: {rapSheet.LSILevel}");
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Warn($"[RAP SHEET] Error loading RapSheet data for {playerName}: {ex.Message}");
+                    ModLogger.Warn($"[RAP SHEET] Stack trace: {ex.StackTrace}");
+                    // If loading failed, call OnLoaded() via ISaveable interface to ensure initialization
+                    try
+                    {
+                        Behind_Bars.Utils.Saveable.ISaveable saveableInterface = rapSheet;
+                        saveableInterface.OnLoaded();
+                    }
+                    catch (Exception onLoadedEx)
+                    {
+                        ModLogger.Error($"[RAP SHEET] Error calling OnLoaded() after load failure: {onLoadedEx.Message}");
+                    }
+                }
+            }
+            else if (!shouldLoadFromSave)
+            {
+                // No save data - this is a new RapSheet, OnLoaded() was already called in constructor
+                ModLogger.Debug($"[RAP SHEET] No save data found for {playerName} - creating new RapSheet");
+            }
+            
+            int crimeCount = rapSheet.CrimesCommited?.Count ?? 0;
+            bool hasCurrentParole = rapSheet.CurrentParoleRecord != null;
+            ModLogger.Debug($"[RAP SHEET] RapSheet final state for {playerName} - Crimes: {crimeCount}, HasCurrentParole: {hasCurrentParole}, LSI: {rapSheet.LSILevel}");
 
-            // Cache the rap sheet
-            _rapSheetCache[player] = rapSheet;
-            ModLogger.Debug($"RapSheet cached for {player.name}");
+            // Cache the instance to prevent repeated creation
+            _rapSheetCache[playerName] = rapSheet;
 
             return rapSheet;
         }
 
         /// <summary>
-        /// Invalidate the cache for a specific player (e.g., after saving changes)
+        /// Mark rap sheet data as changed - game's save system will handle saving automatically
         /// </summary>
-        public void InvalidateCache(Player player)
+        public void MarkRapSheetChanged(Player player)
         {
-            if (player != null && _rapSheetCache.ContainsKey(player))
+            if (player == null)
+                return;
+
+            // Get the rap sheet - uses cached instance if available
+            var rapSheet = GetRapSheet(player);
+            if (rapSheet != null)
             {
-                _rapSheetCache.Remove(player);
-                ModLogger.Debug($"RapSheet cache invalidated for {player.name}");
+                // Mark as changed - game's save system will save it automatically
+                rapSheet.MarkChanged();
+                ModLogger.Debug($"[RAP SHEET] Marked RapSheet as changed for {player.name}");
             }
         }
 
         /// <summary>
-        /// Clear all cached rap sheets
+        /// Clear the cache for a specific player (useful when player is removed or save changes).
+        /// </summary>
+        public void ClearCacheForPlayer(Player player)
+        {
+            if (player == null)
+                return;
+
+            string playerName = player.name;
+            if (_rapSheetCache.Remove(playerName))
+            {
+                ModLogger.Debug($"[RAP SHEET] Cleared cache for {playerName}");
+            }
+        }
+
+        /// <summary>
+        /// Clear all cached RapSheet instances (useful when save changes).
         /// </summary>
         public void ClearCache()
         {
+            int count = _rapSheetCache.Count;
             _rapSheetCache.Clear();
-            ModLogger.Info("RapSheet cache cleared");
+            ModLogger.Debug($"[RAP SHEET] Cleared all cached RapSheet instances ({count} removed)");
         }
 
         /// <summary>
-        /// Save a rap sheet and optionally invalidate cache
+        /// Gets all cached RapSheet instances. Used by the save system to save all RapSheets.
         /// </summary>
-        public bool SaveRapSheet(Player player, bool invalidateCache = false)
+        /// <returns>Collection of all cached RapSheet instances.</returns>
+        public IEnumerable<RapSheet> GetAllRapSheets()
         {
-            var rapSheet = GetRapSheet(player);
-            if (rapSheet == null)
-            {
-                return false;
-            }
-
-            bool success = rapSheet.SaveRapSheet();
-            
-            if (success && invalidateCache)
-            {
-                InvalidateCache(player);
-            }
-
-            return success;
+            return _rapSheetCache.Values;
         }
     }
 }

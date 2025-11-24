@@ -223,8 +223,8 @@ namespace Behind_Bars.Systems.Jail
                     holdingCellDoor1 = holdingCell1.Find("HoldingDoorHolder[0]");
             }
 
-            ModLogger.Info($"Holding Cell Door 0: {(holdingCellDoor0 != null ? "✓ Found" : "✗ Missing")}");
-            ModLogger.Info($"Holding Cell Door 1: {(holdingCellDoor1 != null ? "✓ Found" : "✗ Missing")}");
+            ModLogger.Debug($"Holding Cell Door 0: {(holdingCellDoor0 != null ? "✓ Found" : "✗ Missing")}");
+            ModLogger.Debug($"Holding Cell Door 1: {(holdingCellDoor1 != null ? "✓ Found" : "✗ Missing")}");
         }
 
         void UpdateDoorAnimations()
@@ -307,7 +307,7 @@ namespace Behind_Bars.Systems.Jail
             if (booking.isInitialized)
             {
                 booking.InstantiateDoors(steelDoorPrefab ?? jailDoorPrefab);
-                ModLogger.Info("✓ Setup booking area doors using steelDoorPrefab");
+                ModLogger.Debug("✓ Setup booking area doors using steelDoorPrefab");
             }
             else
             {
@@ -318,7 +318,7 @@ namespace Behind_Bars.Systems.Jail
             if (jailController?.exitScanner?.isInitialized == true)
             {
                 jailController.exitScanner.InstantiateDoors(steelDoorPrefab ?? jailDoorPrefab);
-                ModLogger.Info("✓ Setup exit scanner area doors using steelDoorPrefab");
+                ModLogger.Debug("✓ Setup exit scanner area doors using steelDoorPrefab");
             }
             else
             {
@@ -350,7 +350,7 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Warn($"No door hinge found for {door.doorName} - door will not animate");
             }
 
-            ModLogger.Info($"✓ Instantiated door: {door.doorName}");
+            ModLogger.Debug($"✓ Instantiated door: {door.doorName}");
         }
 
         Transform FindDoorHinge(GameObject doorInstance)

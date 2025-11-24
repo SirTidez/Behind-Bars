@@ -18,7 +18,7 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         public static void AttachJailNavMesh(Transform jailRoot)
         {
-            ModLogger.Info("Attaching NavMesh data from cached asset bundle...");
+            ModLogger.Debug("Attaching NavMesh data from cached asset bundle...");
             
             try
             {
@@ -61,7 +61,7 @@ namespace Behind_Bars.Systems.NPCs
                         if (navMeshData != null)
                         {
                             foundName = name;
-                            ModLogger.Info($"Found NavMesh data with name: {name}");
+                            ModLogger.Debug($"Found NavMesh data with name: {name}");
                             break;
                         }
                     }
@@ -77,9 +77,9 @@ namespace Behind_Bars.Systems.NPCs
                     return;
                 }
 
-                ModLogger.Info($"Attempting to add NavMesh data at position {jailRoot.position}, rotation {jailRoot.rotation}");
+                ModLogger.Debug($"Attempting to add NavMesh data at position {jailRoot.position}, rotation {jailRoot.rotation}");
                 _jailNav = NavMesh.AddNavMeshData(navMeshData, jailRoot.position, jailRoot.rotation);
-                ModLogger.Info($"NavMesh.AddNavMeshData returned: valid={_jailNav.valid}, owner={_jailNav.owner}");
+                ModLogger.Debug($"NavMesh.AddNavMeshData returned: valid={_jailNav.valid}, owner={_jailNav.owner}");
                 
                 // Verify the NavMesh is working
                 VerifyNavMeshAttachment(jailRoot);
@@ -129,7 +129,7 @@ namespace Behind_Bars.Systems.NPCs
 
             if (validPositions > 0)
             {
-                ModLogger.Info($"✓ NavMesh verification complete! {validPositions}/{testPositions.Length} test positions valid");
+                ModLogger.Debug($"✓ NavMesh verification complete! {validPositions}/{testPositions.Length} test positions valid");
             }
             else
             {

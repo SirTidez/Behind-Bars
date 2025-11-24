@@ -2,10 +2,16 @@ using UnityEngine;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.CrimeDetection;
 using Behind_Bars.Harmony;
+
+
 #if !MONO
 using Il2CppTMPro;
+using Il2CppScheduleOne.DevUtilities;
+using Il2CppScheduleOne.UI;
 #else
 using TMPro;
+using ScheduleOne.DevUtilities;
+using ScheduleOne.UI;
 #endif
 
 namespace Behind_Bars.UI
@@ -28,7 +34,11 @@ namespace Behind_Bars.UI
         
         public void Start()
         {
-            CreateWantedLevelUI();
+            // Only create if not already initialized (allows manual initialization)
+            if (!_isInitialized)
+            {
+                CreateWantedLevelUI();
+            }
         }
         
         public void Update()
@@ -44,15 +54,68 @@ namespace Behind_Bars.UI
             }
         }
         
-        private void CreateWantedLevelUI()
+        /// <summary>
+        /// Create the wanted level UI elements (can be called manually for IL2CPP compatibility)
+        /// </summary>
+        public void CreateWantedLevelUI()
         {
+            if (_isInitialized)
+            {
+                ModLogger.Debug("WantedLevelUI already initialized, skipping creation");
+                return;
+            }
+            
             try
             {
-                // Find the main Canvas
-                Canvas mainCanvas = FindObjectOfType<Canvas>();
+                ModLogger.Debug("Creating WantedLevelUI...");
+                
+                // Find canvas using IL2CPP-safe methods (similar to notification system)
+                Canvas mainCanvas = null;
+                
+#if !MONO
+                // IL2CPP-safe canvas finding
+                try
+                {
+                    var hudInstance = Singleton<Il2CppScheduleOne.UI.HUD>.Instance;
+                    if (hudInstance != null && hudInstance.Pointer != System.IntPtr.Zero)
+                    {
+                        mainCanvas = hudInstance.canvas;
+                    }
+                }
+                catch (System.Exception)
+                {
+                    // HUD singleton not available
+                }
+                
                 if (mainCanvas == null)
                 {
-                    ModLogger.Error("Could not find main Canvas for WantedLevelUI");
+                    // Fallback: find any canvas in scene using IL2CPP-safe method
+                    var allCanvases = UnityEngine.Object.FindObjectsOfType<Canvas>();
+                    if (allCanvases != null && allCanvases.Length > 0)
+                    {
+                        mainCanvas = allCanvases[0];
+                    }
+                }
+#else
+                // Mono version
+                mainCanvas = Singleton<HUD>.Instance?.canvas;
+                if (mainCanvas == null)
+                {
+                    // Fallback: find any canvas in scene
+                    mainCanvas = UnityEngine.Object.FindObjectOfType<Canvas>();
+                }
+#endif
+                
+                if (mainCanvas == null)
+                {
+                    ModLogger.Error("Could not find main Canvas for WantedLevelUI - creating overlay canvas");
+                    // Create our own canvas as last resort (similar to notification system)
+                    mainCanvas = FindOrCreateCanvas();
+                }
+                
+                if (mainCanvas == null)
+                {
+                    ModLogger.Error("Failed to find or create canvas for WantedLevelUI");
                     return;
                 }
                 
@@ -106,11 +169,15 @@ namespace Behind_Bars.UI
                 _crimeCountText.alignment = TextAlignmentOptions.Center;
                 
                 _isInitialized = true;
-                ModLogger.Info("WantedLevelUI created successfully");
+                ModLogger.Debug($"✓ WantedLevelUI created successfully on canvas '{mainCanvas.name}'");
+                
+                // Do an initial update to show current wanted level
+                UpdateWantedDisplay();
             }
             catch (System.Exception ex)
             {
                 ModLogger.Error($"Error creating WantedLevelUI: {ex.Message}");
+                ModLogger.Error($"Stack trace: {ex.StackTrace}");
             }
         }
         
@@ -118,6 +185,11 @@ namespace Behind_Bars.UI
         {
             try
             {
+                if (!_isInitialized || _wantedPanel == null)
+                {
+                    return;
+                }
+                
                 var crimeDetectionSystem = HarmonyPatches.GetCrimeDetectionSystem();
                 if (crimeDetectionSystem == null)
                 {
@@ -137,7 +209,7 @@ namespace Behind_Bars.UI
                 }
                 
                 // Show panel only if player has crimes or wanted level
-                bool shouldShow = wantedLevel > 0.1f || totalCrimes > 0;
+                bool shouldShow = wantedLevel > 0.1f;
                 
                 if (_wantedPanel != null)
                     _wantedPanel.SetActive(shouldShow);
@@ -214,6 +286,34 @@ namespace Behind_Bars.UI
             }
             
             ModLogger.Info("=====================");
+        }
+        
+        /// <summary>
+        /// Find existing overlay canvas or create a new one for UI
+        /// </summary>
+        private Canvas FindOrCreateCanvas()
+        {
+            ModLogger.Debug("Creating dedicated overlay canvas for WantedLevelUI");
+            
+            var canvasGO = new GameObject("WantedLevel Overlay Canvas");
+            var overlayCanvas = canvasGO.AddComponent<Canvas>();
+            overlayCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
+            overlayCanvas.sortingOrder = 999; // High sorting order to appear on top
+            
+            // Add CanvasScaler for proper scaling
+            var scaler = canvasGO.AddComponent<UnityEngine.UI.CanvasScaler>();
+            scaler.uiScaleMode = UnityEngine.UI.CanvasScaler.ScaleMode.ScaleWithScreenSize;
+            scaler.referenceResolution = new Vector2(1920, 1080);
+            scaler.matchWidthOrHeight = 0.5f; // Balance between width and height matching
+            
+            // Add GraphicRaycaster for UI interaction
+            canvasGO.AddComponent<UnityEngine.UI.GraphicRaycaster>();
+            
+            // Don't destroy on load so it persists across scenes
+            UnityEngine.Object.DontDestroyOnLoad(canvasGO);
+            
+            ModLogger.Debug("Created WantedLevel overlay canvas");
+            return overlayCanvas;
         }
     }
 }

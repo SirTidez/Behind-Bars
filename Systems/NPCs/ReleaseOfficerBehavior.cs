@@ -131,7 +131,7 @@ namespace Behind_Bars.Systems.NPCs
             {
                 securityDoor.OnDoorOperationComplete += HandleSecurityDoorOperationComplete;
                 securityDoor.OnDoorOperationFailed += HandleSecurityDoorOperationFailed;
-                ModLogger.Info($"ReleaseOfficer {badgeNumber}: Subscribed to SecurityDoor events");
+                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Subscribed to SecurityDoor events");
             }
             else
             {
@@ -145,14 +145,14 @@ namespace Behind_Bars.Systems.NPCs
             if (currentReleasee == null && currentReleaseState == ReleaseState.Idle)
             {
                 ChangeReleaseState(ReleaseState.Idle);
-                ModLogger.Info($"ReleaseOfficer {badgeNumber}: Set to Idle state during initialization");
+                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Set to Idle state during initialization");
             }
             else
             {
-                ModLogger.Info($"ReleaseOfficer {badgeNumber}: Preserving active state {currentReleaseState} during initialization");
+                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Preserving active state {currentReleaseState} during initialization");
             }
 
-            ModLogger.Info($"ReleaseOfficer {badgeNumber} initialized and registered");
+            ModLogger.Debug($"ReleaseOfficer {badgeNumber} initialized and registered");
         }
 
         private void EnsureSecurityDoorComponent()
@@ -163,11 +163,11 @@ namespace Behind_Bars.Systems.NPCs
             {
                 // Add SecurityDoorBehavior component to this ReleaseOfficer
                 var securityDoor = gameObject.AddComponent<SecurityDoorBehavior>();
-                ModLogger.Info($"ReleaseOfficer {badgeNumber}: Added SecurityDoorBehavior component for door operations");
+                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Added SecurityDoorBehavior component for door operations");
             }
             else
             {
-                ModLogger.Info($"ReleaseOfficer {badgeNumber}: SecurityDoorBehavior component already attached");
+                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: SecurityDoorBehavior component already attached");
             }
         }
 
@@ -178,7 +178,7 @@ namespace Behind_Bars.Systems.NPCs
             if (jailController?.booking?.guardSpawns != null && jailController.booking.guardSpawns.Count > 1)
             {
                 guardPost = jailController.booking.guardSpawns[1]; // Use second guard spawn for release officers
-                ModLogger.Info($"ReleaseOfficer {badgeNumber}: Found guard post at {guardPost.position}");
+                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Found guard post at {guardPost.position}");
             }
             else
             {
@@ -241,7 +241,7 @@ namespace Behind_Bars.Systems.NPCs
                     new[] { "You're released.", "Freedom awaits.", "Your time is served." });
 
                 dialogueController.UpdateGreetingForState("Idle");
-                ModLogger.Info($"ReleaseOfficer {badgeNumber}: Dialogue system configured");
+                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Dialogue system configured");
             }
             catch (Exception e)
             {
@@ -403,29 +403,29 @@ namespace Behind_Bars.Systems.NPCs
                 return;
             }
 
-            ModLogger.Info($"ReleaseOfficer {badgeNumber}: Destination reached at {destination} during state {currentReleaseState}");
+            ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Destination reached at {destination} during state {currentReleaseState}");
 
             // Handle state transitions based on current state
             switch (currentReleaseState)
             {
                 case ReleaseState.MovingToPlayer:
                     // We've reached the cell door, now open it
-                    ModLogger.Info($"ReleaseOfficer {badgeNumber}: Arrived at cell door, opening cell");
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Arrived at cell door, opening cell");
                     ChangeReleaseState(ReleaseState.OpeningCell);
                     break;
 
                 case ReleaseState.EscortingToStorage:
-                    ModLogger.Info($"ReleaseOfficer {badgeNumber}: Arrived at storage area");
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Arrived at storage area");
                     ChangeReleaseState(ReleaseState.WaitingAtStorage);
                     break;
 
                 case ReleaseState.EscortingToExitScanner:
-                    ModLogger.Info($"ReleaseOfficer {badgeNumber}: Arrived at exit scanner");
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Arrived at exit scanner");
                     ChangeReleaseState(ReleaseState.WaitingForExitScan);
                     break;
 
                 case ReleaseState.ReturningToPost:
-                    ModLogger.Info($"ReleaseOfficer {badgeNumber}: Returned to guard post");
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Returned to guard post");
                     ChangeReleaseState(ReleaseState.Idle);
                     break;
 
@@ -522,7 +522,7 @@ namespace Behind_Bars.Systems.NPCs
             // If player has moved significantly from last known position, update our navigation
             if (Vector3.Distance(currentPlayerPos, lastKnownPlayerPosition) > 3f)
             {
-                ModLogger.Info($"ReleaseOfficer {badgeNumber}: Player moved, updating navigation from {lastKnownPlayerPosition} to {currentPlayerPos}");
+                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Player moved, updating navigation from {lastKnownPlayerPosition} to {currentPlayerPos}");
                 lastKnownPlayerPosition = currentPlayerPos;
 
                 // If we're moving to player, update destination
@@ -551,13 +551,13 @@ namespace Behind_Bars.Systems.NPCs
             stateStartTime = Time.time;
 
             OnStateChanged?.Invoke(newState);
-            ModLogger.Info($"ReleaseOfficer {badgeNumber}: {oldState} → {newState}");
+            ModLogger.Debug($"ReleaseOfficer {badgeNumber}: {oldState} → {newState}");
 
             // Notify ReleaseManager of status updates for key states
             if (currentReleasee != null && ShouldNotifyStatusUpdate(newState))
             {
                 OnStatusUpdate?.Invoke(currentReleasee, newState);
-                ModLogger.Info($"ReleaseOfficer {badgeNumber}: Notified ReleaseManager of status update: {newState}");
+                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Notified ReleaseManager of status update: {newState}");
             }
 
             // Update dialogue state
@@ -688,18 +688,18 @@ namespace Behind_Bars.Systems.NPCs
 
         private void OnStateEnter(ReleaseState state)
         {
-            ModLogger.Info($"ReleaseOfficer {badgeNumber}: OnStateEnter({state})");
+            ModLogger.Debug($"ReleaseOfficer {badgeNumber}: OnStateEnter({state})");
 
             switch (state)
             {
                 case ReleaseState.Idle:
-                    ModLogger.Info($"ReleaseOfficer {badgeNumber}: Entering Idle state");
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Entering Idle state");
                     ReturnToPost();
                     StartContinuousPlayerLooking();
                     break;
 
                 case ReleaseState.MovingToPlayer:
-                    ModLogger.Info($"ReleaseOfficer {badgeNumber}: Entering MovingToPlayer state");
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Entering MovingToPlayer state");
                     PlayVoiceCommand("On my way to collect the prisoner.", "Fetching");
                     NavigateToPlayer();
                     break;
@@ -802,7 +802,7 @@ namespace Behind_Bars.Systems.NPCs
                     bool doorOpened = jailController.doorController.OpenJailCellDoor(cellNumber);
                     if (doorOpened)
                     {
-                        ModLogger.Info($"ReleaseOfficer {badgeNumber}: Opened cell {cellNumber} door for {currentReleasee.name}");
+                        ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Opened cell {cellNumber} door for {currentReleasee.name}");
                         PlayVoiceCommand("Your release has been processed. Come with me.", "Escorting");
                         ChangeReleaseState(ReleaseState.WaitingForPlayerExitCell);
                     }
@@ -821,7 +821,7 @@ namespace Behind_Bars.Systems.NPCs
             else
             {
                 // Player is not in cell - skip door opening, proceed directly to escort
-                ModLogger.Info($"ReleaseOfficer {badgeNumber}: Player not in cell, proceeding directly to storage escort");
+                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Player not in cell, proceeding directly to storage escort");
                 PlayVoiceCommand("Come with me for release processing.", "Escorting");
                 ChangeReleaseState(ReleaseState.EscortingToStorage);
             }
@@ -875,7 +875,7 @@ namespace Behind_Bars.Systems.NPCs
                         if (!isInCell)
                         {
                             playerDoorClearDetected = true;
-                            ModLogger.Info($"ReleaseOfficer {badgeNumber}: Player has exited cell {cellNumber}");
+                            ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Player has exited cell {cellNumber}");
                             // Add a 2-second delay before proceeding to ensure player is fully clear
                             MelonCoroutines.Start(DelayedCellDoorClose());
                         }
@@ -897,7 +897,7 @@ namespace Behind_Bars.Systems.NPCs
             // Check if player has been teleported out (emergency exit via scanner)
             if (Vector3.Distance(currentReleasee.transform.position, transform.position) > 100f)
             {
-                ModLogger.Info($"ReleaseOfficer {badgeNumber}: Player has been teleported - completing release process");
+                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Player has been teleported - completing release process");
                 ChangeReleaseState(ReleaseState.ReturningToPost);
                 return;
             }
@@ -925,7 +925,7 @@ namespace Behind_Bars.Systems.NPCs
                 // Check if we've reached destination
                 if (distance < DESTINATION_TOLERANCE || (navAgent != null && !navAgent.pathPending && navAgent.remainingDistance < DESTINATION_TOLERANCE))
                 {
-                    ModLogger.Info($"ReleaseOfficer {badgeNumber}: Arrived at exit scanner");
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Arrived at exit scanner");
                     ChangeReleaseState(ReleaseState.WaitingForExitScan);
                     return;
                 }
@@ -1552,7 +1552,7 @@ namespace Behind_Bars.Systems.NPCs
                     int assignedCell = cellAssignmentManager.GetPlayerCellNumber(player);
                     if (assignedCell >= 0)
                     {
-                        ModLogger.Info($"ReleaseOfficer {badgeNumber}: Player {player.name} assigned to cell {assignedCell}");
+                        ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Player {player.name} assigned to cell {assignedCell}");
                         return assignedCell;
                     }
                 }

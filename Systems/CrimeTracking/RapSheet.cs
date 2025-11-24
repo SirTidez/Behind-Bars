@@ -1,5 +1,6 @@
 ﻿using Behind_Bars.Helpers;
 using Behind_Bars.Utils;
+using Behind_Bars.Utils.Saveable;
 using JetBrains.Annotations;
 using System;
 using System.Collections.Generic;
@@ -113,49 +114,172 @@ namespace Behind_Bars.Systems.CrimeTracking
         Severe = 4
     }
 
-    [Serializable]
-    public class RapSheet
+    /// <summary>
+    /// RapSheet - Criminal record for a player.
+    /// Inherits from Saveable to automatically handle persistence via the game's save system.
+    /// </summary>
+    public class RapSheet : Saveable
     {
-        [JsonProperty("inmateID")]
-        public string InmateID;
-        [JsonProperty("fullName")]
-        public string FullName;
-        [JsonProperty("crimesCommited")]
-        public List<CrimeInstance> CrimesCommited;
-        [JsonProperty("currentParoleRecord")]
-        public ParoleRecord CurrentParoleRecord;
-        [JsonProperty("pastParoleRecords")]
-        public List<ParoleRecord> PastParoleRecords;
+        [SaveableField("inmateID")]
+        private string _inmateID;
+
+        [SaveableField("fullName")]
+        private string _fullName;
+
+        [SaveableField("crimesCommited")]
+        private List<CrimeInstance> _crimesCommited;
+
+        [SaveableField("currentParoleRecord")]
+        private ParoleRecord _currentParoleRecord;
+
+        [SaveableField("pastParoleRecords")]
+        private List<ParoleRecord> _pastParoleRecords;
 
         /// <summary>
         /// LSI risk assessment level - determines supervision intensity and search frequency
         /// </summary>
-        [JsonProperty("lsiLevel")]
-        public LSILevel LSILevel = LSILevel.None;
+        [SaveableField("lsiLevel")]
+        private LSILevel _lsiLevel = LSILevel.None;
 
         /// <summary>
         /// Last LSI assessment date - tracks when risk level was last calculated
         /// </summary>
-        [JsonProperty("lastLSIAssessment")]
-        public DateTime LastLSIAssessment = DateTime.MinValue;
+        [SaveableField("lastLSIAssessment")]
+        private DateTime _lastLSIAssessment = DateTime.MinValue;
+
+        // Properties for safe access
+        public string InmateID
+        {
+            get => _inmateID;
+            set
+            {
+                _inmateID = value;
+                MarkChanged();
+            }
+        }
+
+        public string FullName
+        {
+            get => _fullName;
+            set
+            {
+                _fullName = value;
+                MarkChanged();
+            }
+        }
+
+        public List<CrimeInstance> CrimesCommited
+        {
+            get => _crimesCommited ??= new List<CrimeInstance>();
+            set
+            {
+                _crimesCommited = value;
+                MarkChanged();
+            }
+        }
+
+        public ParoleRecord CurrentParoleRecord
+        {
+            get => _currentParoleRecord;
+            set
+            {
+                _currentParoleRecord = value;
+                MarkChanged();
+            }
+        }
+
+        public List<ParoleRecord> PastParoleRecords
+        {
+            get => _pastParoleRecords ??= new List<ParoleRecord>();
+            set
+            {
+                _pastParoleRecords = value;
+                MarkChanged();
+            }
+        }
+
+        public LSILevel LSILevel
+        {
+            get => _lsiLevel;
+            set
+            {
+                _lsiLevel = value;
+                MarkChanged();
+            }
+        }
+
+        public DateTime LastLSIAssessment
+        {
+            get => _lastLSIAssessment;
+            set
+            {
+                _lastLSIAssessment = value;
+                MarkChanged();
+            }
+        }
 
         // Non-Serialized fields
         [NonSerialized]
         public Player Player;
 
+        // Saveable implementation
+        protected override string SaveFolderName => $"BehindBars/{_fullName ?? Player?.name ?? "Unknown"}";
+        protected override string SaveFileName => $"RapSheet_{_fullName ?? Player?.name ?? "Unknown"}";
 
-        public RapSheet(Player player)
+        /// <summary>
+        /// Parameterless constructor for deserialization.
+        /// Used by SaveableAutoRegistry and the game's save system.
+        /// Player reference should be set via SetPlayer() after deserialization.
+        /// </summary>
+        public RapSheet() : base()
+        {
+            // Initialize collections
+            _crimesCommited = new List<CrimeInstance>();
+            _pastParoleRecords = new List<ParoleRecord>();
+            
+            // Don't initialize SaveManager registration here - will be done by RapSheetManager
+            // Don't call OnLoaded here - will be called by the save system after loading
+        }
+
+        /// <summary>
+        /// Constructor with player parameter for normal creation.
+        /// </summary>
+        /// <param name="skipOnLoaded">If true, skips calling OnLoaded() - should be used when LoadInternal() will be called afterwards</param>
+        public RapSheet(Player player, bool skipOnLoaded = false) : this()
+        {
+            SetPlayer(player);
+            
+            if (string.IsNullOrEmpty(_inmateID))
+                _inmateID = GenerateInmateID();
+            
+            // Initialize and register with SaveManager
+            InitializeSaveable();
+            
+            // OnLoaded will be called by LoadInternal() after loading data
+            // Only call OnLoaded() here if we're NOT going to load data (new save)
+            if (!skipOnLoaded)
+            {
+                OnLoaded();
+            }
+        }
+
+        /// <summary>
+        /// Set the player reference after deserialization.
+        /// Should be called after loading from save data.
+        /// </summary>
+        public void SetPlayer(Player player)
         {
             this.Player = player;
-            this.FullName = player.name;
+            if (player != null && string.IsNullOrEmpty(_fullName))
+            {
+                _fullName = player.name;
+            }
             
-            // Initialize collections
-            if (CrimesCommited == null)
-                CrimesCommited = new List<CrimeInstance>();
-            if (PastParoleRecords == null)
-                PastParoleRecords = new List<ParoleRecord>();
-            if (string.IsNullOrEmpty(InmateID))
-                InmateID = GenerateInmateID();
+            // Set player reference on ParoleRecord if it exists
+            if (_currentParoleRecord != null)
+            {
+                _currentParoleRecord.SetPlayer(player);
+            }
         }
 
         /// <summary>
@@ -182,18 +306,19 @@ namespace Behind_Bars.Systems.CrimeTracking
                 return false;
             }
 
-            if (CrimesCommited == null)
+            if (_crimesCommited == null)
             {
-                CrimesCommited = new List<CrimeInstance>();
+                _crimesCommited = new List<CrimeInstance>();
             }
 
-            CrimesCommited.Add(crimeInstance);
+            _crimesCommited.Add(crimeInstance);
+            MarkChanged();
             ModLogger.Info($"Added crime to rap sheet: {crimeInstance.Description} (Severity: {crimeInstance.Severity})");
 
             // Always calculate and update LSI when crimes are added
             // This ensures LSI is current and ready for parole assessment
-            bool isOnParole = CurrentParoleRecord != null && CurrentParoleRecord.IsOnParole();
-            ModLogger.Info($"[LSI] Crime added - calculating LSI for {FullName} (OnParole: {isOnParole}, Total Crimes: {CrimesCommited.Count})");
+            bool isOnParole = _currentParoleRecord != null && _currentParoleRecord.IsOnParole();
+            ModLogger.Info($"[LSI] Crime added - calculating LSI for {FullName} (OnParole: {isOnParole}, Total Crimes: {_crimesCommited.Count})");
             UpdateLSILevel();
 
             return true;
@@ -351,33 +476,25 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// </summary>
         public void UpdateLSILevel()
         {
-            LSILevel oldLevel = LSILevel;
+            LSILevel oldLevel = _lsiLevel;
             ModLogger.Info($"[LSI] === Starting LSI Update for {FullName} ===");
             ModLogger.Info($"[LSI] Previous Level: {oldLevel}");
 
-            LSILevel = CalculateLSILevel();
-            LastLSIAssessment = DateTime.Now;
+            _lsiLevel = CalculateLSILevel();
+            _lastLSIAssessment = DateTime.Now;
+            MarkChanged(); // Mark as changed for saving
 
-            if (oldLevel != LSILevel)
+            if (oldLevel != _lsiLevel)
             {
-                ModLogger.Info($"[LSI] ✓ LSI Level Changed: {oldLevel} -> {LSILevel}");
+                ModLogger.Info($"[LSI] ✓ LSI Level Changed: {oldLevel} -> {_lsiLevel}");
             }
             else
             {
-                ModLogger.Info($"[LSI] ✓ LSI Level Unchanged: {LSILevel}");
+                ModLogger.Info($"[LSI] ✓ LSI Level Unchanged: {_lsiLevel}");
             }
 
-            ModLogger.Info($"[LSI] Saving rap sheet with updated LSI...");
-            bool saveSuccess = SaveRapSheet();
-
-            if (saveSuccess)
-            {
-                ModLogger.Info($"[LSI] ✓ Rap sheet saved successfully with LSI: {LSILevel}");
-            }
-            else
-            {
-                ModLogger.Error($"[LSI] ✗ Failed to save rap sheet!");
-            }
+            // Game's save system handles saving automatically - no manual file saving needed
+            ModLogger.Info($"[LSI] LSI updated - game will save automatically");
 
             ModLogger.Info($"[LSI] === LSI Update Complete ===");
         }
@@ -448,6 +565,9 @@ namespace Behind_Bars.Systems.CrimeTracking
 
             if (success)
             {
+                // Mark RapSheet as changed since ParoleRecord was modified
+                MarkChanged();
+                
                 // Perform initial LSI assessment when parole starts
                 ModLogger.Info($"[LSI] Performing initial LSI assessment for {FullName} at parole start");
                 UpdateLSILevel();
@@ -474,6 +594,9 @@ namespace Behind_Bars.Systems.CrimeTracking
 
             if (success)
             {
+                // Mark RapSheet as changed since ParoleRecord was modified
+                MarkChanged();
+                
                 // Update LSI level after violation
                 ModLogger.Info($"[LSI] Updating LSI after parole violation for {FullName}");
                 UpdateLSILevel();
@@ -489,229 +612,177 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// <returns>True if archived successfully, false if no current parole record exists</returns>
         public bool ArchiveCurrentParoleRecord()
         {
-            if (CurrentParoleRecord == null)
+            if (_currentParoleRecord == null)
             {
                 ModLogger.Debug($"No current parole record to archive for {FullName}");
                 return false;
             }
 
             // Ensure PastParoleRecords list exists
-            if (PastParoleRecords == null)
+            if (_pastParoleRecords == null)
             {
-                PastParoleRecords = new List<ParoleRecord>();
+                _pastParoleRecords = new List<ParoleRecord>();
             }
 
             // Add current record to past records
-            PastParoleRecords.Add(CurrentParoleRecord);
-            ModLogger.Info($"Archived parole record for {FullName} - Total past records: {PastParoleRecords.Count}");
+            _pastParoleRecords.Add(_currentParoleRecord);
+            ModLogger.Info($"Archived parole record for {FullName} - Total past records: {_pastParoleRecords.Count}");
 
             // Clear current parole record
-            CurrentParoleRecord = null;
+            _currentParoleRecord = null;
+            MarkChanged(); // Mark as changed for saving
 
             return true;
         }
 
+        #region ParoleRecord Helper Methods
+
+        /// <summary>
+        /// Helper method to start parole on the current parole record.
+        /// Automatically marks the RapSheet as changed.
+        /// </summary>
+        public bool StartParole(float termLengthInGameMinutes)
+        {
+            if (CurrentParoleRecord == null)
+            {
+                CurrentParoleRecord = new ParoleRecord(Player);
+            }
+
+            bool success = CurrentParoleRecord.StartParole(termLengthInGameMinutes);
+            if (success)
+            {
+                MarkChanged();
+            }
+            return success;
+        }
+
+        /// <summary>
+        /// Helper method to end parole on the current parole record.
+        /// Automatically marks the RapSheet as changed.
+        /// </summary>
+        public bool EndParole()
+        {
+            if (CurrentParoleRecord == null)
+            {
+                return false;
+            }
+
+            bool success = CurrentParoleRecord.EndParole();
+            if (success)
+            {
+                MarkChanged();
+            }
+            return success;
+        }
+
+        /// <summary>
+        /// Helper method to pause parole on the current parole record.
+        /// Automatically marks the RapSheet as changed.
+        /// </summary>
+        public bool PauseParole()
+        {
+            if (CurrentParoleRecord == null)
+            {
+                return false;
+            }
+
+            bool success = CurrentParoleRecord.PauseParole();
+            if (success)
+            {
+                MarkChanged();
+            }
+            return success;
+        }
+
+        /// <summary>
+        /// Helper method to resume parole on the current parole record.
+        /// Automatically marks the RapSheet as changed.
+        /// </summary>
+        public bool ResumeParole()
+        {
+            if (CurrentParoleRecord == null)
+            {
+                return false;
+            }
+
+            bool success = CurrentParoleRecord.ResumeParole();
+            if (success)
+            {
+                MarkChanged();
+            }
+            return success;
+        }
+
+        /// <summary>
+        /// Helper method to extend paused parole on the current parole record.
+        /// Automatically marks the RapSheet as changed.
+        /// </summary>
+        public bool ExtendPausedParole(float additionalGameMinutes)
+        {
+            if (CurrentParoleRecord == null)
+            {
+                return false;
+            }
+
+            bool success = CurrentParoleRecord.ExtendPausedParole(additionalGameMinutes);
+            if (success)
+            {
+                MarkChanged();
+            }
+            return success;
+        }
+
         #endregion
 
-        #region File Operations
-        
         /// <summary>
-        /// Loads the rap sheet from file.
+        /// Called after data is loaded from JSON.
+        /// Initializes collections and validates loaded data.
         /// </summary>
-        /// <returns>True if loaded successfully, false otherwise.</returns>
-        public bool LoadRapSheet()
+        protected override void OnLoaded()
         {
-            if (FileUtilities.Instance == null)
+            base.OnLoaded();
+
+            // Initialize collections if null
+            if (_crimesCommited == null)
+                _crimesCommited = new List<CrimeInstance>();
+            
+            if (_pastParoleRecords == null)
+                _pastParoleRecords = new List<ParoleRecord>();
+
+            // Generate InmateID if missing
+            if (string.IsNullOrEmpty(_inmateID))
+                _inmateID = GenerateInmateID();
+
+            // Update FullName from player if available
+            if (Player != null && !string.IsNullOrEmpty(Player.name))
+                _fullName = Player.name;
+
+            // Set Player reference on ParoleRecord objects (they're non-serialized, so need to be restored)
+            if (_currentParoleRecord != null && Player != null)
+                _currentParoleRecord.SetPlayer(Player);
+
+            if (_pastParoleRecords != null && Player != null)
             {
-                ModLogger.Warn("Failed to load rap sheet: FileUtilities instance is null!");
-                return false;
+                foreach (var pastRecord in _pastParoleRecords)
+                {
+                    if (pastRecord != null)
+                        pastRecord.SetPlayer(Player);
+                }
             }
 
-            var settings = new JsonSerializerSettings
-            {
-                MissingMemberHandling = MissingMemberHandling.Ignore,
-                NullValueHandling = NullValueHandling.Ignore,
-                Formatting = Formatting.Indented,
-                ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
-                MaxDepth = 10,
-                Converters = new List<JsonConverter> { new Vector3JsonConverter() }
-            };
-
-            // Try to load from disk first if not in cache
-            string fileName = $"{Player.name}-rapsheet.json";
-            if (!FileUtilities.IsFileLoaded(fileName))
-            {
-                FileUtilities.LoadFileFromDisk(fileName);
-            }
-
-            if (!FileUtilities.AllLoadedFiles().TryGetValue(fileName, out string json))
-            {
-                ModLogger.Info($"No existing rap sheet found for player {Player.name}.");
-                return false;
-            }
-
-            try
-            {
-                // Temporarily store CurrentParoleRecord to handle it separately
-                ParoleRecord existingParoleRecord = CurrentParoleRecord;
-                CurrentParoleRecord = null; // Clear it to avoid deserialization issues
-
-                // Deserialize the JSON into the RapSheet object (without CurrentParoleRecord)
-                JsonConvert.PopulateObject(json, this, settings);
-
-                // Handle CurrentParoleRecord deserialization separately
-                // Parse JSON to check if CurrentParoleRecord exists
-                try
-                {
-                    var jsonObject = Newtonsoft.Json.Linq.JObject.Parse(json);
-                    if (jsonObject["currentParoleRecord"] != null)
-                    {
-                        // Extract the CurrentParoleRecord JSON
-                        var paroleRecordJson = jsonObject["currentParoleRecord"].ToString();
-                        var paroleSettings = new JsonSerializerSettings
-                        {
-                            MissingMemberHandling = MissingMemberHandling.Ignore,
-                            NullValueHandling = NullValueHandling.Ignore
-                        };
-                        
-                        // Deserialize using parameterless constructor (for JSON deserialization)
-                        CurrentParoleRecord = JsonConvert.DeserializeObject<ParoleRecord>(paroleRecordJson, paroleSettings);
-                        
-                        // Set the player reference after deserialization
-                        if (CurrentParoleRecord != null)
-                        {
-                            CurrentParoleRecord.SetPlayer(Player);
-                            ModLogger.Debug($"Successfully loaded CurrentParoleRecord from rap sheet JSON for {Player.name}");
-                        }
-                    }
-                    else
-                    {
-                        // No CurrentParoleRecord in JSON - create new one (it will load from its own file)
-                        CurrentParoleRecord = new ParoleRecord(Player);
-                    }
-                }
-                catch (Exception paroleEx)
-                {
-                    ModLogger.Warn($"Failed to deserialize CurrentParoleRecord from rap sheet JSON for {Player.name}: {paroleEx.Message}. Will use separate file if available.");
-                    // If deserialization fails, create a new ParoleRecord (it will load from its own file)
-                    try
-                    {
-                        CurrentParoleRecord = new ParoleRecord(Player);
-                    }
-                    catch (Exception createEx)
-                    {
-                        ModLogger.Error($"Failed to create ParoleRecord for {Player.name}: {createEx.Message}");
-                        CurrentParoleRecord = null;
-                    }
-                }
-
-                // Ensure collections are initialized
-                if (CrimesCommited == null)
-                    CrimesCommited = new List<CrimeInstance>();
-                if (PastParoleRecords == null)
-                    PastParoleRecords = new List<ParoleRecord>();
-
-                ModLogger.Info($"Rap sheet loaded for {Player.name}: {GetCrimeCount()} crimes, {PastParoleRecords.Count} past parole records");
-                ModLogger.Info($"[LSI] Loaded LSI data - Level: {LSILevel}, Last Assessment: {LastLSIAssessment}");
-                return true;
-            }
-            catch (Exception ex)
-            {
-                // Log detailed error information including inner exceptions
-                string errorDetails = $"Error deserializing rap sheet for {Player.name}: {ex.GetType().Name} - {ex.Message}";
-                
-                if (ex.InnerException != null)
-                {
-                    errorDetails += $"\n  Inner Exception: {ex.InnerException.GetType().Name} - {ex.InnerException.Message}";
-                    if (ex.InnerException.StackTrace != null)
-                    {
-                        // Limit stack trace to first few lines to avoid log spam
-                        string[] stackLines = ex.InnerException.StackTrace.Split('\n');
-                        string shortStackTrace = string.Join("\n  ", stackLines.Take(5));
-                        errorDetails += $"\n  Inner Stack Trace (first 5 lines):\n  {shortStackTrace}";
-                    }
-                }
-                
-                if (ex.StackTrace != null)
-                {
-                    // Limit stack trace to first few lines
-                    string[] stackLines = ex.StackTrace.Split('\n');
-                    string shortStackTrace = string.Join("\n  ", stackLines.Take(5));
-                    errorDetails += $"\n  Stack Trace (first 5 lines):\n  {shortStackTrace}";
-                }
-
-                // Log JSON snippet for debugging (first 500 chars)
-                if (!string.IsNullOrEmpty(json) && json.Length > 0)
-                {
-                    string jsonPreview = json.Length > 500 ? json.Substring(0, 500) + "..." : json;
-                    errorDetails += $"\n  JSON Preview (first 500 chars): {jsonPreview}";
-                }
-
-                ModLogger.Error(errorDetails);
-                
-                // Try to recover by initializing empty collections
-                try
-                {
-                    if (CrimesCommited == null)
-                        CrimesCommited = new List<CrimeInstance>();
-                    if (PastParoleRecords == null)
-                        PastParoleRecords = new List<ParoleRecord>();
-                    ModLogger.Info($"Initialized empty collections for {Player.name} after deserialization error");
-                }
-                catch (Exception recoveryEx)
-                {
-                    ModLogger.Error($"Failed to recover from deserialization error: {recoveryEx.Message}");
-                }
-                
-                return false;
-            }
+            ModLogger.Debug($"[SAVEABLE] RapSheet loaded for {_fullName} - Crimes: {_crimesCommited.Count}, LSI: {_lsiLevel}");
         }
-        
+
         /// <summary>
-        /// Saves the rap sheet to file.
+        /// Called before data is saved to JSON.
+        /// Performs any cleanup or finalization needed before saving.
         /// </summary>
-        /// <returns>True if saved successfully, false otherwise.</returns>
-        public bool SaveRapSheet()
+        protected override void OnSaved()
         {
-            if (FileUtilities.Instance == null)
-            {
-                ModLogger.Warn("Failed to save rap sheet: FileUtilities instance is null!");
-                return false;
-            }
-
-            try
-            {
-                var settings = new JsonSerializerSettings
-                {
-                    MissingMemberHandling = MissingMemberHandling.Ignore,
-                    NullValueHandling = NullValueHandling.Ignore,
-                    Formatting = Formatting.Indented,
-                    ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
-                    MaxDepth = 10,
-                    Converters = new List<JsonConverter> { new Vector3JsonConverter() }
-                };
-
-                string fileName = $"{Player.name}-rapsheet.json";
-
-                ModLogger.Debug($"[LSI] Serializing rap sheet - Current LSI: {LSILevel}, Assessment Date: {LastLSIAssessment}");
-                string jsonData = JsonConvert.SerializeObject(this, settings);
-
-                bool success = FileUtilities.AddOrUpdateFile(fileName, jsonData);
-
-                if (success)
-                {
-                    ModLogger.Info($"Rap sheet saved for {Player.name}: {GetCrimeCount()} crimes, {PastParoleRecords?.Count ?? 0} past parole records, LSI: {LSILevel}");
-                }
-
-                return success;
-            }
-            catch (Exception ex)
-            {
-                ModLogger.Error($"Error serializing rap sheet: {ex.Message}");
-                return false;
-            }
+            base.OnSaved();
+            // No cleanup needed - data is already in a saveable state
         }
-        
+
         #endregion
     }
 }

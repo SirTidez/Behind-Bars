@@ -54,12 +54,12 @@ namespace Behind_Bars.Systems.Jail
             if (gameObject.name != "InventoryPickup")
             {
                 gameObject.name = "InventoryPickup";
-                ModLogger.Info("Renamed GameObject to 'InventoryPickup' to avoid conflicts with JailInventoryPickup");
+                ModLogger.Debug("Renamed GameObject to 'InventoryPickup' to avoid conflicts with JailInventoryPickup");
             }
 
             // Set up InteractableObject component for IL2CPP compatibility
             SetupInteractableComponent();
-            ModLogger.Info("InventoryPickupStation interaction setup completed");
+            ModLogger.Debug("InventoryPickupStation interaction setup completed");
 
             // Find storage location if not assigned
             if (storageLocation == null)
@@ -72,7 +72,7 @@ namespace Behind_Bars.Systems.Jail
                     storage.transform.SetParent(transform);
                     storage.transform.localPosition = Vector3.zero;
                     storageLocation = storage.transform;
-                    ModLogger.Info("Created default StorageLocation for personal belongings");
+                    ModLogger.Debug("Created default StorageLocation for personal belongings");
                 }
             }
 
@@ -80,7 +80,7 @@ namespace Behind_Bars.Systems.Jail
             Transform possesionCubby = transform.Find("PossesionCubby");
             if (possesionCubby != null)
             {
-                ModLogger.Info("Found PossesionCubby component in InventoryPickup station");
+                ModLogger.Debug("Found PossesionCubby component in InventoryPickup station");
             }
         }
         
@@ -91,11 +91,11 @@ namespace Behind_Bars.Systems.Jail
             if (interactableObject == null)
             {
                 interactableObject = gameObject.AddComponent<InteractableObject>();
-                ModLogger.Info("Added InteractableObject component to InventoryPickupStation");
+                ModLogger.Debug("Added InteractableObject component to InventoryPickupStation");
             }
             else
             {
-                ModLogger.Info("Found existing InteractableObject component on InventoryPickupStation");
+                ModLogger.Debug("Found existing InteractableObject component on InventoryPickupStation");
             }
             
             // Configure the interaction
@@ -115,7 +115,7 @@ namespace Behind_Bars.Systems.Jail
             interactableObject.onInteractStart.AddListener(OnInteractStart);
 #endif
             
-            ModLogger.Info("InteractableObject component configured with event listeners");
+            ModLogger.Debug("InteractableObject component configured with event listeners");
         }
 
         /// <summary>
@@ -128,11 +128,11 @@ namespace Behind_Bars.Systems.Jail
             if (storageEntity == null)
             {
                 storageEntity = gameObject.AddComponent<PrisonStorageEntity>();
-                ModLogger.Info("Added PrisonStorageEntity component to InventoryPickupStation");
+                ModLogger.Debug("Added PrisonStorageEntity component to InventoryPickupStation");
             }
             else
             {
-                ModLogger.Info("Found existing PrisonStorageEntity component");
+                ModLogger.Debug("Found existing PrisonStorageEntity component");
             }
 
             // DO NOT add StorageEntityInteractable - it conflicts with our custom InteractableObject
@@ -179,7 +179,7 @@ namespace Behind_Bars.Systems.Jail
             {
                 ModLogger.Info($"Player {Player.Local.name} interacting with InventoryPickupStation");
 
-                // Show notification about items (but don't block if no items - player can still change clothes)
+                // Show notification about items (block if no items, only change clothes)
                 if (legalItems == null || legalItems.Count == 0)
                 {
                     if (BehindBarsUIManager.Instance != null)
@@ -188,6 +188,8 @@ namespace Behind_Bars.Systems.Jail
                             "No personal items in storage - you can still change clothes",
                             NotificationType.Instruction
                         );
+                        RestorePlayerClothing(Player.Local);
+                        return;
                     }
                     ModLogger.Info("No items in storage, but allowing access for clothing change");
                 }
@@ -196,8 +198,11 @@ namespace Behind_Bars.Systems.Jail
                 if (storageEntity != null)
                 {
                     // Unlock cursor BEFORE opening storage (prevents cursor lock issues)
-                    UnityEngine.Cursor.lockState = CursorLockMode.None;
-                    UnityEngine.Cursor.visible = true;
+                    //UnityEngine.Cursor.lockState = CursorLockMode.None;
+                    //UnityEngine.Cursor.visible = true;
+                    var playerCamera = PlayerSingleton<PlayerCamera>.Instance;
+                    playerCamera.FreeMouse();
+                    Singleton<HUD>.Instance.SetCrosshairVisible(false);
 
                     try
                     {

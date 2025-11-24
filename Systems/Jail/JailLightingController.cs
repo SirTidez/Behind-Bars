@@ -163,7 +163,7 @@ namespace Behind_Bars.Systems.Jail
                 return;
             }
 
-            ModLogger.Info($"Found Lights parent, discovering areas using exact structure...");
+            ModLogger.Debug($"Found Lights parent, discovering areas using exact structure...");
 
             // Use the EXACT structure from the hierarchy provided
             string[] areaNames = { "Booking", "MainRec", "Phones", "Kitchen", "Laundry" };
@@ -194,7 +194,7 @@ namespace Behind_Bars.Systems.Jail
                         }
 
                         areaLights.Add(areaLighting);
-                        ModLogger.Info($"✓ Registered {areaName}: {lightsInArea.Length} lights");
+                        ModLogger.Debug($"✓ Registered {areaName}: {lightsInArea.Length} lights");
                     }
                     else
                     {
@@ -212,7 +212,7 @@ namespace Behind_Bars.Systems.Jail
             {
                 totalLights += area.lights.Count;
             }
-            ModLogger.Info($"✓ Lighting discovery complete: {areaLights.Count} areas, {totalLights} total lights");
+            ModLogger.Debug($"✓ Lighting discovery complete: {areaLights.Count} areas, {totalLights} total lights");
         }
 
         void UpdateLightingLOD()
@@ -326,10 +326,10 @@ namespace Behind_Bars.Systems.Jail
                 return;
             }
 
-            ModLogger.Info($"Searching for emissive material containing name: '{emissiveMaterialName}'");
+            ModLogger.Debug($"Searching for emissive material containing name: '{emissiveMaterialName}'");
 
             Renderer[] renderers = GetComponentsInChildren<Renderer>();
-            ModLogger.Info($"Found {renderers.Length} renderers in jail hierarchy");
+            ModLogger.Debug($"Found {renderers.Length} renderers in jail hierarchy");
 
             int totalMaterials = 0;
             List<string> allMaterialNames = new List<string>();
@@ -350,7 +350,7 @@ namespace Behind_Bars.Systems.Jail
                                 if (!allEmissiveMaterials.Contains(material))
                                 {
                                     allEmissiveMaterials.Add(material);
-                                    ModLogger.Info($"✓ Found emissive material: '{material.name}' on renderer: {renderer.name}");
+                                    ModLogger.Debug($"✓ Found emissive material: '{material.name}' on renderer: {renderer.name}");
 
                                     TestEmissiveMaterialProperties(material);
 
@@ -367,7 +367,7 @@ namespace Behind_Bars.Systems.Jail
 
             if (allEmissiveMaterials.Count > 0)
             {
-                ModLogger.Info($"✓ Found {allEmissiveMaterials.Count} emissive material instances total");
+                ModLogger.Debug($"✓ Found {allEmissiveMaterials.Count} emissive material instances total");
             }
 
             if (allEmissiveMaterials.Count == 0)
@@ -375,14 +375,14 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Warn($"⚠️ Emissive material containing '{emissiveMaterialName}' not found in jail hierarchy");
             }
 
-            ModLogger.Info($"Searched {totalMaterials} materials across {renderers.Length} renderers");
+            ModLogger.Debug($"Searched {totalMaterials} materials across {renderers.Length} renderers");
 
             if (allMaterialNames.Count > 0)
             {
-                ModLogger.Info("First 10 materials found:");
+                ModLogger.Debug("First 10 materials found:");
                 for (int i = 0; i < System.Math.Min(10, allMaterialNames.Count); i++)
                 {
-                    ModLogger.Info($"  [{i}]: {allMaterialNames[i]}");
+                    ModLogger.Debug($"  [{i}]: {allMaterialNames[i]}");
                 }
             }
         }
@@ -395,12 +395,12 @@ namespace Behind_Bars.Systems.Jail
             bool hasEmission = material.HasProperty("_Emission");
             bool hasEmissiveKeyword = material.IsKeywordEnabled("_EMISSION");
 
-            ModLogger.Info($"Material properties: _EmissionColor={hasEmissionColor}, _Emission={hasEmission}, _EMISSION keyword={hasEmissiveKeyword}");
+            ModLogger.Debug($"Material properties: _EmissionColor={hasEmissionColor}, _Emission={hasEmission}, _EMISSION keyword={hasEmissiveKeyword}");
 
             if (hasEmissionColor)
             {
                 Color currentEmission = material.GetColor("_EmissionColor");
-                ModLogger.Info($"Current _EmissionColor: {currentEmission}");
+                ModLogger.Debug($"Current _EmissionColor: {currentEmission}");
             }
 
             if (hasEmission)

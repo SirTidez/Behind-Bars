@@ -91,7 +91,7 @@ namespace Behind_Bars.Systems.Jail
 
             // Set up InteractableObject component for IL2CPP compatibility
             SetupInteractableComponent();
-            ModLogger.Info("ScannerStation interaction setup completed");
+            ModLogger.Debug("ScannerStation interaction setup completed");
 
             // Setup based on scanner mode
             if (useNewPalmScanner)
@@ -110,7 +110,7 @@ namespace Behind_Bars.Systems.Jail
                 scanTarget = transform.Find("ScanTarget");
                 if (scanTarget != null)
                 {
-                    ModLogger.Info($"Found ScanTarget: {scanTarget.name}");
+                    ModLogger.Debug($"Found ScanTarget: {scanTarget.name}");
                 }
                 else
                 {
@@ -120,21 +120,21 @@ namespace Behind_Bars.Systems.Jail
 
             if (ikTarget == null)
             {
-                ModLogger.Info($"Searching for IkTarget. Current transform: {transform.name}");
+                ModLogger.Debug($"Searching for IkTarget. Current transform: {transform.name}");
 
                 // Debug: List all children of this ScannerStation
-                ModLogger.Info($"ScannerStation children: {string.Join(", ", GetChildNames(transform))}");
+                ModLogger.Debug($"ScannerStation children: {string.Join(", ", GetChildNames(transform))}");
 
                 // Find IkTarget: Booking/ScannerStation/Draggable/IkTarget
                 var draggable = transform.Find("Draggable");
                 if (draggable != null)
                 {
-                    ModLogger.Info($"Found Draggable. Children: {string.Join(", ", GetChildNames(draggable))}");
+                    ModLogger.Debug($"Found Draggable. Children: {string.Join(", ", GetChildNames(draggable))}");
 
                     ikTarget = draggable.Find("IkTarget");
                     if (ikTarget != null)
                     {
-                        ModLogger.Info($"Found IkTarget: {ikTarget.name} at position {ikTarget.position}");
+                        ModLogger.Debug($"Found IkTarget: {ikTarget.name} at position {ikTarget.position}");
                         // Start IkTarget at ScanTarget position
                         ikTarget.position = scanTarget.position + Vector3.up * 0.1f;
 
@@ -165,13 +165,13 @@ namespace Behind_Bars.Systems.Jail
                         if (scanEffect != null)
                         {
                             scanEffect.gameObject.SetActive(false); // Hide initially
-                            ModLogger.Info("Found scan effect image");
+                            ModLogger.Debug("Found scan effect image");
                         }
                     }
                 }
             }
 
-            ModLogger.Info($"ScannerStation initialized - Mode: {(useNewPalmScanner ? "Palm Scanner" : "IK System")}, ScanTarget: {scanTarget != null}");
+            ModLogger.Debug($"ScannerStation initialized - Mode: {(useNewPalmScanner ? "Palm Scanner" : "IK System")}, ScanTarget: {scanTarget != null}");
         }
 
         private void SetupInteractableComponent()
@@ -181,11 +181,11 @@ namespace Behind_Bars.Systems.Jail
             if (interactableObject == null)
             {
                 interactableObject = gameObject.AddComponent<InteractableObject>();
-                ModLogger.Info("Added InteractableObject component to ScannerStation");
+                ModLogger.Debug("Added InteractableObject component to ScannerStation");
             }
             else
             {
-                ModLogger.Info("Found existing InteractableObject component on ScannerStation");
+                ModLogger.Debug("Found existing InteractableObject component on ScannerStation");
             }
 
             // Configure the interaction
@@ -203,12 +203,12 @@ namespace Behind_Bars.Systems.Jail
             interactableObject.onInteractStart.AddListener(OnInteractStart);
 #endif
 
-            ModLogger.Info("InteractableObject component configured with event listeners");
+            ModLogger.Debug("InteractableObject component configured with event listeners");
         }
 
         private void SetupPalmScannerComponents()
         {
-            ModLogger.Info("Setting up palm scanner components");
+            ModLogger.Debug("Setting up palm scanner components");
 
             // Find interaction camera (corrected path: Interaction/InteractionCamera)
             if (interactionCamera == null)
@@ -220,7 +220,7 @@ namespace Behind_Bars.Systems.Jail
                     if (interactionCameraObj != null)
                     {
                         interactionCamera = interactionCameraObj.GetComponent<Camera>();
-                        ModLogger.Info("Found InteractionCamera for palm scanner");
+                        ModLogger.Debug("Found InteractionCamera for palm scanner");
                     }
                 }
             }
@@ -235,13 +235,13 @@ namespace Behind_Bars.Systems.Jail
             if (interactionCamera != null)
             {
                 interactionCamera.gameObject.SetActive(false);
-                ModLogger.Info("InteractionCamera disabled initially");
+                ModLogger.Debug("InteractionCamera disabled initially");
             }
 
             // Hide imgScanEffect initially
             HideImgScanEffect();
 
-            ModLogger.Info($"Palm scanner setup complete - Camera: {interactionCamera != null}, Palm: {palmModel != null}");
+            ModLogger.Debug($"Palm scanner setup complete - Camera: {interactionCamera != null}, Palm: {palmModel != null}");
         }
 
         private void SetupOldIKComponents()
@@ -1184,13 +1184,13 @@ namespace Behind_Bars.Systems.Jail
                     var material = new Material(Shader.Find("Unlit/Color"));
                     material.color = Color.red;
                     ikTargetRenderer.material = material;
-                    ModLogger.Info($"Applied Unlit/Color red material to visualizer");
+                    ModLogger.Debug($"Applied Unlit/Color red material to visualizer");
                 }
 
                 // Start hidden
                 ikTargetVisualizer.SetActive(false);
 
-                ModLogger.Info($"IkTarget visualizer created at world position: {ikTargetVisualizer.transform.position}");
+                ModLogger.Debug($"IkTarget visualizer created at world position: {ikTargetVisualizer.transform.position}");
             }
             catch (System.Exception ex)
             {
@@ -1253,7 +1253,7 @@ namespace Behind_Bars.Systems.Jail
                         if (mockHand != null)
                         {
                             palmModel = mockHand.gameObject;
-                            ModLogger.Info($"Found existing MockHand for palm scanner: {palmModel.name}");
+                            ModLogger.Debug($"Found existing MockHand for palm scanner: {palmModel.name}");
                         }
                     }
                 }
@@ -1264,7 +1264,7 @@ namespace Behind_Bars.Systems.Jail
             {
                 originalPalmPosition = palmModel.transform.position;
                 palmModel.SetActive(false); // Hide initially
-                ModLogger.Info($"Palm model setup complete: {palmModel.name} at position {palmModel.transform.position}");
+                ModLogger.Debug($"Palm model setup complete: {palmModel.name} at position {palmModel.transform.position}");
             }
         }
 
@@ -1397,7 +1397,7 @@ namespace Behind_Bars.Systems.Jail
                     if (imgScanEffect != null)
                     {
                         imgScanEffect.gameObject.SetActive(false);
-                        ModLogger.Info("imgScanEffect hidden initially");
+                        ModLogger.Debug("imgScanEffect hidden initially");
                     }
                     else
                     {

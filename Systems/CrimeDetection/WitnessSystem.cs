@@ -2,9 +2,11 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using Behind_Bars.Helpers;
+using Behind_Bars.Utils;
 using Behind_Bars.Systems.CrimeTracking;
 using MelonLoader;
 using Behind_Bars.Systems.Crimes;
+using ScheduleOne.DevUtilities;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -75,12 +77,12 @@ namespace Behind_Bars.Systems.CrimeDetection
             // Police respond immediately
             if (crime.Severity >= 2.0f) // Serious crimes
             {
-                police.BeginFootPursuit_Networked(perpetrator.NetworkObject.ToString());
+                NetworkHelper.TryBeginFootPursuit(police, perpetrator);
             }
             else
             {
                 // For minor crimes, just investigate
-                police.BeginBodySearch_Networked(perpetrator.NetworkObject.ToString());
+                NetworkHelper.TryBeginBodySearch(police, perpetrator);
             }
         }
 
@@ -93,7 +95,8 @@ namespace Behind_Bars.Systems.CrimeDetection
 
             // Determine witness behavior based on crime severity and witness personality
             float fearLevel = CalculateFearLevel(witness, crime);
-
+            ModLogger.Debug($"[FEAR CALC] Witness {witness.name} fear level: {fearLevel}");
+            
             if (fearLevel > 0.7f)
             {
                 // High fear - flee and call police
@@ -138,8 +141,27 @@ namespace Behind_Bars.Systems.CrimeDetection
                 baseFear = 0.8f;
 
             // Distance affects fear (closer = more afraid)
+            // Scale dynamically based on crime type detection radius
             float distance = Vector3.Distance(witness.transform.position, crime.Location);
-            float distanceFactor = Mathf.Clamp01(1.0f - (distance / 20f));
+            
+            // Determine detection radius based on crime type
+            float detectionRadius;
+            if (crime.Crime is Murder)
+                detectionRadius = 50f; // MurderDetectionRadius
+            else if (crime.Crime is Manslaughter)
+                detectionRadius = 50f; // MurderDetectionRadius (same as murder)
+            else if (crime.Crime is AssaultOnCivilian)
+                detectionRadius = 30f; // AssaultDetectionRadius
+            else if (crime.Crime is WitnessIntimidation)
+                detectionRadius = 30f; // AssaultDetectionRadius (uses same radius)
+            else
+                detectionRadius = 15f; // Default to assault radius
+            
+            // Normalize distance to detection radius and apply steeper curve for more sensitivity
+            float normalizedDistance = Mathf.Clamp01(distance / detectionRadius);
+            // Use cubic curve (distance^3) for much steeper falloff - makes distance VERY impactful
+            // Closer witnesses get much higher fear, distance matters a lot more
+            float distanceFactor = 1.0f - (normalizedDistance * normalizedDistance * normalizedDistance);
 
             // Add some randomness for personality
             float personalityFactor = UnityEngine.Random.Range(0.7f, 1.3f);
@@ -233,7 +255,7 @@ namespace Behind_Bars.Systems.CrimeDetection
             ModLogger.Info($"Witness {witness.name} is calling police about {crime.GetCrimeName()}");
 
             // Call police through the law manager
-            var lawManager = LawManager.Instance;
+            var lawManager = Singleton<LawManager>.Instance;
             if (lawManager != null && perpetrator != null && crime.Crime != null)
             {
                 lawManager.PoliceCalled(perpetrator, crime.Crime);
@@ -241,11 +263,11 @@ namespace Behind_Bars.Systems.CrimeDetection
                 // Escalate based on crime severity
                 if (crime.Severity >= 2.0f)
                 {
-                    perpetrator.CrimeData.SetPursuitLevel(PlayerCrimeData.EPursuitLevel.NonLethal);
+                    perpetrator.CrimeData.SetPursuitLevel(PlayerCrimeData.EPursuitLevel.Arresting);
                 }
-                else if (perpetrator.CrimeData.CurrentPursuitLevel == PlayerCrimeData.EPursuitLevel.None)
+                else
                 {
-                    perpetrator.CrimeData.SetPursuitLevel(PlayerCrimeData.EPursuitLevel.Investigating);
+                    perpetrator.CrimeData.SetPursuitLevel(PlayerCrimeData.EPursuitLevel.NonLethal);
                 }
             }
         }

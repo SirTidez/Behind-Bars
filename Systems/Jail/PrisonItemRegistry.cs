@@ -109,7 +109,7 @@ namespace Behind_Bars.Systems.Jail
         {
             try
             {
-                ModLogger.Info("Registering prison items with Schedule I item framework...");
+                ModLogger.Debug("Registering prison items with Schedule I item framework...");
                 
                 foreach (var kvp in PrisonItems)
                 {
@@ -137,7 +137,7 @@ namespace Behind_Bars.Systems.Jail
                         if (icon != null)
                         {
                             itemDef.Icon = icon;
-                            ModLogger.Info($"✓ Loaded icon for {itemInfo.name}");
+                            ModLogger.Debug($"✓ Loaded icon for {itemInfo.name}");
                         }
                         else
                         {
@@ -170,7 +170,7 @@ namespace Behind_Bars.Systems.Jail
                             {
                                 // Set up prefab for inventory/equipping
                                 SetupItemPrefab(itemDef, prefab, itemInfo);
-                                ModLogger.Info($"✓ Loaded prefab for {itemInfo.name}");
+                                ModLogger.Debug($"✓ Loaded prefab for {itemInfo.name}");
                             }
                             else
                             {
@@ -179,7 +179,7 @@ namespace Behind_Bars.Systems.Jail
                         }
                         else if (string.IsNullOrEmpty(itemInfo.prefabName))
                         {
-                            ModLogger.Info($"ℹ No prefab defined for {itemInfo.name} (icon-only item)");
+                            ModLogger.Debug($"ℹ No prefab defined for {itemInfo.name} (icon-only item)");
                         }
                         else
                         {
@@ -197,10 +197,10 @@ namespace Behind_Bars.Systems.Jail
                     // Add to registry
                     registry.AddToRegistry(itemDef);
                     
-                    ModLogger.Info($"✓ Registered prison item: {itemInfo.name} ({itemInfo.id})");
+                    ModLogger.Debug($"✓ Registered prison item: {itemInfo.name} ({itemInfo.id})");
                 }
                 
-                ModLogger.Info($"Successfully registered {PrisonItems.Count} prison items");
+                ModLogger.Debug($"Successfully registered {PrisonItems.Count} prison items");
             }
             catch (Exception ex)
             {
@@ -237,7 +237,7 @@ namespace Behind_Bars.Systems.Jail
         {
             try
             {
-                ModLogger.Info($"Loading icon from embedded resources: {resourcePath}");
+                ModLogger.Debug($"Loading icon from embedded resources: {resourcePath}");
                 
                 // Load texture from embedded resources using assembly
                 var assembly = System.Reflection.Assembly.GetExecutingAssembly();
@@ -261,7 +261,7 @@ namespace Behind_Bars.Systems.Jail
                                 100f
                             );
                             
-                            ModLogger.Info($"Successfully loaded icon sprite from {resourcePath}");
+                            ModLogger.Debug($"Successfully loaded icon sprite from {resourcePath}");
                             return sprite;
                         }
                         else
@@ -288,7 +288,7 @@ namespace Behind_Bars.Systems.Jail
         {
             try
             {
-                ModLogger.Info($"Setting up prefab for {itemInfo.name}");
+                ModLogger.Debug($"Setting up prefab for {itemInfo.name}");
                 
                 // Ensure prefab has proper colliders for world interaction
                 var collider = prefab.GetComponent<Collider>();
@@ -297,7 +297,7 @@ namespace Behind_Bars.Systems.Jail
                     // Add a simple box collider if none exists
                     var boxCollider = prefab.AddComponent<BoxCollider>();
                     boxCollider.isTrigger = false;
-                    ModLogger.Info($"Added BoxCollider to {itemInfo.name} prefab");
+                    ModLogger.Debug($"Added BoxCollider to {itemInfo.name} prefab");
                 }
                 
                 // Ensure prefab has a rigidbody for physics
@@ -308,7 +308,7 @@ namespace Behind_Bars.Systems.Jail
                     rigidbody.mass = 0.1f; // Light objects
                     rigidbody.drag = 1f;
                     rigidbody.angularDrag = 5f;
-                    ModLogger.Info($"Added Rigidbody to {itemInfo.name} prefab");
+                    ModLogger.Debug($"Added Rigidbody to {itemInfo.name} prefab");
                 }
                 
                 // Add PrisonItemEquippable component for proper inventory display and holding
@@ -323,7 +323,7 @@ namespace Behind_Bars.Systems.Jail
                     
                     // Add our custom PrisonItemEquippable component
                     var prisonEquippable = prefab.AddComponent<PrisonItemEquippable>();
-                    ModLogger.Info($"Added PrisonItemEquippable component to {itemInfo.name}");
+                    ModLogger.Debug($"Added PrisonItemEquippable component to {itemInfo.name}");
                 }
                 catch (Exception ex)
                 {
@@ -334,7 +334,7 @@ namespace Behind_Bars.Systems.Jail
                 prefab.layer = LayerMask.NameToLayer("Default");
                 prefab.tag = "Untagged";
                 
-                ModLogger.Info($"Prefab setup completed for {itemInfo.name}");
+                ModLogger.Debug($"Prefab setup completed for {itemInfo.name}");
             }
             catch (Exception ex)
             {

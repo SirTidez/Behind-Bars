@@ -15,6 +15,7 @@ using Il2CppFishNet.Managing.Object;
 using Il2CppFishNet.Object;
 using Il2CppScheduleOne.NPCs;
 using Il2CppScheduleOne.AvatarFramework;
+using Il2CppScheduleOne;
 #else
 using FishNet;
 using FishNet.Managing;
@@ -22,6 +23,7 @@ using FishNet.Managing.Object;
 using FishNet.Object;
 using ScheduleOne.NPCs;
 using ScheduleOne.AvatarFramework;
+using ScheduleOne;
 #endif
 
 namespace Behind_Bars.Systems.NPCs
@@ -37,6 +39,9 @@ namespace Behind_Bars.Systems.NPCs
 #endif
 
         public static PrisonNPCManager Instance { get; private set; }
+        
+        // NPC spawning status
+        public bool IsSpawningComplete { get; private set; } = false;
         
         // NPC tracking
         private List<PrisonGuard> activeGuards = new List<PrisonGuard>();
@@ -84,7 +89,7 @@ namespace Behind_Bars.Systems.NPCs
             if (Instance == null)
             {
                 Instance = this;
-                ModLogger.Info("PrisonNPCManager initialized");
+                ModLogger.Debug("PrisonNPCManager initialized");
             }
             else
             {
@@ -120,18 +125,18 @@ namespace Behind_Bars.Systems.NPCs
             if (jailController.guardRoom.guardSpawns != null)
             {
                 allGuardSpawns.AddRange(jailController.guardRoom.guardSpawns);
-                ModLogger.Info($"Found {jailController.guardRoom.guardSpawns.Count} guard room spawn points");
+                ModLogger.Debug($"Found {jailController.guardRoom.guardSpawns.Count} guard room spawn points");
             }
             
             // Add booking spawns
             if (jailController.booking.guardSpawns != null)
             {
                 allGuardSpawns.AddRange(jailController.booking.guardSpawns);
-                ModLogger.Info($"Found {jailController.booking.guardSpawns.Count} booking spawn points");
+                ModLogger.Debug($"Found {jailController.booking.guardSpawns.Count} booking spawn points");
             }
             
             guardSpawnPoints = allGuardSpawns.ToArray();
-            ModLogger.Info($"Total guard spawn points available: {guardSpawnPoints.Length}");
+            ModLogger.Debug($"Total guard spawn points available: {guardSpawnPoints.Length}");
 
             // Create inmate spawn points near the jail center
             CreateInmateSpawnPoints(jailController);
@@ -170,7 +175,7 @@ namespace Behind_Bars.Systems.NPCs
             }
             
             inmateSpawnPoints = spawnPoints.ToArray();
-            ModLogger.Info($"Created {inmateSpawnPoints.Length} inmate spawn points");
+            ModLogger.Debug($"Created {inmateSpawnPoints.Length} inmate spawn points");
         }
 
         private void CreateParoleOfficerSpawnPoints(JailController jailController)
@@ -208,7 +213,7 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private IEnumerator InitializeNPCs()
         {
-            ModLogger.Info("Starting prison NPC initialization...");
+            ModLogger.Debug("Starting prison NPC initialization...");
             
             // Wait a bit for everything to be ready
             yield return new WaitForSeconds(2f);
@@ -216,13 +221,45 @@ namespace Behind_Bars.Systems.NPCs
             // Spawn guards first
             yield return SpawnGuards();
             
-            // Spawn parole officers
-            yield return SpawnParoleOfficers();
+            // NOTE: Parole officers are now spawned dynamically by DynamicParoleOfficerManager
+            // REMOVED: yield return SpawnParoleOfficers();
+            
+            // Initialize dynamic parole officer manager
+            InitializeDynamicParoleOfficerManager();
             
             // Then spawn inmates
             yield return SpawnInmates();
             
-            ModLogger.Info("✓ Prison NPC initialization completed");
+            // Mark spawning as complete
+            IsSpawningComplete = true;
+            ModLogger.Debug("✓ Prison NPC initialization completed");
+        }
+
+        /// <summary>
+        /// Initialize the dynamic parole officer manager
+        /// </summary>
+        private void InitializeDynamicParoleOfficerManager()
+        {
+            try
+            {
+                ModLogger.Debug("Initializing DynamicParoleOfficerManager...");
+                
+                // Create GameObject for the manager
+                GameObject managerObject = new GameObject("DynamicParoleOfficerManager");
+                managerObject.transform.SetParent(transform); // Parent to NPC manager for organization
+                
+                // Add the component
+                var manager = managerObject.AddComponent<DynamicParoleOfficerManager>();
+                
+                // Initialize it
+                manager.Initialize();
+                
+                ModLogger.Debug("✓ DynamicParoleOfficerManager initialized");
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"Error initializing DynamicParoleOfficerManager: {ex.Message}");
+            }
         }
 
         /// <summary>
@@ -237,7 +274,7 @@ namespace Behind_Bars.Systems.NPCs
                 yield break;
             }
 
-            ModLogger.Info("Spawning 4 guards with specific assignments...");
+            ModLogger.Debug("Spawning 4 guards with specific assignments...");
             
             // Spawn exactly 4 guards with specific assignments
             for (int i = 0; i < maxGuards; i++)
@@ -258,7 +295,7 @@ namespace Behind_Bars.Systems.NPCs
                 if (guard != null)
                 {
                     activeGuards.Add(guard);
-                    ModLogger.Info($"✓ Spawned guard {guard.badgeNumber} at {assignment} ({spawnPoint.name})");
+                    ModLogger.Debug($"✓ Spawned guard {guard.badgeNumber} at {assignment} ({spawnPoint.name})");
                 }
                 else
                 {
@@ -269,7 +306,7 @@ namespace Behind_Bars.Systems.NPCs
                 yield return new WaitForSeconds(0.8f);
             }
             
-            ModLogger.Info($"✓ Spawned {activeGuards.Count} guards with assignments");
+            ModLogger.Debug($"✓ Spawned {activeGuards.Count} guards with assignments");
         }
         
         /// <summary>
@@ -313,7 +350,7 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private IEnumerator SpawnParoleOfficers()
         {
-            ModLogger.Info("Spawning parole officers with preset routes...");
+            ModLogger.Debug("Spawning parole officers with preset routes...");
             
             for (int i = 0; i < paroleOfficerAssignments.Length; i++)
             {
@@ -327,7 +364,7 @@ namespace Behind_Bars.Systems.NPCs
                 if (paroleOfficer != null)
                 {
                     activeParoleOfficers.Add(paroleOfficer);
-                    ModLogger.Info($"✓ Spawned parole officer {paroleOfficer.badgeNumber} at {assignment}");
+                    ModLogger.Debug($"✓ Spawned parole officer {paroleOfficer.badgeNumber} at {assignment}");
                 }
                 else
                 {
@@ -337,7 +374,7 @@ namespace Behind_Bars.Systems.NPCs
                 yield return new WaitForSeconds(0.8f);
             }
             
-            ModLogger.Info($"✓ Parole officers spawned");
+            ModLogger.Debug($"✓ Parole officers spawned");
         }
 
         /// <summary>
@@ -421,7 +458,7 @@ namespace Behind_Bars.Systems.NPCs
                 yield break;
             }
 
-            ModLogger.Info($"Spawning up to {maxInmates} inmates in random cells...");
+            ModLogger.Debug($"Spawning up to {maxInmates} inmates in random cells...");
 
             int inmatesSpawned = 0;
             int maxAttempts = maxInmates * 3; // Allow some failed attempts
@@ -463,7 +500,7 @@ namespace Behind_Bars.Systems.NPCs
                     ModLogger.Warn($"Spawn position for {firstName} is too close to jail center ({distanceFromJailCenter:F2}m) - may indicate spawn failure");
                 }
 
-                ModLogger.Info($"Spawning {firstName} in cell {assignedCell} at position {spawnPosition} (distance from jail center: {distanceFromJailCenter:F2}m)");
+                ModLogger.Debug($"Spawning {firstName} in cell {assignedCell} at position {spawnPosition} (distance from jail center: {distanceFromJailCenter:F2}m)");
 
                 // Spawn the inmate
                 var inmate = SpawnInmate(spawnPosition, firstName, inmateId, crimeType);
@@ -511,7 +548,7 @@ namespace Behind_Bars.Systems.NPCs
                         ModLogger.Debug($"Added InmateBehavior to {inmateId} for cell {assignedCell}");
                     }
 
-                    ModLogger.Info($"✓ Spawned inmate {inmateId} ({crimeType}) in cell {assignedCell}");
+                    ModLogger.Debug($"✓ Spawned inmate {inmateId} ({crimeType}) in cell {assignedCell}");
                     inmatesSpawned++;
                 }
                 else
@@ -525,7 +562,7 @@ namespace Behind_Bars.Systems.NPCs
                 yield return new WaitForSeconds(0.5f);
             }
 
-            ModLogger.Info($"✓ Spawned {inmatesSpawned} inmates in cells randomly");
+            ModLogger.Debug($"✓ Spawned {inmatesSpawned} inmates in cells randomly");
 
             // Log cell assignment distribution for debugging
             if (cellManager != null)
@@ -695,7 +732,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                ModLogger.Info($"🎯 Spawning guard using BaseNPC: {firstName} at {assignment}");
+                ModLogger.Debug($"🎯 Spawning guard using BaseNPC: {firstName} at {assignment}");
 
                 // Get BaseNPC prefab directly
                 var baseNPCPrefab = GetBaseNPCPrefab();
@@ -715,14 +752,44 @@ namespace Behind_Bars.Systems.NPCs
 
                 // Set name and configure basic properties
                 guardObject.name = $"PrisonGuard_{firstName}_{assignment}";
+                
+                // Ensure GameObject is active before trying to access components
+                guardObject.SetActive(true);
 
-                // Get the NPC component and configure it
+                // Log all components on the instantiated prefab for debugging
+                var allComponents = guardObject.GetComponents<Component>();
+                ModLogger.Debug($"📋 Components found on {guardObject.name}: {allComponents.Length} components");
+                foreach (var comp in allComponents)
+                {
+                    if (comp != null)
+                    {
+                        ModLogger.Debug($"  - {comp.GetType().Name}");
+                    }
+                }
+
+                // Get the NPC component - try both direct and in children
                 var npcComponent = guardObject.GetComponent<NPC>();
+                if (npcComponent == null)
+                {
+                    ModLogger.Debug("⚠️ NPC component not found on root, checking children...");
+                    npcComponent = guardObject.GetComponentInChildren<NPC>();
+                }
+                
                 if (npcComponent != null)
                 {
                     npcComponent.FirstName = firstName;
                     npcComponent.LastName = "Guard";
                     npcComponent.ID = $"guard_{System.Guid.NewGuid().ToString().Substring(0, 8)}";
+                    ModLogger.Debug($"✓ NPC component configured: {npcComponent.FirstName} {npcComponent.LastName} (ID: {npcComponent.ID})");
+                }
+                else
+                {
+                    ModLogger.Error("⚠️ No NPC component found on BaseNPC - checking prefab structure...");
+                    // Log all child objects to help debug
+                    LogChildHierarchy(guardObject, 0);
+                    ModLogger.Error("❌ Cannot proceed without NPC component - guard will not spawn correctly");
+                    UnityEngine.Object.Destroy(guardObject);
+                    return null;
                 }
 
                 // Generate badge if needed
@@ -750,7 +817,7 @@ namespace Behind_Bars.Systems.NPCs
                 // Position on NavMesh
                 PositionOnNavMesh(guardObject, position);
 
-                ModLogger.Info($"✓ BaseNPC guard spawned: {firstName} (Badge: {badgeNumber}, Assignment: {assignment})");
+                ModLogger.Debug($"✓ BaseNPC guard spawned: {firstName} (Badge: {badgeNumber}, Assignment: {assignment})");
                 return prisonGuard;
             }
             catch (Exception e)
@@ -767,7 +834,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                ModLogger.Info($"🎯 Spawning parole officer using BaseNPC: {firstName} at {assignment}");
+                ModLogger.Debug($"🎯 Spawning parole officer using BaseNPC: {firstName} at {assignment}");
 
                 // Get BaseNPC prefab directly
                 var baseNPCPrefab = GetBaseNPCPrefab();
@@ -787,14 +854,44 @@ namespace Behind_Bars.Systems.NPCs
 
                 // Set name and configure basic properties
                 paroleOfficerObject.name = $"ParoleOfficer_{firstName}_{assignment}";
+                
+                // Ensure GameObject is active before trying to access components
+                paroleOfficerObject.SetActive(true);
 
-                // Get the NPC component and configure it
+                // Log all components on the instantiated prefab for debugging
+                var allComponents = paroleOfficerObject.GetComponents<Component>();
+                ModLogger.Debug($"📋 Components found on {paroleOfficerObject.name}: {allComponents.Length} components");
+                foreach (var comp in allComponents)
+                {
+                    if (comp != null)
+                    {
+                        ModLogger.Debug($"  - {comp.GetType().Name}");
+                    }
+                }
+
+                // Get the NPC component - try both direct and in children
                 var npcComponent = paroleOfficerObject.GetComponent<NPC>();
+                if (npcComponent == null)
+                {
+                    ModLogger.Debug("⚠️ NPC component not found on root, checking children...");
+                    npcComponent = paroleOfficerObject.GetComponentInChildren<NPC>();
+                }
+                
                 if (npcComponent != null)
                 {
                     npcComponent.FirstName = firstName;
                     npcComponent.LastName = "Parole Officer";
                     npcComponent.ID = $"paroleofficer_{System.Guid.NewGuid().ToString().Substring(0, 8)}";
+                    ModLogger.Debug($"✓ NPC component configured: {npcComponent.FirstName} {npcComponent.LastName} (ID: {npcComponent.ID})");
+                }
+                else
+                {
+                    ModLogger.Error("⚠️ No NPC component found on BaseNPC - checking prefab structure...");
+                    // Log all child objects to help debug
+                    LogChildHierarchy(paroleOfficerObject, 0);
+                    ModLogger.Error("❌ Cannot proceed without NPC component - parole officer will not spawn correctly");
+                    UnityEngine.Object.Destroy(paroleOfficerObject);
+                    return null;
                 }
 
                 // Generate badge if needed
@@ -822,7 +919,7 @@ namespace Behind_Bars.Systems.NPCs
                 // Position on NavMesh
                 PositionOnNavMesh(paroleOfficerObject, position);
 
-                ModLogger.Info($"✓ BaseNPC parole officer spawned: {firstName} (Badge: {badgeNumber}, Assignment: {assignment})");
+                ModLogger.Debug($"✓ BaseNPC parole officer spawned: {firstName} (Badge: {badgeNumber}, Assignment: {assignment})");
                 return paroleOfficer;
             }
             catch (Exception e)
@@ -839,7 +936,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                ModLogger.Info($"🎯 Spawning inmate using BaseNPCSpawner: {firstName} (Crime: {crimeType})");
+                ModLogger.Debug($"🎯 Spawning inmate using BaseNPCSpawner: {firstName} (Crime: {crimeType})");
 
                 // Generate prisoner ID if needed
                 if (string.IsNullOrEmpty(prisonerID))
@@ -862,7 +959,7 @@ namespace Behind_Bars.Systems.NPCs
 
                 // BaseNPCSpawner already handles network spawning and NavMesh positioning
 
-                ModLogger.Info($"✓ BaseNPC inmate spawned: {firstName} (ID: {prisonerID}, Crime: {crimeType})");
+                ModLogger.Debug($"✓ BaseNPC inmate spawned: {firstName} (ID: {prisonerID}, Crime: {crimeType})");
                 return prisonInmate;
             }
             catch (Exception e)
@@ -919,27 +1016,82 @@ namespace Behind_Bars.Systems.NPCs
         #region BaseNPC Helper Methods
 
         /// <summary>
-        /// Get the BaseNPC prefab from FishNet
+        /// Get the BaseNPC prefab by searching through NetworkObject spawnable prefabs by name (S1API method)
+        /// This matches how S1API finds the BaseNPC prefab
         /// </summary>
         private GameObject GetBaseNPCPrefab()
         {
             try
             {
-                const int BASE_NPC_PREFAB_ID = 182;
-
                 var networkManager = InstanceFinder.NetworkManager;
-                if (networkManager == null) return null;
+                if (networkManager == null)
+                {
+                    ModLogger.Error("NetworkManager not found - FishNet not initialized?");
+                    return null;
+                }
 
-                var prefabObjects = networkManager.GetPrefabObjects<PrefabObjects>(0, false);
-                if (prefabObjects == null || BASE_NPC_PREFAB_ID >= prefabObjects.GetObjectCount()) return null;
+                // Get spawnable prefabs collection (S1API method)
+                var spawnablePrefabs = networkManager.GetPrefabObjects<PrefabObjects>(0, false);
+                if (spawnablePrefabs == null)
+                {
+                    ModLogger.Error("No prefab objects collection found");
+                    return null;
+                }
 
-                var prefab = prefabObjects.GetObject(true, BASE_NPC_PREFAB_ID);
-                return prefab?.gameObject;
+                int count = spawnablePrefabs.GetObjectCount();
+                ModLogger.Debug($"🔍 Searching through {count} NetworkObject prefabs for 'BaseNPC'...");
+
+                // Look for "BaseNPC" prefab (S1API method)
+                NetworkObject chosen = null;
+                for (int i = 0; i < count; i++)
+                {
+                    NetworkObject obj = spawnablePrefabs.GetObject(true, i);
+                    if (obj != null && obj.gameObject != null && obj.gameObject.name == "BaseNPC")
+                    {
+                        chosen = obj;
+                        break;
+                    }
+                }
+
+                if (chosen != null && chosen.gameObject != null)
+                {
+                    ModLogger.Debug($"✓ Found BaseNPC prefab: '{chosen.gameObject.name}'");
+                    return chosen.gameObject;
+                }
+
+                ModLogger.Error("❌ BaseNPC prefab not found in NetworkObject spawnable prefabs");
+                return null;
             }
             catch (Exception e)
             {
                 ModLogger.Error($"Error getting BaseNPC prefab: {e.Message}");
+                ModLogger.Error($"Stack trace: {e.StackTrace}");
                 return null;
+            }
+        }
+
+        /// <summary>
+        /// Log the hierarchy of child GameObjects for debugging
+        /// </summary>
+        private void LogChildHierarchy(GameObject obj, int depth)
+        {
+            if (obj == null) return;
+            
+            string indent = new string(' ', depth * 2);
+            var components = obj.GetComponents<Component>();
+            ModLogger.Debug($"{indent}{obj.name} (Components: {components.Length})");
+            
+            foreach (var comp in components)
+            {
+                if (comp != null)
+                {
+                    ModLogger.Debug($"{indent}  - {comp.GetType().Name}");
+                }
+            }
+            
+            foreach (Transform child in obj.transform)
+            {
+                LogChildHierarchy(child.gameObject, depth + 1);
             }
         }
 
@@ -951,7 +1103,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                ModLogger.Info($"🎨 Fixing parole officer appearance for {npcInstance.name} using NPCAppearanceManager");
+                ModLogger.Debug($"🎨 Fixing parole officer appearance for {npcInstance.name} using NPCAppearanceManager");
 
 #if !MONO
                 var avatar = npcInstance.GetComponent<Il2CppScheduleOne.AvatarFramework.Avatar>();
@@ -959,17 +1111,48 @@ namespace Behind_Bars.Systems.NPCs
                 {
                     avatar = npcInstance.GetComponentInChildren<Il2CppScheduleOne.AvatarFramework.Avatar>();
                 }
+                
+                // Also check if NPC component has Avatar reference set
+                if (avatar == null)
+                {
+                    var npcComponent = npcInstance.GetComponent<Il2CppScheduleOne.NPCs.NPC>();
+                    if (npcComponent == null)
+                    {
+                        npcComponent = npcInstance.GetComponentInChildren<Il2CppScheduleOne.NPCs.NPC>();
+                    }
+                    if (npcComponent != null && npcComponent.Avatar != null)
+                    {
+                        avatar = npcComponent.Avatar;
+                        ModLogger.Debug($"✓ Found Avatar via NPC.Avatar reference on {npcInstance.name}");
+                    }
+                }
 #else
                 var avatar = npcInstance.GetComponent<ScheduleOne.AvatarFramework.Avatar>();
                 if (avatar == null)
                 {
                     avatar = npcInstance.GetComponentInChildren<ScheduleOne.AvatarFramework.Avatar>();
                 }
+                
+                // Also check if NPC component has Avatar reference set
+                if (avatar == null)
+                {
+                    var npcComponent = npcInstance.GetComponent<ScheduleOne.NPCs.NPC>();
+                    if (npcComponent == null)
+                    {
+                        npcComponent = npcInstance.GetComponentInChildren<ScheduleOne.NPCs.NPC>();
+                    }
+                    if (npcComponent != null && npcComponent.Avatar != null)
+                    {
+                        avatar = npcComponent.Avatar;
+                        ModLogger.Debug($"✓ Found Avatar via NPC.Avatar reference on {npcInstance.name}");
+                    }
+                }
 #endif
 
                 if (avatar == null)
                 {
                     ModLogger.Warn($"⚠️ No Avatar component found on {npcInstance.name}, falling back to FixNPCAppearance");
+                    LogChildHierarchy(npcInstance, 0);
                     FixNPCAppearance(npcInstance, "guard");
                     return;
                 }
@@ -992,7 +1175,7 @@ namespace Behind_Bars.Systems.NPCs
 
                             // Apply the settings to the NPC's own Avatar
                             avatar.LoadAvatarSettings(avatarSettings);
-                            ModLogger.Info($"✓ Avatar settings loaded from NPCAppearanceManager for {npcInstance.name}");
+                            ModLogger.Debug($"✓ Avatar settings loaded from NPCAppearanceManager for {npcInstance.name}");
 
                             // Force refresh the avatar
                             if (avatar.InitialAvatarSettings == null)
@@ -1004,14 +1187,14 @@ namespace Behind_Bars.Systems.NPCs
                             avatar.enabled = false;
                             avatar.enabled = true;
 
-                            ModLogger.Info($"✓ Avatar refresh triggered for {npcInstance.name}");
+                            ModLogger.Debug($"✓ Avatar refresh triggered for {npcInstance.name}");
                         }
                     }
                     catch (Exception ex)
                     {
-                        ModLogger.Error($"❌ Failed to load avatar settings from NPCAppearanceManager: {ex.Message}");
+                        ModLogger.Debug($"❌ Failed to load avatar settings from NPCAppearanceManager: {ex.Message}");
                         // Fallback to scene search method
-                        ModLogger.Info("Falling back to FixNPCAppearance method");
+                        ModLogger.Debug("Falling back to FixNPCAppearance method");
                         FixNPCAppearance(npcInstance, "guard");
                     }
                 }
@@ -1049,7 +1232,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                ModLogger.Info($"🎨 Fixing appearance for {npcInstance.name} ({npcType})");
+                ModLogger.Debug($"🎨 Fixing appearance for {npcInstance.name} ({npcType})");
 
 #if !MONO
                 var avatar = npcInstance.GetComponent<Il2CppScheduleOne.AvatarFramework.Avatar>();
@@ -1057,17 +1240,48 @@ namespace Behind_Bars.Systems.NPCs
                 {
                     avatar = npcInstance.GetComponentInChildren<Il2CppScheduleOne.AvatarFramework.Avatar>();
                 }
+                
+                // Also check if NPC component has Avatar reference set
+                if (avatar == null)
+                {
+                    var npcComponent = npcInstance.GetComponent<Il2CppScheduleOne.NPCs.NPC>();
+                    if (npcComponent == null)
+                    {
+                        npcComponent = npcInstance.GetComponentInChildren<Il2CppScheduleOne.NPCs.NPC>();
+                    }
+                    if (npcComponent != null && npcComponent.Avatar != null)
+                    {
+                        avatar = npcComponent.Avatar;
+                        ModLogger.Debug($"✓ Found Avatar via NPC.Avatar reference on {npcInstance.name}");
+                    }
+                }
 #else
                 var avatar = npcInstance.GetComponent<ScheduleOne.AvatarFramework.Avatar>();
                 if (avatar == null)
                 {
                     avatar = npcInstance.GetComponentInChildren<ScheduleOne.AvatarFramework.Avatar>();
                 }
+                
+                // Also check if NPC component has Avatar reference set
+                if (avatar == null)
+                {
+                    var npcComponent = npcInstance.GetComponent<ScheduleOne.NPCs.NPC>();
+                    if (npcComponent == null)
+                    {
+                        npcComponent = npcInstance.GetComponentInChildren<ScheduleOne.NPCs.NPC>();
+                    }
+                    if (npcComponent != null && npcComponent.Avatar != null)
+                    {
+                        avatar = npcComponent.Avatar;
+                        ModLogger.Debug($"✓ Found Avatar via NPC.Avatar reference on {npcInstance.name}");
+                    }
+                }
 #endif
 
                 if (avatar == null)
                 {
-                    ModLogger.Warn($"⚠️ No Avatar component found on {npcInstance.name}");
+                    ModLogger.Warn($"⚠️ No Avatar component found on {npcInstance.name} - logging hierarchy for debugging");
+                    LogChildHierarchy(npcInstance, 0);
                     return;
                 }
 
@@ -1082,14 +1296,14 @@ namespace Behind_Bars.Systems.NPCs
                         if (sourceAvatarComponent?.CurrentSettings != null)
                         {
                             avatar.LoadAvatarSettings(sourceAvatarComponent.CurrentSettings);
-                            ModLogger.Info($"✓ Avatar settings loaded from source avatar");
+                            ModLogger.Debug($"✓ Avatar settings loaded from source avatar");
                         }
 #else
                         var sourceAvatarComponent = sourceAvatar as ScheduleOne.AvatarFramework.Avatar;
                         if (sourceAvatarComponent?.CurrentSettings != null)
                         {
                             avatar.LoadAvatarSettings(sourceAvatarComponent.CurrentSettings);
-                            ModLogger.Info($"✓ Avatar settings loaded from source avatar");
+                            ModLogger.Debug($"✓ Avatar settings loaded from source avatar");
                         }
 #endif
                     }
@@ -1142,7 +1356,7 @@ namespace Behind_Bars.Systems.NPCs
                 if (guardAvatars.Count > 0)
                 {
                     var selectedAvatar = guardAvatars[UnityEngine.Random.Range(0, guardAvatars.Count)];
-                    ModLogger.Info($"Selected random guard avatar from {guardAvatars.Count} options");
+                    ModLogger.Debug($"Selected random guard avatar from {guardAvatars.Count} options");
                     return selectedAvatar;
                 }
             }
@@ -1185,7 +1399,7 @@ namespace Behind_Bars.Systems.NPCs
                 {
                     int selectedIndex = UnityEngine.Random.Range(0, inmateAvatars.Count);
                     var selectedAvatar = inmateAvatars[selectedIndex];
-                    ModLogger.Info($"Selected random inmate avatar: {inmateNames[selectedIndex]} from {inmateAvatars.Count} options");
+                    ModLogger.Debug($"Selected random inmate avatar: {inmateNames[selectedIndex]} from {inmateAvatars.Count} options");
                     return selectedAvatar;
                 }
             }
@@ -1286,7 +1500,7 @@ namespace Behind_Bars.Systems.NPCs
 #else
                         avatar = npcObject.AddComponent<ScheduleOne.AvatarFramework.Avatar>();
 #endif
-                        ModLogger.Info("✓ Added Avatar component to BaseNPC");
+                        ModLogger.Debug("✓ Added Avatar component to BaseNPC");
                     }
                     catch (Exception addEx)
                     {
@@ -1681,7 +1895,7 @@ namespace Behind_Bars.Systems.NPCs
                 // Try to set prison uniform if clothing system exists
                 ApplyPrisonUniform(settingsType, settings);
 
-                ModLogger.Info($"✓ Custom appearance applied to {firstName}");
+                ModLogger.Debug($"✓ Custom appearance applied to {firstName}");
             }
             catch (Exception e)
             {
@@ -1870,7 +2084,7 @@ namespace Behind_Bars.Systems.NPCs
 
                     // Reload the avatar with modified settings
                     avatar.LoadAvatarSettings(settings);
-                    ModLogger.Info($"✓ Applied random variations to {inmateObject.name}");
+                    ModLogger.Debug($"✓ Applied random variations to {inmateObject.name}");
                 }
                 catch (Exception ex)
                 {
@@ -1897,7 +2111,7 @@ namespace Behind_Bars.Systems.NPCs
                 if (networkManager != null && networkManager.IsServer)
                 {
                     networkManager.ServerManager.Spawn(networkObject);
-                    ModLogger.Info($"✓ {npcInstance.name} spawned on network");
+                    ModLogger.Debug($"✓ {npcInstance.name} spawned on network");
                 }
             }
             catch (Exception e)
@@ -1922,7 +2136,7 @@ namespace Behind_Bars.Systems.NPCs
                     {
                         navAgent.Warp(hit.position);
                         navAgent.enabled = true;
-                        ModLogger.Info($"✓ {npcInstance.name} positioned on NavMesh");
+                        ModLogger.Debug($"✓ {npcInstance.name} positioned on NavMesh");
                     }
                     else
                     {
@@ -2025,7 +2239,7 @@ namespace Behind_Bars.Systems.NPCs
                 if (guard.GetRole() == GuardBehavior.GuardRole.IntakeOfficer)
                 {
                     intakeOfficer = guard;
-                    ModLogger.Info($"Registered intake officer: {guard.GetBadgeNumber()}");
+                    ModLogger.Debug($"Registered intake officer: {guard.GetBadgeNumber()}");
                 }
 
                 ModLogger.Debug($"Registered guard {guard.GetBadgeNumber()} with PrisonNPCManager");
@@ -2044,7 +2258,7 @@ namespace Behind_Bars.Systems.NPCs
                 if (guard == intakeOfficer)
                 {
                     intakeOfficer = null;
-                    ModLogger.Info($"Unregistered intake officer: {guard.GetBadgeNumber()}");
+                    ModLogger.Debug($"Unregistered intake officer: {guard.GetBadgeNumber()}");
                 }
 
                 ModLogger.Debug($"Unregistered guard {guard.GetBadgeNumber()} from PrisonNPCManager");
@@ -2076,7 +2290,7 @@ namespace Behind_Bars.Systems.NPCs
 
                 requestingGuard.StartPatrol();
                 partner.StartPatrol();
-                ModLogger.Info($"✓ Assigned coordinated patrol: {requestingGuard.GetBadgeNumber()} + {partner.GetBadgeNumber()}");
+                ModLogger.Debug($"✓ Assigned coordinated patrol: {requestingGuard.GetBadgeNumber()} + {partner.GetBadgeNumber()}");
             }
 
             yield break;
@@ -2189,7 +2403,7 @@ namespace Behind_Bars.Systems.NPCs
                 if (officer.GetRole() == ParoleOfficerBehavior.ParoleOfficerRole.SupervisingOfficer)
                 {
                     paroleSupervisor = officer;
-                    ModLogger.Info($"Registered supervising officer: {officer.GetBadgeNumber()}");
+                    ModLogger.Debug($"Registered supervising officer: {officer.GetBadgeNumber()}");
                 }
 
                 ModLogger.Debug($"Registered officer {officer.GetBadgeNumber()} with PrisonNPCManager");
@@ -2208,7 +2422,7 @@ namespace Behind_Bars.Systems.NPCs
                 if (officer == paroleSupervisor)
                 {
                     paroleSupervisor = null;
-                    ModLogger.Info($"Unregistered intake officer: {officer.GetBadgeNumber()}");
+                    ModLogger.Debug($"Unregistered intake officer: {officer.GetBadgeNumber()}");
                 }
 
                 ModLogger.Debug($"Unregistered officer {officer.GetBadgeNumber()} from PrisonNPCManager");
@@ -2240,7 +2454,7 @@ namespace Behind_Bars.Systems.NPCs
 
                 requestingOfficer.StartPatrol();
                 partner.StartPatrol();
-                ModLogger.Info($"✓ Assigned coordinated patrol: {requestingOfficer.GetBadgeNumber()} + {partner.GetBadgeNumber()}");
+                ModLogger.Debug($"✓ Assigned coordinated patrol: {requestingOfficer.GetBadgeNumber()} + {partner.GetBadgeNumber()}");
             }
 
             yield break;
@@ -2417,7 +2631,7 @@ namespace Behind_Bars.Systems.NPCs
                 var dialogueController = guardObject.AddComponent<JailNPCDialogueController>();
                 ModLogger.Debug($"✓ JailNPCDialogueController added to guard {guardObject.name}");
 
-                ModLogger.Info($"✓ Audio system configured for guard: {guardObject.name}");
+                ModLogger.Debug($"✓ Audio system configured for guard: {guardObject.name}");
             }
             catch (Exception e)
             {
@@ -2458,16 +2672,16 @@ namespace Behind_Bars.Systems.NPCs
 
             if (guardBehavior != null)
             {
-                ModLogger.Info($"About to initialize GuardBehavior for {name} with assignment {assignment}");
+                ModLogger.Debug($"About to initialize GuardBehavior for {name} with assignment {assignment}");
                 try
                 {
                     guardBehavior.Initialize(assignment, badge);
-                    ModLogger.Info($"GuardBehavior initialization completed for {name}");
+                    ModLogger.Debug($"GuardBehavior initialization completed for {name}");
 
                     // Force registration if it's an intake officer
                     if (assignment == GuardBehavior.GuardAssignment.Booking0)
                     {
-                        ModLogger.Info($"Manually registering intake officer {name}");
+                        ModLogger.Debug($"Manually registering intake officer {name}");
                         if (PrisonNPCManager.Instance != null)
                         {
                             PrisonNPCManager.Instance.RegisterGuard(guardBehavior);
@@ -2484,7 +2698,7 @@ namespace Behind_Bars.Systems.NPCs
                 ModLogger.Error($"GuardBehavior component not found on guard {name}");
             }
 
-            ModLogger.Info($"Prison guard {name} initialized with badge {badge} and assignment {assignment}");
+            ModLogger.Debug($"Prison guard {name} initialized with badge {badge} and assignment {assignment}");
         }
 
         private void Start()
@@ -2528,16 +2742,16 @@ namespace Behind_Bars.Systems.NPCs
 
             if (officerBehavior != null)
             {
-                ModLogger.Info($"About to initialize ParoleOfficerBehavior for {name} with assignment {assignment}");
+                ModLogger.Debug($"About to initialize ParoleOfficerBehavior for {name} with assignment {assignment}");
                 try
                 {
                     officerBehavior.Initialize(assignment, badge);
-                    ModLogger.Info($"ParoleOfficerBehavior initialization completed for {name}");
+                    ModLogger.Debug($"ParoleOfficerBehavior initialization completed for {name}");
 
                     // Force registration if it's a supervising officer
                     if (assignment == ParoleOfficerBehavior.ParoleOfficerAssignment.PoliceStationSupervisor)
                     {
-                        ModLogger.Info($"Manually registering supervising officer {name}");
+                        ModLogger.Debug($"Manually registering supervising officer {name}");
                         if (PrisonNPCManager.Instance != null)
                         {
                             PrisonNPCManager.Instance.RegisterParoleOfficer(officerBehavior);
@@ -2554,7 +2768,7 @@ namespace Behind_Bars.Systems.NPCs
                 ModLogger.Error($"GuardBehavior component not found on guard {name}");
             }
 
-            ModLogger.Info($"Prison guard {name} initialized with badge {badge} and assignment {assignment}");
+            ModLogger.Debug($"Prison guard {name} initialized with badge {badge} and assignment {assignment}");
         }
 
         private void Start()

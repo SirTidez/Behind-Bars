@@ -161,7 +161,7 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             shiftStartTime = Time.time;
-            ModLogger.Info($"GuardBehavior initialized: {role} guard {badgeNumber} at {assignment}");
+            ModLogger.Debug($"GuardBehavior initialized: {role} guard {badgeNumber} at {assignment}");
         }
 
         public void Initialize(GuardAssignment guardAssignment, string badge = "")

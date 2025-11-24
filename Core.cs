@@ -50,7 +50,8 @@ using Il2CppScheduleOne.DevUtilities;
     Constants.MOD_VERSION,
     Constants.MOD_AUTHOR
 )]
-[assembly: MelonColor(1, 255, 0, 0)]
+[assembly: MelonColor(0, 255, 0, 255)]
+[assembly: MelonAdditionalCredits("Dreous - Jail Scripting and Unity work | Spec - Assets")]
 [assembly: MelonGame("TVGS", "Schedule I")]
 
 namespace Behind_Bars
@@ -89,12 +90,21 @@ namespace Behind_Bars
         private static MelonPreferences_Category? _prefsCategory;
         private static MelonPreferences_Entry<KeyCode>? _bailoutKeyPreference;
         public static KeyCode BailoutKey => _bailoutKeyPreference?.Value ?? KeyCode.B;
+        
+        // Update checking preferences
+        private static MelonPreferences_Entry<long>? _lastUpdateCheckEntry;
+        private static MelonPreferences_Entry<string>? _cachedLatestVersionEntry;
+        private static MelonPreferences_Entry<bool>? _enableUpdateCheckingEntry;
+        
+        // Debug logging preference
+        private static MelonPreferences_Entry<bool>? _enableDebugLoggingEntry;
+        public static bool EnableDebugLogging => _enableDebugLoggingEntry?.Value ?? false;
 
         public override void OnInitializeMelon()
         {
             Instance = this;
 #if !MONO
-            ClassInjector.RegisterTypeInIl2Cpp<ToiletSink>();
+            /*ClassInjector.RegisterTypeInIl2Cpp<ToiletSink>();
             ClassInjector.RegisterTypeInIl2Cpp<ToiletSinkManager>();
             ClassInjector.RegisterTypeInIl2Cpp<BunkBed>();
             ClassInjector.RegisterTypeInIl2Cpp<BunkBedManager>();
@@ -103,7 +113,7 @@ namespace Behind_Bars
             ClassInjector.RegisterTypeInIl2Cpp<CellTable>();
             ClassInjector.RegisterTypeInIl2Cpp<CellTableManager>();
             ClassInjector.RegisterTypeInIl2Cpp<JailAsset>();
-            ClassInjector.RegisterTypeInIl2Cpp<JailManager>();
+            ClassInjector.RegisterTypeInIl2Cpp<JailManager>();*/
 
             // Register Jail System Components
             ClassInjector.RegisterTypeInIl2Cpp<JailController>();
@@ -142,6 +152,7 @@ namespace Behind_Bars
             ClassInjector.RegisterTypeInIl2Cpp<BehindBarsUIWrapper>();
             ClassInjector.RegisterTypeInIl2Cpp<WantedLevelUI>();
             ClassInjector.RegisterTypeInIl2Cpp<OfficerCommandUI>();
+            ClassInjector.RegisterTypeInIl2Cpp<UpdateNotificationUI>();
 
             // Register Booking System Components
             ClassInjector.RegisterTypeInIl2Cpp<BookingProcess>();
@@ -176,14 +187,51 @@ namespace Behind_Bars
                 "Key to press for bailout payment",
                 "The key binding used to pay bail and get released early from jail"
             );
-            ModLogger.Info($"Bailout key preference initialized: {BailoutKey}");
+            ModLogger.Debug($"Bailout key preference initialized: {BailoutKey}");
+            
+            // Initialize update checking preferences
+            _lastUpdateCheckEntry = _prefsCategory.CreateEntry<long>(
+                "LastUpdateCheck",
+                0,
+                "Last update check timestamp",
+                "Unix timestamp of last update check"
+            );
+            _cachedLatestVersionEntry = _prefsCategory.CreateEntry<string>(
+                "CachedLatestVersion",
+                "",
+                "Cached latest version",
+                "Cached version from last check"
+            );
+            _enableUpdateCheckingEntry = _prefsCategory.CreateEntry<bool>(
+                "EnableUpdateChecking",
+                Constants.ENABLE_UPDATE_CHECKING,
+                "Enable update checking",
+                "Check for mod updates on menu load"
+            );
+            
+            // Initialize debug logging preference (default: false)
+            _enableDebugLoggingEntry = _prefsCategory.CreateEntry<bool>(
+                "EnableDebugLogging",
+                false,
+                "Enable debug logging",
+                "Show detailed debug logs. Enable this if you're experiencing issues and need to report bugs. Warning: This will produce a lot of log output."
+            );
+            
+            // Initialize UpdateChecker with preferences
+            Utils.UpdateChecker.InitializePreferences(
+                _lastUpdateCheckEntry,
+                _cachedLatestVersionEntry,
+                _enableUpdateCheckingEntry
+            );
+            ModLogger.Debug("Update checking preferences initialized");
+            ModLogger.Info($"Debug logging: {(EnableDebugLogging ? "ENABLED" : "DISABLED")} (default: disabled)");
 
             // Initialize core systems
             HarmonyPatches.Initialize(this);
             
             // Initialize GameTimeManager first (needed by other systems)
             GameTimeManager.Instance.Initialize();
-            ModLogger.Info("GameTimeManager initialized");
+            ModLogger.Debug("GameTimeManager initialized");
             
             _jailSystem = new JailSystem();
             _jailSystem.Initialize(); // Initialize JailSystem components
@@ -191,20 +239,24 @@ namespace Behind_Bars
             // Initialize ReleaseManager for coordinated prisoner releases
             MelonLogger.Msg("[Core] Initializing ReleaseManager from Core.cs");
             var releaseManager = ReleaseManager.Instance; // This will create the singleton
-            ModLogger.Info("ReleaseManager initialized and ready for coordinated releases");
+            ModLogger.Debug("ReleaseManager initialized and ready for coordinated releases");
 
             _bailSystem = new BailSystem();
             
-            // Initialize crime detection UI
-            CrimeUIManager.Instance.Initialize();
+            // Note: BehindBarsUIManager (including WantedLevelUI) initialization moved to OnSceneWasLoaded to avoid initializing in menu
             _courtSystem = new CourtSystem();
             _paroleSystem = new ParoleSystem();
             FileUtilities.Initialize();
             _fileUtilities = FileUtilities.Instance;
 
+            // Initialize SaveableTestSystem for testing (Alt + letter keybinds)
+            // Accessing Instance will create the GameObject and component
+            var testSystem = Systems.Testing.SaveableTestSystem.Instance;
+            ModLogger.Debug("SaveableTestSystem initialized - Use Alt+S/L/R/P/D/C for testing");
+
             // Initialize preset parole officer routes
             PresetParoleOfficerRoutes.InitializePatrolPoints();
-            ModLogger.Info("Preset parole officer routes initialized");
+            ModLogger.Debug("Preset parole officer routes initialized");
 
             //AssetManager = new AssetManager();
             //AssetManager.Init();
@@ -216,7 +268,7 @@ namespace Behind_Bars
             SceneManager.activeSceneChanged += OnSceneChanged;
 #endif
 
-            ModLogger.Info("Behind Bars initialized with all systems");
+            ModLogger.Debug("Behind Bars initialized with all systems");
         }
 
         public override void OnSceneWasInitialized(int buildIndex, string sceneName)
@@ -228,11 +280,8 @@ namespace Behind_Bars
             {
                 if (sceneName == "Main")
                 {
-                    // Initialize UI system
-                    MelonCoroutines.Start(InitializeUISystem());
-                    
-                    // Load and setup jail from asset bundle (simplified approach)
-                    MelonCoroutines.Start(SetupJail());
+                    // Show loading screen and coordinate all loading phases
+                    MelonCoroutines.Start(LoadModWithProgress());
                 }
             }
             catch (Exception e)
@@ -241,19 +290,199 @@ namespace Behind_Bars
             }
         }
 
+        /// <summary>
+        /// Master loading coroutine that shows progress and coordinates all loading phases
+        /// </summary>
+        private IEnumerator LoadModWithProgress()
+        {
+            // Show loading screen immediately
+            BehindBarsUIManager.Instance.ShowLoadingScreen("Loading Behind Bars Mod...");
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0f, "Initializing...");
+
+            yield return new WaitForSeconds(0.1f); // Small delay to ensure UI is visible
+
+            // Phase 1: UI System Initialization (0-20%)
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.05f, "Waiting for UI systems...");
+            yield return new WaitForSeconds(0.2f);
+
+            // Wait for essential systems to be ready
+#if !MONO
+            while (true)
+            {
+                try
+                {
+                    var instance = PlayerSingleton<AppsCanvas>.Instance;
+                    if (instance != null && instance.Pointer != System.IntPtr.Zero)
+                        break;
+                }
+                catch
+                {
+                    // Instance is null or not ready
+                }
+                yield return null;
+            }
+#else
+            while (PlayerSingleton<AppsCanvas>.Instance == null)
+            {
+                yield return null;
+            }
+#endif
+
+            // Load asset bundle BEFORE initializing UI manager (UI prefab is in the bundle)
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.10f, "Loading asset bundle...");
+            yield return new WaitForSeconds(0.2f);
+            
+            // Load the behind-bars bundle and cache it
+            if (CachedJailBundle == null)
+            {
+                ModLogger.Debug("Loading jail asset bundle for UI prefab...");
+                CachedJailBundle = Utils.AssetBundleUtils.LoadAssetBundle("Behind_Bars.behind_bars");
+                if (CachedJailBundle == null)
+                {
+                    ModLogger.Error("Failed to load behind-bars bundle - UI prefab will not be available");
+                }
+                else
+                {
+                    ModLogger.Debug("✓ Jail asset bundle loaded successfully");
+                }
+            }
+
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.15f, "Initializing UI manager...");
+            yield return new WaitForSeconds(0.5f);
+
+            try
+            {
+                BehindBarsUIManager.Instance.Initialize();
+                ModLogger.Debug("✓ Behind Bars UI system initialized successfully");
+            }
+            catch (Exception e)
+            {
+                ModLogger.Error($"Error initializing UI system: {e.Message}");
+            }
+
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.20f, "UI system ready");
+
+            // Phase 2: Jail Setup and Asset Spawning (20-70%)
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.25f, "Setting up jail...");
+            yield return new WaitForSeconds(0.2f);
+
+            // Start jail setup in parallel
+            var setupJailCoroutine = SetupJail();
+            MelonCoroutines.Start(setupJailCoroutine);
+
+            // Track jail setup progress (simulated - actual progress depends on SetupJail implementation)
+            float jailProgress = 0.25f;
+            while (setupJailCoroutine.MoveNext())
+            {
+                // Increment progress gradually during jail setup
+                jailProgress = Mathf.Min(jailProgress + 0.01f, 0.70f);
+                BehindBarsUIManager.Instance.UpdateLoadingProgress(jailProgress, "Spawning jail assets...");
+                yield return setupJailCoroutine.Current;
+            }
+
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.70f, "Jail setup complete");
+
+            // Phase 3: Wait for NPC Spawning (70-90%)
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.75f, "Spawning NPCs...");
+            yield return new WaitForSeconds(0.5f);
+
+            // Wait for PrisonNPCManager to finish spawning all NPCs
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.80f, "Spawning guards and inmates...");
+            
+            var npcManager = Systems.NPCs.PrisonNPCManager.Instance;
+            if (npcManager != null)
+            {
+                // Wait for NPC spawning to complete
+                float npcProgress = 0.80f;
+                int maxWaitSeconds = 30; // Wait up to 30 seconds for NPC spawning
+                int waitSeconds = 0;
+                
+                while (!npcManager.IsSpawningComplete && waitSeconds < maxWaitSeconds)
+                {
+                    // Increment progress gradually
+                    npcProgress = Mathf.Min(npcProgress + 0.002f, 0.90f);
+                    BehindBarsUIManager.Instance.UpdateLoadingProgress(npcProgress, "Spawning NPCs...");
+                    
+                    yield return new WaitForSeconds(0.5f);
+                    waitSeconds++;
+                }
+                
+                if (npcManager.IsSpawningComplete)
+                {
+                    ModLogger.Debug("✓ NPC spawning completed");
+                }
+                else
+                {
+                    ModLogger.Warn("NPC spawning timeout - proceeding anyway");
+                }
+            }
+            else
+            {
+                // NPC Manager not ready yet, wait a bit
+                ModLogger.Warn("PrisonNPCManager not found - waiting for initialization");
+                yield return new WaitForSeconds(3f);
+            }
+
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.90f, "NPCs spawned");
+
+            // Phase 4: Player Systems Initialization (90-100%)
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.92f, "Initializing player systems...");
+            yield return new WaitForSeconds(0.3f);
+
+            // Wait for player to be ready
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.94f, "Waiting for player...");
+            
+            // Start player systems initialization
+            MelonCoroutines.Start(InitializePlayerSystems());
+            
+            // Simulate progress while player systems initialize
+            float playerProgress = 0.94f;
+            for (int i = 0; i < 20; i++) // Wait up to 2 seconds for player systems
+            {
+                playerProgress = Mathf.Min(playerProgress + 0.002f, 0.98f);
+                BehindBarsUIManager.Instance.UpdateLoadingProgress(playerProgress, "Setting up player systems...");
+                yield return new WaitForSeconds(0.1f);
+            }
+
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.98f, "Finalizing...");
+            yield return new WaitForSeconds(0.5f);
+
+            // Complete
+            BehindBarsUIManager.Instance.UpdateLoadingProgress(1.0f, "Complete!");
+            yield return new WaitForSeconds(1.0f); // Show completion message for 1 second
+
+            // Hide loading screen
+            BehindBarsUIManager.Instance.HideLoadingScreen();
+            ModLogger.Debug("✓ Behind Bars mod loading complete");
+        }
+
         public override void OnSceneWasLoaded(int buildIndex, string sceneName)
         {
             ModLogger.Debug($"Scene loaded: {sceneName}");
+            
+            // Check for updates when entering Menu scene (always check on first load, ignore cache)
+            if (sceneName == "Menu" && _enableUpdateCheckingEntry?.Value == true)
+            {
+                ModLogger.Info("Menu scene loaded - checking for updates (first load check)");
+                MelonCoroutines.Start(Utils.UpdateChecker.CheckForUpdatesAsync(forceCheck: false));
+            }
+            
             if (sceneName == "Main")
             {
                 ModLogger.Debug("Main scene loaded, initializing player systems");
                 MelonCoroutines.Start(InitializePlayerSystems());
             }
+            else if (sceneName != "Menu" && sceneName != "Loading")
+            {
+                // Initialize BehindBarsUIManager (includes wanted level UI) when entering any game scene (not Main menu, Menu, or Loading)
+                ModLogger.Debug($"Initializing BehindBarsUIManager for scene: {sceneName}");
+                BehindBarsUIManager.Instance.Initialize();
+            }
         }
 
         private IEnumerator InitializePlayerSystems()
         {
-            ModLogger.Info("Waiting for player to be ready...");
+            ModLogger.Debug("Waiting for player to be ready...");
 #if !MONO
             // IL2CPP - More robust null checking
             while (true)
@@ -283,7 +512,7 @@ namespace Behind_Bars
                 _playerHandlers[Player.Local] = playerHandler;
                 // Arrest handling is centralized in HarmonyPatches; no direct listener needed here
 
-                ModLogger.Info("Player systems initialized successfully");
+                ModLogger.Debug("Player systems initialized successfully");
                 
                 // Restore parole tracking if player is on parole
                 MelonCoroutines.Start(RestoreParoleIfActive(Player.Local));
@@ -348,12 +577,12 @@ namespace Behind_Bars
                     yield break;
                 }
                 
-                ModLogger.Info($"Restoring parole tracking for {player.name}: {remainingTime} game minutes remaining ({GameTimeManager.FormatGameTime(remainingTime)})");
+                ModLogger.Debug($"Restoring parole tracking for {player.name}: {remainingTime} game minutes remaining ({GameTimeManager.FormatGameTime(remainingTime)})");
                 
                 // Restore parole tracking
                 ParoleTimeTracker.Instance.StartTracking(player, remainingTime, (p) =>
                 {
-                    ModLogger.Info($"Restored parole completed for {p.name}");
+                    ModLogger.Debug($"Restored parole completed for {p.name}");
                     if (_paroleSystem != null)
                     {
                         _paroleSystem.CompleteParoleForPlayer(p);
@@ -384,7 +613,7 @@ namespace Behind_Bars
                     if (paroleRecords != null)
                     {
                         paroleRecords[player] = runtimeRecord;
-                        ModLogger.Info($"Restored parole runtime record for {player.name}");
+                        ModLogger.Debug($"Restored parole runtime record for {player.name}");
                         
                         // Start parole monitoring coroutine using reflection
                         var monitorMethod = paroleSystemType.GetMethod("MonitorParole", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
@@ -394,7 +623,7 @@ namespace Behind_Bars
                             if (coroutine != null)
                             {
                                 MelonCoroutines.Start(coroutine as IEnumerator);
-                                ModLogger.Info($"Restarted parole monitoring for {player.name}");
+                                ModLogger.Debug($"Restarted parole monitoring for {player.name}");
                             }
                         }
                     }
@@ -426,7 +655,7 @@ namespace Behind_Bars
                     if (isParole && remainingTime > 0)
                     {
                         BehindBarsUIManager.Instance.ShowParoleStatus();
-                        ModLogger.Info($"Showed parole UI for {player.name} after scene load");
+                        ModLogger.Debug($"Showed parole UI for {player.name} after scene load");
                     }
                 }
             }
@@ -434,7 +663,7 @@ namespace Behind_Bars
 
         private static IEnumerator InitializeUISystem()
         {
-            ModLogger.Info("Initializing Behind Bars UI system...");
+            ModLogger.Debug("Initializing Behind Bars UI system...");
             
             // Wait for essential systems to be ready
 #if !MONO
@@ -464,7 +693,7 @@ namespace Behind_Bars
             try
             {
                 BehindBarsUIManager.Instance.Initialize();
-                ModLogger.Info("✓ Behind Bars UI system initialized successfully");
+                ModLogger.Debug("✓ Behind Bars UI system initialized successfully");
             }
             catch (Exception e)
             {
@@ -473,7 +702,7 @@ namespace Behind_Bars
             }
             
             // Test the UI system (optional - can be removed in production)
-            if (Constants.DEBUG_LOGGING)
+            if (EnableDebugLogging)
             {
                 yield return new WaitForSeconds(2f);
                 TestUISystem();
@@ -482,7 +711,7 @@ namespace Behind_Bars
         
         private static void TestUISystem()
         {
-            ModLogger.Info("Testing Behind Bars UI system...");
+            ModLogger.Debug("Testing Behind Bars UI system...");
             
             try
             {
@@ -493,7 +722,7 @@ namespace Behind_Bars
                     bailInfo: "$500"
                 );
                 
-                ModLogger.Info("✓ Test UI displayed successfully - check your screen!");
+                ModLogger.Debug("✓ Test UI displayed successfully - check your screen!");
                 
                 // Auto-hide after 10 seconds for testing
                 MelonCoroutines.Start(AutoHideTestUI());
@@ -508,12 +737,12 @@ namespace Behind_Bars
         {
             yield return new WaitForSeconds(10f);
             BehindBarsUIManager.Instance.HideJailInfoUI();
-            ModLogger.Info("Test UI auto-hidden after 10 seconds");
+            ModLogger.Debug("Test UI auto-hidden after 10 seconds");
         }
 
         private static IEnumerator SetupJail()
         {
-            ModLogger.Info("Setting up jail from asset bundle...");
+            ModLogger.Debug("Setting up jail from asset bundle...");
 
             // Load the behind-bars bundle specifically and cache it
             if (CachedJailBundle == null)
@@ -528,12 +757,15 @@ namespace Behind_Bars
                 yield break;
             }
 
+            // Safety: Retry loading UI prefab now that bundle is confirmed loaded
+            BehindBarsUIManager.Instance.RetryLoadUIPrefab();
+
             // Debug: List all assets in the bundle
             var allAssets = jailBundle.GetAllAssetNames();
-            ModLogger.Info($"Assets in bundle ({allAssets.Length} total):");
+            ModLogger.Debug($"Assets in bundle ({allAssets.Length} total):");
             foreach (var asset in allAssets)
             {
-                ModLogger.Info($"  - {asset}");
+                ModLogger.Debug($"  - {asset}");
             }
 
             // Also list all GameObjects
@@ -542,15 +774,15 @@ namespace Behind_Bars
 #else
             var gameObjects = jailBundle.LoadAllAssets(Il2CppInterop.Runtime.Il2CppType.Of<GameObject>());
 #endif
-            ModLogger.Info($"GameObjects in bundle ({gameObjects.Length} total):");
+            ModLogger.Debug($"GameObjects in bundle ({gameObjects.Length} total):");
             for (int i = 0; i < gameObjects.Length; i++)
             {
 #if MONO
                 var obj = gameObjects[i];
-                ModLogger.Info($"  - {obj?.name ?? "<null>"}");
+                ModLogger.Debug($"  - {obj?.name ?? "<null>"}");
 #else
                 var obj = gameObjects[i].TryCast<GameObject>();
-                ModLogger.Info($"  - {obj?.name ?? "<null>"}");
+                ModLogger.Debug($"  - {obj?.name ?? "<null>"}");
 #endif
             }
 
@@ -586,7 +818,7 @@ namespace Behind_Bars
             var jail = Object.Instantiate(jailPrefab, new Vector3(66.5362f, 8.5001f, -220.6056f), Quaternion.identity);
             jail.name = "[Prefab] JailHouseBlues";
 
-            ModLogger.Info($"Jail spawned successfully at {jail.transform.position}");
+            ModLogger.Debug($"Jail spawned successfully at {jail.transform.position}");
 
             // Attach NavMesh data from asset bundle (asset bundles don't preserve NavMesh data)
             yield return new WaitForSeconds(0.5f); // Let components settle first
@@ -601,18 +833,18 @@ namespace Behind_Bars
         {
             try
             {
-                ModLogger.Info("Initializing JailController system...");
+                ModLogger.Debug("Initializing JailController system...");
 
                 // Check if the jail already has a JailController
                 var existingController = jail.GetComponent<JailController>();
                 if (existingController != null)
                 {
-                    ModLogger.Info("Found existing JailController on jail prefab");
+                    ModLogger.Debug("Found existing JailController on jail prefab");
                     JailController = existingController;
                 }
                 else
                 {
-                    ModLogger.Info("Adding JailController component to jail");
+                    ModLogger.Debug("Adding JailController component to jail");
                     JailController = jail.AddComponent<JailController>();
                 }
 
@@ -620,15 +852,15 @@ namespace Behind_Bars
                 if (JailController != null)
                 {
                     LoadAndAssignJailPrefabs(JailController);
-                    ModLogger.Info("✓ JailController prefabs loaded");
+                    ModLogger.Debug("✓ JailController prefabs loaded");
 
                     // Manually call SetupDoors after prefabs are loaded
                     JailController.SetupDoors();
-                    ModLogger.Info("✓ Door setup completed after prefab loading");
+                    ModLogger.Debug("✓ Door setup completed after prefab loading");
 
                     // Setup exit door specifically
                     SetupExitDoor(JailController);
-                    ModLogger.Info("✓ Exit door setup completed");
+                    ModLogger.Debug("✓ Exit door setup completed");
 
                     // Log status after a frame to let everything complete
                     MelonCoroutines.Start(LogStatusAfterFrame());
@@ -654,7 +886,7 @@ namespace Behind_Bars
             yield return null;
             yield return new WaitForSeconds(0.5f); // Extra time for initialization
             
-            ModLogger.Info("Logging jail status after initialization...");
+            ModLogger.Debug("Logging jail status after initialization...");
             LogJailControllerStatus();
         }
 
@@ -663,24 +895,24 @@ namespace Behind_Bars
             // Wait for everything to be fully initialized before creating NPCs
             yield return new WaitForSeconds(2f);
 
-            ModLogger.Info("Creating jail NPCs with custom appearances...");
+            ModLogger.Debug("Creating jail NPCs with custom appearances...");
 
             // Create PrisonNPCManager to handle all NPC spawning and management
             if (JailController != null)
             {
                 var npcManager = JailController.gameObject.AddComponent<PrisonNPCManager>();
-                ModLogger.Info("✓ PrisonNPCManager added to JailController");
+                ModLogger.Debug("✓ PrisonNPCManager added to JailController");
                 
                 // Add CellAssignmentManager for cell tracking
                 var cellManager = JailController.gameObject.AddComponent<CellAssignmentManager>();
-                ModLogger.Info("✓ CellAssignmentManager added to JailController");
+                ModLogger.Debug("✓ CellAssignmentManager added to JailController");
             }
             else
             {
                 ModLogger.Error("ActiveJailController is null - cannot add managers");
             }
 
-            ModLogger.Info("✓ Jail NPCs created successfully with custom appearances");
+            ModLogger.Debug("✓ Jail NPCs created successfully with custom appearances");
             
             // Door interaction system temporarily disabled to reduce log spam
             // NPCDoorInteraction.InitializeDoorDatabase();
@@ -693,7 +925,7 @@ namespace Behind_Bars
             {
                 if (JailNavMeshSetup.HasValidNavMesh(jail.transform))
                 {
-                    ModLogger.Info("✓ NavMesh validation passed");
+                    ModLogger.Debug("✓ NavMesh validation passed");
                 }
                 else
                 {
@@ -706,7 +938,7 @@ namespace Behind_Bars
             // Initialize booking system
             InitializeBookingSystem();
             
-            ModLogger.Info("✓ NPC initialization completed");
+            ModLogger.Debug("✓ NPC initialization completed");
         }
         
         /// <summary>
@@ -716,7 +948,7 @@ namespace Behind_Bars
         {
             try
             {
-                ModLogger.Info("Initializing booking system...");
+                ModLogger.Debug("Initializing booking system...");
                 
                 if (JailController == null)
                 {
@@ -731,17 +963,17 @@ namespace Behind_Bars
                 if (JailController.BookingProcessController == null)
                 {
                     JailController.BookingProcessController = jailGameObject.AddComponent<Behind_Bars.Systems.Jail.BookingProcess>();
-                    ModLogger.Info("✓ BookingProcess component added to jail");
+                    ModLogger.Debug("✓ BookingProcess component added to jail");
                 }
                 else
                 {
-                    ModLogger.Info("✓ BookingProcess component already exists");
+                    ModLogger.Debug("✓ BookingProcess component already exists");
                 }
                 
                 // Find and set up booking stations
                 SetupBookingStations(jailGameObject.transform);
                 
-                ModLogger.Info("✓ Booking system initialized successfully");
+                ModLogger.Debug("✓ Booking system initialized successfully");
             }
             catch (System.Exception ex)
             {
@@ -772,11 +1004,11 @@ namespace Behind_Bars
                     if (mugshotComponent == null)
                     {
                         mugshotComponent = mugshotStation.gameObject.AddComponent<Behind_Bars.Systems.Jail.MugshotStation>();
-                        ModLogger.Info("✓ MugshotStation component added to main GameObject");
+                        ModLogger.Debug("✓ MugshotStation component added to main GameObject");
                     }
                     
                     // DO NOT add manual collider - let InteractableObject handle collision detection
-                    ModLogger.Info("MugshotStation setup complete - single component approach");
+                    ModLogger.Debug("MugshotStation setup complete - single component approach");
                 }
                 else
                 {
@@ -791,11 +1023,11 @@ namespace Behind_Bars
                     if (scannerComponent == null)
                     {
                         scannerComponent = scannerStation.gameObject.AddComponent<Behind_Bars.Systems.Jail.ScannerStation>();
-                        ModLogger.Info("✓ ScannerStation component added to main GameObject");
+                        ModLogger.Debug("✓ ScannerStation component added to main GameObject");
                     }
                     
                     // DO NOT add ScannerStation to Interaction child - this causes duplicates!
-                    ModLogger.Info("ScannerStation setup complete - single component approach");
+                    ModLogger.Debug("ScannerStation setup complete - single component approach");
                 }
                 else
                 {
@@ -803,17 +1035,17 @@ namespace Behind_Bars
                 }
 
                 // Set up Exit Scanner Station - SINGLE COMPONENT ONLY
-                ModLogger.Info("Searching for ExitScannerStation...");
+                ModLogger.Debug("Searching for ExitScannerStation...");
                 Transform hallway = jailTransform.Find("Hallway");
                 Transform exitScannerStation = null;
 
                 if (hallway != null)
                 {
-                    ModLogger.Info($"Found Hallway at {hallway.name}");
+                    ModLogger.Debug($"Found Hallway at {hallway.name}");
                     exitScannerStation = hallway.Find("ExitScannerStation");
                     if (exitScannerStation != null)
                     {
-                        ModLogger.Info($"Found ExitScannerStation in Hallway: {exitScannerStation.name}");
+                        ModLogger.Debug($"Found ExitScannerStation in Hallway: {exitScannerStation.name}");
                     }
                     else
                     {
@@ -830,7 +1062,7 @@ namespace Behind_Bars
                     exitScannerStation = jailTransform.Find("ExitScannerStation");
                     if (exitScannerStation != null)
                     {
-                        ModLogger.Info($"Found ExitScannerStation directly in jail: {exitScannerStation.name}");
+                        ModLogger.Debug($"Found ExitScannerStation directly in jail: {exitScannerStation.name}");
                     }
                 }
 
@@ -840,14 +1072,14 @@ namespace Behind_Bars
                     if (exitScannerComponent == null)
                     {
                         exitScannerComponent = exitScannerStation.gameObject.AddComponent<Behind_Bars.Systems.Jail.ExitScannerStation>();
-                        ModLogger.Info("✓ ExitScannerStation component added to GameObject at " + exitScannerStation.name);
+                        ModLogger.Debug("✓ ExitScannerStation component added to GameObject at " + exitScannerStation.name);
                     }
                     else
                     {
-                        ModLogger.Info("ExitScannerStation component already exists");
+                        ModLogger.Debug("ExitScannerStation component already exists");
                     }
 
-                    ModLogger.Info("ExitScannerStation setup complete - found at " + exitScannerStation.name);
+                    ModLogger.Debug("ExitScannerStation setup complete - found at " + exitScannerStation.name);
                 }
                 else
                 {
@@ -857,15 +1089,15 @@ namespace Behind_Bars
                     for (int i = 0; i < jailTransform.childCount; i++)
                     {
                         var child = jailTransform.GetChild(i);
-                        ModLogger.Info($"Jail child {i}: {child.name}");
+                        ModLogger.Debug($"Jail child {i}: {child.name}");
 
                         if (child.name == "Hallway")
                         {
-                            ModLogger.Info($"Found Hallway, checking its children:");
+                            ModLogger.Debug($"Found Hallway, checking its children:");
                             for (int j = 0; j < child.childCount; j++)
                             {
                                 var grandchild = child.GetChild(j);
-                                ModLogger.Info($"  Hallway child {j}: {grandchild.name}");
+                                ModLogger.Debug($"  Hallway child {j}: {grandchild.name}");
                             }
                         }
                     }
@@ -887,10 +1119,10 @@ namespace Behind_Bars
                     if (inventoryComponent == null)
                     {
                         inventoryComponent = inventoryDropOff.gameObject.AddComponent<Behind_Bars.Systems.Jail.InventoryDropOffStation>();
-                        ModLogger.Info("✓ InventoryDropOffStation component added to InventoryDropOff GameObject");
+                        ModLogger.Debug("✓ InventoryDropOffStation component added to InventoryDropOff GameObject");
                     }
                     
-                    ModLogger.Info("InventoryDropOffStation setup complete");
+                    ModLogger.Debug("InventoryDropOffStation setup complete");
                 }
                 else
                 {
@@ -910,10 +1142,10 @@ namespace Behind_Bars
                     if (jailPickupComponent == null)
                     {
                         jailPickupComponent = jailInventoryPickup.gameObject.AddComponent<Behind_Bars.Systems.Jail.JailInventoryPickupStation>();
-                        ModLogger.Info("✓ JailInventoryPickupStation component added to JailInventoryPickup GameObject");
+                        ModLogger.Debug("✓ JailInventoryPickupStation component added to JailInventoryPickup GameObject");
                     }
 
-                    ModLogger.Info("JailInventoryPickupStation setup complete");
+                    ModLogger.Debug("JailInventoryPickupStation setup complete");
                 }
                 else
                 {
@@ -933,17 +1165,17 @@ namespace Behind_Bars
                     if (pickupComponent == null)
                     {
                         pickupComponent = inventoryPickup.gameObject.AddComponent<Behind_Bars.Systems.Jail.InventoryPickupStation>();
-                        ModLogger.Info("✓ InventoryPickupStation component added to InventoryPickup GameObject");
+                        ModLogger.Debug("✓ InventoryPickupStation component added to InventoryPickup GameObject");
                     }
 
-                    ModLogger.Info("InventoryPickupStation setup complete");
+                    ModLogger.Debug("InventoryPickupStation setup complete");
                 }
                 else
                 {
                     ModLogger.Warn("Storage/InventoryPickup not found in jail hierarchy");
                 }
                 
-                ModLogger.Info("✓ Booking stations setup completed");
+                ModLogger.Debug("✓ Booking stations setup completed");
             }
             catch (System.Exception ex)
             {
@@ -955,7 +1187,7 @@ namespace Behind_Bars
         {
             try
             {
-                ModLogger.Info("Loading jail prefabs from asset bundle...");
+                ModLogger.Debug("Loading jail prefabs from asset bundle...");
 
                 // Use the cached behind-bars bundle
                 var jailBundle = CachedJailBundle;
@@ -978,7 +1210,7 @@ namespace Behind_Bars
                 if (jailDoorPrefab != null)
                 {
                     controller.jailDoorPrefab = jailDoorPrefab;
-                    ModLogger.Info($"✓ Loaded JailDoor prefab: {jailDoorPrefab.name}");
+                    ModLogger.Debug($"✓ Loaded JailDoor prefab: {jailDoorPrefab.name}");
                 }
                 else
                 {
@@ -998,7 +1230,7 @@ namespace Behind_Bars
                 if (steelDoorPrefab != null)
                 {
                     controller.steelDoorPrefab = steelDoorPrefab;
-                    ModLogger.Info($"✓ Loaded SteelDoor prefab: {steelDoorPrefab.name}");
+                    ModLogger.Debug($"✓ Loaded SteelDoor prefab: {steelDoorPrefab.name}");
                 }
                 else
                 {
@@ -1014,14 +1246,14 @@ namespace Behind_Bars
                 if (cameraPrefab != null)
                 {
                     controller.securityCameraPrefab = cameraPrefab;
-                    ModLogger.Info("✓ Loaded SecurityCamera prefab");
+                    ModLogger.Debug("✓ Loaded SecurityCamera prefab");
                 }
                 else
                 {
                     ModLogger.Warn("SecurityCamera prefab not found in bundle (optional)");
                 }
 
-                ModLogger.Info("Jail prefab loading completed");
+                ModLogger.Debug("Jail prefab loading completed");
             }
             catch (Exception e)
             {
@@ -1039,12 +1271,12 @@ namespace Behind_Bars
 
             try
             {
-                ModLogger.Info("=== JAIL CONTROLLER STATUS ===");
-                ModLogger.Info($"Cells discovered: {JailController.cells?.Count ?? 0}");
-                ModLogger.Info($"Holding cells discovered: {JailController.holdingCells?.Count ?? 0}");
-                ModLogger.Info($"Security cameras: {JailController.securityCameras?.Count ?? 0}");
-                ModLogger.Info($"Area lights: {JailController.areaLights?.Count ?? 0}");
-                ModLogger.Info($"Door prefabs loaded: JailDoor={JailController.jailDoorPrefab != null}, SteelDoor={JailController.steelDoorPrefab != null}");
+                ModLogger.Debug("=== JAIL CONTROLLER STATUS ===");
+                ModLogger.Debug($"Cells discovered: {JailController.cells?.Count ?? 0}");
+                ModLogger.Debug($"Holding cells discovered: {JailController.holdingCells?.Count ?? 0}");
+                ModLogger.Debug($"Security cameras: {JailController.securityCameras?.Count ?? 0}");
+                ModLogger.Debug($"Area lights: {JailController.areaLights?.Count ?? 0}");
+                ModLogger.Debug($"Door prefabs loaded: JailDoor={JailController.jailDoorPrefab != null}, SteelDoor={JailController.steelDoorPrefab != null}");
 
                 // Check area initialization
                 var areas = new[]
@@ -1058,10 +1290,10 @@ namespace Behind_Bars
                     ("Showers", JailController.showers?.isInitialized ?? false)
                 };
 
-                ModLogger.Info("Area status:");
+                ModLogger.Debug("Area status:");
                 foreach (var (name, initialized) in areas)
                 {
-                    ModLogger.Info($"  {name}: {(initialized ? "✓ Initialized" : "✗ Not initialized")}");
+                    ModLogger.Debug($"  {name}: {(initialized ? "✓ Initialized" : "✗ Not initialized")}");
                 }
             }
             catch (Exception e)
@@ -1179,12 +1411,12 @@ namespace Behind_Bars
         {
             try
             {
-                ModLogger.Info("Starting jail door trigger setup...");
+                ModLogger.Debug("Starting jail door trigger setup...");
                 
                 // Setup only the specific jail door triggers under PatrolPoints
                 Behind_Bars.Utils.ManualDoorTriggerSetup.SetupJailDoorTriggers();
                 
-                ModLogger.Info("Jail door trigger setup completed!");
+                ModLogger.Debug("Jail door trigger setup completed!");
             }
             catch (Exception e)
             {
@@ -1204,7 +1436,7 @@ namespace Behind_Bars
                 bool success = Behind_Bars.Utils.ManualDoorTriggerSetup.SetupDoorTriggerByName(triggerName, doorName);
                 if (success)
                 {
-                    ModLogger.Info($"Successfully setup door trigger: {triggerName}");
+                    ModLogger.Debug($"Successfully setup door trigger: {triggerName}");
                 }
                 else
                 {
@@ -1239,7 +1471,7 @@ namespace Behind_Bars
                 // F9 key - Show crime details (debug)
                 if (Input.GetKeyDown(KeyCode.F9))
                 {
-                    CrimeUIManager.Instance.ShowCrimeDetails();
+                    BehindBarsUIManager.Instance.ShowCrimeDetails();
                 }
 
                 // F6 key - Quick 10-second jail sentence for release testing
@@ -1258,6 +1490,23 @@ namespace Behind_Bars
                 if (Input.GetKeyDown(KeyCode.F12))
                 {
                     TestSpawnNPCWithAvatar();
+                }
+
+                // Alt+0 key - Show/hide instructions screen (Message of the Day)
+                if (Input.GetKey(KeyCode.LeftAlt) && Input.GetKeyDown(KeyCode.Alpha0))
+                {
+                    if (BehindBarsUIManager.Instance != null)
+                    {
+                        // Toggle instructions screen
+                        if (BehindBarsUIManager.Instance.IsLoadingScreenVisible())
+                        {
+                            BehindBarsUIManager.Instance.HideLoadingScreen();
+                        }
+                        else
+                        {
+                            BehindBarsUIManager.Instance.ShowInstructions();
+                        }
+                    }
                 }
             }
             catch (Exception e)
@@ -1280,7 +1529,7 @@ namespace Behind_Bars
 #endif
                 if (player != null)
                 {
-                    ModLogger.Info("F12 pressed - Testing NPC spawn with working avatar system");
+                    ModLogger.Debug("F12 pressed - Testing NPC spawn with working avatar system");
 
                     // Spawn in front of player
                     var spawnPos = player.transform.position + (player.transform.forward * 3f);
@@ -1291,19 +1540,19 @@ namespace Behind_Bars
 
                     if (spawnGuard)
                     {
-                        ModLogger.Info("Spawning test GUARD with proper uniform...");
+                        ModLogger.Debug("Spawning test GUARD with proper uniform...");
                         testNPC = BaseNPCSpawner.SpawnGuard(spawnPos, "Officer", "Test", $"G{UnityEngine.Random.Range(1000, 9999)}");
                     }
                     else
                     {
-                        ModLogger.Info("Spawning test INMATE with orange jumpsuit...");
+                        ModLogger.Debug("Spawning test INMATE with orange jumpsuit...");
                         testNPC = BaseNPCSpawner.SpawnInmate(spawnPos, "Inmate", $"Test{UnityEngine.Random.Range(100, 999)}");
                     }
 
                     if (testNPC != null)
                     {
-                        ModLogger.Info($"✅ Test {(spawnGuard ? "GUARD" : "INMATE")} spawned successfully: {testNPC.name}");
-                        ModLogger.Info($"Appearance: {(spawnGuard ? "Blue uniform with police cap and combat boots" : "Orange jumpsuit with sandals")}");
+                        ModLogger.Debug($"✅ Test {(spawnGuard ? "GUARD" : "INMATE")} spawned successfully: {testNPC.name}");
+                        ModLogger.Debug($"Appearance: {(spawnGuard ? "Blue uniform with police cap and combat boots" : "Orange jumpsuit with sandals")}");
                     }
                     else
                     {
@@ -1337,7 +1586,7 @@ namespace Behind_Bars
                 {
                     Vector3 jailPosition = new Vector3(44.324f, 10.2846f, -218.7174f);
                     player.transform.position = jailPosition;
-                    ModLogger.Info($"✓ Teleported player to jail at {jailPosition}");
+                    ModLogger.Debug($"✓ Teleported player to jail at {jailPosition}");
                 }
                 else
                 {
@@ -1366,7 +1615,7 @@ namespace Behind_Bars
                 {
                     Vector3 tacoTicklersPosition = new Vector3(-30.4759f, 2.0734f, 61.9903f);
                     player.transform.position = tacoTicklersPosition;
-                    ModLogger.Info($"✓ Teleported player to Taco Ticklers at {tacoTicklersPosition}");
+                    ModLogger.Debug($"✓ Teleported player to Taco Ticklers at {tacoTicklersPosition}");
                 }
                 else
                 {
@@ -1393,7 +1642,7 @@ namespace Behind_Bars
 #endif
                 if (player != null)
                 {
-                    ModLogger.Info("F6 pressed - Quick 10-second jail for release testing!");
+                    ModLogger.Debug("F6 pressed - Quick 10-second jail for release testing!");
 
                     if (JailSystem != null && JailController != null)
                     {
@@ -1408,7 +1657,7 @@ namespace Behind_Bars
                         };
 
                         // Skip booking stations - go straight to cell assignment
-                        ModLogger.Info("Skipping booking process for quick test...");
+                        ModLogger.Debug("Skipping booking process for quick test...");
 
                         // Assign player to a cell
                         var cellManager = Behind_Bars.Systems.Jail.CellAssignmentManager.Instance;
@@ -1417,20 +1666,20 @@ namespace Behind_Bars
                             int cellNumber = cellManager.AssignPlayerToCell(player);
                             if (cellNumber >= 0)
                             {
-                                ModLogger.Info($"✓ Player assigned to cell {cellNumber}");
+                                ModLogger.Debug($"✓ Player assigned to cell {cellNumber}");
 
                                 // Teleport player to the cell
                                 var cell = JailController.GetCellByIndex(cellNumber);
                                 if (cell?.cellTransform != null)
                                 {
                                     player.transform.position = cell.cellTransform.position + Vector3.up * 1f;
-                                    ModLogger.Info($"✓ Player teleported to cell {cellNumber}");
+                                    ModLogger.Debug($"✓ Player teleported to cell {cellNumber}");
 
                                     // Close and lock the cell door
                                     if (JailController.doorController != null)
                                     {
                                         JailController.doorController.CloseJailCellDoor(cellNumber);
-                                        ModLogger.Info($"✓ Cell {cellNumber} door closed and locked");
+                                        ModLogger.Debug($"✓ Cell {cellNumber} door closed and locked");
                                     }
 
                                     // Start UI timer
@@ -1438,11 +1687,11 @@ namespace Behind_Bars
                                     {
                                         float bailAmount = JailSystem.CalculateBailAmount(testSentence.FineAmount, testSentence.Severity);
                                         BehindBarsUIManager.Instance.GetUIWrapper().StartDynamicUpdates(testSentence.JailTime, bailAmount);
-                                        ModLogger.Info($"✓ UI timer started: 10s jail time, ${bailAmount} bail");
+                                        ModLogger.Debug($"✓ UI timer started: 10s jail time, ${bailAmount} bail");
                                     }
 
-                                    ModLogger.Info("✓ Quick jail test complete - player in cell with 10-second sentence!");
-                                    ModLogger.Info("   Timer will trigger automatic release when complete");
+                                    ModLogger.Debug("✓ Quick jail test complete - player in cell with 10-second sentence!");
+                                    ModLogger.Debug("   Timer will trigger automatic release when complete");
                                 }
                                 else
                                 {
@@ -1489,14 +1738,14 @@ namespace Behind_Bars
 #endif
                 if (player != null)
                 {
-                    ModLogger.Info("F8 pressed - Triggering test arrest!");
+                    ModLogger.Debug("F8 pressed - Triggering test arrest!");
 
                     // Start the arrest process through JailSystem
                     if (JailSystem != null)
                     {
                         // Trigger immediate arrest using the existing system
                         MelonCoroutines.Start(JailSystem.HandleImmediateArrest(player));
-                        ModLogger.Info("✓ Test arrest triggered - player will be processed through booking");
+                        ModLogger.Debug("✓ Test arrest triggered - player will be processed through booking");
                     }
                     else
                     {
@@ -1521,12 +1770,12 @@ namespace Behind_Bars
         {
             try
             {
-                ModLogger.Info($"Scene changed from '{oldScene.name}' to '{newScene.name}'");
+                ModLogger.Debug($"Scene changed from '{oldScene.name}' to '{newScene.name}'");
 
                 // Clean up UI when leaving the main game scene
                 if (oldScene.name == "Main" || newScene.name == "Menu" || newScene.name == "Loading")
                 {
-                    ModLogger.Info("Game scene exiting - cleaning up Behind Bars UI");
+                    ModLogger.Debug("Game scene exiting - cleaning up Behind Bars UI");
                     HideJailInfoUI();
                     
                     // Stop any dynamic updates that might be running
@@ -1534,6 +1783,7 @@ namespace Behind_Bars
                     {
                         BehindBarsUIManager.Instance.DestroyJailInfoUI();
                     }
+                    
                 }
             }
             catch (Exception e)
@@ -1549,7 +1799,7 @@ namespace Behind_Bars
         {
             try
             {
-                ModLogger.Info("Behind Bars shutting down - cleaning up...");
+                ModLogger.Debug("Behind Bars shutting down - cleaning up...");
 
                 // Unsubscribe from scene events
 #if !MONO
@@ -1578,13 +1828,13 @@ namespace Behind_Bars
         {
             try
             {
-                ModLogger.Info("Setting up exit door...");
+                ModLogger.Debug("Setting up exit door...");
 
                 // Get the ExitScannerArea
                 if (jailController.exitScanner?.exitDoor != null)
                 {
                     var exitDoor = jailController.exitScanner.exitDoor;
-                    ModLogger.Info($"Found exitDoor in ExitScannerArea: {exitDoor.doorName}");
+                    ModLogger.Debug($"Found exitDoor in ExitScannerArea: {exitDoor.doorName}");
 
                     // Instantiate using steelDoorPrefab (GuardDoor)
                     if (jailController.doorController?.steelDoorPrefab != null && exitDoor.doorHolder != null)
@@ -1592,7 +1842,7 @@ namespace Behind_Bars
                         if (!exitDoor.IsInstantiated())
                         {
                             exitDoor.doorInstance = UnityEngine.Object.Instantiate(jailController.doorController.steelDoorPrefab, exitDoor.doorHolder);
-                            ModLogger.Info("✓ Exit door instantiated using steelDoorPrefab");
+                            ModLogger.Debug("✓ Exit door instantiated using steelDoorPrefab");
 
                             // Enable SecuritySlots for visual difference
                             var hingePoint = exitDoor.doorInstance.transform.Find("HingePoint");
@@ -1602,17 +1852,17 @@ namespace Behind_Bars
                                 if (securitySlots != null)
                                 {
                                     securitySlots.gameObject.SetActive(true);
-                                    ModLogger.Info("✓ SecuritySlots enabled on exit door");
+                                    ModLogger.Debug("✓ SecuritySlots enabled on exit door");
                                 }
                             }
 
                             // Lock the door initially
                             exitDoor.LockDoor();
-                            ModLogger.Info("✓ Exit door locked initially");
+                            ModLogger.Debug("✓ Exit door locked initially");
                         }
                         else
                         {
-                            ModLogger.Info("Exit door already instantiated");
+                            ModLogger.Debug("Exit door already instantiated");
                         }
                     }
                     else

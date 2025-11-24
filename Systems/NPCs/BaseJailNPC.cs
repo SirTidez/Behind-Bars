@@ -108,7 +108,7 @@ namespace Behind_Bars.Systems.NPCs
             InitializeNPC();
             isInitialized = true;
 
-            ModLogger.Info($"BaseJailNPC initialized: {gameObject.name}");
+            ModLogger.Debug($"BaseJailNPC initialized: {gameObject.name}");
         }
 
         protected virtual void Update()
@@ -181,7 +181,7 @@ namespace Behind_Bars.Systems.NPCs
                         attackMonitor = gameObject.AddComponent<NPCAttackMonitor>();
                         attackMonitor.Initialize(this);
                     }
-                    ModLogger.Info($"BaseJailNPC: Attack detection setup for {gameObject.name}");
+                    ModLogger.Debug($"BaseJailNPC: Attack detection setup for {gameObject.name}");
                 }
                 catch (System.Exception ex)
                 {

@@ -95,7 +95,7 @@ namespace Behind_Bars.Systems.Jail
             // Find booking stations if not assigned
             FindBookingStations();
             
-            ModLogger.Info($"BookingProcess initialized - Mugshot: {mugshotStation != null}, Scanner: {scannerStation != null}, InventoryDropOff: {inventoryDropOffStation != null}");
+            ModLogger.Debug($"BookingProcess initialized - Mugshot: {mugshotStation != null}, Scanner: {scannerStation != null}, InventoryDropOff: {inventoryDropOffStation != null}");
         }
         
         void FindBookingStations()
@@ -114,7 +114,7 @@ namespace Behind_Bars.Systems.Jail
                 if (inventoryDropOffStation != null)
                 {
                     inventoryDropOffStation.gameObject.SetActive(false);
-                    ModLogger.Info("InventoryDropOffStation disabled - replaced by prison gear pickup system");
+                    ModLogger.Debug("InventoryDropOffStation disabled - replaced by prison gear pickup system");
                 }
             }
                 
@@ -321,16 +321,57 @@ namespace Behind_Bars.Systems.Jail
             {
                 ModLogger.Info("Booking complete - starting UI timer countdown and jail time");
 
+                // Calculate and store bail amount using BailSystem
+                float bailAmount = 0f;
+                var bailSystem = Core.Instance?.BailSystem;
+                if (bailSystem != null && currentSentence.FineAmount > 0)
+                {
+                    // Calculate bail using BailSystem (which considers player level, etc.)
+                    var bailOffer = bailSystem.CalculateBailAmount(currentPlayer, currentSentence.FineAmount);
+                    bailAmount = bailOffer.Amount;
+                    
+                    // Store the bail amount in the system for later retrieval
+                    bailSystem.StoreBailAmount(currentPlayer, bailAmount);
+                    ModLogger.Info($"[BAIL] Calculated and stored bail amount: ${bailAmount:F0} for {currentPlayer.name} (based on fine: ${currentSentence.FineAmount:F0})");
+                }
+                else if (currentSentence.FineAmount > 0)
+                {
+                    // Fallback to JailSystem calculation if BailSystem not available
+                    bailAmount = jailSystem.CalculateBailAmount(currentSentence.FineAmount, currentSentence.Severity);
+                    ModLogger.Warn($"[BAIL] BailSystem not available - using fallback calculation: ${bailAmount:F0}");
+                }
+
                 // Start the UI timer countdown now that booking is complete
                 if (BehindBarsUIManager.Instance != null && BehindBarsUIManager.Instance.GetUIWrapper() != null)
                 {
-                    float bailAmount = jailSystem.CalculateBailAmount(currentSentence.FineAmount, currentSentence.Severity);
-                    BehindBarsUIManager.Instance.GetUIWrapper().StartDynamicUpdates(currentSentence.JailTime, bailAmount);
+                    var uiWrapper = BehindBarsUIManager.Instance.GetUIWrapper();
+                    uiWrapper.StartDynamicUpdates(currentSentence.JailTime, bailAmount);
+                    
+                    // Update the bail amount in the UI wrapper
+                    if (bailAmount > 0)
+                    {
+                        uiWrapper.UpdateBailAmount(bailAmount);
+                        ModLogger.Info($"[BAIL] Updated jail status UI bail amount to ${bailAmount:F0}");
+                    }
+                    
                     ModLogger.Info($"UI timer started: {currentSentence.JailTime}s jail time, ${bailAmount} bail");
                 }
 
-                // No longer need the separate jail time coroutine since UI timer will handle it
-                // MelonCoroutines.Start(jailSystem.StartJailTimeAfterBooking(currentPlayer, currentSentence));
+                // Show bail UI if player can afford it
+                if (bailAmount > 0 && bailSystem != null && bailSystem.CanPlayerAffordBail(currentPlayer, bailAmount))
+                {
+                    BehindBarsUIManager.Instance.ShowBailUI(bailAmount);
+                    ModLogger.Info($"[BAIL] Showing bail UI for {currentPlayer.name}: ${bailAmount:F0}");
+                }
+                else if (bailAmount > 0)
+                {
+                    ModLogger.Info($"[BAIL] Player {currentPlayer.name} cannot afford bail of ${bailAmount:F0}");
+                }
+
+                // CRITICAL: Start the jail sentence coroutine to handle bail key press detection
+                // This coroutine checks for the B key press and processes bail payments
+                MelonCoroutines.Start(jailSystem.StartJailTimeAfterBooking(currentPlayer, currentSentence));
+                ModLogger.Info($"[BAIL] Started jail sentence coroutine for bail key detection");
             }
             else if (currentSentence == null)
             {
@@ -893,7 +934,7 @@ namespace Behind_Bars.Systems.Jail
                 int cellNumber = cellManager.AssignPlayerToCell(currentPlayer);
                 if (cellNumber >= 0)
                 {
-                    ModLogger.Info($"Player {currentPlayer.name} assigned to cell {cellNumber}");
+                    ModLogger.Debug($"Player {currentPlayer.name} assigned to cell {cellNumber}");
                     
                     if (BehindBarsUIManager.Instance != null)
                     {

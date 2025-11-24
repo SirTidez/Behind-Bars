@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
+using Behind_Bars.Utils;
 using Newtonsoft.Json;
 
 #if !MONO
@@ -184,6 +185,32 @@ namespace Behind_Bars.Systems.Data
         }
 
         #endregion
+
+        /// <summary>
+        /// Simple serializable Vector3 structure for JSON serialization
+        /// Used when JsonSerializerSettings are not available (Mono mode)
+        /// </summary>
+        [System.Serializable]
+        private class SerializableVector3
+        {
+            public float x;
+            public float y;
+            public float z;
+
+            public SerializableVector3() { }
+
+            public SerializableVector3(Vector3 vector)
+            {
+                x = vector.x;
+                y = vector.y;
+                z = vector.z;
+            }
+
+            public Vector3 ToVector3()
+            {
+                return new Vector3(x, y, z);
+            }
+        }
 
         #region Singleton Pattern
 
@@ -860,14 +887,9 @@ namespace Behind_Bars.Systems.Data
                     };
 
                     // Serialize with settings to handle any remaining circular references
-                    var settings = new JsonSerializerSettings
-                    {
-                        ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
-                        MaxDepth = 5,
-                        NullValueHandling = NullValueHandling.Ignore
-                    };
+                    var settings = JsonHelper.GetSettingsWithReferenceLoopHandling(maxDepth: 5);
 
-                    return JsonConvert.SerializeObject(sanitized, settings);
+                    return JsonHelper.SerializeObject(sanitized, settings);
                 }
             }
             catch (System.Exception ex)
@@ -991,17 +1013,19 @@ namespace Behind_Bars.Systems.Data
             {
                 gameData.lastSaveTime = DateTime.Now;
 
-                var settings = new JsonSerializerSettings
-                {
-                    Formatting = Formatting.Indented,
-                    ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
-                    MaxDepth = 10,
-                    NullValueHandling = NullValueHandling.Ignore,
-                    ContractResolver = new Vector3ContractResolver(),
-                    Converters = new List<JsonConverter> { new Vector3JsonConverter() }
-                };
+                var settings = JsonHelper.GetSettingsWithConvertersAndResolver(
+                    new List<JsonConverter> { new Vector3JsonConverter() },
+                    new Vector3ContractResolver()
+                );
 
-                string jsonData = JsonConvert.SerializeObject(gameData, settings);
+                // In Mono mode, settings is null, so we need to convert Vector3 to serializable format
+                object dataToSerialize = gameData;
+                if (settings == null)
+                {
+                    dataToSerialize = ConvertGameDataToSerializable(gameData);
+                }
+
+                string jsonData = JsonHelper.SerializeObject(dataToSerialize, settings);
                 PlayerPrefs.SetString(SAVE_KEY, jsonData);
                 PlayerPrefs.Save();
 
@@ -1022,19 +1046,52 @@ namespace Behind_Bars.Systems.Data
                     string jsonData = PlayerPrefs.GetString(SAVE_KEY);
                     if (!string.IsNullOrEmpty(jsonData))
                     {
-                        var settings = new JsonSerializerSettings
-                        {
-                            ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
-                            MaxDepth = 10,
-                            NullValueHandling = NullValueHandling.Ignore,
-                            ContractResolver = new Vector3ContractResolver(),
-                            Converters = new List<JsonConverter> { new Vector3JsonConverter() }
-                        };
+                        var settings = JsonHelper.GetSettingsWithConvertersAndResolver(
+                            new List<JsonConverter> { new Vector3JsonConverter() },
+                            new Vector3ContractResolver()
+                        );
 
-                        gameData = JsonConvert.DeserializeObject<PersistentGameData>(jsonData, settings);
-                        if (gameData == null)
+                        // If settings is null (Mono mode), try to deserialize as SerializablePersistentGameData first
+                        if (settings == null)
                         {
-                            gameData = new PersistentGameData();
+                            try
+                            {
+                                var serializableData = JsonHelper.DeserializeObject<SerializablePersistentGameData>(jsonData, settings);
+                                if (serializableData != null)
+                                {
+                                    gameData = ConvertSerializableToGameData(serializableData);
+                                }
+                                else
+                                {
+                                    gameData = new PersistentGameData();
+                                }
+                            }
+                            catch
+                            {
+                                // If deserialization as SerializablePersistentGameData fails, try PersistentGameData
+                                // This handles old save files that were saved with Vector3JsonConverter
+                                try
+                                {
+                                    gameData = JsonHelper.DeserializeObject<PersistentGameData>(jsonData, settings);
+                                    if (gameData == null)
+                                    {
+                                        gameData = new PersistentGameData();
+                                    }
+                                }
+                                catch
+                                {
+                                    gameData = new PersistentGameData();
+                                }
+                            }
+                        }
+                        else
+                        {
+                            // IL2CPP mode - use normal deserialization with converter
+                            gameData = JsonHelper.DeserializeObject<PersistentGameData>(jsonData, settings);
+                            if (gameData == null)
+                            {
+                                gameData = new PersistentGameData();
+                            }
                         }
 
                         ModLogger.Info($"Loaded player data - {gameData.playerSnapshots.Count} snapshots, {gameData.storedExitPositions.Count} positions");
@@ -1072,6 +1129,119 @@ namespace Behind_Bars.Systems.Data
             {
                 ModLogger.Error($"Error cleaning up old data: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Converts PersistentGameData to a serializable format when JsonSerializerSettings are not available (Mono mode)
+        /// Converts Vector3 to SerializableVector3 to avoid circular reference issues
+        /// </summary>
+        private SerializablePersistentGameData ConvertGameDataToSerializable(PersistentGameData data)
+        {
+            var serializableData = new SerializablePersistentGameData
+            {
+                playerSnapshots = new List<SerializablePlayerInventorySnapshot>(),
+                storedExitPositions = new Dictionary<string, SerializableVector3>(),
+                lastSaveTime = data.lastSaveTime,
+                version = data.version
+            };
+
+            // Convert snapshots
+            foreach (var snapshot in data.playerSnapshots)
+            {
+                var serializableSnapshot = new SerializablePlayerInventorySnapshot
+                {
+                    playerId = snapshot.playerId,
+                    playerName = snapshot.playerName,
+                    items = snapshot.items,
+                    lastPosition = new SerializableVector3(snapshot.lastPosition),
+                    arrestTime = snapshot.arrestTime,
+                    arrestId = snapshot.arrestId,
+                    crimeData = snapshot.crimeData,
+                    isActive = snapshot.isActive,
+                    originalClothing = snapshot.originalClothing
+                };
+                serializableData.playerSnapshots.Add(serializableSnapshot);
+            }
+
+            // Convert stored exit positions
+            foreach (var kvp in data.storedExitPositions)
+            {
+                serializableData.storedExitPositions[kvp.Key] = new SerializableVector3(kvp.Value);
+            }
+
+            return serializableData;
+        }
+
+        /// <summary>
+        /// Converts SerializablePersistentGameData back to PersistentGameData after deserialization
+        /// </summary>
+        private PersistentGameData ConvertSerializableToGameData(object serializableData)
+        {
+            if (serializableData is SerializablePersistentGameData serializable)
+            {
+                var gameData = new PersistentGameData
+                {
+                    playerSnapshots = new List<PlayerInventorySnapshot>(),
+                    storedExitPositions = new Dictionary<string, Vector3>(),
+                    lastSaveTime = serializable.lastSaveTime,
+                    version = serializable.version
+                };
+
+                // Convert snapshots
+                foreach (var snapshot in serializable.playerSnapshots)
+                {
+                    var gameSnapshot = new PlayerInventorySnapshot(snapshot.playerId, snapshot.playerName, snapshot.arrestId)
+                    {
+                        items = snapshot.items,
+                        lastPosition = snapshot.lastPosition.ToVector3(),
+                        arrestTime = snapshot.arrestTime,
+                        crimeData = snapshot.crimeData,
+                        isActive = snapshot.isActive,
+                        originalClothing = snapshot.originalClothing
+                    };
+                    gameData.playerSnapshots.Add(gameSnapshot);
+                }
+
+                // Convert stored exit positions
+                foreach (var kvp in serializable.storedExitPositions)
+                {
+                    gameData.storedExitPositions[kvp.Key] = kvp.Value.ToVector3();
+                }
+
+                return gameData;
+            }
+
+            // If it's already PersistentGameData, return as-is
+            return serializableData as PersistentGameData;
+        }
+
+        /// <summary>
+        /// Serializable version of PersistentGameData for Mono mode serialization
+        /// </summary>
+        [System.Serializable]
+        private class SerializablePersistentGameData
+        {
+            public List<SerializablePlayerInventorySnapshot> playerSnapshots = new List<SerializablePlayerInventorySnapshot>();
+            public Dictionary<string, SerializableVector3> storedExitPositions = new Dictionary<string, SerializableVector3>();
+            public DateTime lastSaveTime;
+            public int version = 1;
+        }
+
+        /// <summary>
+        /// Serializable version of PlayerInventorySnapshot for Mono mode serialization
+        /// </summary>
+        [System.Serializable]
+        private class SerializablePlayerInventorySnapshot
+        {
+            public string playerId;
+            public string playerName;
+            public List<StoredItem> items = new List<StoredItem>();
+            public SerializableVector3 lastPosition;
+            public DateTime arrestTime;
+            public string arrestId;
+            public object crimeData;
+            public bool isActive;
+            public List<ClothingLayer> originalClothing = new List<ClothingLayer>();
         }
 
         public void AutoSave()

@@ -32,7 +32,10 @@ namespace Behind_Bars.Systems.Jail
         /// <summary>
         /// Calculate jail sentence for a player based on their current crimes
         /// </summary>
-        public JailSentenceData CalculateSentence(Player player, RapSheet? rapSheet = null)
+        /// <param name="player">The player to calculate sentence for</param>
+        /// <param name="rapSheet">The player's rap sheet (optional)</param>
+        /// <param name="wasOnParole">Whether the player was on parole when arrested (affects sentence multiplier)</param>
+        public JailSentenceData CalculateSentence(Player player, RapSheet? rapSheet = null, bool wasOnParole = false)
         {
             var sentenceData = new JailSentenceData();
 
@@ -145,9 +148,10 @@ namespace Behind_Bars.Systems.Jail
             float severityMultiplier = CalculateSeverityMultiplier(crimeSentences, configManager);
             float repeatOffenderMultiplier = CalculateRepeatOffenderMultiplier(rapSheet, configManager);
             float witnessMultiplier = CalculateWitnessMultiplier(crimeSentences, configManager);
+            float paroleViolationMultiplier = CalculateParoleViolationMultiplier(wasOnParole);
             float globalMultiplier = configManager.GetGlobalMultiplier();
             
-            ModLogger.Info($"[SENTENCE CALC] Multipliers - Severity: {severityMultiplier}, Repeat: {repeatOffenderMultiplier}, Witness: {witnessMultiplier}, Global: {globalMultiplier}");
+            ModLogger.Info($"[SENTENCE CALC] Multipliers - Severity: {severityMultiplier}, Repeat: {repeatOffenderMultiplier}, Witness: {witnessMultiplier}, Parole: {paroleViolationMultiplier}, Global: {globalMultiplier}");
 
             // Apply all multipliers
             float totalMinutes = totalBaseMinutes;
@@ -158,6 +162,8 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info($"[SENTENCE CALC] After repeat ({repeatOffenderMultiplier}): {totalMinutes} game minutes");
             totalMinutes *= witnessMultiplier;
             ModLogger.Info($"[SENTENCE CALC] After witness ({witnessMultiplier}): {totalMinutes} game minutes");
+            totalMinutes *= paroleViolationMultiplier;
+            ModLogger.Info($"[SENTENCE CALC] After parole violation ({paroleViolationMultiplier}): {totalMinutes} game minutes");
             totalMinutes *= globalMultiplier;
             ModLogger.Info($"[SENTENCE CALC] After global ({globalMultiplier}): {totalMinutes} game minutes");
 
@@ -174,6 +180,7 @@ namespace Behind_Bars.Systems.Jail
             sentenceData.SeverityMultiplier = severityMultiplier;
             sentenceData.RepeatOffenderMultiplier = repeatOffenderMultiplier;
             sentenceData.WitnessMultiplier = witnessMultiplier;
+            sentenceData.ParoleViolationMultiplier = paroleViolationMultiplier;
             sentenceData.GlobalMultiplier = globalMultiplier;
             sentenceData.TotalGameMinutes = totalMinutes;
 
@@ -318,6 +325,24 @@ namespace Behind_Bars.Systems.Jail
             int avgWitnessCount = totalWitnesses / crimeSentences.Count;
 
             return configManager.GetWitnessMultiplier(avgWitnessCount, anyWitnessed);
+        }
+
+        /// <summary>
+        /// Calculate parole violation multiplier
+        /// Being arrested while on parole results in increased sentence
+        /// </summary>
+        private float CalculateParoleViolationMultiplier(bool wasOnParole)
+        {
+            if (!wasOnParole)
+            {
+                return 1.0f; // No multiplier if not on parole
+            }
+
+            // Parole violation multiplier: +50% sentence increase
+            // This reflects the serious nature of committing crimes while under supervision
+            float multiplier = 1.5f;
+            ModLogger.Info($"[SENTENCE CALC] Parole violation detected - applying {multiplier}x multiplier");
+            return multiplier;
         }
     }
 }

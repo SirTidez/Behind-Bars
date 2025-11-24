@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using Behind_Bars.Helpers;
+using Behind_Bars.Utils;
 using Behind_Bars.Systems.Crimes;
 using Behind_Bars.Systems.CrimeTracking;
 
@@ -27,13 +28,13 @@ namespace Behind_Bars.Systems.CrimeDetection
     public class CrimeDetectionSystem
     {
         private CrimeRecord _crimeRecord;
-        private WitnessSystem _witnessSystem;
+        public WitnessSystem _witnessSystem;
         private ContrabandDetectionSystem _contrabandDetectionSystem;
         
         // Detection settings
-        public float MurderDetectionRadius = 25f;
-        public float AssaultDetectionRadius = 15f;
-        public float WeaponDetectionRadius = 30f;
+        public float MurderDetectionRadius = 50f;
+        public float AssaultDetectionRadius = 30f;
+        public float WeaponDetectionRadius = 65f;
         
         public CrimeRecord CrimeRecord => _crimeRecord;
         public ContrabandDetectionSystem ContrabandDetection => _contrabandDetectionSystem;
@@ -120,7 +121,7 @@ namespace Behind_Bars.Systems.CrimeDetection
                     if (closestWitness is PoliceOfficer policeWitness)
                     {
                         // Immediate police response
-                        policeWitness.BeginFootPursuit_Networked(perpetrator.NetworkObject.ObjectId.ToString());
+                        NetworkHelper.TryBeginFootPursuit(policeWitness, perpetrator);
                     }
                     else
                     {
@@ -168,8 +169,9 @@ namespace Behind_Bars.Systems.CrimeDetection
             // Add to player's Schedule I crime data
             if (perpetrator.IsOwner)
             {
-                perpetrator.CrimeData.AddCrime(crime);
-                
+                // TODO: Commented out CrimeData.AddCrime and testing adding the crime directly to the dictionary.
+                //perpetrator.CrimeData.AddCrime(crime);
+                perpetrator.CrimeData.Crimes.Add(crime, 1);
                 if (perpetrator.CrimeData.CurrentPursuitLevel == PlayerCrimeData.EPursuitLevel.None)
                 {
                     perpetrator.CrimeData.SetPursuitLevel(PlayerCrimeData.EPursuitLevel.Investigating);
@@ -179,7 +181,7 @@ namespace Behind_Bars.Systems.CrimeDetection
                 var policeWitnesses = witnesses.OfType<PoliceOfficer>();
                 foreach (var policeWitness in policeWitnesses)
                 {
-                    policeWitness.BeginFootPursuit_Networked(perpetrator.NetworkObject.ObjectId.ToString());
+                    NetworkHelper.TryBeginFootPursuit(policeWitness, perpetrator);
                 }
             }
             
@@ -229,6 +231,13 @@ namespace Behind_Bars.Systems.CrimeDetection
             }
             
             _crimeRecord.AddCrime(crimeInstance);
+            
+            // CRITICAL: Mark the witness as intimidated so they're less likely to call police
+            if (witness != null && !string.IsNullOrEmpty(witness.ID))
+            {
+                _witnessSystem.MarkWitnessIntimidated(witness.ID);
+                ModLogger.Info($"Marked witness {witness.name} (ID: {witness.ID}) as intimidated");
+            }
         }
         
         /// <summary>
@@ -250,8 +259,8 @@ namespace Behind_Bars.Systems.CrimeDetection
                 
                 if (distance <= detectionRadius)
                 {
-                    // Check if NPC has line of sight (simplified check)
-                    if (HasLineOfSight(npc.transform.position, crimeLocation))
+                    // Check if NPC has line of sight (simplified check) and isn't the victim themselves
+                    if (HasLineOfSight(npc.transform.position, crimeLocation) && crimeLocation != npc.transform.position)
                     {
                         witnesses.Add(npc);
                     }

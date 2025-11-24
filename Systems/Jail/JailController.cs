@@ -181,7 +181,7 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
 
         lightingController.Initialize(transform);
 
-        ModLogger.Info("✓ All controllers initialized");
+        ModLogger.Debug("✓ All controllers initialized");
     }
 
     /// <summary>
@@ -198,13 +198,13 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         holdingCell01GuardPoint = transform.Find("Cells/HoldingCells/HoldingCell_01/HoldingDoorHolder[1]/DoorPoint");
 
         // Log what we found
-        ModLogger.Info($"✓ Guard point references initialized:");
-        ModLogger.Info($"  MugshotStation GuardPoint: {(mugshotStationGuardPoint != null ? "FOUND" : "MISSING")}");
-        ModLogger.Info($"  ScannerStation GuardPoint: {(scannerStationGuardPoint != null ? "FOUND" : "MISSING")}");
-        ModLogger.Info($"  ExitScannerStation GuardPoint: {(exitScannerStationGuardPoint != null ? "FOUND" : "MISSING")}");
-        ModLogger.Info($"  Storage GuardPoint: {(storageGuardPoint != null ? "FOUND" : "MISSING")}");
-        ModLogger.Info($"  HoldingCell_00 GuardPoint: {(holdingCell00GuardPoint != null ? "FOUND" : "MISSING")}");
-        ModLogger.Info($"  HoldingCell_01 GuardPoint: {(holdingCell01GuardPoint != null ? "FOUND" : "MISSING")}");
+        ModLogger.Debug($"✓ Guard point references initialized:");
+        ModLogger.Debug($"  MugshotStation GuardPoint: {(mugshotStationGuardPoint != null ? "FOUND" : "MISSING")}");
+        ModLogger.Debug($"  ScannerStation GuardPoint: {(scannerStationGuardPoint != null ? "FOUND" : "MISSING")}");
+        ModLogger.Debug($"  ExitScannerStation GuardPoint: {(exitScannerStationGuardPoint != null ? "FOUND" : "MISSING")}");
+        ModLogger.Debug($"  Storage GuardPoint: {(storageGuardPoint != null ? "FOUND" : "MISSING")}");
+        ModLogger.Debug($"  HoldingCell_00 GuardPoint: {(holdingCell00GuardPoint != null ? "FOUND" : "MISSING")}");
+        ModLogger.Debug($"  HoldingCell_01 GuardPoint: {(holdingCell01GuardPoint != null ? "FOUND" : "MISSING")}");
     }
 
     /// <summary>
@@ -239,7 +239,7 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
 
         // Then setup monitor assignments using the monitor controller
         monitorController.Initialize(transform, securityCameras);
-        ModLogger.Info($"Security camera setup completed with {securityCameras.Count} cameras");
+        ModLogger.Debug($"Security camera setup completed with {securityCameras.Count} cameras");
     }
 
     void CreateSecurityCameras()
@@ -253,7 +253,7 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
             SetupSecurityCameras(camera.transform);
         }
 
-        ModLogger.Info($"✓ Created {securityCameras.Count} security cameras");
+        ModLogger.Debug($"✓ Created {securityCameras.Count} security cameras");
     }
 
     void DiscoverSecurityCameraPositions()
@@ -326,7 +326,7 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
             );
         }
 
-        ModLogger.Info($"✓ Configured camera: {cameraName} (Type: {camera.cameraType})");
+        ModLogger.Debug($"✓ Configured camera: {cameraName} (Type: {camera.cameraType})");
     }
 
     // Public API methods - delegate to appropriate controllers
@@ -458,14 +458,14 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     {
         try
         {
-            ModLogger.Info("Setting up door triggers for escort system...");
+            ModLogger.Debug("Setting up door triggers for escort system...");
 
             // Debug: Find all objects with "Trigger" in their name
             var allTriggers = FindObjectsOfType<GameObject>().Where(obj => obj.name.Contains("Trigger")).ToList();
-            ModLogger.Info($"Found {allTriggers.Count} objects with 'Trigger' in name:");
+            ModLogger.Debug($"Found {allTriggers.Count} objects with 'Trigger' in name:");
             foreach (var trigger in allTriggers)
             {
-                ModLogger.Info($"  - {trigger.name}");
+                ModLogger.Debug($"  - {trigger.name}");
             }
 
             // Find all door trigger GameObjects using EXACT names from Unity hierarchy
@@ -531,7 +531,7 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
                 */
             }
 
-            ModLogger.Info($"Door trigger setup complete: {triggersConfigured}/6 triggers configured");
+            ModLogger.Debug($"Door trigger setup complete: {triggersConfigured}/6 triggers configured");
         }
         catch (System.Exception e)
         {

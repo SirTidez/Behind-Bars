@@ -304,7 +304,7 @@ namespace Behind_Bars.Systems.NPCs
                             {
                                 // Set the database on our emitter
                                 databaseField.SetValue(voiceEmitter, database);
-                                ModLogger.Info($"Found and set VODatabase from {emitter.gameObject.name}");
+                                ModLogger.Debug($"Found and set VODatabase from {emitter.gameObject.name}");
                                 return;
                             }
                         }
@@ -339,7 +339,7 @@ namespace Behind_Bars.Systems.NPCs
                 }
 
                 isInitialized = true;
-                ModLogger.Info($"JailNPCAudioController fully initialized for {gameObject.name}");
+                ModLogger.Debug($"JailNPCAudioController fully initialized for {gameObject.name}");
             }
             catch (System.Exception e)
             {

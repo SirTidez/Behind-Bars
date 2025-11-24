@@ -67,7 +67,7 @@ namespace Behind_Bars.Systems.Jail
                 {
                     exitScanner.Initialize(exitScannerTransform);
                     allAreas.Add(exitScanner);
-                    ModLogger.Info($"✓ Initialized ExitScanner area in Hallway");
+                    ModLogger.Debug($"✓ Initialized ExitScanner area in Hallway");
                 }
                 else
                 {
@@ -82,7 +82,7 @@ namespace Behind_Bars.Systems.Jail
             InitializeArea(mainRec, jailRoot, "MainRec");
             InitializeArea(showers, jailRoot, "Showers");
 
-            ModLogger.Info($"✓ Area system initialized with {allAreas.Count} areas");
+            ModLogger.Debug($"✓ Area system initialized with {allAreas.Count} areas");
         }
 
         void InitializeArea<T>(T area, Transform jailRoot, string areaName) where T : JailAreaBase
@@ -92,7 +92,7 @@ namespace Behind_Bars.Systems.Jail
             {
                 area.Initialize(areaTransform);
                 allAreas.Add(area);
-                ModLogger.Info($"✓ Initialized {areaName} area");
+                ModLogger.Debug($"✓ Initialized {areaName} area");
             }
             else
             {

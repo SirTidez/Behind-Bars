@@ -57,17 +57,17 @@ namespace Behind_Bars.Systems.Jail
             
             // Set up InteractableObject component for IL2CPP compatibility
             SetupInteractableComponent();
-            ModLogger.Info("MugshotStation interaction setup completed");
+            ModLogger.Debug("MugshotStation interaction setup completed");
             
             
             // Find mugshot camera using static structure: MugshotStation/MugshotCamera
             if (mugshotCamera == null)
             {
-                ModLogger.Info($"Looking for MugshotCamera in {transform.name}");
+                ModLogger.Debug($"Looking for MugshotCamera in {transform.name}");
                 Transform cameraTransform = transform.Find("MugshotCamera");
                 if (cameraTransform != null)
                 {
-                    ModLogger.Info($"Found MugshotCamera GameObject: {cameraTransform.name}");
+                    ModLogger.Debug($"Found MugshotCamera GameObject: {cameraTransform.name}");
                     mugshotCamera = cameraTransform.GetComponent<Camera>();
                     if (mugshotCamera == null)
                     {
@@ -77,7 +77,7 @@ namespace Behind_Bars.Systems.Jail
                     }
                     else
                     {
-                        ModLogger.Info("Found existing Camera component on MugshotCamera");
+                        ModLogger.Debug("Found existing Camera component on MugshotCamera");
                     }
                     
                     // Configure the camera for mugshots
@@ -90,14 +90,14 @@ namespace Behind_Bars.Systems.Jail
                     if (playerLayer != -1)
                     {
                         mugshotCamera.cullingMask |= (1 << playerLayer);
-                        ModLogger.Info($"Added Player layer ({playerLayer}) to MugshotCamera culling mask");
+                        ModLogger.Debug($"Added Player layer ({playerLayer}) to MugshotCamera culling mask");
                     }
                     else
                     {
                         ModLogger.Warn("Player layer not found - MugshotCamera may not see avatar");
                     }
                     
-                    ModLogger.Info("Configured mugshot camera settings");
+                    ModLogger.Debug("Configured mugshot camera settings");
                 }
                 else
                 {
@@ -128,7 +128,7 @@ namespace Behind_Bars.Systems.Jail
                             displayMonitor = canvas.Find("imgDisplay")?.GetComponent<RawImage>();
                             if (displayMonitor != null)
                             {
-                                ModLogger.Info($"Found imgDisplay RawImage: {displayMonitor.name}");
+                                ModLogger.Debug($"Found imgDisplay RawImage: {displayMonitor.name}");
                             }
                             else
                             {
@@ -157,7 +157,7 @@ namespace Behind_Bars.Systems.Jail
                 attachmentPoint = transform.Find("StandingPoint");
                 if (attachmentPoint != null)
                 {
-                    ModLogger.Info($"Found StandingPoint: {attachmentPoint.name} at position {attachmentPoint.position}");
+                    ModLogger.Debug($"Found StandingPoint: {attachmentPoint.name} at position {attachmentPoint.position}");
                 }
                 else
                 {
@@ -171,7 +171,7 @@ namespace Behind_Bars.Systems.Jail
                 flashLight = mugshotCamera.transform.Find("Flash");
                 if (flashLight != null)
                 {
-                    ModLogger.Info($"Found Flash: {flashLight.name}");
+                    ModLogger.Debug($"Found Flash: {flashLight.name}");
                     
                     // Find the Light component on the Flash GameObject
                     flashLightComponent = flashLight.GetComponent<Light>();
@@ -179,7 +179,7 @@ namespace Behind_Bars.Systems.Jail
                     {
                         // Ensure flash light is initially disabled
                         flashLightComponent.enabled = false;
-                        ModLogger.Info($"Found Flash Light component - initially disabled");
+                        ModLogger.Debug($"Found Flash Light component - initially disabled");
                     }
                     else
                     {
@@ -195,12 +195,12 @@ namespace Behind_Bars.Systems.Jail
             // The interaction should be handled by the existing Interaction child GameObject
             // (just like ScannerStation), not by adding colliders to the main object
             
-            ModLogger.Info($"MugshotStation initialized - Camera: {mugshotCamera != null}, Monitor: {displayMonitor != null}, AttachmentPoint: {attachmentPoint != null}, Flash: {flashLight != null}");
+            ModLogger.Debug($"MugshotStation initialized - Camera: {mugshotCamera != null}, Monitor: {displayMonitor != null}, AttachmentPoint: {attachmentPoint != null}, Flash: {flashLight != null}");
             
             // Additional debug info
             if (mugshotCamera != null)
             {
-                ModLogger.Info($"MugshotCamera details - Position: {mugshotCamera.transform.position}, Enabled: {mugshotCamera.enabled}");
+                ModLogger.Debug($"MugshotCamera details - Position: {mugshotCamera.transform.position}, Enabled: {mugshotCamera.enabled}");
             }
         }
         
@@ -211,11 +211,11 @@ namespace Behind_Bars.Systems.Jail
             if (interactableObject == null)
             {
                 interactableObject = gameObject.AddComponent<InteractableObject>();
-                ModLogger.Info("Added InteractableObject component to MugshotStation");
+                ModLogger.Debug("Added InteractableObject component to MugshotStation");
             }
             else
             {
-                ModLogger.Info("Found existing InteractableObject component on MugshotStation");
+                ModLogger.Debug("Found existing InteractableObject component on MugshotStation");
             }
             
             // Configure the interaction
@@ -232,7 +232,7 @@ namespace Behind_Bars.Systems.Jail
             interactableObject.onInteractStart.AddListener(OnInteractStart);
 #endif
             
-            ModLogger.Info("InteractableObject component configured with event listeners");
+            ModLogger.Debug("InteractableObject component configured with event listeners");
         }
         
         private void OnInteractStart()

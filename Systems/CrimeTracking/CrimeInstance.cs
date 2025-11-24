@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using Behind_Bars.Utils.Saveable;
+using Behind_Bars.Systems;
 #if !MONO
 using Il2CppScheduleOne.Law;
 using Il2CppScheduleOne.NPCs;
@@ -12,18 +14,84 @@ using ScheduleOne.NPCs;
 namespace Behind_Bars.Systems.CrimeTracking
 {
     /// <summary>
-    /// Represents a single instance of a crime with all its details
+    /// Represents a single instance of a crime with all its details.
+    /// Uses SaveableField attributes for automatic serialization by SaveableSerializer.
+    /// Note: Crime object reference is stored as type name string since it's a game object reference.
     /// </summary>
     [Serializable]
     public class CrimeInstance
     {
-        public Crime Crime { get; set; }
-        public DateTime Timestamp { get; set; }
-        public Vector3 Location { get; set; }
-        public List<string> WitnessIds { get; set; } = new List<string>();
-        public float Severity { get; set; }
+        // Non-serialized - Crime object reference cannot be saved
+        [NonSerialized]
+        private Crime _crime;
+
+        [SaveableField("crimeTypeName")]
+        private string _crimeTypeName; // Store the type name instead of the object
+
+        [SaveableField("timestamp")]
+        private float _timestamp; // Game time in game minutes
+
+        [SaveableField("location")]
+        private Vector3 _location;
+
+        [SaveableField("witnessIds")]
+        private List<string> _witnessIds;
+
+        [SaveableField("severity")]
+        private float _severity;
+
+        [SaveableField("description")]
+        private string _description;
+
+        // Properties for safe access
+        public Crime Crime
+        {
+            get => _crime;
+            set
+            {
+                _crime = value;
+                // Store type name for serialization (Crime object reference cannot be serialized)
+                _crimeTypeName = value != null ? value.GetType().Name : "";
+                // Update description if available
+                if (value != null && string.IsNullOrEmpty(_description))
+                    _description = value.CrimeName ?? "";
+            }
+        }
+
+        /// <summary>
+        /// Timestamp in game minutes (game time when crime was committed)
+        /// </summary>
+        public float Timestamp
+        {
+            get => _timestamp;
+            set => _timestamp = value;
+        }
+
+        public Vector3 Location
+        {
+            get => _location;
+            set => _location = value;
+        }
+
+        public List<string> WitnessIds
+        {
+            get => _witnessIds ??= new List<string>();
+            set => _witnessIds = value ?? new List<string>();
+        }
+
+        public float Severity
+        {
+            get => _severity;
+            set => _severity = value;
+        }
+
         public bool WasWitnessed => WitnessIds.Count > 0;
-        public string Description { get; set; } = "";
+
+        public string Description
+        {
+            get => _description ?? "";
+            set => _description = value ?? "";
+        }
         
         /// <summary>
         /// Get the crime name safely - prefers Description (user-friendly), falls back to Crime.CrimeName
@@ -79,16 +147,22 @@ namespace Behind_Bars.Systems.CrimeTracking
             return "Unknown";
         }
         
-        public CrimeInstance() { }
+        public CrimeInstance()
+        {
+            _witnessIds = new List<string>();
+            _description = "";
+        }
         
         public CrimeInstance(Crime crime, Vector3 location, float severity = 1.0f)
         {
             Crime = crime;
-            Timestamp = DateTime.Now;
-            Location = location;
-            Severity = severity;
+            // Use game time instead of real time
+            _timestamp = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
+            _location = location;
+            _severity = severity;
+            _witnessIds = new List<string>();
             // Set Description to the user-friendly CrimeName from the Crime object
-            Description = crime != null ? crime.CrimeName : "";
+            _description = crime != null ? crime.CrimeName : "";
         }
         
         public void AddWitness(NPC witness)
@@ -118,26 +192,33 @@ namespace Behind_Bars.Systems.CrimeTracking
             float witnessFactor = 1.0f + (WitnessIds.Count * 0.2f);
             
             // Newer crimes contribute more to current wanted level
-            float ageDays = (float)(DateTime.Now - Timestamp).TotalDays;
-            float ageFactor = Mathf.Clamp01(1.0f - (ageDays / 7.0f)); // Fade over a week
+            // Use game time: 7 days = 10080 game minutes (7 * 24 * 60)
+            float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
+            float ageGameMinutes = currentGameTime - Timestamp;
+            float ageGameDays = ageGameMinutes / (24f * 60f); // Convert game minutes to game days
+            float ageFactor = Mathf.Clamp01(1.0f - (ageGameDays / 7.0f)); // Fade over a week
             
             return baseSeverity * witnessFactor * ageFactor;
         }
         
         /// <summary>
         /// Check if this crime should expire (only for minor crimes)
+        /// Uses game time: 1 day = 1440 game minutes, 3 days = 4320 game minutes
         /// </summary>
         public bool ShouldExpire()
         {
             // Major crimes never expire
             if (Severity >= 2.0f) return false;
             
-            // Minor crimes expire after 1 day if no witnesses
-            if (!WasWitnessed && (DateTime.Now - Timestamp).TotalDays > 1.0)
+            float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
+            float ageGameMinutes = currentGameTime - Timestamp;
+            
+            // Minor crimes expire after 1 game day (1440 game minutes) if no witnesses
+            if (!WasWitnessed && ageGameMinutes > 1440f)
                 return true;
                 
-            // Witnessed minor crimes expire after 3 days
-            if (WasWitnessed && (DateTime.Now - Timestamp).TotalDays > 3.0)
+            // Witnessed minor crimes expire after 3 game days (4320 game minutes)
+            if (WasWitnessed && ageGameMinutes > 4320f)
                 return true;
                 
             return false;

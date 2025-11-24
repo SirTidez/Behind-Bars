@@ -22,6 +22,19 @@ namespace Behind_Bars.Systems
     /// </summary>
     public class ParoleSystem
     {
+        #region Events
+
+        /// <summary>
+        /// Event fired when parole starts for a player
+        /// </summary>
+        public static event System.Action<Player> OnParoleStarted;
+
+        /// <summary>
+        /// Event fired when parole ends for a player (completed, revoked, or expired)
+        /// </summary>
+        public static event System.Action<Player> OnParoleEnded;
+
+        #endregion
         private const float PAROLE_DURATION = 600f; // 10 minutes default
         private const float SEARCH_INTERVAL_MIN = 30f; // Minimum time between searches
         private const float SEARCH_INTERVAL_MAX = 120f; // Maximum time between searches
@@ -96,21 +109,16 @@ namespace Behind_Bars.Systems
             // Start parole monitoring
             MelonCoroutines.Start(MonitorParole(record));
 
-            // Spawn parole officer if not already present
-            if (_paroleOfficerInstance == null)
-            {
-                SpawnParoleOfficer();
-            }
+            // NOTE: Parole officer spawning is now handled by DynamicParoleOfficerManager
+            // The old SpawnParoleOfficer() call has been removed
+
+            // Emit parole started event
+            OnParoleStarted?.Invoke(player);
+            ModLogger.Debug($"ParoleSystem: Emitted OnParoleStarted event for {player.name}");
 
             // NOTE: RecordReleaseTime is now called in ReleaseManager.WaitForParoleConditionsAcknowledgment()
             // after the player dismisses the parole conditions UI. This ensures the grace period
             // starts only after the player acknowledges their conditions, not immediately when parole starts.
-
-            // Show parole status UI after a short delay to ensure RapSheet is initialized (only if showUI is true)
-            if (showUI)
-            {
-                MelonCoroutines.Start(DelayedShowParoleUI(player));
-            }
         }
 
         /// <summary>
@@ -150,8 +158,8 @@ namespace Behind_Bars.Systems
                 {
                     ModLogger.Info($"[LSI] Parole tracking initialized for {player.name} - LSI Level: {rapSheet.LSILevel}");
 
-                    // Save the updated rap sheet and invalidate cache
-                    RapSheetManager.Instance.SaveRapSheet(player, invalidateCache: true);
+                    // Mark rap sheet as changed - game's save system handles saving automatically
+                    RapSheetManager.Instance.MarkRapSheetChanged(player);
                 }
                 else
                 {
@@ -165,34 +173,11 @@ namespace Behind_Bars.Systems
         }
 
         /// <summary>
-        /// Delayed show parole UI to ensure RapSheet is initialized
-        /// </summary>
-        private IEnumerator DelayedShowParoleUI(Player player)
-        {
-            // Wait a frame to ensure RapSheet initialization is complete
-            yield return new WaitForSeconds(0.5f);
-
-            try
-            {
-                var uiManager = BehindBarsUIManager.Instance;
-                if (uiManager != null)
-                {
-                    uiManager.ShowParoleStatus();
-                    ModLogger.Info($"Parole status UI shown for {player.name}");
-                }
-            }
-            catch (System.Exception ex)
-            {
-                ModLogger.Warn($"Failed to show parole status UI: {ex.Message}");
-            }
-        }
-
-        /// <summary>
         /// Monitor active parole and conduct periodic searches
         /// </summary>
         private IEnumerator MonitorParole(ParoleRuntimeRecord record)
         {
-            ModLogger.Info($"Monitoring parole for {record.Player.name}");
+            ModLogger.Debug($"Monitoring parole for {record.Player.name}");
 
             while (record.Status == ParoleStatus.Active)
             {
@@ -230,7 +215,7 @@ namespace Behind_Bars.Systems
         /// </summary>
         private IEnumerator ConductRandomSearch(ParoleRuntimeRecord record)
         {
-            ModLogger.Info($"Conducting random search on {record.Player.name}");
+            ModLogger.Debug($"Conducting random search on {record.Player.name}");
 
             // Check if parole officer is close enough
             if (_paroleOfficerInstance != null && record.Player != null)
@@ -434,7 +419,7 @@ namespace Behind_Bars.Systems
                     rapSheet.CurrentParoleRecord.EndParole();
                     // Move current parole record to past records
                     rapSheet.ArchiveCurrentParoleRecord();
-                    RapSheetManager.Instance.SaveRapSheet(record.Player, invalidateCache: true);
+                    RapSheetManager.Instance.MarkRapSheetChanged(record.Player);
                 }
             }
             catch (System.Exception ex)
@@ -459,6 +444,10 @@ namespace Behind_Bars.Systems
 
             // Remove from active parole
             _paroleRecords.Remove(record.Player);
+
+            // Emit parole ended event
+            OnParoleEnded?.Invoke(record.Player);
+            ModLogger.Debug($"ParoleSystem: Emitted OnParoleEnded event for {record.Player.name} (revoked)");
 
             // TODO: Implement revocation consequences
             // This could involve:
@@ -502,8 +491,12 @@ namespace Behind_Bars.Systems
                     {
                         rapSheet.CurrentParoleRecord.EndParole();
                         rapSheet.ArchiveCurrentParoleRecord();
-                        RapSheetManager.Instance.SaveRapSheet(player, invalidateCache: true);
+                        RapSheetManager.Instance.MarkRapSheetChanged(player);
                         ModLogger.Info($"Completed parole in RapSheet for {player.name}");
+                        
+                        // Emit parole ended event
+                        OnParoleEnded?.Invoke(player);
+                        ModLogger.Debug($"ParoleSystem: Emitted OnParoleEnded event for {player.name} (completed via CompleteParoleForPlayer)");
                     }
                 }
                 catch (System.Exception ex)
@@ -538,7 +531,7 @@ namespace Behind_Bars.Systems
                     rapSheet.CurrentParoleRecord.EndParole();
                     // Move current parole record to past records
                     rapSheet.ArchiveCurrentParoleRecord();
-                    RapSheetManager.Instance.SaveRapSheet(record.Player, invalidateCache: true);
+                    RapSheetManager.Instance.MarkRapSheetChanged(record.Player);
                 }
             }
             catch (System.Exception ex)
@@ -560,6 +553,10 @@ namespace Behind_Bars.Systems
             {
                 ModLogger.Warn($"Failed to hide parole status UI: {ex.Message}");
             }
+
+            // Emit parole ended event
+            OnParoleEnded?.Invoke(record.Player);
+            ModLogger.Debug($"ParoleSystem: Emitted OnParoleEnded event for {record.Player.name} (completed)");
 
             // TODO: Implement parole completion rewards
             // This could involve:
