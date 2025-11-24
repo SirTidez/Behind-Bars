@@ -1,8 +1,8 @@
 {
     "name": "Behind_Bars",
-    "version_number": "1.0.4",
+    "version_number": "alpha-1.0.5",
     "website_url": "",
-    "description": "Update to support game version f13",
+    "description": "Fixed save system - RapSheet and ParoleRecord now save/load correctly",
     "dependencies": [
         "LavaGang-MelonLoader-0.7.0",
         "the_croods-SwapperPlugin-1.2.1"

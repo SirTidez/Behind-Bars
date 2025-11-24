@@ -857,16 +857,16 @@ namespace Behind_Bars.Systems.Jail
                     ModLogger.Debug($"[PAROLE] Additional time from new crimes: {additionalTime} game minutes ({GameTimeManager.FormatGameTime(additionalTime)})");
                     ModLogger.Debug($"[PAROLE] Violation penalty: {violationPenalty} game minutes ({GameTimeManager.FormatGameTime(violationPenalty)}) for {violationCount} violations");
 
-                    // Extend the paused parole
+                    // Extend the paused parole using helper method that marks RapSheet as changed
                     float totalAdditional = additionalTime + violationPenalty;
-                    rapSheet.CurrentParoleRecord.ExtendPausedParole(totalAdditional);
+                    rapSheet.ExtendPausedParole(totalAdditional);
 
                     float newTotalTime = pausedRemainingTime + totalAdditional;
                     float newGameDays = newTotalTime / (60f * 24f); // Convert game minutes to game days
                     ModLogger.Debug($"[PAROLE] New total parole time: {newTotalTime} game minutes ({newGameDays:F1} game days / {GameTimeManager.FormatGameTime(newTotalTime)})");
 
-                    // Resume parole
-                    rapSheet.CurrentParoleRecord.ResumeParole();
+                    // Resume parole using helper method that marks RapSheet as changed
+                    rapSheet.ResumeParole();
                     ModLogger.Debug($"[PAROLE] ✓ Paused parole resumed and extended for {player.name}");
                 }
                 else

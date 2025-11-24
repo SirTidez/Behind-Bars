@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using Behind_Bars.Helpers;
+using ScheduleOne.Persistence;
 using UnityEngine;
 
 #if !MONO
@@ -15,7 +16,7 @@ namespace Behind_Bars.Utils.Saveable
 {
     /// <summary>
     /// Loader implementation for Saveable objects.
-    /// Handles deserialization of Saveable data from JSON files.
+    /// Handles deserialization of Saveable data from JSON files using the S1API pattern.
     /// </summary>
     public class SaveableLoader : Loader
     {
@@ -29,6 +30,7 @@ namespace Behind_Bars.Utils.Saveable
         /// <summary>
         /// Loads saveable data from a file path.
         /// This is called by the game's save system when loading.
+        /// Uses LoadInternal to load individual field files (S1API pattern).
         /// </summary>
         public override void Load(string mainPath)
         {
@@ -37,40 +39,56 @@ namespace Behind_Bars.Utils.Saveable
                 if (string.IsNullOrEmpty(mainPath))
                 {
                     ModLogger.Warn("[SAVEABLE] Load path is null or empty");
+                    // Still call OnLoaded for initialization via ISaveable interface
+                    Behind_Bars.Utils.Saveable.ISaveable internalInterface = _saveable;
+                    internalInterface.OnLoaded();
                     return;
                 }
 
-                // Try to load the file
-                string jsonContent;
-                if (!TryLoadFile(mainPath, out jsonContent))
+                // Determine the folder path for loading
+                string folderPath = mainPath;
+                ScheduleOne.Persistence.ISaveable saveableInterface = _saveable;
+                
+                // If the path is a file, get its directory
+                if (File.Exists(mainPath))
                 {
-                    // File doesn't exist - this is normal for new saves
-                    ModLogger.Debug($"[SAVEABLE] Save file not found at {mainPath} - initializing new save data");
-                    _saveable.InternalOnLoaded(); // Still call OnLoaded for initialization
-                    return;
+                    folderPath = Path.GetDirectoryName(mainPath);
                 }
-
-                if (string.IsNullOrEmpty(jsonContent))
+                // If ShouldSaveUnderFolder, the folder should be the SaveFolderName subdirectory
+                else if (saveableInterface.ShouldSaveUnderFolder)
                 {
-                    ModLogger.Warn("[SAVEABLE] Loaded JSON content is empty");
-                    _saveable.InternalOnLoaded(); // Still call OnLoaded for initialization
+                    // mainPath might be the parent folder, so we need to add SaveFolderName
+                    string parentFolder = Path.GetDirectoryName(mainPath);
+                    if (string.IsNullOrEmpty(parentFolder))
+                        parentFolder = mainPath;
+                    
+                    folderPath = Path.Combine(parentFolder, saveableInterface.SaveFolderName);
+                }
+
+                // Ensure folder exists (might not for new saves)
+                if (!Directory.Exists(folderPath))
+                {
+                    ModLogger.Debug($"[SAVEABLE] Save folder not found at {folderPath} - initializing new save data");
+                    // Still call OnLoaded for initialization via ISaveable interface
+                    Behind_Bars.Utils.Saveable.ISaveable internalSaveable = _saveable;
+                    internalSaveable.OnLoaded();
                     return;
                 }
 
-                // Deserialize and apply to the saveable
-                _saveable.DeserializeFromJson(jsonContent);
-                _saveable.InternalOnLoaded();
+                // Use LoadInternal to load all fields from individual JSON files
+                _saveable.LoadInternal(folderPath);
 
-                ModLogger.Debug($"[SAVEABLE] Successfully loaded {_saveable.GetType().Name} from {mainPath}");
+                ModLogger.Debug($"[SAVEABLE] Successfully loaded {_saveable.GetType().Name} from {folderPath}");
             }
             catch (Exception ex)
             {
                 ModLogger.Error($"[SAVEABLE] Error loading {_saveable.GetType().Name} from {mainPath}: {ex.Message}");
                 ModLogger.Error($"[SAVEABLE] Stack trace: {ex.StackTrace}");
-                // Still call OnLoaded even if deserialization failed
+                // Still call OnLoaded even if loading failed
                 try
                 {
-                    _saveable.InternalOnLoaded();
+                    ISaveable saveableInterface = _saveable;
+                    saveableInterface.OnLoaded();
                 }
                 catch (Exception onLoadedEx)
                 {

@@ -11,9 +11,11 @@ using Behind_Bars.Helpers;
 #if !MONO
 using Il2CppFishNet;
 using Il2CppScheduleOne.DevUtilities;
+using Il2CppScheduleOne.Persistence;
 #else
 using FishNet;
 using ScheduleOne.DevUtilities;
+using ScheduleOne.Persistence;
 #endif
 
 namespace Behind_Bars.Utils
@@ -33,7 +35,7 @@ namespace Behind_Bars.Utils
         private static Dictionary<string, string> _fileCache = new Dictionary<string, string>();
 
         /// <summary>
-        /// Gets the current save name from GameManager
+        /// Gets the current save name from GameManager or LoadManager
         /// </summary>
         /// <returns>The save name, or null if not available (to avoid creating default folder)</returns>
         private static string GetSaveName()
@@ -41,20 +43,66 @@ namespace Behind_Bars.Utils
             try
             {
 #if !MONO
+                // First try LoadManager.ActiveSaveInfo (more reliable, set when save is loaded)
+                if (Singleton<Il2CppScheduleOne.Persistence.LoadManager>.InstanceExists)
+                {
+                    var loadManager = Singleton<Il2CppScheduleOne.Persistence.LoadManager>.Instance;
+                    if (loadManager != null)
+                    {
+                        // Only try to get save name if a game is actually loaded
+                        if (loadManager.IsGameLoaded && !string.IsNullOrEmpty(loadManager.LoadedGameFolderPath))
+                        {
+                            if (loadManager.ActiveSaveInfo != null)
+                            {
+                                string saveName = loadManager.ActiveSaveInfo.OrganisationName;
+                                if (!string.IsNullOrEmpty(saveName) && saveName != "Game" && saveName != "Organisation")
+                                {
+                                    ModLogger.Debug($"Got organization name from LoadManager: {saveName}");
+                                    return saveName;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Fallback to GameManager (only if game is loaded)
                 if (NetworkSingleton<GameManager>.InstanceExists && NetworkSingleton<GameManager>.Instance != null)
                 {
                     string saveName = NetworkSingleton<GameManager>.Instance.OrganisationName;
-                    if (!string.IsNullOrEmpty(saveName) && saveName != "Game")
+                    if (!string.IsNullOrEmpty(saveName) && saveName != "Game" && saveName != "Organisation")
                     {
                         ModLogger.Debug($"Got organization name from GameManager: {saveName}");
                         return saveName;
                     }
                 }
 #else
+                // First try LoadManager.ActiveSaveInfo (more reliable, set when save is loaded)
+                if (Singleton<ScheduleOne.Persistence.LoadManager>.InstanceExists)
+                {
+                    var loadManager = Singleton<ScheduleOne.Persistence.LoadManager>.Instance;
+                    if (loadManager != null)
+                    {
+                        // Only try to get save name if a game is actually loaded
+                        if (loadManager.IsGameLoaded && !string.IsNullOrEmpty(loadManager.LoadedGameFolderPath))
+                        {
+                            if (loadManager.ActiveSaveInfo != null)
+                            {
+                                string saveName = loadManager.ActiveSaveInfo.OrganisationName;
+                                if (!string.IsNullOrEmpty(saveName) && saveName != "Game" && saveName != "Organisation")
+                                {
+                                    ModLogger.Debug($"Got organization name from LoadManager: {saveName}");
+                                    return saveName;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Fallback to GameManager (only if game is loaded)
                 if (NetworkSingleton<GameManager>.InstanceExists && NetworkSingleton<GameManager>.Instance != null)
                 {
                     string saveName = NetworkSingleton<GameManager>.Instance.OrganisationName;
-                    if (!string.IsNullOrEmpty(saveName) && saveName != "Game")
+                    if (!string.IsNullOrEmpty(saveName) && saveName != "Game" && saveName != "Organisation")
                     {
                         ModLogger.Debug($"Got organization name from GameManager: {saveName}");
                         return saveName;
@@ -64,13 +112,13 @@ namespace Behind_Bars.Utils
             }
             catch (Exception ex)
             {
-                ModLogger.Warn($"Could not get save name from GameManager: {ex.Message}");
+                ModLogger.Warn($"Could not get save name: {ex.Message}");
                 ModLogger.Warn($"Stack trace: {ex.StackTrace}");
             }
             
             // Return null instead of "default" to avoid creating unnecessary folders
             // The directory will be created when a save is actually loaded
-            ModLogger.Debug("No valid save name found, returning null");
+            // This is expected during mod initialization before a save is loaded, so don't log as an error
             return null;
         }
 

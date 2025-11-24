@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.IO;
 using Behind_Bars.Helpers;
 
 #if !MONO
@@ -55,13 +57,73 @@ namespace Behind_Bars.Systems.CrimeTracking
                 return cachedRapSheet;
             }
 
+            // Check if we should load from save data first
+            bool shouldLoadFromSave = false;
+            string savePath = null;
+            try
+            {
+                var loadManager = ScheduleOne.Persistence.LoadManager.Instance;
+                if (loadManager != null && !string.IsNullOrEmpty(loadManager.LoadedGameFolderPath))
+                {
+                    // RapSheet saves to Modded/Saveables/BehindBars/{PlayerName}/
+                    savePath = Path.Combine(loadManager.LoadedGameFolderPath, "Modded", "Saveables", "BehindBars", playerName);
+                    shouldLoadFromSave = Directory.Exists(savePath);
+                    ModLogger.Debug($"[RAP SHEET] Checking save path for {playerName}: {savePath} (exists: {shouldLoadFromSave})");
+                }
+                else
+                {
+                    ModLogger.Debug($"[RAP SHEET] LoadManager not available or no loaded game folder path for {playerName}");
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"[RAP SHEET] Error checking save path for {playerName}: {ex.Message}");
+            }
+            
             // Create new rap sheet only if not in cache
-            // This will auto-register with SaveManager and load from save system
+            // Skip OnLoaded() if we're going to load data - LoadInternal() will call it
+            // This will auto-register with SaveManager
             // RapSheet constructor calls InitializeSaveable() which registers with SaveManager
-            // The game's save system will call Loader.Load() when loading, which calls OnLoaded()
-            var rapSheet = new RapSheet(player);
+            var rapSheet = new RapSheet(player, skipOnLoaded: shouldLoadFromSave);
+            
+            // Load from save data if available
+            // The Loader.Load() will be called by the game's save system, but we need to trigger it manually
+            // since RapSheet is not auto-discovered (it's per-player, not singleton)
+            if (shouldLoadFromSave && !string.IsNullOrEmpty(savePath))
+            {
+                try
+                {
+                    ModLogger.Debug($"[RAP SHEET] Loading RapSheet data for {playerName} from {savePath}");
+                    rapSheet.LoadInternal(savePath);
+                    int loadedCrimeCount = rapSheet.CrimesCommited?.Count ?? 0;
+                    bool hasParoleRecord = rapSheet.CurrentParoleRecord != null;
+                    ModLogger.Debug($"[RAP SHEET] Successfully loaded RapSheet data for {playerName} - Crimes: {loadedCrimeCount}, HasParoleRecord: {hasParoleRecord}, LSI: {rapSheet.LSILevel}");
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Warn($"[RAP SHEET] Error loading RapSheet data for {playerName}: {ex.Message}");
+                    ModLogger.Warn($"[RAP SHEET] Stack trace: {ex.StackTrace}");
+                    // If loading failed, call OnLoaded() via ISaveable interface to ensure initialization
+                    try
+                    {
+                        Behind_Bars.Utils.Saveable.ISaveable saveableInterface = rapSheet;
+                        saveableInterface.OnLoaded();
+                    }
+                    catch (Exception onLoadedEx)
+                    {
+                        ModLogger.Error($"[RAP SHEET] Error calling OnLoaded() after load failure: {onLoadedEx.Message}");
+                    }
+                }
+            }
+            else if (!shouldLoadFromSave)
+            {
+                // No save data - this is a new RapSheet, OnLoaded() was already called in constructor
+                ModLogger.Debug($"[RAP SHEET] No save data found for {playerName} - creating new RapSheet");
+            }
+            
             int crimeCount = rapSheet.CrimesCommited?.Count ?? 0;
-            ModLogger.Debug($"[RAP SHEET] RapSheet created for {playerName} - {crimeCount} crimes, LSI: {rapSheet.LSILevel}");
+            bool hasCurrentParole = rapSheet.CurrentParoleRecord != null;
+            ModLogger.Debug($"[RAP SHEET] RapSheet final state for {playerName} - Crimes: {crimeCount}, HasCurrentParole: {hasCurrentParole}, LSI: {rapSheet.LSILevel}");
 
             // Cache the instance to prevent repeated creation
             _rapSheetCache[playerName] = rapSheet;
@@ -110,6 +172,15 @@ namespace Behind_Bars.Systems.CrimeTracking
             int count = _rapSheetCache.Count;
             _rapSheetCache.Clear();
             ModLogger.Debug($"[RAP SHEET] Cleared all cached RapSheet instances ({count} removed)");
+        }
+
+        /// <summary>
+        /// Gets all cached RapSheet instances. Used by the save system to save all RapSheets.
+        /// </summary>
+        /// <returns>Collection of all cached RapSheet instances.</returns>
+        public IEnumerable<RapSheet> GetAllRapSheets()
+        {
+            return _rapSheetCache.Values;
         }
     }
 }

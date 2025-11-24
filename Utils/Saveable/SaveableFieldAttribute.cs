@@ -3,26 +3,27 @@ using System;
 namespace Behind_Bars.Utils.Saveable
 {
     /// <summary>
-    /// Attribute to mark fields that should be persisted in the save system.
-    /// Fields marked with this attribute will be automatically serialized/deserialized.
+    /// Marks a field to be saved alongside the class instance.
+    /// This attribute is intended to work across all custom game elements.
+    /// Compatible with S1API's SaveableField pattern.
     /// </summary>
-    [AttributeUsage(AttributeTargets.Field, AllowMultiple = false, Inherited = true)]
+    [AttributeUsage(AttributeTargets.Field)]
     public class SaveableFieldAttribute : Attribute
     {
         /// <summary>
-        /// The key name used in JSON serialization.
-        /// If not provided, the field name will be used.
+        /// What the save data should be named.
         /// </summary>
-        public string Key { get; }
+        internal string SaveName { get; }
 
         /// <summary>
-        /// Constructor for SaveableField attribute.
+        /// Base constructor for initializing a SaveableField.
         /// </summary>
-        /// <param name="key">The JSON key name for this field. If null or empty, the field name is used.</param>
-        public SaveableFieldAttribute(string key = null)
+        /// <param name="saveName">The name to use for the save file.</param>
+        public SaveableFieldAttribute(string saveName)
         {
-            Key = key;
+            SaveName = saveName;
         }
     }
 }
+
 

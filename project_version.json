@@ -1,7 +1,7 @@
 {
-  "version": "1.0.4",
-  "description": "Behind Bars - 1.0.4\n\nUpdate to support game version f13\n\nExpands the after-arrest experience in Schedule I with a complete criminal justice system:\n\n• Full jail facility with booking process (mugshots, fingerprinting, cell assignment)\n• Bail system with negotiation and payment mechanics\n• Court system for plea bargaining and sentencing\n• Parole system with officer patrols and random searches\n• Dynamic prison NPCs (guards, inmates, intake/release officers)\n• Crime tracking and wanted level display\n• Time-based sentences with early release options\n• Persistent player data across sessions",
-  "release_date": "2025-01-13",
+  "version": "alpha-1.0.5",
+  "description": "Fixed save system - RapSheet and ParoleRecord now save/load correctly",
+  "release_date": "2025-11-23",
   "download_url": "",
   "changelog_url": "https://github.com/SirTidez/Behind-Bars/blob/parole-development/CHANGELOG.md"
 }

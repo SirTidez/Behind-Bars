@@ -1,5 +1,16 @@
 # Changelog
 
+## alpha-1.0.5
+- **Save System Overhaul**: Migrated save system from UserDataDirectory to game save folders and fixed critical save/load issues
+  - **Migration to Game Save Folders**: Changed from saving to MelonEnvironment.UserDataDirectory to game's save folder structure (Modded/Saveables/) for proper integration with game saves
+    - Mod data now saves within game save folders, ensuring data travels with save backups/transfers
+    - Added whitelisting of Modded paths in SaveManager to prevent cleanup deletion
+  - **Fixed RapSheet saving**: Added GetAllRapSheets() method to RapSheetManager and updated SaveablePatches to save per-player saveables (RapSheets) that were excluded from auto-discovery
+  - **Fixed RapSheet loading**: Corrected initialization order to prevent OnLoaded() from being called before LoadInternal(), which was overwriting loaded data
+  - **Fixed ParoleRecord serialization**: Updated SaveInternal and LoadInternal to properly detect and serialize/deserialize nested objects with SaveableField attributes (like ParoleRecord) using SaveableSerializer instead of standard JsonConvert
+  - Added comprehensive debug logging throughout save/load process for better troubleshooting
+  - Made SaveableSerializer.SerializeValue() and DeserializeValue() public to support nested object serialization
+
 ## alpha-1.0.2
 - **Jail Status Tracking Improvements**: Added explicit jail status tracking to JailTimeTracker for more accurate UI and logic separation from sentence tracking
 - **Crime Type Mapping**: Enhanced FineCalculator to better map crime descriptions to type names for fine lookup

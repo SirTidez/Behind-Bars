@@ -1814,8 +1814,8 @@ namespace Behind_Bars.Systems
                         3.0f // High severity - being arrested is a serious violation
                     );
 
-                    // Add violation to parole record
-                    bool violationAdded = rapSheet.CurrentParoleRecord.AddViolation(arrestViolation);
+                    // Add violation to parole record using helper method that marks RapSheet as changed
+                    bool violationAdded = rapSheet.AddParoleViolation(arrestViolation);
                     
                     if (violationAdded)
                     {

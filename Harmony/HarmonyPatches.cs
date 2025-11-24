@@ -37,13 +37,9 @@ namespace Behind_Bars.Harmony
         private static CrimeDetectionSystem? _crimeDetectionSystem;
         private static bool _mugshotInProgress = false;
         
-        // Flags to prevent duplicate processing of the same arrest event
-        private static bool _isProcessingArrestServer = false;
-        private static bool _isProcessingArrestClient = false;
-        
-        // Track last arrest processing time as secondary guard
-        private static DateTime _lastArrestServerTime = DateTime.MinValue;
-        private static DateTime _lastArrestClientTime = DateTime.MinValue;
+        // Cooldown tracking for assault detection to prevent duplicates
+        private static Dictionary<string, float> _assaultCooldown = new Dictionary<string, float>();
+        private const float ASSAULT_COOLDOWN_SECONDS = 3f; // Prevent duplicate processing within 3 seconds
         
         public static void Initialize(Core core)
         {
@@ -352,29 +348,8 @@ namespace Behind_Bars.Harmony
             // TODO: For multiplayer support, also check __instance.IsOwner instead of just Player.Local
             if (__instance != Player.Local)
                 return;
-            
-            // Guard against duplicate execution - use immediate flag to prevent concurrent execution
-            if (_isProcessingArrestServer)
-            {
-                ModLogger.Debug($"[ARREST SERVER] Skipping duplicate arrest processing for {__instance.name} - already processing");
-                return;
-            }
-            
-            // Secondary guard: check timestamp
-            var timeSinceLastArrest = DateTime.Now - _lastArrestServerTime;
-            if (timeSinceLastArrest.TotalSeconds < 2.0)
-            {
-                ModLogger.Debug($"[ARREST SERVER] Skipping duplicate arrest processing for {__instance.name} (last arrest was {timeSinceLastArrest.TotalSeconds:F2}s ago)");
-                return;
-            }
-            
-            // Set processing flag immediately to prevent concurrent execution
-            _isProcessingArrestServer = true;
-            _lastArrestServerTime = DateTime.Now;
-            
-            try
-            {
-                ModLogger.Info($"[ARREST SERVER] Player {__instance.name} arrested - processing authoritative game logic");
+                
+            ModLogger.Info($"[ARREST SERVER] Player {__instance.name} arrested - processing authoritative game logic");
 
                 //TODO: Capturing inventory and removing ammo
                 // STEP 1: Remove ALL ammo BEFORE capturing inventory (ammo is never returned)
@@ -448,22 +423,12 @@ namespace Behind_Bars.Harmony
                     ModLogger.Error("[CONTRABAND] Crime detection system is null during arrest!");
                 }
 
-                // Set flag to prevent default teleportation in Player.Free()
-                _jailSystemHandlingArrest = true;
-                
-                ModLogger.Info($"[ARREST SERVER] Server-side arrest processing complete for {__instance.name}");
-            }
-            finally
-            {
-                // Reset processing flag after a delay to catch any delayed duplicate events
-                MelonCoroutines.Start(ResetArrestServerFlagAfterDelay());
-            }
-        }
-        
-        private static IEnumerator ResetArrestServerFlagAfterDelay()
-        {
-            yield return new WaitForSeconds(0.1f); // 100ms delay
-            _isProcessingArrestServer = false;
+            
+
+            // Set flag to prevent default teleportation in Player.Free()
+            _jailSystemHandlingArrest = true;
+            
+            ModLogger.Info($"[ARREST SERVER] Server-side arrest processing complete for {__instance.name}");
         }
         
         /// <summary>
@@ -484,89 +449,56 @@ namespace Behind_Bars.Harmony
             // TODO: For multiplayer support, also check __instance.IsOwner instead of just Player.Local
             if (__instance != Player.Local)
                 return;
+                
+            ModLogger.Info($"[ARREST CLIENT] Player {__instance.name} arrested - handling UI and visual feedback");
             
-            // Guard against duplicate execution - use immediate flag to prevent concurrent execution
-            if (_isProcessingArrestClient)
-            {
-                ModLogger.Debug($"[ARREST CLIENT] Skipping duplicate arrest processing for {__instance.name} - already processing");
-                return;
-            }
-            
-            // Secondary guard: check timestamp
-            var timeSinceLastArrest = DateTime.Now - _lastArrestClientTime;
-            if (timeSinceLastArrest.TotalSeconds < 2.0)
-            {
-                ModLogger.Debug($"[ARREST CLIENT] Skipping duplicate arrest processing for {__instance.name} (last arrest was {timeSinceLastArrest.TotalSeconds:F2}s ago)");
-                return;
-            }
-            
-            // Set processing flag immediately to prevent concurrent execution
-            _isProcessingArrestClient = true;
-            _lastArrestClientTime = DateTime.Now;
-            
+            // Start immediate jail processing (booking, UI, camera control, etc.)
             try
             {
-                ModLogger.Info($"[ARREST CLIENT] Player {__instance.name} arrested - handling UI and visual feedback");
-            
-                // Start immediate jail processing (booking, UI, camera control, etc.)
+                //TODO: Commented out rapsheet logic from harmony patches for the moment. We are attempting to set it in multiple places and it is running into issues.
+                /*// RAP SHEET LOGGING: Log all crimes to player's rap sheet
                 try
                 {
-                    //TODO: Commented out rapsheet logic from harmony patches for the moment. We are attempting to set it in multiple places and it is running into issues.
-                    /*// RAP SHEET LOGGING: Log all crimes to player's rap sheet
-                    try
+                    ModLogger.Info($"[RAP SHEET] Logging arrest to rap sheet for {__instance.name}");
+                
+                    // DEBUG: Log CrimeData state BEFORE processing
+                    if (__instance.CrimeData != null)
                     {
-                        ModLogger.Info($"[RAP SHEET] Logging arrest to rap sheet for {__instance.name}");
-                    
-                        // DEBUG: Log CrimeData state BEFORE processing
-                        if (__instance.CrimeData != null)
+                        ModLogger.Info($"[RAP SHEET] [DEBUG] CrimeData is not null");
+                        if (__instance.CrimeData.Crimes != null)
                         {
-                            ModLogger.Info($"[RAP SHEET] [DEBUG] CrimeData is not null");
-                            if (__instance.CrimeData.Crimes != null)
+                            ModLogger.Info($"[RAP SHEET] [DEBUG] CrimeData.Crimes is not null, Count: {__instance.CrimeData.Crimes.Count}");
+                            if (__instance.CrimeData.Crimes.Count > 0)
                             {
-                                ModLogger.Info($"[RAP SHEET] [DEBUG] CrimeData.Crimes is not null, Count: {__instance.CrimeData.Crimes.Count}");
-                                if (__instance.CrimeData.Crimes.Count > 0)
+                                foreach (var crimeEntry in __instance.CrimeData.Crimes)
                                 {
-                                    foreach (var crimeEntry in __instance.CrimeData.Crimes)
-                                    {
-                                        ModLogger.Info($"[RAP SHEET] [DEBUG] Crime in CrimeData: {crimeEntry.Key?.CrimeName ?? "NULL"} (Value: {crimeEntry.Value})");
-                                    }
+                                    ModLogger.Info($"[RAP SHEET] [DEBUG] Crime in CrimeData: {crimeEntry.Key?.CrimeName ?? "NULL"} (Value: {crimeEntry.Value})");
                                 }
-                            }
-                            else
-                            {
-                                ModLogger.Warn($"[RAP SHEET] [DEBUG] CrimeData.Crimes is NULL!");
                             }
                         }
                         else
                         {
-                            ModLogger.Warn($"[RAP SHEET] [DEBUG] CrimeData is NULL!");
+                            ModLogger.Warn($"[RAP SHEET] [DEBUG] CrimeData.Crimes is NULL!");
                         }
-                    
-                        LogCrimesToRapSheet(__instance);
                     }
-                    catch (Exception ex)
+                    else
                     {
-                        ModLogger.Error($"[RAP SHEET] Error logging to rap sheet: {ex.Message}\nStack trace: {ex.StackTrace}");
-                    }*/
-                    MelonCoroutines.Start(_core.JailSystem.HandleImmediateArrest(__instance));
-                    //ModLogger.Info($"[ARREST CLIENT] Jail processing coroutine started for {__instance.name}");
+                        ModLogger.Warn($"[RAP SHEET] [DEBUG] CrimeData is NULL!");
+                    }
+                
+                    LogCrimesToRapSheet(__instance);
                 }
                 catch (Exception ex)
                 {
-                    ModLogger.Error($"[ARREST CLIENT] Error starting jail processing: {ex.Message}");
-                }
+                    ModLogger.Error($"[RAP SHEET] Error logging to rap sheet: {ex.Message}\nStack trace: {ex.StackTrace}");
+                }*/
+                MelonCoroutines.Start(_core.JailSystem.HandleImmediateArrest(__instance));
+                //ModLogger.Info($"[ARREST CLIENT] Jail processing coroutine started for {__instance.name}");
             }
-            finally
+            catch (Exception ex)
             {
-                // Reset processing flag after a delay to catch any delayed duplicate events
-                MelonCoroutines.Start(ResetArrestClientFlagAfterDelay());
+                ModLogger.Error($"[ARREST CLIENT] Error starting jail processing: {ex.Message}");
             }
-        }
-        
-        private static IEnumerator ResetArrestClientFlagAfterDelay()
-        {
-            yield return new WaitForSeconds(0.1f); // 100ms delay
-            _isProcessingArrestClient = false;
         }
         
         /// <summary>
@@ -604,7 +536,7 @@ namespace Behind_Bars.Harmony
                 {
                     if (!rapSheet.CurrentParoleRecord.IsPaused())
                     {
-                        rapSheet.CurrentParoleRecord.PauseParole();
+                        rapSheet.PauseParole(); // Use helper method that marks RapSheet as changed
                         ModLogger.Info($"[PAROLE] Player {player.name} was on parole at time of arrest - parole time paused");
 
                         // Add a violation for being arrested while on parole
@@ -613,7 +545,7 @@ namespace Behind_Bars.Harmony
                             "Player was arrested and charged with new crimes while on parole supervision",
                             3.0f
                         );
-                        rapSheet.CurrentParoleRecord.AddViolation(arrestViolation);
+                        rapSheet.AddParoleViolation(arrestViolation); // Use helper method that marks RapSheet as changed
                         ModLogger.Info($"[PAROLE] Added violation for arrest while on parole");
                     }
                     else
@@ -893,9 +825,117 @@ namespace Behind_Bars.Harmony
             }
         }
         
-        // NOTE: Assault detection disabled due to NPCHealth.TakeDamage method signature mismatch
-        // The actual method is TakeDamage(float damage, bool isLethal = true), not TakeDamage(Impact impact)
-        // TODO: Find alternative way to detect player-caused NPC damage
+        /// <summary>
+        /// Detect assaults on civilian NPCs
+        /// </summary>
+        [HarmonyPatch(typeof(NPCHealth), "TakeDamage")]
+        [HarmonyPostfix]
+        public static void NPCHealth_TakeDamage_Postfix(NPCHealth __instance, float damage, bool isLethal)
+        {
+            if (_crimeDetectionSystem == null || __instance == null || __instance.npc == null)
+                return;
+                
+            try
+            {
+                var localPlayer = Player.Local;
+                if (localPlayer == null)
+                    return;
+                
+                // Skip if this is a police officer (handled by game's system)
+                if (__instance.npc is PoliceOfficer)
+                    return;
+                
+                // Only process if damage is significant (avoid noise from minor damage)
+                if (damage < 5f)
+                    return;
+                
+                // Check if player is nearby (likely the attacker)
+                float distanceToPlayer = Vector3.Distance(__instance.npc.transform.position, localPlayer.transform.position);
+                
+                if (distanceToPlayer <= 5f) // Player is close enough to have caused damage
+                {
+                    // Check cooldown to prevent duplicate processing
+                    string npcId = __instance.npc.ID;
+                    float currentTime = Time.time;
+                    
+                    if (_assaultCooldown.ContainsKey(npcId))
+                    {
+                        float timeSinceLastAssault = currentTime - _assaultCooldown[npcId];
+                        if (timeSinceLastAssault < ASSAULT_COOLDOWN_SECONDS)
+                        {
+                            ModLogger.Debug($"Skipping duplicate assault detection for {__instance.npc.name} (cooldown: {timeSinceLastAssault:F2}s)");
+                            return;
+                        }
+                    }
+                    
+                    // CRITICAL: Check if this NPC recently witnessed a crime
+                    // If they did, they might be taking damage from reacting (fleeing/backing away)
+                    // Only count it as assault if damage is very high (clearly intentional)
+                    try
+                    {
+                        var witnessSystem = _crimeDetectionSystem._witnessSystem;
+                            
+                        if (witnessSystem != null && witnessSystem.HasWitnessedCrimes(npcId))
+                        {
+                            // This NPC has witnessed crimes - check if damage is high enough to be intentional
+                            // Low damage (< 20) while reacting is likely accidental/environmental
+                            if (damage < 20f)
+                            {
+                                ModLogger.Debug($"Skipping assault detection for witness {__instance.npc.name} - low damage ({damage:F1}) likely from reaction, not direct attack");
+                                return;
+                            }
+                            else
+                            {
+                                ModLogger.Info($"High damage ({damage:F1}) to witness {__instance.npc.name} - treating as intentional assault despite witness status");
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        ModLogger.Debug($"Could not check witness status: {ex.Message}");
+                        // Continue with normal processing if we can't check
+                    }
+                    
+                    // Check if NPC was recently attacked by player
+                    // HoursSinceAttackedByPlayer is 0 when just attacked, 9999 if never attacked
+                    bool playerAttacked = false;
+                    try
+                    {
+                        // If HoursSinceAttackedByPlayer is 0, it was just attacked by a player
+                        // If it's a small number (< 1 hour), it was recently attacked
+                        if (__instance.HoursSinceAttackedByPlayer == 0 || __instance.HoursSinceAttackedByPlayer < 1)
+                        {
+                            playerAttacked = true;
+                        }
+                    }
+                    catch
+                    {
+                        // Fallback: if we can't check, use proximity as indicator
+                        playerAttacked = true;
+                    }
+                    
+                    if (playerAttacked)
+                    {
+                        // Update cooldown
+                        _assaultCooldown[npcId] = currentTime;
+                        
+                        // Clean up old cooldown entries (older than cooldown period)
+                        var keysToRemove = _assaultCooldown.Where(kvp => currentTime - kvp.Value > ASSAULT_COOLDOWN_SECONDS).Select(kvp => kvp.Key).ToList();
+                        foreach (var key in keysToRemove)
+                        {
+                            _assaultCooldown.Remove(key);
+                        }
+                        
+                        ModLogger.Info($"Assault detected: Player attacked {__instance.npc.name} (damage: {damage:F1}, lethal: {isLethal}, distance: {distanceToPlayer:F1}m)");
+                        _crimeDetectionSystem.ProcessCivilianAssault(__instance.npc, localPlayer, isLethal);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"Error in assault detection: {ex.Message}");
+            }
+        }
         
         /// <summary>
         /// Detect witness intimidation (attacking NPCs who have witnessed crimes)

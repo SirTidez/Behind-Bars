@@ -57,7 +57,7 @@ namespace Behind_Bars.Utils.Saveable
                     try
                     {
                         var value = field.GetValue(saveable);
-                        var key = !string.IsNullOrEmpty(attr.Key) ? attr.Key : field.Name;
+                        var key = !string.IsNullOrEmpty(attr.SaveName) ? attr.SaveName : field.Name;
 
                         // Handle null values
                         if (value == null)
@@ -144,7 +144,7 @@ namespace Behind_Bars.Utils.Saveable
                     var attr = field.GetCustomAttribute<SaveableFieldAttribute>();
                     if (attr != null && !field.IsNotSerialized)
                     {
-                        var key = !string.IsNullOrEmpty(attr.Key) ? attr.Key : field.Name;
+                        var key = !string.IsNullOrEmpty(attr.SaveName) ? attr.SaveName : field.Name;
                         fieldMap[key] = field;
                     }
                 }
@@ -180,8 +180,9 @@ namespace Behind_Bars.Utils.Saveable
 
         /// <summary>
         /// Serializes a single value to a format suitable for JSON.
+        /// Handles objects with SaveableField attributes by serializing them recursively.
         /// </summary>
-        private static object SerializeValue(object value)
+        public static object SerializeValue(object value)
         {
             if (value == null)
                 return null;
@@ -251,7 +252,7 @@ namespace Behind_Bars.Utils.Saveable
                             if (attr != null && !field.IsNotSerialized)
                             {
                                 var fieldValue = field.GetValue(value);
-                                var key = !string.IsNullOrEmpty(attr.Key) ? attr.Key : field.Name;
+                                var key = !string.IsNullOrEmpty(attr.SaveName) ? attr.SaveName : field.Name;
                                 
                                 if (fieldValue == null)
                                 {
@@ -297,8 +298,9 @@ namespace Behind_Bars.Utils.Saveable
 
         /// <summary>
         /// Deserializes a value from JSON to the target type.
+        /// Handles objects with SaveableField attributes by deserializing them recursively.
         /// </summary>
-        private static object DeserializeValue(Type targetType, object value)
+        public static object DeserializeValue(Type targetType, object value)
         {
             if (value == null)
             {
@@ -454,7 +456,7 @@ namespace Behind_Bars.Utils.Saveable
                                 var attr = field.GetCustomAttribute<SaveableFieldAttribute>();
                                 if (attr != null && !field.IsNotSerialized)
                                 {
-                                    var key = !string.IsNullOrEmpty(attr.Key) ? attr.Key : field.Name;
+                                    var key = !string.IsNullOrEmpty(attr.SaveName) ? attr.SaveName : field.Name;
                                     if (nestedData.TryGetValue(key, out var fieldValue))
                                     {
                                         var deserializedValue = DeserializeValue(field.FieldType, fieldValue);

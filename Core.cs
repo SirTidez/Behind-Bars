@@ -249,6 +249,11 @@ namespace Behind_Bars
             FileUtilities.Initialize();
             _fileUtilities = FileUtilities.Instance;
 
+            // Initialize SaveableTestSystem for testing (Alt + letter keybinds)
+            // Accessing Instance will create the GameObject and component
+            var testSystem = Systems.Testing.SaveableTestSystem.Instance;
+            ModLogger.Debug("SaveableTestSystem initialized - Use Alt+S/L/R/P/D/C for testing");
+
             // Initialize preset parole officer routes
             PresetParoleOfficerRoutes.InitializePatrolPoints();
             ModLogger.Debug("Preset parole officer routes initialized");

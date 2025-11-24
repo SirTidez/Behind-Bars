@@ -223,18 +223,31 @@ namespace Behind_Bars.Systems.CrimeTracking
         public Player Player;
 
         // Saveable implementation
-        protected override string SaveFolderName => "BehindBars";
+        protected override string SaveFolderName => $"BehindBars/{_fullName ?? Player?.name ?? "Unknown"}";
         protected override string SaveFileName => $"RapSheet_{_fullName ?? Player?.name ?? "Unknown"}";
 
-
-        public RapSheet(Player player) : base()
+        /// <summary>
+        /// Parameterless constructor for deserialization.
+        /// Used by SaveableAutoRegistry and the game's save system.
+        /// Player reference should be set via SetPlayer() after deserialization.
+        /// </summary>
+        public RapSheet() : base()
         {
-            this.Player = player;
-            _fullName = player.name;
-            
             // Initialize collections
             _crimesCommited = new List<CrimeInstance>();
             _pastParoleRecords = new List<ParoleRecord>();
+            
+            // Don't initialize SaveManager registration here - will be done by RapSheetManager
+            // Don't call OnLoaded here - will be called by the save system after loading
+        }
+
+        /// <summary>
+        /// Constructor with player parameter for normal creation.
+        /// </summary>
+        /// <param name="skipOnLoaded">If true, skips calling OnLoaded() - should be used when LoadInternal() will be called afterwards</param>
+        public RapSheet(Player player, bool skipOnLoaded = false) : this()
+        {
+            SetPlayer(player);
             
             if (string.IsNullOrEmpty(_inmateID))
                 _inmateID = GenerateInmateID();
@@ -242,9 +255,31 @@ namespace Behind_Bars.Systems.CrimeTracking
             // Initialize and register with SaveManager
             InitializeSaveable();
             
-            // OnLoaded will be called by the game's save system when loading
-            // For new saves, we still call OnLoaded to ensure initialization
-            OnLoaded();
+            // OnLoaded will be called by LoadInternal() after loading data
+            // Only call OnLoaded() here if we're NOT going to load data (new save)
+            if (!skipOnLoaded)
+            {
+                OnLoaded();
+            }
+        }
+
+        /// <summary>
+        /// Set the player reference after deserialization.
+        /// Should be called after loading from save data.
+        /// </summary>
+        public void SetPlayer(Player player)
+        {
+            this.Player = player;
+            if (player != null && string.IsNullOrEmpty(_fullName))
+            {
+                _fullName = player.name;
+            }
+            
+            // Set player reference on ParoleRecord if it exists
+            if (_currentParoleRecord != null)
+            {
+                _currentParoleRecord.SetPlayer(player);
+            }
         }
 
         /// <summary>
@@ -530,6 +565,9 @@ namespace Behind_Bars.Systems.CrimeTracking
 
             if (success)
             {
+                // Mark RapSheet as changed since ParoleRecord was modified
+                MarkChanged();
+                
                 // Perform initial LSI assessment when parole starts
                 ModLogger.Info($"[LSI] Performing initial LSI assessment for {FullName} at parole start");
                 UpdateLSILevel();
@@ -556,6 +594,9 @@ namespace Behind_Bars.Systems.CrimeTracking
 
             if (success)
             {
+                // Mark RapSheet as changed since ParoleRecord was modified
+                MarkChanged();
+                
                 // Update LSI level after violation
                 ModLogger.Info($"[LSI] Updating LSI after parole violation for {FullName}");
                 UpdateLSILevel();
@@ -593,6 +634,105 @@ namespace Behind_Bars.Systems.CrimeTracking
 
             return true;
         }
+
+        #region ParoleRecord Helper Methods
+
+        /// <summary>
+        /// Helper method to start parole on the current parole record.
+        /// Automatically marks the RapSheet as changed.
+        /// </summary>
+        public bool StartParole(float termLengthInGameMinutes)
+        {
+            if (CurrentParoleRecord == null)
+            {
+                CurrentParoleRecord = new ParoleRecord(Player);
+            }
+
+            bool success = CurrentParoleRecord.StartParole(termLengthInGameMinutes);
+            if (success)
+            {
+                MarkChanged();
+            }
+            return success;
+        }
+
+        /// <summary>
+        /// Helper method to end parole on the current parole record.
+        /// Automatically marks the RapSheet as changed.
+        /// </summary>
+        public bool EndParole()
+        {
+            if (CurrentParoleRecord == null)
+            {
+                return false;
+            }
+
+            bool success = CurrentParoleRecord.EndParole();
+            if (success)
+            {
+                MarkChanged();
+            }
+            return success;
+        }
+
+        /// <summary>
+        /// Helper method to pause parole on the current parole record.
+        /// Automatically marks the RapSheet as changed.
+        /// </summary>
+        public bool PauseParole()
+        {
+            if (CurrentParoleRecord == null)
+            {
+                return false;
+            }
+
+            bool success = CurrentParoleRecord.PauseParole();
+            if (success)
+            {
+                MarkChanged();
+            }
+            return success;
+        }
+
+        /// <summary>
+        /// Helper method to resume parole on the current parole record.
+        /// Automatically marks the RapSheet as changed.
+        /// </summary>
+        public bool ResumeParole()
+        {
+            if (CurrentParoleRecord == null)
+            {
+                return false;
+            }
+
+            bool success = CurrentParoleRecord.ResumeParole();
+            if (success)
+            {
+                MarkChanged();
+            }
+            return success;
+        }
+
+        /// <summary>
+        /// Helper method to extend paused parole on the current parole record.
+        /// Automatically marks the RapSheet as changed.
+        /// </summary>
+        public bool ExtendPausedParole(float additionalGameMinutes)
+        {
+            if (CurrentParoleRecord == null)
+            {
+                return false;
+            }
+
+            bool success = CurrentParoleRecord.ExtendPausedParole(additionalGameMinutes);
+            if (success)
+            {
+                MarkChanged();
+            }
+            return success;
+        }
+
+        #endregion
 
         /// <summary>
         /// Called after data is loaded from JSON.
