@@ -25,9 +25,9 @@ namespace Behind_Bars.Systems.Jail
         public static CellAssignmentManager Instance { get; private set; }
 
         // Cell tracking
-        private Dictionary<int, CellOccupancy> cellOccupancy = new Dictionary<int, CellOccupancy>();
-        private Dictionary<string, int> playerCellAssignments = new Dictionary<string, int>(); // playerId -> cellNumber
-        private Dictionary<string, int> npcCellAssignments = new Dictionary<string, int>(); // npcId -> cellNumber
+        public Dictionary<int, CellOccupancy> cellOccupancy = new Dictionary<int, CellOccupancy>();
+        public Dictionary<string, int> playerCellAssignments = new Dictionary<string, int>(); // playerId -> cellNumber
+        public Dictionary<string, int> npcCellAssignments = new Dictionary<string, int>(); // npcId -> cellNumber
 
         // Configuration
         public int totalCells = 36; // Total cells available (0-35)

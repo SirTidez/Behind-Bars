@@ -442,7 +442,6 @@ namespace Behind_Bars.Systems.NPCs
             {
                 ModLogger.Error($"ReleaseOfficer {badgeNumber}: Error ending dialogue: {ex.Message}");
             }
-
             // Finalize inventory processing now that player is done with storage
             FinalizeInventoryPickup();
 

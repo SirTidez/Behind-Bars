@@ -288,9 +288,9 @@ namespace Behind_Bars.Systems.Jail
                 if (isStuck || officerMissing || officerIdle)
                 {
                     string cleanupReason = isStuck ? "timeout" : officerMissing ? "missing officer" : "officer idle";
-                    ModLogger.Debug($"Forcing cleanup of stuck release for {player.name} - Reason: {cleanupReason}, Age: {(DateTime.Now - existingRequest.releaseTime).TotalMinutes:F1} minutes, Officer: {existingRequest.assignedOfficer?.GetBadgeNumber() ?? "none"}");
-                    if (!officerIdle)
-                        FailRelease(existingRequest, $"Stuck release cleanup: {cleanupReason}");
+                    if (cleanupReason != "officer idle")
+                        ModLogger.Debug($"Forcing cleanup of stuck release for {player.name} - Reason: {cleanupReason}, Age: {(DateTime.Now - existingRequest.releaseTime).TotalMinutes:F1} minutes, Officer: {existingRequest.assignedOfficer?.GetBadgeNumber() ?? "none"}");
+                    FailRelease(existingRequest, $"Stuck release cleanup: {cleanupReason}");
                 }
                 else
                 {
@@ -607,6 +607,7 @@ namespace Behind_Bars.Systems.Jail
         {
             ModLogger.Error($"Release failed for {request.player.name}: {reason}");
             request.status = ReleaseStatus.Failed;
+            var officerIdle = reason.Contains("officer idle");
 
             // CRITICAL: Clear ALL escort registrations for this player to prevent conflicts
             OfficerCoordinator.Instance.UnregisterAllEscortsForPlayer(request.player);
@@ -627,15 +628,16 @@ namespace Behind_Bars.Systems.Jail
             // Fire event
             OnReleaseFailed?.Invoke(request.player, reason);
             // Notify player
-            if (BehindBarsUIManager.Instance != null)
+            if (BehindBarsUIManager.Instance != null && !officerIdle)
             {
                 BehindBarsUIManager.Instance.ShowNotification(
                     $"Release failed: {reason}",
                     NotificationType.Warning
                 );
             }
-
-            ModLogger.Debug($"Release failed for {request.player.name} - all escorts cleared");
+            
+            if (!officerIdle)
+                ModLogger.Debug($"Release failed for {request.player.name} - all escorts cleared");
         }
 
         private void ProcessQueuedReleases()
