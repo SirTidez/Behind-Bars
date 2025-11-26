@@ -638,6 +638,12 @@ namespace Behind_Bars.Systems.Jail
             
             if (!officerIdle)
                 ModLogger.Debug($"Release failed for {request.player.name} - all escorts cleared");
+            else if (BehindBarsUIManager.Instance != null)
+            {
+                BehindBarsUIManager.Instance.ShowNotification(
+                    "Processing release... Please wait!",
+                    NotificationType.Instruction);
+            }
         }
 
         private void ProcessQueuedReleases()

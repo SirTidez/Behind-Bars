@@ -685,6 +685,8 @@ namespace Behind_Bars.Systems.Jail
         {
             yield return new WaitForSeconds(2f);
 
+            // Set up exit trigger monitoring
+            MelonCoroutines.Start(MonitorExitTrigger());
             if (currentPlayer != null)
             {
                 ModLogger.Info($"ExitScannerStation: Player {currentPlayer.name} ready for exit trigger");
@@ -697,9 +699,6 @@ namespace Behind_Bars.Systems.Jail
                         NotificationType.Instruction
                     );
                 }
-
-                // Set up exit trigger monitoring
-                MelonCoroutines.Start(MonitorExitTrigger());
             }
         }
 

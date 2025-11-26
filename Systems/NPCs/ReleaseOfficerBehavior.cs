@@ -43,6 +43,7 @@ namespace Behind_Bars.Systems.NPCs
             MovingToPlayer,            // Moving to player's current location
             OpeningCell,               // Opening cell door if needed
             WaitingForPlayerExitCell,  // Waiting for player to exit cell
+            MovingToPrisonDoor,        // Moving to prison entry door for transition
             EscortingToStorage,        // Escorting to inventory pickup
             WaitingAtStorage,          // Supervising inventory pickup
             EscortingToExitScanner,    // Escorting to exit scanner station
@@ -60,7 +61,10 @@ namespace Behind_Bars.Systems.NPCs
         // State machine timing
         private new float stateStartTime;
         private const float STATE_TIMEOUT = 300f; // 5 minutes max per state
-        private const float PLAYER_CHECK_INTERVAL = 2f; // How often to update player position
+        private const float PLAYER_CHECK_INTERVAL = 1f; // How often to update player position (faster for responsive door handling)
+        private const float PRISON_DOOR_WAIT_LOG_INTERVAL = 2f; // Log wait status every 2 seconds
+        private const float PRISON_DOOR_PROXIMITY = 11f; // Distance to start waiting for door
+        private const float DOOR_CLOSE_RETRY_DELAY = 2f;
         private float lastPlayerPositionCheck = 0f;
 
         // Movement and tracking
@@ -95,7 +99,7 @@ namespace Behind_Bars.Systems.NPCs
 
         // Door clearance tracking (like IntakeOfficer)
         private bool playerDoorClearDetected = false;
-        private bool doorCloseInitiated = false;
+
 
         // Proactive release timing - learn from first escort cycle
         private float estimatedTravelTimeToPost = 0f; // Time it takes to get from cell to guard post
@@ -703,8 +707,10 @@ namespace Behind_Bars.Systems.NPCs
         private void UpdateReleaseStateMachine()
         {
             // Check state timeout, but exclude waiting states (player can take as long as they want)
+            // Also exclude MovingToPrisonDoor as SecurityDoorBehavior handles timing
             bool isWaitingState = currentReleaseState == ReleaseState.Idle ||
                                   currentReleaseState == ReleaseState.WaitingForPlayerExitCell ||
+                                  currentReleaseState == ReleaseState.MovingToPrisonDoor ||
                                   currentReleaseState == ReleaseState.WaitingAtStorage ||
                                   currentReleaseState == ReleaseState.WaitingForExitScan;
 
@@ -742,6 +748,10 @@ namespace Behind_Bars.Systems.NPCs
                     HandleWaitingForPlayerExitCellState();
                     break;
 
+                case ReleaseState.MovingToPrisonDoor:
+                    HandleMovingToPrisonDoorState();
+                    break;
+
                 case ReleaseState.EscortingToStorage:
                     HandleEscortState();
                     break;
@@ -770,7 +780,8 @@ namespace Behind_Bars.Systems.NPCs
 
         private bool IsEscortState(ReleaseState state)
         {
-            return state == ReleaseState.EscortingToStorage ||
+            return state == ReleaseState.MovingToPrisonDoor ||
+                   state == ReleaseState.EscortingToStorage ||
                    state == ReleaseState.EscortingToExitScanner ||
                    state == ReleaseState.MovingToPlayer;
         }
@@ -783,26 +794,28 @@ namespace Behind_Bars.Systems.NPCs
             lastPlayerPositionCheck = Time.time;
 
             Vector3 currentPlayerPos = currentReleasee.transform.position;
+            float distanceToPlayer = Vector3.Distance(transform.position, currentPlayerPos);
 
-            // If player has moved significantly from last known position, update our navigation
-            if (Vector3.Distance(currentPlayerPos, lastKnownPlayerPosition) > 3f)
+            // Update last known position tracking
+            bool playerMovedSignificantly = Vector3.Distance(currentPlayerPos, lastKnownPlayerPosition) > 2f;
+            if (playerMovedSignificantly)
             {
-                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Player moved, updating navigation from {lastKnownPlayerPosition} to {currentPlayerPos}");
                 lastKnownPlayerPosition = currentPlayerPos;
+            }
 
-                // If we're moving to player, update destination
-                if (currentReleaseState == ReleaseState.MovingToPlayer)
+            // If we're moving to player, update destination when player moves
+            if (currentReleaseState == ReleaseState.MovingToPlayer && playerMovedSignificantly)
+            {
+                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Player moved, updating navigation to {currentPlayerPos}");
+                NavigateToPlayer();
+            }
+            else if (currentReleaseState == ReleaseState.EscortingToStorage || currentReleaseState == ReleaseState.EscortingToExitScanner)
+            {
+                // During escort, check if player is falling behind
+                if (distanceToPlayer > ESCORT_FOLLOW_DISTANCE)
                 {
-                    NavigateToPlayer();
-                }
-                else if (currentReleaseState == ReleaseState.EscortingToStorage || currentReleaseState == ReleaseState.EscortingToExitScanner)
-                {
-                    // During escort, check if player is falling behind
-                    float distance = Vector3.Distance(transform.position, currentPlayerPos);
-                    if (distance > ESCORT_FOLLOW_DISTANCE)
-                    {
-                        PlayVoiceCommand("Stay close! Follow me.", "Escorting");
-                    }
+                    // Only remind occasionally (voice command has its own throttling)
+                    PlayVoiceCommand("Stay close! Follow me.", "Escorting");
                 }
             }
         }
@@ -996,6 +1009,11 @@ namespace Behind_Bars.Systems.NPCs
                     playerDoorClearDetected = false;
                     break;
 
+                case ReleaseState.MovingToPrisonDoor:
+                    PlayVoiceCommand("Follow me through the door.", "Escorting");
+                    NavigateToPrisonDoor();
+                    break;
+
                 case ReleaseState.EscortingToStorage:
                     NavigateToStorage();
                     break;
@@ -1103,11 +1121,70 @@ namespace Behind_Bars.Systems.NPCs
             }
             else
             {
-                // Player is not in cell - skip door opening, proceed directly to escort
-                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Player not in cell, proceeding directly to storage escort");
-                PlayVoiceCommand("Come with me for release processing.", "Escorting");
-                ChangeReleaseState(ReleaseState.EscortingToStorage);
+                // Player is not in cell - skip door opening, proceed to prison door
+                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Player not in cell, proceeding to prison door");
+                ChangeReleaseState(ReleaseState.MovingToPrisonDoor);
             }
+        }
+
+        private void HandleMovingToPrisonDoorState()
+        {
+            if (currentReleasee == null)
+            {
+                ChangeReleaseState(ReleaseState.ReturningToPost);
+                return;
+            }
+
+            // Check if SecurityDoorBehavior is already handling the door operation
+            var securityDoor = GetSecurityDoor();
+            if (securityDoor != null && securityDoor.IsBusy())
+            {
+                // SecurityDoorBehavior is in control - wait for it to complete
+                return;
+            }
+
+            // Check if we've reached the door entry point
+            var jailController = Core.JailController;
+            var prisonDoor = jailController?.booking?.prisonEntryDoor;
+            if (prisonDoor?.doorPoint == null)
+            {
+                ModLogger.Error($"ReleaseOfficer {badgeNumber}: Could not find prison door entry point");
+                // Fallback: proceed directly to storage escort
+                ChangeReleaseState(ReleaseState.EscortingToStorage);
+                return;
+            }
+
+            Vector3 doorEntryPoint = prisonDoor.doorPoint.position;
+            float distanceToDoor = Vector3.Distance(transform.position, doorEntryPoint);
+
+            // If we're close enough to the door, trigger SecurityDoorBehavior
+            if (distanceToDoor < DESTINATION_TOLERANCE || (navAgent != null && !navAgent.pathPending && navAgent.remainingDistance < DESTINATION_TOLERANCE))
+            {
+                // We've reached the door - trigger SecurityDoorBehavior to handle the operation
+                if (securityDoor != null)
+                {
+                    string triggerName = "PrisonDoorTrigger_FromPrison"; // Guard moving from prison to hall
+                    bool triggered = securityDoor.HandleDoorTrigger(triggerName, true, currentReleasee);
+
+                    if (triggered)
+                    {
+                        isSecurityDoorActive = true;
+                        triggeredDoorOperations.Add("PrisonEntryDoor");
+                        ModLogger.Info($"ReleaseOfficer {badgeNumber}: SecurityDoor operation triggered for prison entry door - waiting for completion");
+                    }
+                    else
+                    {
+                        ModLogger.Warn($"ReleaseOfficer {badgeNumber}: SecurityDoor trigger failed - proceeding directly to storage");
+                        ChangeReleaseState(ReleaseState.EscortingToStorage);
+                    }
+                }
+                else
+                {
+                    ModLogger.Warn($"ReleaseOfficer {badgeNumber}: No SecurityDoor component - proceeding directly to storage");
+                    ChangeReleaseState(ReleaseState.EscortingToStorage);
+                }
+            }
+            // Otherwise, continue navigating to door (handled by OnStateEnter navigation)
         }
 
         private void HandleEscortState()
@@ -1453,6 +1530,23 @@ namespace Behind_Bars.Systems.NPCs
             {
                 ModLogger.Error($"ReleaseOfficer {badgeNumber}: MoveTo cell door failed");
             }
+        }
+
+        private void NavigateToPrisonDoor()
+        {
+            var jailController = Core.JailController;
+            var prisonDoor = jailController?.booking?.prisonEntryDoor;
+            if (prisonDoor?.doorPoint == null)
+            {
+                ModLogger.Error($"ReleaseOfficer {badgeNumber}: Could not find prison door entry point - proceeding directly to storage");
+                ChangeReleaseState(ReleaseState.EscortingToStorage);
+                return;
+            }
+
+            Vector3 doorEntryPoint = prisonDoor.doorPoint.position;
+            destinationPosition = doorEntryPoint;
+            ModLogger.Info($"ReleaseOfficer {badgeNumber}: Navigating to prison door entry point at {doorEntryPoint}");
+            MoveTo(doorEntryPoint);
         }
 
         private void NavigateToStorage()
@@ -2169,6 +2263,14 @@ namespace Behind_Bars.Systems.NPCs
             // Record the time of door operation completion to prevent premature destination events
             lastDoorOperationTime = Time.time;
 
+            // If we're in MovingToPrisonDoor state, transition to EscortingToStorage
+            if (currentReleaseState == ReleaseState.MovingToPrisonDoor)
+            {
+                ModLogger.Info($"ReleaseOfficer {badgeNumber}: Prison door operation complete - transitioning to EscortingToStorage");
+                ChangeReleaseState(ReleaseState.EscortingToStorage);
+                return;
+            }
+
             // Give guard time to move away from door before resuming navigation
             ModLogger.Info($"ReleaseOfficer {badgeNumber}: Waiting for guard to clear door area before resuming navigation");
             MelonCoroutines.Start(DelayedNavigationResume());
@@ -2240,52 +2342,13 @@ namespace Behind_Bars.Systems.NPCs
 
         private void CheckForDoorTriggers()
         {
-            // Like IntakeOfficer - trigger doors during escort states
-            // This makes the guard properly handle doors during navigation
-
-            if (currentReleaseState == ReleaseState.EscortingToStorage)
-            {
-                // Open prison door when escorting FROM prison TO storage (through hallway)
-                TriggerPrisonEntryDoorIfNeeded();
-
-                // Close prison door after BOTH pass through
-                CheckAndClosePrisonDoorBehind();
-            }
+            // Door handling is now done via dedicated MovingToPrisonDoor state
+            // which uses SecurityDoorBehavior to properly handle the door sequence
             // NOTE: NO door needed for EscortingToExitScanner!
             // Storage and ExitScanner are both in the Booking/Hallway area already
             // The booking door is only needed when coming FROM outside (intake direction)
         }
 
-        private void TriggerPrisonEntryDoorIfNeeded()
-        {
-            // Check if we've already triggered the prison entry door operation
-            if (triggeredDoorOperations.Contains("PrisonEntryDoor")) return;
-
-            var securityDoor = GetSecurityDoor();
-            if (securityDoor == null)
-            {
-                ModLogger.Error($"ReleaseOfficer {badgeNumber}: No SecurityDoor component - falling back to direct control");
-                FallbackDirectDoorControl("PrisonEntryDoor");
-                return;
-            }
-
-            // CRITICAL: Release direction is FROM Prison TO Hallway (opposite of intake)
-            // Use PrisonDoorTrigger_FromPrison trigger (not FromHall)
-            string triggerName = "PrisonDoorTrigger_FromPrison"; // Guard moving from prison to hall
-            bool triggered = securityDoor.HandleDoorTrigger(triggerName, true, currentReleasee);
-
-            if (triggered)
-            {
-                triggeredDoorOperations.Add("PrisonEntryDoor");
-                isSecurityDoorActive = true;
-                ModLogger.Info($"ReleaseOfficer {badgeNumber}: SecurityDoor operation triggered for prison entry door (release direction)");
-            }
-            else
-            {
-                ModLogger.Warn($"ReleaseOfficer {badgeNumber}: SecurityDoor trigger failed - using fallback");
-                FallbackDirectDoorControl("PrisonEntryDoor");
-            }
-        }
 
         /// <summary>
         /// Check if officer and player are near the prison door (for opening before escort)
@@ -2397,80 +2460,9 @@ namespace Behind_Bars.Systems.NPCs
             lastDoorOperationTime = 0f;
             stationDestinationProcessed.Clear();
             playerDoorClearDetected = false;
-            doorCloseInitiated = false;
-            prisonDoorClosed = false; // Reset door closed flag
             ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Door tracking reset for new release");
         }
 
-        // Track if we've already closed the prison door
-        private bool prisonDoorClosed = false;
-        private float lastDoorCheckTime = 0f; // Throttle door checks
-
-        private void CheckAndClosePrisonDoorBehind()
-        {
-            // Don't check if already closed
-            if (prisonDoorClosed) return;
-
-            // Check if we've opened the door first
-            if (!triggeredDoorOperations.Contains("PrisonEntryDoor")) return;
-
-            // Only check every half second to prevent spam (not every frame!)
-            if (Time.time - lastDoorCheckTime < 0.5f) return;
-            lastDoorCheckTime = Time.time;
-
-            // Check if BOTH guard and player are on the STORAGE side of the door (past it)
-            if (AreBothPastPrisonDoor())
-            {
-                ModLogger.Info($"ReleaseOfficer {badgeNumber}: Both guard and player past prison door - closing behind them");
-
-                var jailController = Core.JailController;
-                if (jailController?.doorController != null)
-                {
-                    bool doorClosed = jailController.doorController.ClosePrisonEntryDoor();
-                    if (doorClosed)
-                    {
-                        prisonDoorClosed = true;
-                        ModLogger.Info($"ReleaseOfficer {badgeNumber}: Prison entry door closed behind escort (secure)");
-                    }
-                }
-            }
-        }
-
-        private bool AreBothPastPrisonDoor()
-        {
-            try
-            {
-                if (currentReleasee == null) return false;
-
-                var jailController = Core.JailController;
-                if (jailController?.booking?.prisonEntryDoor?.doorInstance == null) return false;
-
-                var doorPosition = jailController.booking.prisonEntryDoor.doorInstance.transform.position;
-                var doorForward = jailController.booking.prisonEntryDoor.doorInstance.transform.forward;
-
-                // Calculate which side of door each person is on
-                // Positive = storage side, negative = prison side
-                float guardSide = Vector3.Dot(transform.position - doorPosition, doorForward);
-                float playerSide = Vector3.Dot(currentReleasee.transform.position - doorPosition, doorForward);
-
-                // Both should be on storage side (positive) and at least 3m past door
-                bool guardPast = guardSide > 3f;
-                bool playerPast = playerSide > 3f;
-
-                // Only log when close to threshold to reduce spam
-                if (!guardPast || !playerPast)
-                {
-                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Prison door check - Guard side: {guardSide:F1}m, Player side: {playerSide:F1}m");
-                }
-
-                return guardPast && playerPast;
-            }
-            catch (System.Exception ex)
-            {
-                ModLogger.Error($"ReleaseOfficer {badgeNumber}: Error checking prison door clearance: {ex.Message}");
-                return false;
-            }
-        }
 
 #if !MONO
         [HideFromIl2Cpp]
@@ -2526,9 +2518,8 @@ namespace Behind_Bars.Systems.NPCs
                 }
             }
 
-            // Proceed to escort to storage
-            PlayVoiceCommand("Follow me to storage.", "Escorting");
-            ChangeReleaseState(ReleaseState.EscortingToStorage);
+            // Proceed to prison door first, then storage
+            ChangeReleaseState(ReleaseState.MovingToPrisonDoor);
         }
 
         private void StartContinuousPlayerLooking()
@@ -2691,8 +2682,8 @@ namespace Behind_Bars.Systems.NPCs
                 ModLogger.Info($"ReleaseOfficer {badgeNumber}: Closed cell {cellNumber} door");
             }
 
-            // Close prison entry door if it was opened
-            if (triggeredDoorOperations.Contains("PrisonEntryDoor") && !prisonDoorClosed)
+            // Close prison entry door if it was opened (SecurityDoorBehavior should have closed it, but ensure it's closed)
+            if (triggeredDoorOperations.Contains("PrisonEntryDoor"))
             {
                 jailController.doorController.ClosePrisonEntryDoor();
                 ModLogger.Info($"ReleaseOfficer {badgeNumber}: Closed prison entry door");
