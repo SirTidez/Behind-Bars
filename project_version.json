@@ -1,7 +1,7 @@
 {
-  "version": "alpha-1.0.5",
-  "description": "Fixed save system - RapSheet and ParoleRecord now save/load correctly",
-  "release_date": "2025-11-23",
+  "version": "alpha-1.0.6",
+  "description": "Added event-driven jail and parole status updates with improved release escort system. Integrated parole check-in and intake systems for supervising officers with dialogue system improvements.",
+  "release_date": "2025-01-27",
   "download_url": "",
   "changelog_url": "https://github.com/SirTidez/Behind-Bars/blob/parole-development/CHANGELOG.md"
 }

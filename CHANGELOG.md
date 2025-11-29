@@ -1,5 +1,15 @@
 # Changelog
 
+## alpha-1.0.6
+- **Event-Driven Status Updates**: Implemented event-driven system for jail and parole status updates, improving real-time UI responsiveness and system synchronization
+- **Release Escort Improvements**: Refactored release escort system to use dedicated prison door state tracking for more reliable release processes
+- **Parole Check-In and Intake Systems**: Added comprehensive parole check-in and intake systems for supervising officers, enhancing parole officer interactions
+- **Dialogue System Integration**: Integrated dialogue system with improved jail time tracking for better player-NPC interactions
+- **Bug Fixes**: 
+  - Fixed release error notification display issues
+  - Resolved stuck release cleanup error messages
+- **Testing Improvements**: Updated jail managed testing keybinds to require Left Alt modifier for safer testing
+
 ## alpha-1.0.5
 - **Save System Overhaul**: Migrated save system from UserDataDirectory to game save folders and fixed critical save/load issues
   - **Migration to Game Save Folders**: Changed from saving to MelonEnvironment.UserDataDirectory to game's save folder structure (Modded/Saveables/) for proper integration with game saves

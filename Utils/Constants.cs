@@ -8,7 +8,7 @@ namespace Behind_Bars.Helpers
         public const string MOD_ID = "Behind_Bars";
         public const string MOD_NAME = "Behind Bars";
         public const string MOD_AUTHOR = "SirTidez";
-        public const string MOD_VERSION = "alpha-1.0.5";
+        public const string MOD_VERSION = "alpha-1.0.6";
         public const string MOD_DESCRIPTION = "Expands the after-arrest experience in Schedule I with jail, bail, court, and parole systems";
 
         /// <summary>
