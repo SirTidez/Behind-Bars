@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Collections;
 using System.Linq;
@@ -46,6 +47,7 @@ namespace Behind_Bars.Systems.Jail
         private Dictionary<Player, CompletedSentence> _completedSentences = new(); // Store sentence data for completed/stopped sentences
         private HashSet<Player> _inJailStatus = new(); // Track if player is actively in jail (separate from sentence tracking)
         private bool _isSubscribed = false;
+        private bool _isSubscribedToArrestEvents = false;
         
         // Real-time tracking fallback (in case game time events don't fire)
         private Dictionary<Player, float> _sentenceStartTimes = new(); // Real-time when sentence started
@@ -54,8 +56,138 @@ namespace Behind_Bars.Systems.Jail
         private JailTimeTracker()
         {
             SubscribeToGameTimeEvents();
+            SubscribeToArrestReleaseEvents();
             StartRealTimeTracking(); // Start real-time fallback tracking
         }
+        
+        #region Arrest/Release Event Subscriptions
+        
+        /// <summary>
+        /// Subscribe to arrest and release events for jail status tracking.
+        /// Subscribes to ReleaseManager.OnReleaseCompleted immediately,
+        /// and starts a coroutine to subscribe to Player.local.onArrested when available.
+        /// </summary>
+        private void SubscribeToArrestReleaseEvents()
+        {
+            if (_isSubscribedToArrestEvents)
+            {
+                return;
+            }
+            
+            // Subscribe to ReleaseManager events (always available since it's static)
+            ReleaseManager.OnReleaseCompleted += OnPlayerReleased;
+            ModLogger.Debug("JailTimeTracker subscribed to ReleaseManager.OnReleaseCompleted");
+            
+            // Start coroutine to subscribe to Player.local.onArrested when available
+            MelonCoroutines.Start(WaitForPlayerAndSubscribe());
+            
+            _isSubscribedToArrestEvents = true;
+        }
+        
+        /// <summary>
+        /// Coroutine that waits for Player.Local to become available, then subscribes to onArrested
+        /// </summary>
+        private IEnumerator WaitForPlayerAndSubscribe()
+        {
+            ModLogger.Debug("JailTimeTracker waiting for Player.Local to subscribe to onArrested...");
+            
+            int attempts = 0;
+            const int maxAttempts = 300; // 30 seconds max wait
+            
+            while (attempts < maxAttempts)
+            {
+                Player localPlayer = null;
+                
+                try
+                {
+#if !MONO
+                    localPlayer = Player.Local;
+                    if (localPlayer != null && localPlayer.Pointer != IntPtr.Zero)
+                    {
+                        // Subscribe to onArrested
+                        localPlayer.onArrested.AddListener(new Action(OnPlayerArrested));
+                        ModLogger.Info($"JailTimeTracker subscribed to Player.local.onArrested for {localPlayer.name}");
+                        yield break;
+                    }
+#else
+                    localPlayer = Player.Local;
+                    if (localPlayer != null)
+                    {
+                        // Subscribe to onArrested
+                        localPlayer.onArrested.AddListener(OnPlayerArrested);
+                        ModLogger.Info($"JailTimeTracker subscribed to Player.local.onArrested for {localPlayer.name}");
+                        yield break;
+                    }
+#endif
+                }
+                catch (Exception ex)
+                {
+                    // Player.Local not available yet
+                    if (attempts % 50 == 0) // Log every 5 seconds
+                    {
+                        ModLogger.Debug($"JailTimeTracker still waiting for Player.Local... ({attempts / 10}s elapsed, error: {ex.Message})");
+                    }
+                }
+                
+                attempts++;
+                yield return new WaitForSeconds(0.1f);
+            }
+            
+            ModLogger.Warn("JailTimeTracker: Gave up waiting for Player.Local after 30 seconds");
+        }
+        
+        /// <summary>
+        /// Event handler called when Player.local.onArrested fires
+        /// </summary>
+        private void OnPlayerArrested()
+        {
+            try
+            {
+#if !MONO
+                var player = Player.Local;
+#else
+                var player = Player.Local;
+#endif
+                if (player != null)
+                {
+                    ModLogger.Info($"JailTimeTracker: OnPlayerArrested event received for {player.name}");
+                    SetInJail(player);
+                }
+                else
+                {
+                    ModLogger.Warn("JailTimeTracker: OnPlayerArrested called but Player.Local is null");
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"JailTimeTracker: Error in OnPlayerArrested: {ex.Message}");
+            }
+        }
+        
+        /// <summary>
+        /// Event handler called when ReleaseManager.OnReleaseCompleted fires
+        /// </summary>
+        private void OnPlayerReleased(Player player, ReleaseManager.ReleaseType releaseType)
+        {
+            try
+            {
+                if (player != null)
+                {
+                    ModLogger.Info($"JailTimeTracker: OnPlayerReleased event received for {player.name} (type: {releaseType})");
+                    ClearInJail(player);
+                }
+                else
+                {
+                    ModLogger.Warn("JailTimeTracker: OnPlayerReleased called but player is null");
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"JailTimeTracker: Error in OnPlayerReleased: {ex.Message}");
+            }
+        }
+        
+        #endregion
 
         /// <summary>
         /// Subscribe to game time events

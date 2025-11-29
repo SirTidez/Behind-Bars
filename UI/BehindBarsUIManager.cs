@@ -1,3 +1,4 @@
+using System;
 using UnityEngine;
 using Behind_Bars.Helpers;
 using Behind_Bars.Utils;
@@ -444,6 +445,7 @@ namespace Behind_Bars.UI
         private GameObject? _paroleStatusManager;
         private ParoleStatusUI? _paroleStatusUI;
         private Coroutine? _paroleStatusUpdateCoroutine;
+        private bool _isSubscribedToArrestEvents = false;
         
         // === BAIL UI SYSTEM ===
 
@@ -918,10 +920,120 @@ namespace Behind_Bars.UI
                     _paroleStatusUpdateCoroutine = MelonLoader.MelonCoroutines.Start(UpdateParoleStatusCoroutine()) as Coroutine;
                     ModLogger.Debug("Parole status UI update coroutine started");
                 }
+                
+                // Subscribe to arrest/release events for immediate UI updates
+                SubscribeToArrestReleaseEvents();
             }
             catch (System.Exception ex)
             {
                 ModLogger.Error($"Error initializing parole status UI: {ex.Message}");
+            }
+        }
+        
+        /// <summary>
+        /// Subscribe to Player.local.onArrested and ReleaseManager.OnReleaseCompleted events
+        /// for immediate parole status UI visibility control
+        /// </summary>
+        private void SubscribeToArrestReleaseEvents()
+        {
+            if (_isSubscribedToArrestEvents)
+            {
+                return;
+            }
+            
+            // Subscribe to ReleaseManager events (static, always available)
+            ReleaseManager.OnReleaseCompleted += HandlePlayerReleased;
+            ModLogger.Debug("ParoleStatusUI subscribed to ReleaseManager.OnReleaseCompleted");
+            
+            // Start coroutine to subscribe to Player.local.onArrested when available
+            MelonLoader.MelonCoroutines.Start(WaitForPlayerAndSubscribeToArrest());
+            
+            _isSubscribedToArrestEvents = true;
+        }
+        
+        /// <summary>
+        /// Coroutine that waits for Player.Local to become available, then subscribes to onArrested
+        /// </summary>
+        private IEnumerator WaitForPlayerAndSubscribeToArrest()
+        {
+            ModLogger.Debug("ParoleStatusUI waiting for Player.Local to subscribe to onArrested...");
+            
+            int attempts = 0;
+            const int maxAttempts = 300; // 30 seconds max wait
+            
+            while (attempts < maxAttempts)
+            {
+                Player localPlayer = null;
+                
+                try
+                {
+#if !MONO
+                    localPlayer = Player.Local;
+                    if (localPlayer != null && localPlayer.Pointer != IntPtr.Zero)
+                    {
+                        // Subscribe to onArrested
+                        localPlayer.onArrested.AddListener(new Action(HandlePlayerArrested));
+                        ModLogger.Info($"ParoleStatusUI subscribed to Player.local.onArrested for {localPlayer.name}");
+                        yield break;
+                    }
+#else
+                    localPlayer = Player.Local;
+                    if (localPlayer != null)
+                    {
+                        // Subscribe to onArrested
+                        localPlayer.onArrested.AddListener(HandlePlayerArrested);
+                        ModLogger.Info($"ParoleStatusUI subscribed to Player.local.onArrested for {localPlayer.name}");
+                        yield break;
+                    }
+#endif
+                }
+                catch (Exception ex)
+                {
+                    // Player.Local not available yet
+                    if (attempts % 50 == 0) // Log every 5 seconds
+                    {
+                        ModLogger.Debug($"ParoleStatusUI still waiting for Player.Local... ({attempts / 10}s elapsed)");
+                    }
+                }
+                
+                attempts++;
+                yield return new WaitForSeconds(0.1f);
+            }
+            
+            ModLogger.Warn("ParoleStatusUI: Gave up waiting for Player.Local after 30 seconds");
+        }
+        
+        /// <summary>
+        /// Event handler called when Player.local.onArrested fires - hide parole status UI immediately
+        /// </summary>
+        private void HandlePlayerArrested()
+        {
+            try
+            {
+                ModLogger.Info("ParoleStatusUI: HandlePlayerArrested event received - hiding UI immediately");
+                HideParoleStatus();
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"ParoleStatusUI: Error in HandlePlayerArrested: {ex.Message}");
+            }
+        }
+        
+        /// <summary>
+        /// Event handler called when ReleaseManager.OnReleaseCompleted fires
+        /// Note: ShowParoleStatus() is called after release summary UI is dismissed
+        /// </summary>
+        private void HandlePlayerReleased(Player player, ReleaseManager.ReleaseType releaseType)
+        {
+            try
+            {
+                ModLogger.Info($"ParoleStatusUI: HandlePlayerReleased event received for {player?.name} (type: {releaseType})");
+                // ShowParoleStatus() will be called after release summary UI is dismissed in ReleaseManager
+                // The coroutine will automatically show the UI if player is on parole
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"ParoleStatusUI: Error in HandlePlayerReleased: {ex.Message}");
             }
         }
 
@@ -1114,7 +1226,13 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Coroutine to periodically update parole status
+        /// Coroutine to periodically update parole status display.
+        /// NOTE: Primary visibility control is event-driven via HandlePlayerArrested (from Player.local.onArrested)
+        /// and HandlePlayerReleased (from ReleaseManager.OnReleaseCompleted).
+        /// This coroutine handles:
+        ///   - Periodic data updates (time remaining, violations)
+        ///   - Safety fallback for jail status (in case events miss)
+        ///   - Auto-showing UI when player is on parole after release
         /// </summary>
         private IEnumerator UpdateParoleStatusCoroutine()
         {
@@ -1125,51 +1243,53 @@ namespace Behind_Bars.UI
                 try
                 {
                     var statusData = GetParoleStatusData();
-                    if (statusData != null)
-                    {
-                        // CRITICAL: Hide UI if player is in jail (GetParoleStatusData already checks this, but double-check)
+                    if (statusData == null)
+                        continue;
+
+                    // SAFETY FALLBACK: Hide UI if player is in jail
+                    // Primary hiding is done by HandlePlayerArrested event, but this catches edge cases
+                    // where the event might not fire or JailTimeTracker.SetInJail was called independently
 #if !MONO
-                        var player = Il2CppScheduleOne.PlayerScripts.Player.Local;
+                    var player = Il2CppScheduleOne.PlayerScripts.Player.Local;
 #else
-                        var player = ScheduleOne.PlayerScripts.Player.Local;
+                    var player = ScheduleOne.PlayerScripts.Player.Local;
 #endif
-                        // Use IsInJail to check jail status (set immediately on arrest, before sentence tracking starts)
-                        if (player != null && JailTimeTracker.Instance != null && JailTimeTracker.Instance.IsInJail(player))
+                    if (player != null && JailTimeTracker.Instance != null && JailTimeTracker.Instance.IsInJail(player))
+                    {
+                        if (_paroleStatusUI != null && _paroleStatusUI.IsVisible())
                         {
-                            // Player is in jail - hide parole status UI
-                            if (_paroleStatusUI != null && _paroleStatusUI.IsVisible())
-                            {
-                                _paroleStatusUI.Hide();
-                            }
-                            continue;
+                            _paroleStatusUI.Hide();
+                            ModLogger.Debug("ParoleStatusUI: Safety fallback hid UI (JailTimeTracker.IsInJail = true)");
+                        }
+                        continue;
+                    }
+
+                    // Update parole status display based on current state
+                    if (statusData.IsOnParole)
+                    {
+                        if (_paroleStatusUI == null)
+                        {
+                            CreateParoleStatusUI();
                         }
 
-                        if (statusData.IsOnParole)
+                        if (_paroleStatusUI != null)
                         {
-                            if (_paroleStatusUI == null)
+                            if (!_paroleStatusUI.IsVisible())
                             {
-                                CreateParoleStatusUI();
+                                _paroleStatusUI.Show(statusData);
                             }
-
-                            if (_paroleStatusUI != null)
+                            else
                             {
-                                if (!_paroleStatusUI.IsVisible())
-                                {
-                                    _paroleStatusUI.Show(statusData);
-                                }
-                                else
-                                {
-                                    _paroleStatusUI.UpdateStatus(statusData);
-                                }
+                                _paroleStatusUI.UpdateStatus(statusData);
                             }
                         }
-                        else
+                    }
+                    else
+                    {
+                        // Not on parole - hide UI
+                        if (_paroleStatusUI != null && _paroleStatusUI.IsVisible())
                         {
-                            // Not on parole - hide UI
-                            if (_paroleStatusUI != null && _paroleStatusUI.IsVisible())
-                            {
-                                _paroleStatusUI.Hide();
-                            }
+                            _paroleStatusUI.Hide();
                         }
                     }
                 }

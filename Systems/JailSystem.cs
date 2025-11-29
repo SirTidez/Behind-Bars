@@ -498,7 +498,7 @@ namespace Behind_Bars.Systems
             }
             else
             {
-                ModLogger.Warn("InventoryPickupStation not found - creating one now");
+                ModLogger.Debug("InventoryPickupStation not found - creating one now");
                 CreateInventoryPickupStation();
 
                 // Verify it was created
