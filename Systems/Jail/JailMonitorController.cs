@@ -30,6 +30,11 @@ namespace Behind_Bars.Systems.Jail
 #endif
         public bool showDebugInfo = false;
 
+        // Performance optimization: throttle Update() checks and pool list allocations
+        private float _rotationCheckInterval = 0.5f;  // Check rotations every 0.5 seconds instead of every frame
+        private float _lastRotationCheck = 0f;
+        private readonly List<SecurityCamera> _pooledCamerasInUse = new List<SecurityCamera>();
+
         [System.Serializable]
         public class MonitorAssignment
         {
@@ -87,7 +92,13 @@ namespace Behind_Bars.Systems.Jail
 
         void Update()
         {
-            UpdateMonitorRotations();
+            // Throttle rotation checks to every 0.5 seconds instead of every frame
+            // Reduces overhead by 30x (from 60 fps to 2 checks per second)
+            if (Time.time - _lastRotationCheck >= _rotationCheckInterval)
+            {
+                UpdateMonitorRotations();
+                _lastRotationCheck = Time.time;
+            }
         }
 
         public void Initialize(Transform jailRoot, List<SecurityCamera> cameras)
@@ -115,23 +126,24 @@ namespace Behind_Bars.Systems.Jail
 
         void RotateMonitorCamera(MonitorAssignment assignment)
         {
-            List<SecurityCamera> camerasInUse = GetCamerasCurrentlyInUse(assignment);
-            SecurityCamera nextCamera = assignment.GetNextAvailableCamera(camerasInUse);
+            // Reuse pooled list instead of allocating new one every rotation
+            _pooledCamerasInUse.Clear();
+            GetCamerasCurrentlyInUse(assignment, _pooledCamerasInUse);
+            SecurityCamera nextCamera = assignment.GetNextAvailableCamera(_pooledCamerasInUse);
 
             if (nextCamera != null && assignment.monitor != null)
             {
                 SetMonitorCamera(assignment.monitor, nextCamera);
                 if (showDebugInfo)
                 {
-                    Debug.Log($"Auto-rotated monitor {assignment.monitor.name} to camera {nextCamera.cameraName} (avoiding {camerasInUse.Count} cameras in use)");
+                    ModLogger.Debug($"Auto-rotated monitor {assignment.monitor.name} to camera {nextCamera.cameraName} (avoiding {_pooledCamerasInUse.Count} cameras in use)");
                 }
             }
         }
 
-        List<SecurityCamera> GetCamerasCurrentlyInUse(MonitorAssignment excludeAssignment)
+        // Modified to accept output list parameter instead of creating and returning new list
+        void GetCamerasCurrentlyInUse(MonitorAssignment excludeAssignment, List<SecurityCamera> outList)
         {
-            List<SecurityCamera> camerasInUse = new List<SecurityCamera>();
-
             foreach (var assignment in monitorAssignments)
             {
                 if (assignment == excludeAssignment) continue;
@@ -139,11 +151,9 @@ namespace Behind_Bars.Systems.Jail
                 SecurityCamera currentCamera = assignment.GetCurrentCamera();
                 if (currentCamera != null)
                 {
-                    camerasInUse.Add(currentCamera);
+                    outList.Add(currentCamera);
                 }
             }
-
-            return camerasInUse;
         }
 
         public void SetMonitorCamera(MonitorController monitor, SecurityCamera camera)
@@ -174,19 +184,22 @@ namespace Behind_Bars.Systems.Jail
                 camera.cameraComponent.enabled = true;
             }
 
-            MelonCoroutines.Start(SetMonitorCameraDelayed(monitor, camera));
+             MelonCoroutines.Start(SetMonitorCameraDelayed(monitor, camera));
 #else
-            if (camera.cameraComponent != null)
-            {
-                camera.cameraComponent.Render();
-            }
+            // IL2CPP path - Let Unity's rendering pipeline handle camera renders automatically
+            // Removed explicit Render() call to fix double/triple rendering bottleneck
 
             monitor.SetCamera(camera);
 
             if (camera.renderTexture != null && monitor.screenImage != null)
             {
                 monitor.screenImage.texture = camera.renderTexture;
-                Debug.Log($"✓ Monitor {monitor.name} → {camera.cameraName} (texture: {camera.renderTexture.width}x{camera.renderTexture.height})");
+
+                // Performance: Only log when debug info is enabled
+                if (showDebugInfo)
+                {
+                    ModLogger.Debug($"✓ Monitor {monitor.name} → {camera.cameraName} (texture: {camera.renderTexture.width}x{camera.renderTexture.height})");
+                }
             }
 #endif
         }

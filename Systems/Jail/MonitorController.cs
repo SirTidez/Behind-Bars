@@ -94,7 +94,7 @@ public sealed class MonitorController(IntPtr ptr) : MonoBehaviour(ptr)
         }
         
         screenImage.texture = currentTexture;
-        
+
 #if MONO
         // Mono-specific: Force a render to ensure texture is populated
         if (camera.cameraComponent != null)
@@ -102,8 +102,12 @@ public sealed class MonitorController(IntPtr ptr) : MonoBehaviour(ptr)
             camera.cameraComponent.Render();
         }
 #endif
-        
-        Debug.Log($"Monitor {gameObject.name} now showing camera: {camera.cameraName} (texture: {currentTexture.name}, size: {currentTexture.width}x{currentTexture.height})");
+
+        // Performance: Only log when debug info is enabled
+        if (showDebugInfo)
+        {
+            Debug.Log($"Monitor {gameObject.name} now showing camera: {camera.cameraName} (texture: {currentTexture.name}, size: {currentTexture.width}x{currentTexture.height})");
+        }
     }
     
     public void ClearDisplay()

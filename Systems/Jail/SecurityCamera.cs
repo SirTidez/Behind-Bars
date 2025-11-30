@@ -62,7 +62,10 @@ public sealed class SecurityCamera(IntPtr ptr) : MonoBehaviour(ptr)
         }
 
         // Configure camera for security monitoring
-        cameraComponent.cullingMask = ~0; // Render all layers
+        // Performance: Only render default layer instead of all layers (~0)
+        // Adjust if specific layers are needed for your setup
+        int defaultLayer = LayerMask.GetMask("Default");
+        cameraComponent.cullingMask = defaultLayer != 0 ? defaultLayer : ~0;
         cameraComponent.nearClipPlane = 0.1f;
         cameraComponent.farClipPlane = 100f;
         cameraComponent.fieldOfView = 60f;
@@ -74,7 +77,8 @@ public sealed class SecurityCamera(IntPtr ptr) : MonoBehaviour(ptr)
         {
             renderTexture = new RenderTexture(renderTextureSize, renderTextureSize, 16);
             renderTexture.name = $"SecurityCam_{gameObject.name}";
-            renderTexture.filterMode = FilterMode.Bilinear;
+            // Performance: Use Point filtering instead of Bilinear (much faster, no visual filtering)
+            renderTexture.filterMode = FilterMode.Point;
             
 #if MONO
             // Mono-specific: Ensure render texture is created immediately

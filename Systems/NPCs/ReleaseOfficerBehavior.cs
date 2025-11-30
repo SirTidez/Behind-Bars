@@ -86,6 +86,10 @@ namespace Behind_Bars.Systems.NPCs
         private bool dialogueContainerRegistered = false;
         private bool readyInteractionEnabled = false;
 
+        // Performance: Cache dialogue lookups to avoid searching every frame
+        private DialogueContainer _cachedReadyContainer;
+        private bool _greetingOverridesProcessed = false;
+
         // Door management
         private HashSet<string> triggeredDoorOperations = new HashSet<string>();
         private bool isSecurityDoorActive = false;
@@ -623,32 +627,37 @@ namespace Behind_Bars.Systems.NPCs
             if (!isInitialized) return;
 
             base.Update();
-            
-            // Continuously ensure custom dialogue container stays active and greetings stay disabled
+
+            // Performance: Only process dialogue setup once, not every frame
             if (readyInteractionEnabled && baseDialogueController != null)
             {
-                // Ensure all greeting overrides stay disabled
-                if (baseDialogueController.GreetingOverrides != null)
+                // Process greeting overrides only ONCE instead of every frame
+                if (!_greetingOverridesProcessed && baseDialogueController.GreetingOverrides != null)
                 {
                     foreach (var greetingOverride in baseDialogueController.GreetingOverrides)
                     {
                         if (greetingOverride.ShouldShow)
                         {
                             greetingOverride.ShouldShow = false;
-                            ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Disabled re-enabled greeting override in Update()");
                         }
                     }
+                    _greetingOverridesProcessed = true;
                 }
-                
-                // Ensure container is still first in the list
+
+                // Performance: Cache container reference instead of Find() every frame
                 if (dialogueHandler != null && dialogueHandler.dialogueContainers != null && dialogueHandler.dialogueContainers.Count > 0)
                 {
-                    var targetContainer = dialogueHandler.dialogueContainers.Find(c => c != null && c.name == READY_TO_LEAVE_CONTAINER_NAME);
-                    if (targetContainer != null && dialogueHandler.dialogueContainers[0] != targetContainer)
+                    // Cache lookup on first run
+                    if (_cachedReadyContainer == null)
                     {
-                        dialogueHandler.dialogueContainers.Remove(targetContainer);
-                        dialogueHandler.dialogueContainers.Insert(0, targetContainer);
-                        ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Re-ensured container is first in Update()");
+                        _cachedReadyContainer = dialogueHandler.dialogueContainers.Find(c => c != null && c.name == READY_TO_LEAVE_CONTAINER_NAME);
+                    }
+
+                    // Only reorder if needed (use cached reference)
+                    if (_cachedReadyContainer != null && dialogueHandler.dialogueContainers[0] != _cachedReadyContainer)
+                    {
+                        dialogueHandler.dialogueContainers.Remove(_cachedReadyContainer);
+                        dialogueHandler.dialogueContainers.Insert(0, _cachedReadyContainer);
                     }
                 }
             }
@@ -1712,9 +1721,13 @@ namespace Behind_Bars.Systems.NPCs
         private void EnableGuardReadyInteraction()
         {
             if (readyInteractionEnabled) return;
-            
+
             readyInteractionEnabled = true;
-            
+
+            // Performance: Reset caches so Update() rebuilds them
+            _greetingOverridesProcessed = false;
+            _cachedReadyContainer = null;
+
             // Enable dialogue container override instead of InteractableObject
             EnableReadyToLeaveDialogue();
             
@@ -1992,9 +2005,13 @@ namespace Behind_Bars.Systems.NPCs
         private void DisableGuardReadyInteraction()
         {
             if (!readyInteractionEnabled) return;
-            
+
             readyInteractionEnabled = false;
-            
+
+            // Performance: Clear caches when disabling interaction
+            _greetingOverridesProcessed = false;
+            _cachedReadyContainer = null;
+
             // Disable dialogue container override
             DisableReadyToLeaveDialogue();
             
