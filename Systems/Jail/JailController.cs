@@ -183,6 +183,9 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
 
         lightingController.Initialize(transform);
 
+        // Performance: Initialize NPCUpdateManager for event-driven NPC updates
+        InitializeNPCUpdateSystem();
+
         ModLogger.Debug("✓ All controllers initialized");
     }
 
@@ -207,6 +210,26 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         ModLogger.Debug($"  Storage GuardPoint: {(storageGuardPoint != null ? "FOUND" : "MISSING")}");
         ModLogger.Debug($"  HoldingCell_00 GuardPoint: {(holdingCell00GuardPoint != null ? "FOUND" : "MISSING")}");
         ModLogger.Debug($"  HoldingCell_01 GuardPoint: {(holdingCell01GuardPoint != null ? "FOUND" : "MISSING")}");
+    }
+
+    /// <summary>
+    /// Initialize the centralized NPC update manager for event-driven updates.
+    /// Performance: Reduces per-NPC Update() overhead by consolidating into throttled intervals.
+    /// </summary>
+    void InitializeNPCUpdateSystem()
+    {
+        // Create NPCUpdateManager if it doesn't exist
+        var updateManager = GameObject.FindObjectOfType<Behind_Bars.Systems.NPCs.NPCUpdateManager>();
+        if (updateManager == null)
+        {
+            var managerObj = new GameObject("NPCUpdateManager");
+            managerObj.AddComponent<Behind_Bars.Systems.NPCs.NPCUpdateManager>();
+            ModLogger.Info("✓ NPCUpdateManager initialized - Event-driven NPC updates enabled");
+        }
+        else
+        {
+            ModLogger.Debug("NPCUpdateManager already exists");
+        }
     }
 
     /// <summary>

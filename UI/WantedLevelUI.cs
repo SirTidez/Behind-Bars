@@ -29,9 +29,8 @@ namespace Behind_Bars.UI
         private TextMeshProUGUI _wantedLevelText;
         private TextMeshProUGUI _crimeCountText;
         private bool _isInitialized = false;
-        private float _updateTimer = 0f;
         private const float UPDATE_INTERVAL = 1f; // Update every second
-        
+
         public void Start()
         {
             // Only create if not already initialized (allows manual initialization)
@@ -40,18 +39,24 @@ namespace Behind_Bars.UI
                 CreateWantedLevelUI();
             }
         }
-        
-        public void Update()
+
+        /// <summary>
+        /// Performance: Use OnEnable/OnDisable with InvokeRepeating instead of Update()
+        /// Eliminates per-frame timer checks
+        /// </summary>
+        void OnEnable()
         {
-            if (!_isInitialized)
-                return;
-                
-            _updateTimer += Time.deltaTime;
-            if (_updateTimer >= UPDATE_INTERVAL)
+            if (_isInitialized)
             {
-                _updateTimer = 0f;
-                UpdateWantedDisplay();
+                // Start repeating updates every second (no per-frame overhead)
+                InvokeRepeating(nameof(UpdateWantedDisplay), 0f, UPDATE_INTERVAL);
             }
+        }
+
+        void OnDisable()
+        {
+            // Stop repeating updates when disabled
+            CancelInvoke(nameof(UpdateWantedDisplay));
         }
         
         /// <summary>
@@ -170,9 +175,12 @@ namespace Behind_Bars.UI
                 
                 _isInitialized = true;
                 ModLogger.Debug($"✓ WantedLevelUI created successfully on canvas '{mainCanvas.name}'");
-                
+
                 // Do an initial update to show current wanted level
                 UpdateWantedDisplay();
+
+                // Performance: Start repeating updates (no per-frame overhead)
+                InvokeRepeating(nameof(UpdateWantedDisplay), UPDATE_INTERVAL, UPDATE_INTERVAL);
             }
             catch (System.Exception ex)
             {

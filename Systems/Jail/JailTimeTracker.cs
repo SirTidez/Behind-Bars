@@ -48,10 +48,13 @@ namespace Behind_Bars.Systems.Jail
         private HashSet<Player> _inJailStatus = new(); // Track if player is actively in jail (separate from sentence tracking)
         private bool _isSubscribed = false;
         private bool _isSubscribedToArrestEvents = false;
-        
+
         // Real-time tracking fallback (in case game time events don't fire)
         private Dictionary<Player, float> _sentenceStartTimes = new(); // Real-time when sentence started
         private object? _realTimeUpdateCoroutine = null;
+
+        // Performance: Pool list to avoid allocation every update
+        private readonly List<Player> _completedSentencesPool = new();
 
         private JailTimeTracker()
         {
@@ -280,30 +283,35 @@ namespace Behind_Bars.Systems.Jail
         /// This is a fallback in case game time events don't fire correctly
         /// 1 real second = 1 game minute
         /// </summary>
+        /// <summary>
+        /// Performance: Reuse pooled list and iterate dictionary directly without ToList()
+        /// Eliminates repeated allocations every second
+        /// </summary>
         private IEnumerator RealTimeUpdateLoop()
         {
             while (true)
             {
                 yield return new WaitForSeconds(1f); // Update every real second
-                
-                // Update all active sentences using real-time tracking
-                var completedSentences = new List<Player>();
+
+                // Performance: Reuse pooled list instead of allocating new one
+                _completedSentencesPool.Clear();
                 float currentTime = Time.time;
-                
-                foreach (var kvp in _activeSentences.ToList())
+
+                // Performance: Iterate directly without ToList() to avoid dictionary copy
+                foreach (var kvp in _activeSentences)
                 {
                     Player player = kvp.Key;
                     ActiveSentence sentence = kvp.Value;
-                    
+
                     // Calculate elapsed real-time since sentence started
                     if (_sentenceStartTimes.TryGetValue(player, out float startTime))
                     {
                         float elapsedRealSeconds = currentTime - startTime;
                         float elapsedGameMinutes = elapsedRealSeconds; // 1 real second = 1 game minute
-                        
+
                         // Update remaining time based on elapsed time
                         float expectedRemaining = sentence.TotalGameMinutes - elapsedGameMinutes;
-                        
+
                         // Only update if the real-time calculation shows less remaining time
                         // This prevents time from going backwards if game time events are also firing
                         if (expectedRemaining < sentence.RemainingGameMinutes)
@@ -318,27 +326,27 @@ namespace Behind_Bars.Systems.Jail
                         // This shouldn't happen, but handle gracefully
                         ModLogger.Warn($"[JAIL TRACKING] No start time recorded for {player.name} - using game time events only");
                     }
-                    
+
                     if (sentence.RemainingGameMinutes <= 0f)
                     {
-                        completedSentences.Add(player);
+                        _completedSentencesPool.Add(player);
                     }
                 }
-                
+
                 // Trigger completion callbacks for sentences that completed via real-time tracking
-                foreach (var player in completedSentences)
+                foreach (var player in _completedSentencesPool)
                 {
                     if (_activeSentences.TryGetValue(player, out var sentence))
                     {
                         ModLogger.Info($"Jail sentence completed (real-time tracking) for {player.name} ({sentence.TotalGameMinutes} game minutes served)");
-                        
+
                         // Store the original sentence time and time served before removing from active tracking
                         _completedSentences[player] = new CompletedSentence
                         {
                             OriginalSentenceTime = sentence.TotalGameMinutes,
                             TimeServed = sentence.TotalGameMinutes // Full sentence served
                         };
-                        
+
                         sentence.OnComplete?.Invoke(player);
                         _activeSentences.Remove(player);
                         _sentenceStartTimes.Remove(player);

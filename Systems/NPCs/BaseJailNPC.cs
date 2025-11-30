@@ -111,12 +111,48 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Debug($"BaseJailNPC initialized: {gameObject.name}");
         }
 
-        protected virtual void Update()
+        /// <summary>
+        /// Performance: Event-driven updates instead of per-frame Update()
+        /// Subscribes to NPCUpdateManager events for throttled updates
+        /// </summary>
+        protected virtual void OnEnable()
+        {
+            if (NPCUpdateManager.Instance != null)
+            {
+                NPCUpdateManager.Instance.RegisterNPC(this);
+                NPCUpdateManager.Instance.OnNPCStateUpdate += HandleStateUpdate;
+                NPCUpdateManager.Instance.OnNPCMovementCheck += HandleMovementCheck;
+                NPCUpdateManager.Instance.OnNPCActionProcess += HandleActionProcess;
+            }
+        }
+
+        protected virtual void OnDisable()
+        {
+            if (NPCUpdateManager.Instance != null)
+            {
+                NPCUpdateManager.Instance.UnregisterNPC(this);
+                NPCUpdateManager.Instance.OnNPCStateUpdate -= HandleStateUpdate;
+                NPCUpdateManager.Instance.OnNPCMovementCheck -= HandleMovementCheck;
+                NPCUpdateManager.Instance.OnNPCActionProcess -= HandleActionProcess;
+            }
+        }
+
+        // Event handlers replace Update() methods
+        private void HandleStateUpdate(float currentTime)
         {
             if (!isInitialized) return;
-
             UpdateState();
+        }
+
+        private void HandleMovementCheck(float currentTime)
+        {
+            if (!isInitialized) return;
             CheckStuckMovement();
+        }
+
+        private void HandleActionProcess()
+        {
+            if (!isInitialized) return;
             ProcessActionQueue();
         }
 

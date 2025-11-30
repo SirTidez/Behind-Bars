@@ -40,6 +40,9 @@ namespace Behind_Bars.UI
         private BehindBarsUIWrapper? _uiWrapper;
         private bool _isInitialized = false;
 
+        // Performance: Pool canvas to avoid repeated allocation
+        private static Canvas? _pooledOverlayCanvas;
+
         /// <summary>
         /// Initialize the UI manager and load assets
         /// </summary>
@@ -389,32 +392,42 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Find existing overlay canvas or create a new one for UI
+        /// Performance: Find existing overlay canvas or create a new one (pooled)
+        /// Reuses pooled canvas to avoid repeated allocation
         /// </summary>
         private Canvas FindOrCreateCanvas()
         {
-            // Always create a dedicated overlay canvas for the jail UI
-            // This ensures it appears on top and is properly isolated
-            ModLogger.Debug("Creating dedicated overlay canvas for Behind Bars UI");
-            
+            // Reuse existing pooled canvas if it exists and is still valid
+            if (_pooledOverlayCanvas != null && _pooledOverlayCanvas.gameObject != null)
+            {
+                ModLogger.Debug("Reusing pooled overlay canvas");
+                return _pooledOverlayCanvas;
+            }
+
+            // Create new canvas only if pool is empty
+            ModLogger.Debug("Creating new dedicated overlay canvas for Behind Bars UI");
+
             var canvasGO = new GameObject("Behind Bars Overlay Canvas");
             var overlayCanvas = canvasGO.AddComponent<Canvas>();
             overlayCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
             overlayCanvas.sortingOrder = 1000; // Very high sorting order to appear on top of everything
-            
+
             // Add CanvasScaler for proper scaling
             var scaler = canvasGO.AddComponent<UnityEngine.UI.CanvasScaler>();
             scaler.uiScaleMode = UnityEngine.UI.CanvasScaler.ScaleMode.ScaleWithScreenSize;
             scaler.referenceResolution = new Vector2(1920, 1080);
             scaler.matchWidthOrHeight = 0.5f; // Balance between width and height matching
-            
+
             // Add GraphicRaycaster for UI interaction
             canvasGO.AddComponent<UnityEngine.UI.GraphicRaycaster>();
-            
+
             // Don't destroy on load so it persists across scenes
             UnityEngine.Object.DontDestroyOnLoad(canvasGO);
-            
-            ModLogger.Debug("Created overlay canvas with sorting order 1000");
+
+            // Cache in pool for reuse
+            _pooledOverlayCanvas = overlayCanvas;
+
+            ModLogger.Debug("Created and pooled overlay canvas with sorting order 1000");
             return overlayCanvas;
         }
 

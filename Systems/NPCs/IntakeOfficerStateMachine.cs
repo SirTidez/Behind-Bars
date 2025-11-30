@@ -329,14 +329,44 @@ namespace Behind_Bars.Systems.NPCs
 
         #region State Machine Core
 
-        protected override void Update()
+        /// <summary>
+        /// Performance: Override OnEnable to use custom state update handler
+        /// </summary>
+        protected override void OnEnable()
+        {
+            // Subscribe to NPCUpdateManager events (custom handler for state updates)
+            if (NPCUpdateManager.Instance != null)
+            {
+                NPCUpdateManager.Instance.RegisterNPC(this);
+                NPCUpdateManager.Instance.OnNPCStateUpdate += HandleIntakeStateUpdate;  // Custom handler
+                NPCUpdateManager.Instance.OnNPCMovementCheck += HandleMovementCheck;
+                NPCUpdateManager.Instance.OnNPCActionProcess += HandleActionProcess;
+            }
+        }
+
+        protected override void OnDisable()
+        {
+            // Unsubscribe from events
+            if (NPCUpdateManager.Instance != null)
+            {
+                NPCUpdateManager.Instance.UnregisterNPC(this);
+                NPCUpdateManager.Instance.OnNPCStateUpdate -= HandleIntakeStateUpdate;  // Custom handler
+                NPCUpdateManager.Instance.OnNPCMovementCheck -= HandleMovementCheck;
+                NPCUpdateManager.Instance.OnNPCActionProcess -= HandleActionProcess;
+            }
+        }
+
+        /// <summary>
+        /// Custom state update handler that includes intake state machine logic
+        /// </summary>
+        private void HandleIntakeStateUpdate(float currentTime)
         {
             if (!isInitialized) return;
 
-            // Allow base class to handle movement, but prevent it from interfering with our states
-            base.Update();
+            // Call base state update
+            UpdateState();
 
-            // Handle our own state machine
+            // Handle intake state machine
             UpdateStateMachine();
 
             // Check for door triggers during escort states
@@ -344,6 +374,18 @@ namespace Behind_Bars.Systems.NPCs
             {
                 CheckForDoorTriggers();
             }
+        }
+
+        private void HandleMovementCheck(float currentTime)
+        {
+            if (!isInitialized) return;
+            CheckStuckMovement();
+        }
+
+        private void HandleActionProcess()
+        {
+            if (!isInitialized) return;
+            ProcessActionQueue();
         }
 
         private void UpdateStateMachine()

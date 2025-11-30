@@ -622,47 +622,97 @@ namespace Behind_Bars.Systems.NPCs
 
         #region State Management
 
-        protected override void Update()
+        /// <summary>
+        /// Performance: Override OnEnable to use custom state update handler
+        /// </summary>
+        protected override void OnEnable()
+        {
+            // Subscribe to NPCUpdateManager events (custom handler for state updates)
+            if (NPCUpdateManager.Instance != null)
+            {
+                NPCUpdateManager.Instance.RegisterNPC(this);
+                NPCUpdateManager.Instance.OnNPCStateUpdate += HandleReleaseStateUpdate;  // Custom handler
+                NPCUpdateManager.Instance.OnNPCMovementCheck += HandleMovementCheck;
+                NPCUpdateManager.Instance.OnNPCActionProcess += HandleActionProcess;
+            }
+
+            // Process dialogue setup once when enabled (not every frame)
+            ProcessDialogueSetup();
+        }
+
+        protected override void OnDisable()
+        {
+            // Unsubscribe from events
+            if (NPCUpdateManager.Instance != null)
+            {
+                NPCUpdateManager.Instance.UnregisterNPC(this);
+                NPCUpdateManager.Instance.OnNPCStateUpdate -= HandleReleaseStateUpdate;  // Custom handler
+                NPCUpdateManager.Instance.OnNPCMovementCheck -= HandleMovementCheck;
+                NPCUpdateManager.Instance.OnNPCActionProcess -= HandleActionProcess;
+            }
+        }
+
+        /// <summary>
+        /// Process dialogue container management once instead of every frame
+        /// </summary>
+        private void ProcessDialogueSetup()
+        {
+            if (!readyInteractionEnabled || baseDialogueController == null) return;
+
+            // Process greeting overrides ONCE
+            if (!_greetingOverridesProcessed && baseDialogueController.GreetingOverrides != null)
+            {
+                foreach (var greetingOverride in baseDialogueController.GreetingOverrides)
+                {
+                    if (greetingOverride.ShouldShow)
+                    {
+                        greetingOverride.ShouldShow = false;
+                    }
+                }
+                _greetingOverridesProcessed = true;
+            }
+
+            // Cache container reference ONCE
+            if (dialogueHandler != null && dialogueHandler.dialogueContainers != null && dialogueHandler.dialogueContainers.Count > 0)
+            {
+                if (_cachedReadyContainer == null)
+                {
+                    _cachedReadyContainer = dialogueHandler.dialogueContainers.Find(c => c != null && c.name == READY_TO_LEAVE_CONTAINER_NAME);
+                }
+
+                // Only reorder if needed
+                if (_cachedReadyContainer != null && dialogueHandler.dialogueContainers[0] != _cachedReadyContainer)
+                {
+                    dialogueHandler.dialogueContainers.Remove(_cachedReadyContainer);
+                    dialogueHandler.dialogueContainers.Insert(0, _cachedReadyContainer);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Override state update handler to include release state machine
+        /// </summary>
+        private void HandleReleaseStateUpdate(float currentTime)
         {
             if (!isInitialized) return;
 
-            base.Update();
+            // Call base state update
+            UpdateState();
 
-            // Performance: Only process dialogue setup once, not every frame
-            if (readyInteractionEnabled && baseDialogueController != null)
-            {
-                // Process greeting overrides only ONCE instead of every frame
-                if (!_greetingOverridesProcessed && baseDialogueController.GreetingOverrides != null)
-                {
-                    foreach (var greetingOverride in baseDialogueController.GreetingOverrides)
-                    {
-                        if (greetingOverride.ShouldShow)
-                        {
-                            greetingOverride.ShouldShow = false;
-                        }
-                    }
-                    _greetingOverridesProcessed = true;
-                }
-
-                // Performance: Cache container reference instead of Find() every frame
-                if (dialogueHandler != null && dialogueHandler.dialogueContainers != null && dialogueHandler.dialogueContainers.Count > 0)
-                {
-                    // Cache lookup on first run
-                    if (_cachedReadyContainer == null)
-                    {
-                        _cachedReadyContainer = dialogueHandler.dialogueContainers.Find(c => c != null && c.name == READY_TO_LEAVE_CONTAINER_NAME);
-                    }
-
-                    // Only reorder if needed (use cached reference)
-                    if (_cachedReadyContainer != null && dialogueHandler.dialogueContainers[0] != _cachedReadyContainer)
-                    {
-                        dialogueHandler.dialogueContainers.Remove(_cachedReadyContainer);
-                        dialogueHandler.dialogueContainers.Insert(0, _cachedReadyContainer);
-                    }
-                }
-            }
-            
+            // Update release-specific state machine
             UpdateReleaseStateMachine();
+        }
+
+        private void HandleMovementCheck(float currentTime)
+        {
+            if (!isInitialized) return;
+            CheckStuckMovement();
+        }
+
+        private void HandleActionProcess()
+        {
+            if (!isInitialized) return;
+            ProcessActionQueue();
         }
 
         private void HandleDestinationReached(Vector3 destination)
