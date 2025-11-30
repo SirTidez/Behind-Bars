@@ -130,8 +130,10 @@ namespace Behind_Bars.Systems.Jail
             
             // Set up event listeners with IL2CPP-safe casting
 #if !MONO
+            interactableObject.onHovered.AddListener((System.Action)OnHovered);
             interactableObject.onInteractStart.AddListener((System.Action)OnInteractStart);
 #else
+            interactableObject.onHovered.AddListener(OnHovered);
             interactableObject.onInteractStart.AddListener(OnInteractStart);
 #endif
             
@@ -164,6 +166,14 @@ namespace Behind_Bars.Systems.Jail
             if (pillow != null) pillow.gameObject.SetActive(showPillow);
             
             ModLogger.Debug($"Updated bed visuals for stage {setupStage} - Mat: {showMat}, WhiteSheet: {showWhiteSheet}, BedSheet: {showBedSheet}, Pillow: {showPillow}");
+        }
+        
+        /// <summary>
+        /// Called when player hovers over the bed - updates interaction state in real-time
+        /// </summary>
+        private void OnHovered()
+        {
+            UpdateInteractionState();
         }
         
         private void UpdateInteractionState()
@@ -247,9 +257,6 @@ namespace Behind_Bars.Systems.Jail
             
             ModLogger.Info($"Processing bed setup stage {setupStage + 1}");
             
-            // Get the required item before processing
-            string requiredItem = GetRequiredItemForStage(setupStage);
-            
             // Show progress notification
             if (BehindBarsUIManager.Instance != null)
             {
@@ -262,14 +269,24 @@ namespace Behind_Bars.Systems.Jail
             // Setup time delay
             yield return new WaitForSeconds(1.5f);
             
-            // Consume the required item
-            if (!string.IsNullOrEmpty(requiredItem))
-            {
-                ConsumeRequiredItem(requiredItem);
-            }
-            
             // Advance to next stage
             SetupStage++;
+            
+            // Consume items only at the right times:
+            // - Bedroll is consumed after stage 0 (placing bed mat)
+            // - Sheets & pillow is consumed only after stage 3 (when bed is complete)
+            // - Stages 1 and 2 use sheetsnpillows but don't consume it yet
+            if (setupStage == 1)
+            {
+                // Just finished stage 0 - consume bedroll
+                ConsumeRequiredItem("behindbars.bedroll");
+            }
+            else if (setupStage >= 4)
+            {
+                // Just finished stage 3 - bed is complete, consume sheets & pillow
+                ConsumeRequiredItem("behindbars.sheetsnpillows");
+            }
+            // Stages 1 and 2 don't consume the item - it's needed for later stages
             
             // Check if bed is complete
             if (setupStage >= 4)
@@ -401,11 +418,6 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         private bool CheckPlayerHasRequiredItem(string itemId)
         {
-            // TEMPORARY: Inventory check disabled for testing - always return true
-            ModLogger.Debug($"Inventory check disabled - allowing bed setup without item {itemId}");
-            return true;
-            
-            /* ORIGINAL CODE - Re-enable when inventory detection is working:
             try
             {
 #if !MONO
@@ -431,7 +443,6 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Error($"Error checking for required item {itemId}: {ex.Message}");
                 return false;
             }
-            */
         }
         
         /// <summary>

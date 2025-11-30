@@ -1,5 +1,6 @@
 using UnityEngine;
 using Behind_Bars.Helpers;
+using Behind_Bars.Systems;
 
 #if MONO
 using FishNet.Object;
@@ -191,15 +192,26 @@ public class JailBed : MonoBehaviour
         }
     }
     
-    // Simplified CanSleep method for jail beds - allow sleep anytime
+    // CanSleep method for jail beds - only allow sleep at 6PM (1800 hours) or later
     private bool CanSleep(out string noSleepReason)
     {
         noSleepReason = string.Empty;
-
-        // In jail, allow sleeping at any time - no time restrictions
-        ModLogger.Debug("Jail bed sleep check - allowing sleep at any time");
-
-        return true;
+        
+        // Get current game hour (0-23)
+        int currentHour = GameTimeManager.Instance.GetCurrentGameHour();
+        
+        // Check if it's 6PM (18:00) or later
+        if (currentHour >= 18)
+        {
+            ModLogger.Debug($"Jail bed sleep check - current hour is {currentHour}:00 (6PM or later) - sleep allowed");
+            return true;
+        }
+        else
+        {
+            noSleepReason = $"Cannot sleep until 6PM";
+            ModLogger.Debug($"Jail bed sleep check - current hour is {currentHour}:00 (before 6PM) - sleep not allowed");
+            return false;
+        }
     }
     
     void OnValidate()

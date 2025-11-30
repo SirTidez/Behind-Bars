@@ -196,7 +196,7 @@ namespace Behind_Bars.Systems.NPCs
             float elapsed = 0f;
             bool officerReachedPlayer = false;
             
-            // Start moving to player immediately
+            // Performance: Start moving to player ONCE, then wait for arrival
             // Ensure navAgent is enabled and ready
             var navAgent = officer.GetComponent<UnityEngine.AI.NavMeshAgent>();
             if (navAgent != null)
@@ -206,78 +206,65 @@ namespace Behind_Bars.Systems.NPCs
                     ModLogger.Warn($"Officer {officer.GetBadgeNumber()} navAgent is disabled - enabling it");
                     navAgent.enabled = true;
                 }
-                
+
                 if (!navAgent.isOnNavMesh)
                 {
                     ModLogger.Warn($"Officer {officer.GetBadgeNumber()} navAgent is not on NavMesh - may cause movement issues");
                 }
             }
-            
+
+            // Performance: Set destination ONCE, not every frame
             bool moveStarted = officer.MoveTo(playerPosition);
-            ModLogger.Info($"Officer {officer.GetBadgeNumber()} MoveTo() called: success={moveStarted}, destination={playerPosition}, current position={officer.transform.position}, distance={Vector3.Distance(officer.transform.position, playerPosition):F2}m");
-            
+            ModLogger.Info($"Officer {officer.GetBadgeNumber()} MoveTo() called ONCE: success={moveStarted}, destination={playerPosition}, current position={officer.transform.position}, distance={Vector3.Distance(officer.transform.position, playerPosition):F2}m");
+
             if (!moveStarted)
             {
                 ModLogger.Warn($"Officer {officer.GetBadgeNumber()} failed to start movement to player - navAgent may not be ready");
             }
-            
+
+            Vector3 lastPlayerPosition = playerPosition;
+            const float POSITION_UPDATE_THRESHOLD = 2f; // Only update if player moves >2m
+
+            // Performance: Wait for arrival without constant destination updates
             while (elapsed < maxWaitTime && !officerReachedPlayer)
             {
-                // Get current player position (should be frozen, but update target just in case)
                 playerPosition = player.transform.position;
                 float distance = Vector3.Distance(officer.transform.position, playerPosition);
-                
-                // If officer is not close enough, keep moving toward player
-                if (distance > SEARCH_DISTANCE_THRESHOLD)
+
+                // Performance: Only update destination if player moved significantly (shouldn't happen - player is frozen)
+                if (Vector3.Distance(playerPosition, lastPlayerPosition) > POSITION_UPDATE_THRESHOLD)
                 {
-                    // Update destination to player's current position (in case player moved slightly)
-                    // Only update if navAgent is not already moving or if destination changed significantly
-                    if (navAgent != null && navAgent.enabled)
-                    {
-                        // Update destination if navAgent has stopped or if we're far from target
-                        if (!navAgent.pathPending && navAgent.remainingDistance > SEARCH_DISTANCE_THRESHOLD)
-                        {
-                            bool updated = officer.MoveTo(playerPosition);
-                            if (updated)
-                            {
-                                ModLogger.Debug($"Officer {officer.GetBadgeNumber()} updated destination to player (distance: {distance:F2}m)");
-                            }
-                        }
-                        
-                        // Check if navAgent has reached destination or is close enough
-                        if (!navAgent.pathPending && navAgent.remainingDistance < SEARCH_DISTANCE_THRESHOLD)
-                        {
-                            officerReachedPlayer = true;
-                            ModLogger.Debug($"Officer {officer.GetBadgeNumber()} reached player via navAgent (remainingDistance: {navAgent.remainingDistance:F2}m, direct distance: {distance:F2}m)");
-                            break;
-                        }
-                        
-                        // Log progress every 2 seconds for debugging
-                        if (elapsed % 2f < Time.deltaTime)
-                        {
-                            ModLogger.Debug($"Officer {officer.GetBadgeNumber()} moving to player: distance={distance:F2}m, navAgent.remainingDistance={navAgent.remainingDistance:F2}m, pathPending={navAgent.pathPending}, hasPath={navAgent.hasPath}, enabled={navAgent.enabled}, isOnNavMesh={navAgent.isOnNavMesh}");
-                        }
-                    }
-                    else
-                    {
-                        // NavAgent not available - use direct distance check
-                        if (distance < SEARCH_DISTANCE_THRESHOLD)
-                        {
-                            officerReachedPlayer = true;
-                            ModLogger.Debug($"Officer {officer.GetBadgeNumber()} reached player (distance: {distance:F2}m)");
-                            break;
-                        }
-                    }
+                    officer.MoveTo(playerPosition);
+                    lastPlayerPosition = playerPosition;
+                    ModLogger.Debug($"Officer {officer.GetBadgeNumber()} updated destination - player moved {Vector3.Distance(playerPosition, lastPlayerPosition):F2}m");
                 }
-                else
+
+                // Check arrival based on distance
+                if (distance <= SEARCH_DISTANCE_THRESHOLD)
                 {
-                    // Officer is within 5f - stop movement and proceed with search
                     officer.StopMovement();
                     officerReachedPlayer = true;
                     ModLogger.Debug($"Officer {officer.GetBadgeNumber()} reached player for search (distance: {distance:F2}m)");
                     break;
                 }
-                
+
+                // Check navAgent path completion
+                if (navAgent != null && navAgent.enabled)
+                {
+                    if (!navAgent.pathPending && navAgent.remainingDistance < SEARCH_DISTANCE_THRESHOLD)
+                    {
+                        officerReachedPlayer = true;
+                        ModLogger.Debug($"Officer {officer.GetBadgeNumber()} reached player via navAgent (remainingDistance: {navAgent.remainingDistance:F2}m)");
+                        break;
+                    }
+
+                    // Log progress every 2 seconds
+                    if (elapsed % 2f < Time.deltaTime)
+                    {
+                        ModLogger.Debug($"Officer {officer.GetBadgeNumber()} approaching: distance={distance:F2}m, remaining={navAgent.remainingDistance:F2}m, pathPending={navAgent.pathPending}");
+                    }
+                }
+
                 elapsed += Time.deltaTime;
                 yield return null;
             }

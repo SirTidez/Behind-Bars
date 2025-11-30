@@ -610,12 +610,19 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Patrol Logic
 
+        /// <summary>
+        /// Performance: Check if officer reached destination before moving to next patrol point
+        /// Previous logic was time-based which caused constant path recalculation
+        /// </summary>
         private void HandlePatrolLogic()
         {
             if (!patrolInitialized || availablePatrolPoints.Count == 0) return;
 
-            // Continue patrol movement
-            if (Time.time - lastPatrolTime >= patrolRoute.waitTime)
+            // Performance: Only move to next point if arrived at current point AND wait time has passed
+            bool hasReachedDestination = HasReachedDestination();
+            bool waitTimeElapsed = (Time.time - lastPatrolTime >= patrolRoute.waitTime);
+
+            if (hasReachedDestination && waitTimeElapsed)
             {
                 MoveToNextPatrolPoint();
             }

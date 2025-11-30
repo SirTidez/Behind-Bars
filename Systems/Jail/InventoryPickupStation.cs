@@ -189,6 +189,8 @@ namespace Behind_Bars.Systems.Jail
                             NotificationType.Instruction
                         );
                         RestorePlayerClothing(Player.Local);
+                        // Remove jail items before returning
+                        RemoveJailItemsFromInventory(Player.Local);
                         return;
                     }
                     ModLogger.Info("No items in storage, but allowing access for clothing change");
@@ -209,8 +211,9 @@ namespace Behind_Bars.Systems.Jail
                         // Restore player's original clothing from PersistentPlayerData
                         RestorePlayerClothing(Player.Local);
 
-                        // Remove any remaining jail items before opening storage
-                        MelonCoroutines.Start(RemovePrisonItems(Player.Local));
+                        // Remove any remaining jail items before opening storage (synchronous)
+                        RemoveJailItemsFromInventory(Player.Local);
+                        
                         ModLogger.Info($"Attempting to open storage - IsOpened: {storageEntity.IsOpened}, CurrentAccessor: {storageEntity.CurrentPlayerAccessor?.name ?? "null"}");
                         storageEntity.Open();
                         storageSessionActive = true;
@@ -897,6 +900,68 @@ namespace Behind_Bars.Systems.Jail
             catch (System.Exception ex)
             {
                 ModLogger.Debug($"Error checking inventory slots: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Remove all jail items from player inventory using item IDs (synchronous)
+        /// Called before opening storage to ensure jail items are removed first
+        /// </summary>
+        private void RemoveJailItemsFromInventory(Player player)
+        {
+            try
+            {
+                ModLogger.Info("Removing jail items from inventory before opening storage");
+
+#if !MONO
+                var inventory = Il2CppScheduleOne.PlayerScripts.PlayerInventory.Instance;
+#else
+                var inventory = ScheduleOne.PlayerScripts.PlayerInventory.Instance;
+#endif
+                if (inventory == null)
+                {
+                    ModLogger.Warn("PlayerInventory instance not found for jail item removal");
+                    return;
+                }
+
+                // Get all registered jail item IDs from PrisonItemRegistry
+                var jailItemIds = PrisonItemRegistry.GetPrisonItemIds();
+                int totalRemoved = 0;
+
+                foreach (string itemId in jailItemIds)
+                {
+                    try
+                    {
+                        // Check how many items the player has
+                        uint itemCount = inventory.GetAmountOfItem(itemId);
+                        
+                        if (itemCount > 0)
+                        {
+                            // Remove all instances of this item
+                            inventory.RemoveAmountOfItem(itemId, itemCount);
+                            totalRemoved += (int)itemCount;
+                            
+                            ModLogger.Info($"Removed {itemCount} of jail item {itemId} from inventory");
+                        }
+                    }
+                    catch (System.Exception ex)
+                    {
+                        ModLogger.Debug($"Error removing jail item {itemId}: {ex.Message}");
+                    }
+                }
+
+                if (totalRemoved > 0)
+                {
+                    ModLogger.Info($"Removed {totalRemoved} total jail items from inventory before opening storage");
+                }
+                else
+                {
+                    ModLogger.Debug("No jail items found in inventory");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error removing jail items from inventory: {ex.Message}");
             }
         }
 
