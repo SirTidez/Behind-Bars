@@ -16,10 +16,16 @@ namespace Behind_Bars.Utils
 #endif
             LoadAssetBundle(string bundleFileName)
         {
+            Stream? bundleStream = null;
+#if !MONO
+            Il2CppSystem.IO.MemoryStream? il2cppStream = null;
+#endif
+
             try
             {
+                AssetBundle bundle = null;
                 string streamPath = bundleFileName;
-                Stream bundleStream = melonAssembly.Assembly.GetManifestResourceStream($"{streamPath}");
+                bundleStream = melonAssembly.Assembly.GetManifestResourceStream($"{streamPath}");
                 if (bundleStream == null)
                 {
                     mod.Unregister($"AssetBundle: '{streamPath}' not found. \nOpen .csproj file and search for '{bundleFileName}'.\nIf it doesn't exist,\nCopy your asset to Assets/ folder then look for 'your.assetbundle' in .csproj file.");
@@ -32,16 +38,38 @@ namespace Behind_Bars.Utils
                     bundleStream.CopyTo(ms);
                     bundleData = ms.ToArray();
                 }
-                Il2CppSystem.IO.Stream stream = new Il2CppSystem.IO.MemoryStream(bundleData);
-                return Il2CppAssetBundleManager.LoadFromStream(stream);
+
+                // Dispose manifest stream after reading - frees ~1-2 MB
+                bundleStream.Dispose();
+                bundleStream = null;
+
+                il2cppStream = new Il2CppSystem.IO.MemoryStream(bundleData);
+                bundle = Il2CppAssetBundle.LoadFromStream(il2cppStream);
+
+                // Dispose IL2CPP stream after bundle loads - frees ~15-25 MB
+                il2cppStream.Dispose();
+                il2cppStream = null;
+
+                return bundle;
 #elif MONO
-                return AssetBundle.LoadFromStream(bundleStream);
+                bundle = AssetBundle.LoadFromStream(bundleStream);
+                bundleStream.Close();
+                bundleStream = null;
+                return bundle;
 #endif
             }
             catch (Exception e)
             {
                 mod.Unregister($"Failed to load AssetBundle. Please report to dev: {e}");
                 return null;
+            }
+            finally
+            {
+                // Safety cleanup - dispose streams even on error
+                bundleStream?.Dispose();
+#if !MONO
+                il2cppStream?.Dispose();
+#endif
             }
         }
 

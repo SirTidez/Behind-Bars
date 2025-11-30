@@ -4,6 +4,7 @@ using System.Linq;
 using MelonLoader;
 using HarmonyLib;
 using System;
+using System.Runtime.CompilerServices;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.NPCs;
 using Behind_Bars.UI;
@@ -747,6 +748,7 @@ namespace Behind_Bars
             if (CachedJailBundle == null)
             {
                 CachedJailBundle = Utils.AssetBundleUtils.LoadAssetBundle("Behind_Bars.behind_bars");
+                
             }
 
             var jailBundle = CachedJailBundle;
