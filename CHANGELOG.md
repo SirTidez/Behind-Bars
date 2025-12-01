@@ -1,5 +1,13 @@
 # Changelog
 
+## alpha-1.0.7
+- **Performance Optimizations**: Comprehensive performance improvements across multiple systems
+  - **NavMesh Optimization**: Optimized NavMesh operations and improved jail scanner interaction efficiency
+  - **Jail System Performance**: Enhanced jail systems performance with reduced allocations and improved processing
+  - **NPC Performance**: Improved NPC patrol and search performance, optimized update loops for better frame rates
+  - **UI Performance**: Optimized UI update loops to reduce overhead and improve responsiveness
+  - **Memory Management**: Improved asset bundle stream disposal and memory usage patterns
+
 ## alpha-1.0.6
 - **Event-Driven Status Updates**: Implemented event-driven system for jail and parole status updates, improving real-time UI responsiveness and system synchronization
 - **Release Escort Improvements**: Refactored release escort system to use dedicated prison door state tracking for more reliable release processes
