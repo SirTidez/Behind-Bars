@@ -192,7 +192,8 @@ public class JailBed : MonoBehaviour
         }
     }
     
-    // CanSleep method for jail beds - only allow sleep at 6PM (1800 hours) or later
+    // CanSleep method for jail beds - allow sleep at 6PM (18:00) or later, or before 7AM (end of day cycle)
+    // Day cycle is 7am-4am, so allow sleep from 6PM to 7AM next day
     private bool CanSleep(out string noSleepReason)
     {
         noSleepReason = string.Empty;
@@ -200,18 +201,42 @@ public class JailBed : MonoBehaviour
         // Get current game hour (0-23)
         int currentHour = GameTimeManager.Instance.GetCurrentGameHour();
         
-        // Check if it's 6PM (18:00) or later
-        if (currentHour >= 18)
+        // Get current game minute for more accurate logging
+        int currentMinute = GameTimeManager.Instance.GetCurrentGameMinute();
+        
+        // Allow sleep if:
+        // - It's 6PM (18:00) or later (evening/night)
+        // - OR it's before 7AM (0-6) (early morning - end of day cycle)
+        // This covers the full day cycle from 7am to 4am next day
+        bool canSleep = currentHour >= 18 || currentHour < 7;
+        
+        if (canSleep)
         {
-            ModLogger.Debug($"Jail bed sleep check - current hour is {currentHour}:00 (6PM or later) - sleep allowed");
+            // Format time for display (handle 12-hour format)
+            string timeDisplay = FormatTimeForDisplay(currentHour, currentMinute);
+            ModLogger.Debug($"[JailBed] Sleep check - Current game time: {timeDisplay} ({currentHour:00}:{currentMinute:00}) - Sleep ALLOWED (after 6PM or before 7AM)");
             return true;
         }
         else
         {
-            noSleepReason = $"Cannot sleep until 6PM";
-            ModLogger.Debug($"Jail bed sleep check - current hour is {currentHour}:00 (before 6PM) - sleep not allowed");
+            // Format time for display
+            string timeDisplay = FormatTimeForDisplay(currentHour, currentMinute);
+            noSleepReason = $"Cannot sleep until 6PM (current time: {timeDisplay})";
+            ModLogger.Debug($"[JailBed] Sleep check - Current game time: {timeDisplay} ({currentHour:00}:{currentMinute:00}) - Sleep NOT ALLOWED (between 7AM and 6PM)");
             return false;
         }
+    }
+    
+    /// <summary>
+    /// Format game hour and minute into a readable time string
+    /// </summary>
+    private string FormatTimeForDisplay(int hour, int minute)
+    {
+        // Convert to 12-hour format for better readability
+        int displayHour = hour % 12;
+        if (displayHour == 0) displayHour = 12;
+        string period = hour < 12 ? "AM" : "PM";
+        return $"{displayHour}:{minute:00} {period}";
     }
     
     void OnValidate()

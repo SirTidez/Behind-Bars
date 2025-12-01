@@ -333,9 +333,44 @@ namespace Behind_Bars.Systems.Jail
                 0.15f
             );
 
-            // Free mouse for potential future interaction (but no dragging needed)
+            // Free mouse for dragging interaction and hide cursor
             playerCamera.FreeMouse();
             Singleton<HUD>.Instance.SetCrosshairVisible(false);
+            Cursor.visible = false; // Hide cursor - palm will act as cursor
+
+            // Show palm model and position it correctly for scanning
+            if (palmModel != null)
+            {
+                palmModel.SetActive(true);
+                
+                // Position palm at scanner target location (or slightly above/forward)
+                if (scanTarget != null)
+                {
+                    Vector3 startPos = scanTarget.position;
+                    // Position slightly in front and above scanner for better visibility
+                    Vector3 cameraForward = interactionCamera.transform.forward;
+                    startPos += cameraForward * 0.1f; // Slightly in front
+                    startPos.y += 0.05f; // Slightly above
+                    
+                    palmModel.transform.position = startPos;
+                    originalPalmPosition = startPos; // Update original position to scanner location
+                    ModLogger.Info($"Palm model activated at scanner position: {palmModel.transform.position}");
+                }
+                else
+                {
+                    palmModel.transform.position = originalPalmPosition;
+                    ModLogger.Info($"Palm model activated: {palmModel.name} at {palmModel.transform.position}");
+                }
+            }
+
+            // Show instructions
+            if (BehindBarsUIManager.Instance != null)
+            {
+                BehindBarsUIManager.Instance.ShowNotification(
+                    "Click and drag to move your palm to the scanner",
+                    NotificationType.Instruction
+                );
+            }
 
             ModLogger.Info("Camera locked to scanner view");
 
@@ -355,42 +390,64 @@ namespace Behind_Bars.Systems.Jail
             // Wait a moment for camera to settle
             yield return new WaitForSeconds(0.5f);
 
-            if (interactableObject != null)
-                interactableObject.SetMessage("Scanning...");
+            float elapsed = 0f;
+            bool scanCompleted = false;
 
             // Show notification
             if (BehindBarsUIManager.Instance != null)
             {
                 BehindBarsUIManager.Instance.ShowNotification(
-                    "Scanning in progress...",
+                    "Drag your palm to the scanner",
                     NotificationType.Instruction
                 );
             }
 
-            // Start scan animation
-            yield return StartScanAnimation();
-
-            // Complete the scan
-            if (bookingProcess != null)
+            // Play scanning sound
+            if (scannerAudio != null && scanningSound != null)
             {
-                bookingProcess.SetFingerprintComplete("HAND_SCAN_" + System.DateTime.Now.Ticks);
-                ModLogger.Info("Hand scan completed successfully");
+                scannerAudio.clip = scanningSound;
+                scannerAudio.loop = true;
+                scannerAudio.Play();
             }
 
-            // Show success notification
-            if (BehindBarsUIManager.Instance != null)
+            while (elapsed < scanDuration && !scanCompleted)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
-                    "Scan complete!",
-                    NotificationType.Progress
-                );
+                elapsed += Time.deltaTime;
+
+                // Handle palm dragging
+                if (Input.GetMouseButton(0) && palmModel != null)
+                {
+                    HandlePalmDragging();
+
+                    // Check if palm is close enough to scanner target
+                    if (scanTarget != null)
+                    {
+                        float distance = Vector3.Distance(palmModel.transform.position, scanTarget.position);
+                        if (distance < validRange)
+                        {
+                            scanCompleted = true;
+                            ModLogger.Info("Scan completed - palm reached target");
+                        }
+                    }
+                }
+
+                yield return null;
             }
 
-            // Wait a moment before exit
-            yield return new WaitForSeconds(1f);
+            // Stop scanning sound
+            if (scannerAudio != null)
+            {
+                scannerAudio.Stop();
+            }
 
-            // Auto-exit scanner view
-            EndCameraView();
+            if (scanCompleted)
+            {
+                CompletePalmScan();
+            }
+            else
+            {
+                FailPalmScan();
+            }
         }
 
 #if !MONO
@@ -523,6 +580,13 @@ namespace Behind_Bars.Systems.Jail
                 playerCamera.LockMouse();
                 Singleton<HUD>.Instance.SetCrosshairVisible(true);
             }
+            
+            // Restore cursor visibility
+            Cursor.visible = true;
+
+            // Hide palm model
+            if (palmModel != null)
+                palmModel.SetActive(false);
 
             // Deregister exit listener
 #if !MONO
@@ -534,11 +598,19 @@ namespace Behind_Bars.Systems.Jail
             // Update final state
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Palm scan complete");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Label);
+                if (bookingProcess != null && bookingProcess.fingerprintComplete)
+                {
+                    interactableObject.SetMessage("Palm scan complete");
+                    interactableObject.SetInteractableState(InteractableObject.EInteractableState.Label);
+                }
+                else
+                {
+                    interactableObject.SetMessage("Scan fingerprints");
+                    interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                }
             }
 
-            ModLogger.Info("Camera view ended - scan complete");
+            ModLogger.Info("Camera view ended");
         }
 
         private void StartPalmScannerView()
@@ -639,6 +711,9 @@ namespace Behind_Bars.Systems.Jail
                 playerCamera.LockMouse();
                 Singleton<HUD>.Instance.SetCrosshairVisible(true);
             }
+            
+            // Restore cursor visibility
+            Cursor.visible = true;
 
             // Hide palm model
             if (palmModel != null)
@@ -1149,8 +1224,8 @@ namespace Behind_Bars.Systems.Jail
                 }
             }
 
-            // Handle palm scanner mouse dragging
-            if (useNewPalmScanner && inScannerView)
+            // Handle palm scanner - palm should always follow cursor
+            if (useNewPalmScanner && inScannerView && palmModel != null && palmModel.activeSelf)
             {
                 HandlePalmDragging();
             }
@@ -1290,71 +1365,70 @@ namespace Behind_Bars.Systems.Jail
 
         private void HandlePalmDragging()
         {
-            if (palmModel == null) return;
+            if (palmModel == null || interactionCamera == null) return;
 
-            bool mouseDown = Input.GetMouseButtonDown(0);
-            bool mouseHeld = Input.GetMouseButton(0);
-            bool mouseUp = Input.GetMouseButtonUp(0);
+            // TODO: Palm scanner plane positioning needs refinement
+            // The palm should follow the cursor on the correct scanning plane for proper interaction.
+            // Current implementation may need adjustments to:
+            // - Better align with scanner surface orientation
+            // - Handle different camera angles
+            // - Improve depth calculation accuracy
 
-            if (mouseDown)
+            // Always update palm position to follow cursor directly (no drag requirement)
+            Vector3 mousePos = Input.mousePosition;
+            
+            // Get scanner target position for reference
+            Vector3 scannerWorldPos = scanTarget != null ? scanTarget.position : originalPalmPosition;
+            
+            // Calculate the distance from camera to scanner target
+            float cameraToScannerDistance = Vector3.Distance(interactionCamera.transform.position, scannerWorldPos);
+            
+            // Convert mouse position to world position at the scanner's depth
+            // Use ScreenToWorldPoint with the calculated distance
+            Vector3 screenPointWithDepth = new Vector3(mousePos.x, mousePos.y, cameraToScannerDistance);
+            Vector3 worldPos = interactionCamera.ScreenToWorldPoint(screenPointWithDepth);
+            
+            // Project onto a plane at the scanner target's position to keep it aligned with scanner surface
+            // Calculate plane normal (perpendicular to camera forward, aligned with scanner surface)
+            Vector3 cameraForward = interactionCamera.transform.forward;
+            
+            // Create plane at scanner position, perpendicular to camera view
+            Plane scannerPlane = new Plane(cameraForward, scannerWorldPos);
+            
+            // Project the world position onto this plane
+            Vector3 projectedPos = worldPos;
+            float distanceToPlane = scannerPlane.GetDistanceToPoint(projectedPos);
+            projectedPos -= cameraForward * distanceToPlane;
+            
+            // Constrain to max drag distance from scanner center
+            Vector3 fromScanner = projectedPos - scannerWorldPos;
+            if (fromScanner.magnitude > maxDragDistance)
             {
-                isDragging = true;
-                mouseStartPos = Input.mousePosition;
-                dragStartWorldPos = palmModel.transform.position;
-                ModLogger.Info("Started dragging palm");
+                fromScanner = fromScanner.normalized * maxDragDistance;
+                projectedPos = scannerWorldPos + fromScanner;
             }
-            else if (mouseHeld && isDragging)
+            
+            // Ensure palm stays at proper scanning height (slightly above scanner surface)
+            if (scanTarget != null)
             {
-                Vector3 currentMousePos = Input.mousePosition;
-                Vector3 mouseDelta = currentMousePos - mouseStartPos;
-
-                if (interactionCamera != null && mouseDelta.magnitude > 1f)
-                {
-                    // Simple screen-to-world conversion
-                    Vector3 rightVector = interactionCamera.transform.right;
-                    Vector3 upVector = interactionCamera.transform.up;
-
-                    Vector3 worldDelta = (rightVector * mouseDelta.x + upVector * mouseDelta.y) * dragSensitivity;
-                    Vector3 newPosition = dragStartWorldPos + worldDelta;
-
-                    // Constrain to max distance from scanner
-                    if (scanTarget != null)
-                    {
-                        Vector3 fromTarget = newPosition - scanTarget.position;
-                        if (fromTarget.magnitude > maxDragDistance)
-                        {
-                            fromTarget = fromTarget.normalized * maxDragDistance;
-                            newPosition = scanTarget.position + fromTarget;
-                        }
-
-                        // Keep palm slightly above scanner
-                        newPosition.y = Mathf.Max(newPosition.y, scanTarget.position.y + 0.02f);
-                    }
-
-                    palmModel.transform.position = newPosition;
-
-                    // Check for scanning trigger
-                    if (scanTarget != null)
-                    {
-                        float distance = Vector3.Distance(palmModel.transform.position, scanTarget.position);
-                        if (distance <= validRange)
-                        {
-                            // Start scanning animation or complete scan
-                            CompletePalmScan();
-                        }
-                    }
-                }
+                projectedPos.y = scanTarget.position.y + 0.05f; // Slightly above scanner for visibility
             }
-            else if (mouseUp)
-            {
-                isDragging = false;
-                ModLogger.Info("Ended dragging palm");
-            }
+            
+            // Update palm position to follow cursor
+            palmModel.transform.position = projectedPos;
         }
 
         private void CompletePalmScan()
         {
-            ModLogger.Info("Palm scan completed!");
+            ModLogger.Info("Palm scan completed successfully!");
+
+            // Play success sound
+            if (scannerAudio != null && successSound != null)
+            {
+                scannerAudio.clip = successSound;
+                scannerAudio.loop = false;
+                scannerAudio.Play();
+            }
 
             // Mark as complete in booking process
             if (bookingProcess != null)
@@ -1366,13 +1440,38 @@ namespace Behind_Bars.Systems.Jail
             if (BehindBarsUIManager.Instance != null)
             {
                 BehindBarsUIManager.Instance.ShowNotification(
-                    "Palm scan complete!",
+                    "Scan complete!",
                     NotificationType.Progress
                 );
             }
 
             // Auto-exit scanner view after short delay
             MelonCoroutines.Start(DelayedExitScannerView());
+        }
+        
+        private void FailPalmScan()
+        {
+            ModLogger.Info("Palm scan failed - time expired or palm not in position");
+
+            // Play error sound
+            if (scannerAudio != null && errorSound != null)
+            {
+                scannerAudio.clip = errorSound;
+                scannerAudio.loop = false;
+                scannerAudio.Play();
+            }
+
+            // Show failure notification
+            if (BehindBarsUIManager.Instance != null)
+            {
+                BehindBarsUIManager.Instance.ShowNotification(
+                    "Scan failed - try again!",
+                    NotificationType.Warning
+                );
+            }
+
+            // Exit scanner view
+            EndCameraView();
         }
 
 #if !MONO
@@ -1381,7 +1480,7 @@ namespace Behind_Bars.Systems.Jail
         private IEnumerator DelayedExitScannerView()
         {
             yield return new WaitForSeconds(2f);
-            EndPalmScannerView();
+            EndCameraView();
         }
 
         private void HideImgScanEffect()

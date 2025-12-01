@@ -26,6 +26,12 @@ using Behind_Bars.Systems.Jail;
 using Behind_Bars.Systems.CrimeTracking;
 using Behind_Bars.Harmony;
 using Behind_Bars.Utils;
+using UnityEngine.AI;
+#if !MONO
+using Il2CppScheduleOne.NPCs;
+#else
+using ScheduleOne.NPCs;
+#endif
 
 #if !MONO
 using Il2CppScheduleOne.Law;
@@ -229,6 +235,9 @@ namespace Behind_Bars
 
             // Initialize core systems
             HarmonyPatches.Initialize(this);
+            
+            // Initialize NavMesh optimization patches (manual patch for CanGetTo method)
+            InitializeNavMeshOptimizationPatches();
             
             // Initialize GameTimeManager first (needed by other systems)
             GameTimeManager.Instance.Initialize();
@@ -1880,6 +1889,53 @@ namespace Behind_Bars
             {
                 ModLogger.Error($"Error setting up exit door: {ex.Message}");
             }
+        }
+        
+        /// <summary>
+        /// Initialize NavMesh optimization patches manually (for methods with ref parameters)
+        /// </summary>
+        private void InitializeNavMeshOptimizationPatches()
+        {
+            ModLogger.Info("Initializing NavMesh optimization patches...");
+            
+            try
+            {
+#if !MONO
+                var npcMovementType = typeof(Il2CppScheduleOne.NPCs.NPCMovement);
+#else
+                var npcMovementType = typeof(ScheduleOne.NPCs.NPCMovement);
+#endif
+                var canGetToMethod = npcMovementType.GetMethod("CanGetTo",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance,
+                    null,
+                    new[] { typeof(Vector3), typeof(float), typeof(NavMeshPath).MakeByRefType() },
+                    null);
+
+                if (canGetToMethod != null)
+                {
+                    var prefixMethod = typeof(Harmony.NavMeshOptimizationPatches.NPCMovementCanGetToPatch).GetMethod("Prefix", 
+                        System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
+                    if (prefixMethod != null)
+                    {
+                        HarmonyInstance.Patch(canGetToMethod, new HarmonyLib.HarmonyMethod(prefixMethod));
+                        ModLogger.Info("✓ NavMesh optimization: NPCMovement.CanGetTo patch applied");
+                    }
+                    else
+                    {
+                        ModLogger.Error("Could not find NPCMovementCanGetToPatch.Prefix method");
+                    }
+                }
+                else
+                {
+                    ModLogger.Error("Could not find NPCMovement.CanGetTo method with ref NavMeshPath parameter");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error while manually patching NPCMovement.CanGetTo: {ex.Message}");
+            }
+            
+            ModLogger.Info("NavMesh optimization patches initialized");
         }
     }
 }
