@@ -1,6 +1,6 @@
 {
-  "version": "alpha-1.0.7",
-  "description": "Performance optimizations and code improvements across jail, parole, and NPC systems for enhanced stability and efficiency.",
+  "version": "alpha-1.0.8",
+  "description": "Version update with bug fixes and improvements.",
   "release_date": "2025-01-27",
   "download_url": "",
   "changelog_url": "https://github.com/SirTidez/Behind-Bars/blob/parole-development/CHANGELOG.md"
