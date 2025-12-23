@@ -247,12 +247,12 @@ namespace Behind_Bars.Systems.CrimeDetection
         {
             var witnesses = new List<NPC>();
             
-            // Find all NPCs in range
-            var allNPCs = GameObject.FindObjectsOfType<NPC>();
+            // Use NPCRegistry for O(1) access instead of O(n) FindObjectsOfType
+            var allNPCs = NPCRegistryHelper.GetConsciousNPCs();
             
             foreach (var npc in allNPCs)
             {
-                if (npc == null || !npc.IsConscious)
+                if (npc == null)
                     continue;
                     
                 float distance = Vector3.Distance(npc.transform.position, crimeLocation);

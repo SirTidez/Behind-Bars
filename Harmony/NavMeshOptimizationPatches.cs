@@ -28,9 +28,9 @@ namespace Behind_Bars.Harmony
     public static class NavMeshOptimizationPatches
     {
         /// <summary>
-        /// Cache for NavMeshUtility.GetAccessPoint to reduce redundant pathfinding calls
+        /// Cache for NavMeshUtility.GetReachableAccessPoint to reduce redundant pathfinding calls
         /// </summary>
-        [HarmonyPatch(typeof(NavMeshUtility), nameof(NavMeshUtility.GetAccessPoint))]
+        [HarmonyPatch(typeof(NavMeshUtility), "GetReachableAccessPoint")]
         private static class NavMeshUtilityGetAccessPointPatch
         {
             private struct CacheKey
@@ -98,7 +98,7 @@ namespace Behind_Bars.Harmony
                 return true;
             }
 
-            static void Postfix(ITransitEntity entity, NPC npc, Transform __result)
+            static void Postfix(ITransitEntity entity, NPC npc, ref Transform __result)
             {
                 if (entity == null) return;
 

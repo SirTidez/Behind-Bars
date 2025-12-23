@@ -1,6 +1,7 @@
 using System;
 using UnityEngine;
 using Behind_Bars.Helpers;
+using Behind_Bars.Utils;
 
 
 #if !MONO
@@ -523,19 +524,15 @@ namespace Behind_Bars.Systems.NPCs
                     }
                 }
 
-                // Then try regular NPCs
-                var npcs = UnityEngine.Object.FindObjectsOfType<NPC>();
+                // Then try regular NPCs - use NPCRegistry for O(1) access
+                var npcs = NPCRegistryHelper.GetNPCsExcluding("Prison", "BaseNPC");
                 foreach (var npc in npcs)
                 {
-                    // Skip our own spawned NPCs
-                    if (!npc.gameObject.name.Contains("Prison") && !npc.gameObject.name.Contains("BaseNPC"))
+                    var avatar = npc.GetComponentInChildren<Avatar>();
+                    if (avatar != null && avatar.CurrentSettings != null)
                     {
-                        var avatar = npc.GetComponentInChildren<Avatar>();
-                        if (avatar != null && avatar.CurrentSettings != null)
-                        {
-                            ModLogger.Info($"Found working avatar on NPC: {npc.gameObject.name}");
-                            return npc.gameObject;
-                        }
+                        ModLogger.Info($"Found working avatar on NPC: {npc.gameObject.name}");
+                        return npc.gameObject;
                     }
                 }
 

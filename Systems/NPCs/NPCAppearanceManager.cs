@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 using Behind_Bars.Helpers;
+using Behind_Bars.Utils;
 
 #if !MONO
 using Il2CppScheduleOne.AvatarFramework;
@@ -461,9 +462,9 @@ namespace Behind_Bars.Systems.NPCs
             {
                 ModLogger.Info("🎨 Initializing NPC appearance cache...");
 
-                // Find all existing NPCs with avatar settings
-                var existingNPCs = UnityEngine.Object.FindObjectsOfType<NPC>();
-                ModLogger.Info($"Found {existingNPCs.Length} existing NPCs to analyze");
+                // Use NPCRegistry for O(1) access instead of O(n) FindObjectsOfType
+                var existingNPCs = NPCRegistryHelper.GetNPCsExcluding("JailGuard", "JailInmate", "TestNPC", "BaseNPC");
+                ModLogger.Info($"Found {existingNPCs.Count} existing NPCs to analyze");
 
                 int cachedSettings = 0;
 
@@ -471,12 +472,6 @@ namespace Behind_Bars.Systems.NPCs
                 {
                     try
                     {
-                        // Skip our own spawned NPCs
-                        if (npc.gameObject.name.Contains("JailGuard") ||
-                            npc.gameObject.name.Contains("JailInmate") ||
-                            npc.gameObject.name.Contains("TestNPC") ||
-                            npc.gameObject.name.Contains("BaseNPC"))
-                            continue;
 
                         var avatar = npc.Avatar;
                         if (avatar != null && avatar.CurrentSettings != null)

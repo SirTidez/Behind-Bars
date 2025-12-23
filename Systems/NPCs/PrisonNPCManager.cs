@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using Behind_Bars.Helpers;
+using Behind_Bars.Utils;
 using Behind_Bars.Systems.Jail;
 using MelonLoader;
 
@@ -1334,7 +1335,8 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private object FindSourceAvatar(string npcType)
         {
-            var existingNPCs = UnityEngine.Object.FindObjectsOfType<NPC>();
+            // Use NPCRegistry for O(1) access instead of O(n) FindObjectsOfType
+            var existingNPCs = NPCRegistryHelper.GetNPCsExcluding("Prison");
 
             if (npcType == "guard")
             {
@@ -1342,7 +1344,6 @@ namespace Behind_Bars.Systems.NPCs
                 var guardAvatars = new List<object>();
                 foreach (var npc in existingNPCs)
                 {
-                    if (npc.gameObject.name.Contains("Prison")) continue;
                     var avatar = npc.Avatar;
                     if (avatar == null || avatar.CurrentSettings == null) continue;
 
@@ -1581,8 +1582,9 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private object FindAnyWorkingAvatar()
         {
-            var existingNPCs = UnityEngine.Object.FindObjectsOfType<NPC>();
-            ModLogger.Info($"🔍 Searching {existingNPCs.Length} NPCs for working avatars...");
+            // Use NPCRegistry for O(1) access instead of O(n) FindObjectsOfType
+            var existingNPCs = NPCRegistryHelper.GetNPCsExcluding("Prison");
+            ModLogger.Info($"🔍 Searching {existingNPCs.Count} NPCs for working avatars...");
 
             int checkedNPCs = 0;
             int npcsWithAvatars = 0;
@@ -1592,7 +1594,6 @@ namespace Behind_Bars.Systems.NPCs
             foreach (var npc in existingNPCs)
             {
                 checkedNPCs++;
-                if (npc.gameObject.name.Contains("Prison")) continue;
 
                 if (npc.Avatar != null)
                 {
@@ -1743,10 +1744,10 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private object GetAnyWorkingAvatarSettings()
         {
-            var existingNPCs = UnityEngine.Object.FindObjectsOfType<NPC>();
+            // Use NPCRegistry for O(1) access instead of O(n) FindObjectsOfType
+            var existingNPCs = NPCRegistryHelper.GetNPCsExcluding("Prison");
             foreach (var npc in existingNPCs)
             {
-                if (npc.gameObject.name.Contains("Prison")) continue;
                 if (npc.Avatar?.CurrentSettings != null)
                 {
                     return npc.Avatar.CurrentSettings;
