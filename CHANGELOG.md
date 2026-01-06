@@ -1,5 +1,23 @@
 # Changelog
 
+## alpha-1.0.8
+- **Advanced Performance Optimizations**: Additional performance improvements building on alpha-1.0.7
+  - **NavMesh Caching System**: Implemented comprehensive caching for NavMesh pathfinding operations
+    - Added caching for `NavMeshUtility.GetReachableAccessPoint` with time-to-live (TTL) and position-based cache invalidation
+    - Integrated path caching for `NPCMovement.CanGetTo` using existing PathCache system
+    - Reduced redundant pathfinding calculations by reusing cached results when NPC position hasn't changed significantly
+  - **Employee Update Throttling**: Throttled `Employee.UpdateBehaviour` calls from every frame to 1.5-second intervals, significantly reducing CPU usage for employee NPCs
+  - **Event-Driven NPC Architecture**: Migrated NPC update system from per-frame Update() calls to event-driven architecture
+    - BaseJailNPC now uses NPCUpdateManager for throttled, event-driven state updates
+    - Improved performance by batching NPC updates instead of processing every frame
+  - **Event-Driven Player Tracking**: Replaced coroutine-based player location tracking with event-driven system
+    - PlayerLocationTracker now uses event-driven architecture for better performance and responsiveness
+    - Reduced overhead from continuous coroutine execution
+  - **NPC System Performance**: Additional optimizations in NPC behavior systems
+    - Optimized patrol point movement checks in ParoleOfficerBehavior
+    - Improved dialogue lookup caching in ReleaseOfficerBehavior
+    - Enhanced destination update logic to reduce redundant path calculations
+
 ## alpha-1.0.7
 - **Performance Optimizations**: Comprehensive performance improvements across multiple systems
   - **NavMesh Optimization**: Optimized NavMesh operations and improved jail scanner interaction efficiency

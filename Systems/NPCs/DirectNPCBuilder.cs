@@ -1,6 +1,7 @@
 using System;
 using UnityEngine;
 using Behind_Bars.Helpers;
+using Behind_Bars.Utils;
 using HarmonyLib;
 using MelonLoader;
 using System.Collections;
@@ -431,10 +432,13 @@ namespace Behind_Bars.Systems.NPCs
 #endif
                 if (npc_casted != null)
                 {
-                    // Use reflection to set the awareness field
-                    var awarenessField = npc_casted.GetType().GetField("awareness", 
-                        System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                    awarenessField?.SetValue(npc_casted, awareness);
+                    // Direct assignment to public field (optimized from reflection)
+                    npc_casted.Awareness = awareness as 
+#if !MONO
+                        Il2CppScheduleOne.NPCs.NPCAwareness;
+#else
+                        ScheduleOne.NPCs.NPCAwareness;
+#endif
                 }
 
                 ModLogger.Debug("✓ Awareness system added successfully");
@@ -470,10 +474,8 @@ namespace Behind_Bars.Systems.NPCs
 
                 if (awareness_casted != null)
                 {
-                    // Use reflection to set VisionCone
-                    var visionField = awareness_casted.GetType().GetField("VisionCone", 
-                        System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                    visionField?.SetValue(awareness_casted, visionCone);
+                    // Direct assignment to public field (optimized from reflection)
+                    awareness_casted.VisionCone = visionCone;
                     
                     // Suspicious ? icon in world space
 #if !MONO
@@ -540,10 +542,13 @@ namespace Behind_Bars.Systems.NPCs
 #endif
                 if (npc_casted != null)
                 {
-                    // Use reflection to set the behaviour field
-                    var behaviourField = npc_casted.GetType().GetField("behaviour", 
-                        System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
-                    behaviourField?.SetValue(npc_casted, behaviour);
+                    // Direct assignment to public field (optimized from reflection)
+                    npc_casted.Behaviour = behaviour as
+#if !MONO
+                        Il2CppScheduleOne.NPCs.NPCBehaviour;
+#else
+                        NPCBehaviour;
+#endif
                 }
 
                 ModLogger.Debug("✓ Behavior system added successfully");
@@ -819,13 +824,8 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private static GameObject FindExistingNPCWithAvatar(NPCType? preferredType = null)
         {
-            var existingNPCs = UnityEngine.Object.FindObjectsOfType<
-#if !MONO
-                Il2CppScheduleOne.NPCs.NPC
-#else
-                ScheduleOne.NPCs.NPC
-#endif
-            >();
+            // Use NPCRegistry for O(1) access instead of O(n) FindObjectsOfType
+            var existingNPCs = NPCRegistryHelper.GetNPCsExcluding("JailGuard", "JailInmate");
 
             // Define preferred avatar sources based on NPC type
             string[] preferredNames = new string[0];
@@ -853,11 +853,6 @@ namespace Behind_Bars.Systems.NPCs
                 {
                     foreach (var existingNPC in existingNPCs)
                     {
-                        // Skip our own NPCs
-                        if (existingNPC.gameObject.name.Contains("JailGuard") || 
-                            existingNPC.gameObject.name.Contains("JailInmate"))
-                            continue;
-
                         if (existingNPC.Avatar != null && 
                             existingNPC.gameObject.name.ToLower().Contains(preferredName.ToLower()))
                         {
@@ -871,11 +866,6 @@ namespace Behind_Bars.Systems.NPCs
             // Second pass: Any NPC with avatar (fallback)
             foreach (var existingNPC in existingNPCs)
             {
-                // Skip our own NPCs
-                if (existingNPC.gameObject.name.Contains("JailGuard") || 
-                    existingNPC.gameObject.name.Contains("JailInmate"))
-                    continue;
-
                 if (existingNPC.Avatar != null)
                 {
                     ModLogger.Info($"Found fallback NPC with avatar: {existingNPC.name}");
@@ -891,22 +881,15 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private static GameObject FindExistingNPCWithAvatar()
         {
-            var existingNPCs = UnityEngine.Object.FindObjectsOfType<
-#if !MONO
-                Il2CppScheduleOne.NPCs.NPC
-#else
-                ScheduleOne.NPCs.NPC
-#endif
-            >();
+            // Use NPCRegistry for O(1) access instead of O(n) FindObjectsOfType
+            var existingNPCs = NPCRegistryHelper.GetNPCsExcluding("JailGuard", "JailInmate", "TestNPC");
 
-            ModLogger.Info($"Searching through {existingNPCs.Length} existing NPCs for Billy...");
+            ModLogger.Info($"Searching through {existingNPCs.Count} existing NPCs for Billy...");
 
             // Log all available NPCs first
             foreach (var npc in existingNPCs)
             {
-                if (!npc.gameObject.name.Contains("JailGuard") && 
-                    !npc.gameObject.name.Contains("JailInmate") &&
-                    !npc.gameObject.name.Contains("TestNPC"))
+                // GetNPCsExcluding already filters out JailGuard, JailInmate, TestNPC
                 {
                     // Check for avatar using the same method as CopyAvatarStructure
                     bool hasAvatar = false;

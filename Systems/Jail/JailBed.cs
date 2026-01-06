@@ -177,6 +177,7 @@ public class JailBed : MonoBehaviour
             try
             {
                 Singleton<SleepCanvas>.Instance.SetIsOpen(true);
+                Singleton<SleepCanvas>.Instance.SleepButtonPressed();
                 ModLogger.Info($"Opened sleep canvas for {bedName}");
             }
             catch (System.Exception ex)

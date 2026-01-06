@@ -300,7 +300,7 @@ namespace Behind_Bars.Systems.Jail
             }
 
             StartCameraView();
-            MelonCoroutines.Start(SimplePalmScanProcess());
+            MelonCoroutines.Start(SimplifiedScanProcess());
         }
 
         private void StartCameraView()
@@ -363,15 +363,6 @@ namespace Behind_Bars.Systems.Jail
                 }
             }
 
-            // Show instructions
-            if (BehindBarsUIManager.Instance != null)
-            {
-                BehindBarsUIManager.Instance.ShowNotification(
-                    "Click and drag to move your palm to the scanner",
-                    NotificationType.Instruction
-                );
-            }
-
             ModLogger.Info("Camera locked to scanner view");
 
             // Register exit listener for escape key
@@ -382,72 +373,21 @@ namespace Behind_Bars.Systems.Jail
 #endif
         }
 
+        /// <summary>
+        /// Main scan process - simplified version that doesn't require hand movement (same as exit scanner)
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
-        private IEnumerator SimplePalmScanProcess()
+        private IEnumerator SimplifiedScanProcess()
         {
-            // Wait a moment for camera to settle
-            yield return new WaitForSeconds(0.5f);
+            ModLogger.Info("Starting scan animation for palm scanner");
 
-            float elapsed = 0f;
-            bool scanCompleted = false;
+            // Start scan animation (same as exit scanner)
+            yield return MelonCoroutines.Start(StartScanAnimation());
 
-            // Show notification
-            if (BehindBarsUIManager.Instance != null)
-            {
-                BehindBarsUIManager.Instance.ShowNotification(
-                    "Drag your palm to the scanner",
-                    NotificationType.Instruction
-                );
-            }
-
-            // Play scanning sound
-            if (scannerAudio != null && scanningSound != null)
-            {
-                scannerAudio.clip = scanningSound;
-                scannerAudio.loop = true;
-                scannerAudio.Play();
-            }
-
-            while (elapsed < scanDuration && !scanCompleted)
-            {
-                elapsed += Time.deltaTime;
-
-                // Handle palm dragging
-                if (Input.GetMouseButton(0) && palmModel != null)
-                {
-                    HandlePalmDragging();
-
-                    // Check if palm is close enough to scanner target
-                    if (scanTarget != null)
-                    {
-                        float distance = Vector3.Distance(palmModel.transform.position, scanTarget.position);
-                        if (distance < validRange)
-                        {
-                            scanCompleted = true;
-                            ModLogger.Info("Scan completed - palm reached target");
-                        }
-                    }
-                }
-
-                yield return null;
-            }
-
-            // Stop scanning sound
-            if (scannerAudio != null)
-            {
-                scannerAudio.Stop();
-            }
-
-            if (scanCompleted)
-            {
-                CompletePalmScan();
-            }
-            else
-            {
-                FailPalmScan();
-            }
+            // Complete the scan
+            CompletePalmScan();
         }
 
 #if !MONO
@@ -1224,11 +1164,7 @@ namespace Behind_Bars.Systems.Jail
                 }
             }
 
-            // Handle palm scanner - palm should always follow cursor
-            if (useNewPalmScanner && inScannerView && palmModel != null && palmModel.activeSelf)
-            {
-                HandlePalmDragging();
-            }
+            // Palm scanner no longer requires dragging - it just plays animation and completes
         }
 
         private void SetupIkTargetVisualizer()

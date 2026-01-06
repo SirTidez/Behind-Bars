@@ -578,15 +578,24 @@ namespace Behind_Bars.Systems.Jail
         public bool IsPlayerInJailCellBounds(Player player, int cellIndex)
         {
             if (player == null || cellIndex < 0 || cellIndex >= cells.Count)
+            {
+                ModLogger.Debug($"IsPlayerInJailCellBounds: Invalid parameters - player={player != null}, cellIndex={cellIndex}, cells.Count={cells.Count}");
                 return false;
+            }
 
             var cell = cells[cellIndex];
             if (cell?.cellBounds == null)
+            {
+                ModLogger.Debug($"IsPlayerInJailCellBounds: Cell {cellIndex} or cellBounds is null");
                 return false;
+            }
 
             var boundsCollider = cell.cellBounds.GetComponent<BoxCollider>();
             if (boundsCollider == null)
+            {
+                ModLogger.Debug($"IsPlayerInJailCellBounds: Cell {cellIndex} boundsCollider is null");
                 return false;
+            }
 
             // Use same manual world-space calculation as holding cells to avoid Unity bounds issues
             Vector3 playerPos = player.transform.position;
@@ -594,13 +603,37 @@ namespace Behind_Bars.Systems.Jail
             Vector3 boundsWorldCenter = boundsTransform.TransformPoint(boundsCollider.center);
             Vector3 boundsWorldSize = Vector3.Scale(boundsCollider.size, boundsTransform.lossyScale);
 
-            // Manual bounds checking
+            // Manual bounds checking with slight margin for edge cases
             Vector3 min = boundsWorldCenter - boundsWorldSize * 0.5f;
             Vector3 max = boundsWorldCenter + boundsWorldSize * 0.5f;
 
-            bool contains = (playerPos.x >= min.x && playerPos.x <= max.x) &&
-                           (playerPos.y >= min.y && playerPos.y <= max.y) &&
-                           (playerPos.z >= min.z && playerPos.z <= max.z);
+            // Add small margin (0.1m) to account for floating point precision and edge cases
+            const float margin = 0.1f;
+            Vector3 marginVector = new Vector3(margin, margin, margin);
+            min -= marginVector;
+            max += marginVector;
+
+            bool containsX = playerPos.x >= min.x && playerPos.x <= max.x;
+            bool containsY = playerPos.y >= min.y && playerPos.y <= max.y;
+            bool containsZ = playerPos.z >= min.z && playerPos.z <= max.z;
+            bool contains = containsX && containsY && containsZ;
+
+            // Debug logging when player should be in cell but isn't detected
+            if (!contains)
+            {
+                ModLogger.Debug($"IsPlayerInJailCellBounds: Player {player.name} at ({playerPos.x:F2}, {playerPos.y:F2}, {playerPos.z:F2}) is NOT in cell {cellIndex}");
+                ModLogger.Debug($"  Cell bounds: center=({boundsWorldCenter.x:F2}, {boundsWorldCenter.y:F2}, {boundsWorldCenter.z:F2}), size=({boundsWorldSize.x:F2}, {boundsWorldSize.y:F2}, {boundsWorldSize.z:F2})");
+                ModLogger.Debug($"  Bounds min=({min.x:F2}, {min.y:F2}, {min.z:F2}), max=({max.x:F2}, {max.y:F2}, {max.z:F2})");
+                ModLogger.Debug($"  Checks: X={containsX}, Y={containsY}, Z={containsZ}");
+                
+                // Also try using Unity's built-in bounds check as fallback
+                Bounds worldBounds = new Bounds(boundsWorldCenter, boundsWorldSize);
+                if (worldBounds.Contains(playerPos))
+                {
+                    ModLogger.Debug($"  Unity Bounds.Contains returns TRUE (using fallback)");
+                    return true;
+                }
+            }
 
             return contains;
         }

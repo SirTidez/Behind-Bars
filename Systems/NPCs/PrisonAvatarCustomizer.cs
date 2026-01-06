@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using Behind_Bars.Helpers;
+using Behind_Bars.Utils;
 using MelonLoader;
 
 #if !MONO
@@ -386,14 +387,8 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                // Debug: List all available NPCs to understand what we have
-                var allAvailableNPCs = UnityEngine.Object.FindObjectsOfType<
-#if !MONO
-                    Il2CppScheduleOne.NPCs.NPC
-#else
-                    ScheduleOne.NPCs.NPC
-#endif
-                >()
+                // Debug: List all available NPCs to understand what we have - use NPCRegistry for O(1) access
+                var allAvailableNPCs = NPCRegistryHelper.GetAllNPCs()
                     .Where(npcComp => npcComp != null && npcComp.gameObject != npc)
                     .Take(20)
                     .ToArray();
@@ -821,13 +816,8 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                var allNPCs = UnityEngine.Object.FindObjectsOfType<
-#if !MONO
-                    Il2CppScheduleOne.NPCs.NPC
-#else
-                    ScheduleOne.NPCs.NPC
-#endif
-                >();
+                // Use NPCRegistry for O(1) access instead of O(n) FindObjectsOfType
+                var allNPCs = NPCRegistryHelper.GetAllNPCs();
                 
                 // Look for Billy specifically
                 foreach (var npcComp in allNPCs)
@@ -860,13 +850,8 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                var allNPCs = UnityEngine.Object.FindObjectsOfType<
-#if !MONO
-                    Il2CppScheduleOne.NPCs.NPC
-#else
-                    ScheduleOne.NPCs.NPC
-#endif
-                >();
+                // Use NPCRegistry for O(1) access instead of O(n) FindObjectsOfType
+                var allNPCs = NPCRegistryHelper.GetAllNPCs();
                 
                 foreach (var npcComp in allNPCs)
                 {
@@ -892,13 +877,8 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                var allNPCs = UnityEngine.Object.FindObjectsOfType<
-#if !MONO
-                    Il2CppScheduleOne.NPCs.NPC
-#else
-                    ScheduleOne.NPCs.NPC
-#endif
-                >();
+                // Use NPCRegistry for O(1) access instead of O(n) FindObjectsOfType
+                var allNPCs = NPCRegistryHelper.GetAllNPCs();
                 
                 // Priority list of reliable male NPCs for inmate appearance
                 string[] preferredMales = { "Brad", "Kevin", "Keith", "Jack", "Marco", "Stan", "Tobias" };
@@ -953,13 +933,8 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                var allNPCs = UnityEngine.Object.FindObjectsOfType<
-#if !MONO
-                    Il2CppScheduleOne.NPCs.NPC
-#else
-                    ScheduleOne.NPCs.NPC
-#endif
-                >()
+                // Use NPCRegistry for O(1) access instead of O(n) FindObjectsOfType
+                var allNPCs = NPCRegistryHelper.GetAllNPCs()
                     .Where(npcComp => npcComp != null && npcComp.gameObject != excludeNPC)
                     .Where(npcComp => !npcComp.name.Contains("Officer") &&
                                       !npcComp.name.Contains("Police") && 
