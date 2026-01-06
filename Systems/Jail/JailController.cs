@@ -32,6 +32,7 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
 
     public JailLightingController lightingController;
     public JailMonitorController monitorController;
+    public SecurityCameraCullingManager cameraCullingManager;
     public JailDoorController doorController;
     public JailCellManager cellManager;
     public JailPatrolManager patrolManager;
@@ -158,6 +159,8 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
             lightingController = gameObject.AddComponent<JailLightingController>();
         if (monitorController == null)
             monitorController = gameObject.AddComponent<JailMonitorController>();
+        if (cameraCullingManager == null)
+            cameraCullingManager = gameObject.AddComponent<SecurityCameraCullingManager>();
         if (doorController == null)
             doorController = gameObject.AddComponent<JailDoorController>();
         if (cellManager == null)
@@ -264,6 +267,14 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
 
         // Then setup monitor assignments using the monitor controller
         monitorController.Initialize(transform, securityCameras);
+        
+        // Initialize camera culling manager after monitors are set up
+        if (cameraCullingManager != null)
+        {
+            cameraCullingManager.Initialize(securityCameras, monitorController.monitorAssignments, transform);
+            ModLogger.Debug("Security camera culling manager initialized");
+        }
+        
         ModLogger.Debug($"Security camera setup completed with {securityCameras.Count} cameras");
     }
 
