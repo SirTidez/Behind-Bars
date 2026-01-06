@@ -1,6 +1,6 @@
 {
-  "version": "alpha-1.0.8",
-  "description": "Version update with bug fixes and improvements.",
+  "version": "alpha-1.0.9",
+  "description": "Reverted palm scanner to auto-complete without hand dragging; Added camera culling and cell occupancy checks.",
   "release_date": "2025-01-27",
   "download_url": "",
   "changelog_url": "https://github.com/SirTidez/Behind-Bars/blob/parole-development/CHANGELOG.md"
