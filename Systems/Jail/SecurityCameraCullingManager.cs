@@ -33,7 +33,7 @@ namespace Behind_Bars.Systems.Jail
         public float checkInterval = 2.0f;  // Increased from 0.5s to 2s to reduce frame impact
 
         [Tooltip("Maximum distance in meters a player can be from a monitor to view it")]
-        public float viewDistance = 15f;
+        public float viewDistance = 10f;
 
         [Tooltip("Maximum distance in meters from jail center - cameras disabled beyond this")]
         public float maxJailDistance = 50f;  // Disable all cameras if player is more than this distance from jail
@@ -56,6 +56,7 @@ namespace Behind_Bars.Systems.Jail
         private Dictionary<SecurityCamera, HashSet<MonitorController>> _cameraToMonitorsMap = new Dictionary<SecurityCamera, HashSet<MonitorController>>();
         private Dictionary<MonitorController, bool> _monitorVisibilityCache = new Dictionary<MonitorController, bool>();
         private List<MonitorController> _allMonitors = new List<MonitorController>();
+        private List<SecurityCamera> _allCameras = new List<SecurityCamera>();
 
         // Performance optimization: throttle checks
         private float _lastCheckTime = 0f;
@@ -108,6 +109,7 @@ namespace Behind_Bars.Systems.Jail
             _cameraToMonitorsMap.Clear();
             _monitorVisibilityCache.Clear();
             _allMonitors.Clear();
+            _allCameras.Clear();
 
             // Store jail root transform for bounds checking
             _jailRootTransform = jailRootTransform ?? transform.parent ?? transform;
@@ -115,6 +117,7 @@ namespace Behind_Bars.Systems.Jail
             _jailBounds = null;
 
             // Build camera-to-monitor mapping
+            _allCameras.AddRange(cameras);
             foreach (var assignment in monitorAssignments)
             {
                 if (assignment.monitor == null) continue;
@@ -259,7 +262,7 @@ namespace Behind_Bars.Systems.Jail
                     continue;
                 }
 
-                bool isVisible = CheckMonitorVisibility(monitor, playerCamera, playerTransform);
+                bool isVisible = CheckMonitorVisibility(monitor, playerCamera, localPlayer, playerTransform);
                 _monitorVisibilityCache[monitor] = isVisible;
             }
         }
@@ -359,9 +362,9 @@ namespace Behind_Bars.Systems.Jail
         /// Check if a monitor is visible to a player
         /// Uses proximity, frustum, and angle checks
         /// </summary>
-        private bool CheckMonitorVisibility(MonitorController monitor, Camera playerCamera, Transform playerTransform)
+        private bool CheckMonitorVisibility(MonitorController monitor, Camera playerCamera, Player player, Transform playerTransform)
         {
-            if (monitor == null || monitor.transform == null || playerCamera == null || playerTransform == null)
+            if (monitor == null || monitor.transform == null || player == null || playerTransform == null)
                 return false;
 
             Vector3 monitorPosition = monitor.transform.position;
@@ -374,22 +377,17 @@ namespace Behind_Bars.Systems.Jail
                 return false;
             }
 
-            // 2. Angle check (facing toward monitor)
-            Vector3 directionToMonitor = (monitorPosition - playerPosition).normalized;
-            Vector3 playerForward = playerTransform.forward;
-
-            // Calculate angle between player forward and direction to monitor
-            float dotProduct = Vector3.Dot(playerForward, directionToMonitor);
-            float angle = Mathf.Acos(Mathf.Clamp(dotProduct, -1f, 1f)) * Mathf.Rad2Deg;
-
-            if (angle > viewAngleThreshold)
+            // 2. Visibility check using the monitor face
+            Transform screenTransform = monitor.screenImage != null ? monitor.screenImage.transform : monitor.transform;
+            Vector3 screenPoint = screenTransform.position + (screenTransform.forward * 0.05f);
+            if (!player.IsPointVisibleToPlayer(screenPoint, viewDistance, 0.1f))
             {
                 return false;
             }
 
             // 3. Frustum check (optional - disabled by default due to performance cost)
             // Only perform if enabled, as it can cause frame spikes
-            if (useFrustumCheck)
+            if (useFrustumCheck && playerCamera != null)
             {
                 // Use cached frustum planes instead of recalculating (expensive operation)
                 Bounds monitorBounds = GetMonitorBounds(monitor);
@@ -447,9 +445,8 @@ namespace Behind_Bars.Systems.Jail
                 if (distanceToJail > maxJailDistance || !IsPlayerInJailBounds(playerPosition))
                 {
                     // Player is outside jail - immediately disable all cameras (no debouncing delay)
-                    foreach (var kvp in _cameraToMonitorsMap)
+                    foreach (var camera in _allCameras)
                     {
-                        SecurityCamera camera = kvp.Key;
                         if (camera != null && camera.cameraComponent != null && camera.cameraComponent.enabled)
                         {
                             camera.SetEnabled(false);
@@ -460,6 +457,32 @@ namespace Behind_Bars.Systems.Jail
                     return;
                 }
             }
+
+            bool anyMonitorVisibleGlobal = false;
+            foreach (var kvp in _monitorVisibilityCache)
+            {
+                if (kvp.Value)
+                {
+                    anyMonitorVisibleGlobal = true;
+                    break;
+                }
+            }
+
+            if (!anyMonitorVisibleGlobal)
+            {
+                // No monitors visible - disable all cameras immediately
+                foreach (var camera in _allCameras)
+                {
+                    if (camera != null && camera.cameraComponent != null && camera.cameraComponent.enabled)
+                    {
+                        camera.SetEnabled(false);
+                        _cameraEnableRequestTime.Remove(camera);
+                        _cameraDisableRequestTime.Remove(camera);
+                    }
+                }
+                return;
+            }
+            //
 
             foreach (var kvp in _cameraToMonitorsMap)
             {
@@ -553,6 +576,20 @@ namespace Behind_Bars.Systems.Jail
                     _cameraDisableRequestTime.Remove(camera);
                 }
             }
+
+            // Ensure cameras not mapped to any monitor are always disabled
+            foreach (var camera in _allCameras)
+            {
+                if (camera == null || camera.cameraComponent == null) continue;
+                if (_cameraToMonitorsMap.ContainsKey(camera)) continue;
+
+                if (camera.cameraComponent.enabled)
+                {
+                    camera.SetEnabled(false);
+                    _cameraEnableRequestTime.Remove(camera);
+                    _cameraDisableRequestTime.Remove(camera);
+                }
+            }
         }
 
         /// <summary>
@@ -611,6 +648,7 @@ namespace Behind_Bars.Systems.Jail
 
             return _cachedPlayerCamera;
         }
+
 
         /// <summary>
         /// Log system status for debugging

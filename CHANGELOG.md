@@ -1,5 +1,12 @@
 # Changelog
 
+## alpha-1.1.0
+- **Security Camera Performance**: Cameras now only render when you are close enough and can actually see a monitor screen
+  - Added monitor face visibility checks and tightened the activation range to 10m
+  - Disabled all cameras when no monitors are visible and forced unmapped cameras off
+- **Palm Scanner UX**: Restored auto-complete behavior for palm scans
+- **NPC Lookup Optimization**: Improved NPC lookups using NPCRegistryHelper for better performance
+
 ## alpha-1.0.8
 - **Advanced Performance Optimizations**: Additional performance improvements building on alpha-1.0.7
   - **NavMesh Caching System**: Implemented comprehensive caching for NavMesh pathfinding operations

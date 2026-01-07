@@ -45,4 +45,9 @@
         <!--<Exec Condition="'$(IsMultiplayerTest)' == 'true'"
               Command='powershell -Command "Start-Process -FilePath \"$(MultiplayerModStarter)\" -WorkingDirectory \"$(S1Dir)\""' />-->
     </Target>
+
+    <Target Name="Copy built mod to FOMOD directory" AfterTargets="Copy built mod and run the game" Condition="'$(RunPostBuildEvent)' == 'OnBuildSuccess'">
+        <Message Text="Syncing FOMOD info and copying built mod..." Importance="high" />
+        <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -Command &quot;&amp; { $projectRoot = '$(ProjectDir)'; $json = Get-Content (Join-Path $projectRoot 'project_version.json') | ConvertFrom-Json; $version = $json.version; $description = $json.description; $fomodRoot = Join-Path $projectRoot 'bin\FOMod\Mods\Behind Bars'; $infoPath = Join-Path $fomodRoot 'fomod\Info.xml'; if (Test-Path $infoPath) { [xml]$xml = Get-Content $infoPath; $xml.fomod.Version = $version; $xml.fomod.Description = $description; $xml.Save($infoPath); Write-Host 'Updated Info.xml' }; $dataMods = Join-Path $fomodRoot 'data\Mods'; New-Item -ItemType Directory -Force -Path $dataMods | Out-Null; $dest = Join-Path $dataMods ('Behind_Bars-' + $version + '.dll'); Copy-Item -Force -LiteralPath '$(TargetPath)' -Destination $dest; Write-Host ('Copied DLL to: ' + $dest) }&quot;" />
+    </Target>
 </Project>

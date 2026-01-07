@@ -1,8 +1,8 @@
 {
     "name": "Behind_Bars",
-    "version_number": "alpha-1.0.5",
+    "version_number": "alpha-1.1.0",
     "website_url": "",
-    "description": "Fixed save system - RapSheet and ParoleRecord now save/load correctly",
+    "description": "Security cameras now power down unless you are close enough and actually looking at a monitor display. This keeps the jail scene lighter when you are away while preserving live feeds when you need them.",
     "dependencies": [
         "LavaGang-MelonLoader-0.7.0",
         "the_croods-SwapperPlugin-1.2.1"
