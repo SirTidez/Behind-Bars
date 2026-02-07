@@ -2,6 +2,7 @@ using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.NPCs;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 namespace Behind_Bars.Utils
 {
@@ -43,7 +44,7 @@ namespace Behind_Bars.Utils
             }
             
             // Add the DoorTriggerHandler component
-            var handler = triggerGO.AddComponent<DoorTriggerHandler>();
+            var handler = BBHelpers.AddComponentSafe<DoorTriggerHandler>(triggerGO);
             
             // Try to auto-detect the door or manually assign if doorName provided
             if (!string.IsNullOrEmpty(doorName))
@@ -146,7 +147,7 @@ namespace Behind_Bars.Utils
             }
             
             // Add the DoorTriggerHandler component
-            var handler = triggerGO.AddComponent<DoorTriggerHandler>();
+            var handler = BBHelpers.AddComponentSafe<DoorTriggerHandler>(triggerGO);
             
             // Try to find and assign the specific door
             var door = FindDoorByName(doorName);
@@ -190,7 +191,7 @@ namespace Behind_Bars.Utils
                             ModLogger.Info($"Found potential door trigger: {go.name}");
                             
                             // Add the handler
-                            var handler = go.AddComponent<DoorTriggerHandler>();
+                            var handler = BBHelpers.AddComponentSafe<DoorTriggerHandler>(go);
                             handler.autoDetectDoor = true;
                             
                             setupCount++;

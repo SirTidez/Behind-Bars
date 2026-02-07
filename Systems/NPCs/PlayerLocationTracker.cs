@@ -117,7 +117,7 @@ namespace Behind_Bars.Systems.NPCs
                 if (trackedPlayer == null)
                 {
                     ModLogger.Debug("PlayerLocationTracker: Local player not found, will retry");
-                    StartCoroutine(RetryInitialize());
+                    MelonLoader.MelonCoroutines.Start(RetryInitialize());
                     return;
                 }
 
@@ -247,28 +247,9 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private EMapRegion GetRegionForPosition(Vector3 position)
         {
-            try
-            {
-                // Try to use game's built-in region detection if available
-                // Fallback to coordinate-based detection if enum not accessible
-#if !MONO
-                // Attempt to use game's region detection system
-                // This may need adjustment based on actual game API
-                var mapRegion = Il2CppScheduleOne.Map.MapRegionDetector.GetRegion(position);
-                if (mapRegion != null)
-                {
-                    return (EMapRegion)mapRegion;
-                }
-#endif
-
-                // Fallback: Use coordinate-based region detection
-                return DetectRegionByCoordinates(position);
-            }
-            catch (Exception ex)
-            {
-                ModLogger.Debug($"PlayerLocationTracker: Error getting region, using fallback: {ex.Message}");
-                return DetectRegionByCoordinates(position);
-            }
+            // Use coordinate-based region detection
+            // MapRegionDetector is not available in the current game build
+            return DetectRegionByCoordinates(position);
         }
 
         /// <summary>

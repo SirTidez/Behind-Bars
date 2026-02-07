@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using Behind_Bars.Helpers;
-using ScheduleOne.Persistence;
 using UnityEngine;
 
 #if !MONO
@@ -47,7 +46,6 @@ namespace Behind_Bars.Utils.Saveable
 
                 // Determine the folder path for loading
                 string folderPath = mainPath;
-                ScheduleOne.Persistence.ISaveable saveableInterface = _saveable;
                 
                 // If the path is a file, get its directory
                 if (File.Exists(mainPath))
@@ -55,14 +53,14 @@ namespace Behind_Bars.Utils.Saveable
                     folderPath = Path.GetDirectoryName(mainPath);
                 }
                 // If ShouldSaveUnderFolder, the folder should be the SaveFolderName subdirectory
-                else if (saveableInterface.ShouldSaveUnderFolder)
+                else if (_saveable.ShouldSaveUnderFolderInternal)
                 {
                     // mainPath might be the parent folder, so we need to add SaveFolderName
                     string parentFolder = Path.GetDirectoryName(mainPath);
                     if (string.IsNullOrEmpty(parentFolder))
                         parentFolder = mainPath;
                     
-                    folderPath = Path.Combine(parentFolder, saveableInterface.SaveFolderName);
+                    folderPath = Path.Combine(parentFolder, _saveable.SaveFolderNameInternal);
                 }
 
                 // Ensure folder exists (might not for new saves)

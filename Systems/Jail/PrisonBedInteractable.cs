@@ -5,6 +5,7 @@ using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.UI;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppInterop.Runtime.Attributes;
@@ -323,7 +324,7 @@ namespace Behind_Bars.Systems.Jail
             var jailBed = GetComponent<JailBed>();
             if (jailBed == null)
             {
-                jailBed = gameObject.AddComponent<JailBed>();
+                jailBed = BBHelpers.AddComponentSafe<JailBed>(gameObject);
                 jailBed.bedName = $"{cellName} {(isTopBunk ? "Top Bunk" : "Bottom Bunk")}";
                 jailBed.isTopBunk = isTopBunk;
                 jailBed.sleepPosition = transform;

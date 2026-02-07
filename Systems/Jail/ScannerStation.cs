@@ -4,6 +4,7 @@ using UnityEngine.UI;
 using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.UI;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 
 
@@ -87,7 +88,7 @@ namespace Behind_Bars.Systems.Jail
         void Start()
         {
             // Find booking process
-            bookingProcess = FindObjectOfType<BookingProcess>();
+            bookingProcess = BBHelpers.FindObjectOfTypeSafe<BookingProcess>();
 
             // Set up InteractableObject component for IL2CPP compatibility
             SetupInteractableComponent();
@@ -320,7 +321,7 @@ namespace Behind_Bars.Systems.Jail
 #if MONO
             PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
 #else
-            PlayerSingleton<PlayerMovement>.Instance.canMove = false;
+            PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
 #endif
             PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(false);
             PlayerSingleton<PlayerInventory>.Instance.SetEquippingEnabled(false);
@@ -507,7 +508,7 @@ namespace Behind_Bars.Systems.Jail
 #if MONO
             PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
 #else
-            PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+            PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
 #endif
             PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
             PlayerSingleton<PlayerInventory>.Instance.SetEquippingEnabled(true);
@@ -572,7 +573,7 @@ namespace Behind_Bars.Systems.Jail
 #if MONO
             PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
 #else
-            PlayerSingleton<PlayerMovement>.Instance.canMove = false;
+            PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
 #endif
             PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(false);
             PlayerSingleton<PlayerInventory>.Instance.SetEquippingEnabled(false);
@@ -638,7 +639,7 @@ namespace Behind_Bars.Systems.Jail
 #if MONO
             PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
 #else
-            PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+            PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
 #endif
             PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
             PlayerSingleton<PlayerInventory>.Instance.SetEquippingEnabled(true);

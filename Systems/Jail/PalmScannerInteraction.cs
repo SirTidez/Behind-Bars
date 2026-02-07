@@ -3,6 +3,7 @@ using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.UI;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -77,7 +78,7 @@ namespace Behind_Bars.Systems.Jail
             try { playerCamera = PlayerSingleton<PlayerCamera>.Instance; }
             catch { ModLogger.Warn("PlayerCamera singleton not found"); }
             
-            bookingProcess = FindObjectOfType<BookingProcess>();
+            bookingProcess = BBHelpers.FindObjectOfTypeSafe<BookingProcess>();
             
             // Find interaction camera if not assigned (corrected path)
             if (interactionCamera == null)
@@ -359,7 +360,7 @@ namespace Behind_Bars.Systems.Jail
 #if MONO
             PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
 #else
-            PlayerSingleton<PlayerMovement>.Instance.canMove = false;
+            PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
 #endif
             PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(false);
             PlayerSingleton<PlayerInventory>.Instance.SetEquippingEnabled(false);
@@ -425,7 +426,7 @@ namespace Behind_Bars.Systems.Jail
 #if MONO
             PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
 #else
-            PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+            PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
 #endif
             PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
             PlayerSingleton<PlayerInventory>.Instance.SetEquippingEnabled(true);

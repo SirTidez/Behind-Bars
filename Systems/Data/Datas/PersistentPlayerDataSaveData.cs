@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 using Behind_Bars.Helpers;
+using Behind_Bars.Utils;
 
 #if !MONO
 using Il2CppScheduleOne.Persistence.Datas;
@@ -301,7 +302,7 @@ namespace Behind_Bars.Systems.Data.Datas
                         snapshotsList.Add(snapshotSaveData);
                     }
                 }
-                string snapshotsJson = JsonUtility.ToJson(snapshotsList);
+                string snapshotsJson = JsonHelper.SerializeObject(snapshotsList);
                 saveData.Add(KEY_PLAYER_SNAPSHOTS_JSON, snapshotsJson);
             }
 
@@ -314,7 +315,7 @@ namespace Behind_Bars.Systems.Data.Datas
                     var positionSaveData = StoredExitPositionSaveData.FromKeyValue(kvp.Key, kvp.Value);
                     positionsList.Add(positionSaveData);
                 }
-                string positionsJson = JsonUtility.ToJson(positionsList);
+                string positionsJson = JsonHelper.SerializeObject(positionsList);
                 saveData.Add(KEY_STORED_EXIT_POSITIONS_JSON, positionsJson);
             }
 
@@ -346,7 +347,7 @@ namespace Behind_Bars.Systems.Data.Datas
             {
                 try
                 {
-                    var snapshotsList = JsonUtility.FromJson<List<PlayerInventorySnapshotSaveData>>(snapshotsJson);
+                    var snapshotsList = JsonHelper.DeserializeObject<List<PlayerInventorySnapshotSaveData>>(snapshotsJson);
                     if (snapshotsList != null)
                     {
                         foreach (var snapshotSaveData in snapshotsList)
@@ -371,7 +372,7 @@ namespace Behind_Bars.Systems.Data.Datas
             {
                 try
                 {
-                    var positionsList = JsonUtility.FromJson<List<StoredExitPositionSaveData>>(positionsJson);
+                    var positionsList = JsonHelper.DeserializeObject<List<StoredExitPositionSaveData>>(positionsJson);
                     if (positionsList != null)
                     {
                         foreach (var positionSaveData in positionsList)

@@ -5,6 +5,7 @@ using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.UI;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppInterop.Runtime.Attributes;
@@ -43,7 +44,7 @@ namespace Behind_Bars.Systems.Jail
         void Start()
         {
             // Find booking process
-            bookingProcess = FindObjectOfType<BookingProcess>();
+            bookingProcess = BBHelpers.FindObjectOfTypeSafe<BookingProcess>();
             
             // Set up InteractableObject component for IL2CPP compatibility
             SetupInteractableComponent();

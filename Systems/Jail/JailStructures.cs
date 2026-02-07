@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using Behind_Bars.Systems.Jail;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -678,10 +679,10 @@ public class JailStorageArea
         // Initialize jail inventory pickup station (prison items)
         if (jailInventoryPickup != null)
         {
-            jailInventoryComponent = jailInventoryPickup.GetComponent<JailInventoryPickupStation>();
+            jailInventoryComponent = BBHelpers.GetComponentSafe<JailInventoryPickupStation>(jailInventoryPickup.gameObject);
             if (jailInventoryComponent == null)
             {
-                jailInventoryComponent = jailInventoryPickup.gameObject.AddComponent<JailInventoryPickupStation>();
+                jailInventoryComponent = BBHelpers.AddComponentSafe<JailInventoryPickupStation>(jailInventoryPickup.gameObject);
                 Debug.Log("Added JailInventoryPickupStation component to JailInventoryPickup");
             }
         }
@@ -689,10 +690,10 @@ public class JailStorageArea
         // Initialize inventory pickup station (personal items return)
         if (inventoryPickup != null)
         {
-            inventoryPickupComponent = inventoryPickup.GetComponent<InventoryPickupStation>();
+            inventoryPickupComponent = BBHelpers.GetComponentSafe<InventoryPickupStation>(inventoryPickup.gameObject);
             if (inventoryPickupComponent == null)
             {
-                inventoryPickupComponent = inventoryPickup.gameObject.AddComponent<InventoryPickupStation>();
+                inventoryPickupComponent = BBHelpers.AddComponentSafe<InventoryPickupStation>(inventoryPickup.gameObject);
                 Debug.Log("Added InventoryPickupStation component to InventoryPickup");
             }
         }
@@ -707,7 +708,7 @@ public class JailStorageArea
     {
         if (jailInventoryComponent == null && jailInventoryPickup != null)
         {
-            jailInventoryComponent = jailInventoryPickup.GetComponent<JailInventoryPickupStation>();
+            jailInventoryComponent = BBHelpers.GetComponentSafe<JailInventoryPickupStation>(jailInventoryPickup.gameObject);
         }
         return jailInventoryComponent;
     }
@@ -719,7 +720,7 @@ public class JailStorageArea
     {
         if (inventoryPickupComponent == null && inventoryPickup != null)
         {
-            inventoryPickupComponent = inventoryPickup.GetComponent<InventoryPickupStation>();
+            inventoryPickupComponent = BBHelpers.GetComponentSafe<InventoryPickupStation>(inventoryPickup.gameObject);
         }
         return inventoryPickupComponent;
     }

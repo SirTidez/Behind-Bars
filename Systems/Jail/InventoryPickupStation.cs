@@ -5,6 +5,7 @@ using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.UI;
 using Behind_Bars.Systems.Data;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppInterop.Runtime.Attributes;
@@ -87,10 +88,10 @@ namespace Behind_Bars.Systems.Jail
         private void SetupInteractableComponent()
         {
             // Get or create InteractableObject component
-            interactableObject = GetComponent<InteractableObject>();
+            interactableObject = BBHelpers.GetComponentSafe<InteractableObject>(gameObject);
             if (interactableObject == null)
             {
-                interactableObject = gameObject.AddComponent<InteractableObject>();
+                interactableObject = BBHelpers.AddComponentSafe<InteractableObject>(gameObject);
                 ModLogger.Debug("Added InteractableObject component to InventoryPickupStation");
             }
             else
@@ -124,10 +125,10 @@ namespace Behind_Bars.Systems.Jail
         private void SetupStorageEntity()
         {
             // Get or create PrisonStorageEntity component
-            storageEntity = GetComponent<PrisonStorageEntity>();
+            storageEntity = BBHelpers.GetComponentSafe<PrisonStorageEntity>(gameObject);
             if (storageEntity == null)
             {
-                storageEntity = gameObject.AddComponent<PrisonStorageEntity>();
+                storageEntity = BBHelpers.AddComponentSafe<PrisonStorageEntity>(gameObject);
                 ModLogger.Debug("Added PrisonStorageEntity component to InventoryPickupStation");
             }
             else

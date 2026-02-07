@@ -8,6 +8,7 @@ using Behind_Bars.Helpers;
 using Behind_Bars.Systems.CrimeTracking;
 using Behind_Bars.Systems;
 using static Behind_Bars.Systems.NPCs.ParoleOfficerBehavior;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -169,7 +170,7 @@ namespace Behind_Bars.Systems.NPCs
                 if (npcManager == null)
                 {
                     ModLogger.Error("DynamicParoleOfficerManager: PrisonNPCManager not found");
-                    StartCoroutine(RetryInitialize());
+                    MelonCoroutines.Start(RetryInitialize());
                     return;
                 }
 
@@ -181,7 +182,7 @@ namespace Behind_Bars.Systems.NPCs
                 if (locationTracker == null)
                 {
                     GameObject trackerObject = new GameObject("PlayerLocationTracker");
-                    locationTracker = trackerObject.AddComponent<PlayerLocationTracker>();
+                    locationTracker = BBHelpers.AddComponentSafe<PlayerLocationTracker>(trackerObject);
                     locationTracker.Initialize();
                 }
 
@@ -197,7 +198,7 @@ namespace Behind_Bars.Systems.NPCs
                 if (currentPlayer == null)
                 {
                     ModLogger.Debug("DynamicParoleOfficerManager: Local player not found, will retry");
-                    StartCoroutine(RetryInitialize());
+                    MelonCoroutines.Start(RetryInitialize());
                     return;
                 }
 
@@ -624,9 +625,9 @@ namespace Behind_Bars.Systems.NPCs
                 // Spawn via NPC manager
                 var paroleOfficer = npcManager.SpawnParoleOfficer(spawnPosition, officerName, badge, assignment);
                 
-                if (paroleOfficer != null && paroleOfficer.GetComponent<ParoleOfficerBehavior>() != null)
+                if (paroleOfficer != null && BBHelpers.GetComponentSafe<ParoleOfficerBehavior>(paroleOfficer.gameObject) != null)
                 {
-                    var behavior = paroleOfficer.GetComponent<ParoleOfficerBehavior>();
+                    var behavior = BBHelpers.GetComponentSafe<ParoleOfficerBehavior>(paroleOfficer.gameObject);
                     activeOfficers[assignment] = behavior;
                     spawnedAssignments.Add(assignment);
                     ModLogger.Debug($"DynamicParoleOfficerManager: ✓ Spawned {assignment} officer {badge}");

@@ -8,14 +8,16 @@ using Behind_Bars.Helpers;
 using Behind_Bars.Systems.CrimeTracking;
 using Behind_Bars.Systems.Jail;
 using Behind_Bars.UI;
-using ScheduleOne.VoiceOver;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
+using Il2CppScheduleOne.VoiceOver;
 using Il2CppScheduleOne.PlayerScripts;
 using Il2CppScheduleOne.NPCs;
 using Il2CppScheduleOne.AvatarFramework;
 using Il2CppInterop.Runtime.Attributes;
 #else
+using ScheduleOne.VoiceOver;
 using ScheduleOne.PlayerScripts;
 using ScheduleOne.NPCs;
 using ScheduleOne.AvatarFramework;
@@ -160,10 +162,10 @@ namespace Behind_Bars.Systems.NPCs
 
         protected override void InitializeNPC()
         {
-            doorBehavior = GetComponent<SecurityDoorBehavior>();
+            doorBehavior = BBHelpers.GetComponentSafe<SecurityDoorBehavior>(gameObject);
             if (doorBehavior == null)
             {
-                doorBehavior = gameObject.AddComponent<SecurityDoorBehavior>();
+                doorBehavior = BBHelpers.AddComponentSafe<SecurityDoorBehavior>(gameObject);
             }
 
             if (string.IsNullOrEmpty(badgeNumber))
@@ -225,14 +227,14 @@ namespace Behind_Bars.Systems.NPCs
             try
             {
                 // Get audio controller (should be added by DirectNPCBuilder)
-                audioController = GetComponent<JailNPCAudioController>();
+                audioController = BBHelpers.GetComponentSafe<JailNPCAudioController>(gameObject);
                 if (audioController == null)
                 {
                     ModLogger.Warn($"Guard {badgeNumber}: No JailNPCAudioController found");
                 }
 
                 // Get dialogue controller
-                dialogueController = GetComponent<JailNPCDialogueController>();
+                dialogueController = BBHelpers.GetComponentSafe<JailNPCDialogueController>(gameObject);
                 if (dialogueController == null)
                 {
                     ModLogger.Warn($"Guard {badgeNumber}: No JailNPCDialogueController found");
@@ -262,10 +264,10 @@ namespace Behind_Bars.Systems.NPCs
             try
             {
                 // Get or add StationaryBehavior component
-                stationaryBehavior = GetComponent<StationaryBehavior>();
+                stationaryBehavior = BBHelpers.GetComponentSafe<StationaryBehavior>(gameObject);
                 if (stationaryBehavior == null)
                 {
-                    stationaryBehavior = gameObject.AddComponent<StationaryBehavior>();
+                    stationaryBehavior = BBHelpers.AddComponentSafe<StationaryBehavior>(gameObject);
                 }
 
                 // Set stationary position to police station entrance (first waypoint of PoliceStation route)
@@ -286,10 +288,10 @@ namespace Behind_Bars.Systems.NPCs
                 // Initialize check-in system for supervising officer
                 if (checkInSystem == null)
                 {
-                    checkInSystem = GetComponent<ParoleCheckInSystem>();
+                    checkInSystem = BBHelpers.GetComponentSafe<ParoleCheckInSystem>(gameObject);
                     if (checkInSystem == null)
                     {
-                        checkInSystem = gameObject.AddComponent<ParoleCheckInSystem>();
+                        checkInSystem = BBHelpers.AddComponentSafe<ParoleCheckInSystem>(gameObject);
                         ModLogger.Debug($"Supervising Officer {badgeNumber}: Added ParoleCheckInSystem component");
                     }
                 }
@@ -666,6 +668,9 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Debug($"Guard {badgeNumber} patrolling to point {currentPatrolIndex}");
         }
 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         public void AssignPatrolRoute(Vector3[] points)
         {
             patrolRoute.points = points;
@@ -712,7 +717,7 @@ namespace Behind_Bars.Systems.NPCs
                         var playerMovement = Il2CppScheduleOne.DevUtilities.PlayerSingleton<Il2CppScheduleOne.PlayerScripts.PlayerMovement>.Instance;
                         if (playerMovement != null)
                         {
-                            playerMovement.canMove = false;
+                            playerMovement.CanMove = false;
                             ModLogger.Debug($"Froze player {player.name} movement immediately for parole search");
                         }
 #endif
@@ -759,10 +764,10 @@ namespace Behind_Bars.Systems.NPCs
             // Initialize parole intake state machine if not already present
             if (paroleIntakeStateMachine == null)
             {
-                paroleIntakeStateMachine = GetComponent<ParoleIntakeStateMachine>();
+                paroleIntakeStateMachine = BBHelpers.GetComponentSafe<ParoleIntakeStateMachine>(gameObject);
                 if (paroleIntakeStateMachine == null)
                 {
-                    paroleIntakeStateMachine = gameObject.AddComponent<ParoleIntakeStateMachine>();
+                    paroleIntakeStateMachine = BBHelpers.AddComponentSafe<ParoleIntakeStateMachine>(gameObject);
                 }
             }
 
@@ -950,6 +955,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Get command data for the current activity
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private OfficerCommandData? GetCommandDataForActivity(ParoleOfficerActivity activity)
         {
             bool isEscorting = IsCurrentlyEscortingParolee();
@@ -1122,6 +1130,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Hide search notification after delay
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private IEnumerator HideSearchNotificationAfterDelay(float delay)
         {
             yield return new WaitForSeconds(delay);
@@ -1178,10 +1189,10 @@ namespace Behind_Bars.Systems.NPCs
             // Get or add check-in system
             if (checkInSystem == null)
             {
-                checkInSystem = GetComponent<ParoleCheckInSystem>();
+                checkInSystem = BBHelpers.GetComponentSafe<ParoleCheckInSystem>(gameObject);
                 if (checkInSystem == null)
                 {
-                    checkInSystem = gameObject.AddComponent<ParoleCheckInSystem>();
+                    checkInSystem = BBHelpers.AddComponentSafe<ParoleCheckInSystem>(gameObject);
                 }
             }
 
@@ -1212,12 +1223,15 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Info($"Supervising Officer {badgeNumber} handling violation '{violationType}' for {parolee.name}");
 
             // Start violation dialogue
-            StartCoroutine(ProcessViolation(parolee, violationType));
+            MelonLoader.MelonCoroutines.Start(ProcessViolation(parolee, violationType));
         }
 
         /// <summary>
         /// Process violation with dialogue
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private IEnumerator ProcessViolation(Player parolee, string violationType)
         {
             // Update dialogue to violation detected
@@ -1318,12 +1332,15 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Info($"Supervising Officer {badgeNumber} reviewing conditions with {parolee.name}");
 
             // Start conditions review dialogue
-            StartCoroutine(ProcessConditionsReview(parolee));
+            MelonLoader.MelonCoroutines.Start(ProcessConditionsReview(parolee));
         }
 
         /// <summary>
         /// Process conditions review with dialogue
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private IEnumerator ProcessConditionsReview(Player parolee)
         {
             // Update dialogue to conditions request
@@ -1388,7 +1405,7 @@ namespace Behind_Bars.Systems.NPCs
         private void OnTriggerEnter(Collider other)
         {
             // Handle door triggers - delegate to intake state machine if processing intake
-            var doorTrigger = other.GetComponent<DoorTriggerHandler>();
+            var doorTrigger = BBHelpers.GetComponentSafe<DoorTriggerHandler>(other.gameObject);
             if (doorTrigger != null && doorBehavior != null)
             {
                 if (role == ParoleOfficerRole.SupervisingOfficer && paroleIntakeStateMachine != null && paroleIntakeStateMachine.IsProcessingIntake())

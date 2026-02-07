@@ -4,6 +4,7 @@ using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.Data;
 using System;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppInterop.Runtime.Attributes;
@@ -40,9 +41,15 @@ namespace Behind_Bars.Systems.Jail
         private List<PersistentPlayerData.StoredItem> playerLegalItems;
         private bool isPopulated = false;
         private HashSet<string> failedItemsCache = new HashSet<string>(); // Cache failed items to prevent log spam
+        private bool _awakeInitialized;
 
         public override void Awake()
         {
+            if (_awakeInitialized)
+                return;
+
+            _awakeInitialized = true;
+
             // Configure storage entity BEFORE base.Awake() which creates slots
             StorageEntityName = "Personal Belongings Storage";
             StorageEntitySubtitle = "Retrieve your stored items";
@@ -51,7 +58,12 @@ namespace Behind_Bars.Systems.Jail
             MaxAccessDistance = 3f;
             DisplayRowCount = 2; // Show in 2 rows (4x2 grid)
 
+#if MONO
             base.Awake();
+#else
+            // IL2CPP: calling base.Awake() on injected StorageEntity derivatives can recurse
+            // through IL2CPP runtime invoke and cause stack overflow.
+#endif
 
             // CRITICAL: Add NetworkObject component for StorageEntity.Open() to work
             // StorageEntity expects a NetworkObject for network RPCs
@@ -106,7 +118,7 @@ namespace Behind_Bars.Systems.Jail
 #if MONO
                 onClosed += HandleStorageClosed;
 #else
-                onClosed.AddListener(new System.Action(HandleStorageClosed));
+                onClosed += new System.Action(HandleStorageClosed);
 #endif
             }
 
@@ -120,10 +132,17 @@ namespace Behind_Bars.Systems.Jail
         {
             ModLogger.Info("Storage closed by player");
 
-            var pickupStation = GetComponentInParent<InventoryPickupStation>();
-            if (pickupStation != null)
+            Transform cursor = transform;
+            while (cursor != null)
             {
-                pickupStation.OnStorageSessionComplete();
+                var pickupStation = BBHelpers.GetComponentSafe<InventoryPickupStation>(cursor.gameObject);
+                if (pickupStation != null)
+                {
+                    pickupStation.OnStorageSessionComplete();
+                    break;
+                }
+
+                cursor = cursor.parent;
             }
         }
 

@@ -16,16 +16,24 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Configuration
 
+#if MONO
         [SerializeField]
+#endif
         private Vector3 stationaryPosition;
 
+#if MONO
         [SerializeField]
+#endif
         private float positionTolerance = 1.5f;
 
+#if MONO
         [SerializeField]
+#endif
         private float returnSpeed = 2.5f;
 
+#if MONO
         [SerializeField]
+#endif
         private bool maintainPosition = true;
 
         #endregion

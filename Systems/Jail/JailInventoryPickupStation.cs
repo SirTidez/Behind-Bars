@@ -5,6 +5,7 @@ using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.UI;
 using Behind_Bars.Systems.NPCs;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppInterop.Runtime.Attributes;
@@ -472,7 +473,7 @@ namespace Behind_Bars.Systems.Jail
 
             // Mark prison gear pickup as complete in booking process
             ModLogger.Info("Attempting to find BookingProcess to mark gear pickup complete...");
-            var bookingProcess = FindObjectOfType<BookingProcess>();
+            var bookingProcess = BBHelpers.FindObjectOfTypeSafe<BookingProcess>();
             if (bookingProcess != null)
             {
                 ModLogger.Info($"Found BookingProcess! Current state - Mugshot: {bookingProcess.mugshotComplete}, Fingerprint: {bookingProcess.fingerprintComplete}, Prison Gear: {bookingProcess.prisonGearPickupComplete}");
@@ -583,8 +584,8 @@ namespace Behind_Bars.Systems.Jail
                 wasMovable = PlayerSingleton<PlayerMovement>.Instance.CanMove;
                 PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
 #else
-                wasMovable = PlayerSingleton<PlayerMovement>.Instance.canMove;
-                PlayerSingleton<PlayerMovement>.Instance.canMove = false;
+                wasMovable = PlayerSingleton<PlayerMovement>.Instance.CanMove;
+                PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
 #endif
                 ModLogger.Debug("Froze player movement during uniform application");
             }
@@ -641,7 +642,7 @@ namespace Behind_Bars.Systems.Jail
 #if MONO
                         PlayerSingleton<PlayerMovement>.Instance.CanMove = wasMovable;
 #else
-                        PlayerSingleton<PlayerMovement>.Instance.canMove = wasMovable;
+                        PlayerSingleton<PlayerMovement>.Instance.CanMove = wasMovable;
 #endif
                     }
                     catch { }
@@ -667,7 +668,7 @@ namespace Behind_Bars.Systems.Jail
 #if MONO
                         PlayerSingleton<PlayerMovement>.Instance.CanMove = wasMovable;
 #else
-                        PlayerSingleton<PlayerMovement>.Instance.canMove = wasMovable;
+                        PlayerSingleton<PlayerMovement>.Instance.CanMove = wasMovable;
 #endif
                     }
                     catch { }
@@ -795,7 +796,7 @@ namespace Behind_Bars.Systems.Jail
 #if MONO
                 PlayerSingleton<PlayerMovement>.Instance.CanMove = wasMovable;
 #else
-                PlayerSingleton<PlayerMovement>.Instance.canMove = wasMovable;
+                PlayerSingleton<PlayerMovement>.Instance.CanMove = wasMovable;
 #endif
                 ModLogger.Debug("Restored player movement after uniform application");
             }

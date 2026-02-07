@@ -5,6 +5,7 @@ using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.CrimeTracking;
 using Behind_Bars.UI;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -65,9 +66,11 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Events
 
+#if MONO
         public System.Action<ParoleIntakeState> OnStateChanged;
         public System.Action<Player> OnIntakeStarted;
         public System.Action<Player> OnIntakeCompleted;
+#endif
 
         #endregion
 
@@ -76,8 +79,8 @@ namespace Behind_Bars.Systems.NPCs
         protected override void Awake()
         {
             base.Awake();
-            paroleOfficer = GetComponent<ParoleOfficerBehavior>();
-            stationaryBehavior = GetComponent<StationaryBehavior>();
+            paroleOfficer = BBHelpers.GetComponentSafe<ParoleOfficerBehavior>(gameObject);
+            stationaryBehavior = BBHelpers.GetComponentSafe<StationaryBehavior>(gameObject);
         }
 
         protected override void Start()
@@ -127,6 +130,9 @@ namespace Behind_Bars.Systems.NPCs
 #if MONO
         private System.Collections.IEnumerator WaitForDialogueController()
 #else
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private IEnumerator WaitForDialogueController()
 #endif
         {
@@ -135,7 +141,7 @@ namespace Behind_Bars.Systems.NPCs
 
             while (retryCount < maxRetries)
             {
-                dialogueController = GetComponent<JailNPCDialogueController>();
+                dialogueController = BBHelpers.GetComponentSafe<JailNPCDialogueController>(gameObject);
                 if (dialogueController != null)
                 {
                     ModLogger.Debug("ParoleIntakeStateMachine: Dialogue controller found");
@@ -161,7 +167,9 @@ namespace Behind_Bars.Systems.NPCs
             currentState = newState;
             stateStartTime = Time.time;
 
+#if MONO
             OnStateChanged?.Invoke(newState);
+#endif
             ModLogger.Info($"ParoleIntakeStateMachine: {oldState} → {newState}");
 
             UpdateDialogueForState(newState);
@@ -242,52 +250,23 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         protected override void OnEnable()
         {
-            // Subscribe to NPCUpdateManager events (custom handler for state updates)
-            if (NPCUpdateManager.Instance != null)
-            {
-                NPCUpdateManager.Instance.RegisterNPC(this);
-                NPCUpdateManager.Instance.OnNPCStateUpdate += HandleParoleIntakeStateUpdate;  // Custom handler
-                NPCUpdateManager.Instance.OnNPCMovementCheck += HandleMovementCheck;
-                NPCUpdateManager.Instance.OnNPCActionProcess += HandleActionProcess;
-            }
+            base.OnEnable();
         }
 
         protected override void OnDisable()
         {
-            // Unsubscribe from events
-            if (NPCUpdateManager.Instance != null)
-            {
-                NPCUpdateManager.Instance.UnregisterNPC(this);
-                NPCUpdateManager.Instance.OnNPCStateUpdate -= HandleParoleIntakeStateUpdate;  // Custom handler
-                NPCUpdateManager.Instance.OnNPCMovementCheck -= HandleMovementCheck;
-                NPCUpdateManager.Instance.OnNPCActionProcess -= HandleActionProcess;
-            }
+            base.OnDisable();
         }
 
         /// <summary>
         /// Custom state update handler that includes parole intake state machine logic
         /// </summary>
-        private void HandleParoleIntakeStateUpdate(float currentTime)
+        protected override void OnStateUpdateTick(float currentTime)
         {
-            if (!isInitialized) return;
-
-            // Call base state update
-            UpdateState();
+            base.OnStateUpdateTick(currentTime);
 
             // Handle parole intake state machine
             ProcessIntakeState();
-        }
-
-        private void HandleMovementCheck(float currentTime)
-        {
-            if (!isInitialized) return;
-            CheckStuckMovement();
-        }
-
-        private void HandleActionProcess()
-        {
-            if (!isInitialized) return;
-            ProcessActionQueue();
         }
 
         private void ProcessIntakeState()
@@ -473,7 +452,9 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             currentParolee = parolee;
+#if MONO
             OnIntakeStarted?.Invoke(parolee);
+#endif
             ChangeIntakeState(ParoleIntakeState.DetectingParolee);
 
             ModLogger.Info($"ParoleIntakeStateMachine: Started intake for {parolee.name}");
@@ -509,7 +490,9 @@ namespace Behind_Bars.Systems.NPCs
                 rapSheet.CurrentParoleRecord.RecordInteraction();
             }
 
+#if MONO
             OnIntakeCompleted?.Invoke(currentParolee);
+#endif
             currentParolee = null;
 
             // Return to post

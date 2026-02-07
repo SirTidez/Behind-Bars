@@ -6,8 +6,13 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
-using Newtonsoft.Json;
 using UnityEngine;
+
+#if !MONO
+using Il2CppNewtonsoft.Json;
+#else
+using Newtonsoft.Json;
+#endif
 
 
 #if !MONO
@@ -20,6 +25,7 @@ using ScheduleOne.Law;
 
 namespace Behind_Bars.Systems.CrimeTracking
 {
+#if MONO
     /// <summary>
     /// Custom JSON converter for Unity Vector3 to avoid circular reference issues
     /// Serializes Vector3 as a simple object with x, y, z properties
@@ -70,6 +76,7 @@ namespace Behind_Bars.Systems.CrimeTracking
             return new Vector3(x, y, z);
         }
     }
+#endif
 
     /// <summary>
     /// Level of Service Inventory (LSI) - Risk assessment level for parolees

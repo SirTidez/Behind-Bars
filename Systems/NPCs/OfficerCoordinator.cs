@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -30,11 +31,11 @@ namespace Behind_Bars.Systems.NPCs
             {
                 if (_instance == null)
                 {
-                    var coordinator = FindObjectOfType<OfficerCoordinator>();
+                    var coordinator = BBHelpers.FindObjectOfTypeSafe<OfficerCoordinator>();
                     if (coordinator == null)
                     {
                         var go = new GameObject("OfficerCoordinator");
-                        coordinator = go.AddComponent<OfficerCoordinator>();
+                        coordinator = BBHelpers.AddComponentSafe<OfficerCoordinator>(go);
                     }
                     _instance = coordinator;
                 }

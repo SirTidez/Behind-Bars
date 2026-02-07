@@ -2,9 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using Behind_Bars.Helpers;
-using Newtonsoft.Json;
 #if !MONO
+using Il2CppNewtonsoft.Json;
+using JsonSerialization = Il2CppNewtonsoft.Json.Serialization;
+using STJ = System.Text.Json;
+#else
 using Newtonsoft.Json;
+using JsonSerialization = Newtonsoft.Json.Serialization;
 #endif
 
 namespace Behind_Bars.Utils
@@ -188,9 +192,7 @@ namespace Behind_Bars.Utils
                     MissingMemberHandling = MissingMemberHandling.Ignore,
                     NullValueHandling = NullValueHandling.Ignore,
                     Formatting = Formatting.Indented,
-                    ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
-                    MaxDepth = 10,
-                    Converters = converters
+                    ReferenceLoopHandling = ReferenceLoopHandling.Ignore
                 };
             }
             catch (Exception ex)
@@ -207,11 +209,11 @@ namespace Behind_Bars.Utils
 #if MONO
         public static object GetSettingsWithConvertersAndResolver(
             List<JsonConverter> converters, 
-            Newtonsoft.Json.Serialization.IContractResolver contractResolver)
+            JsonSerialization.IContractResolver contractResolver)
 #else
         public static JsonSerializerSettings GetSettingsWithConvertersAndResolver(
             List<JsonConverter> converters, 
-            Newtonsoft.Json.Serialization.IContractResolver contractResolver)
+            JsonSerialization.IContractResolver contractResolver)
 #endif
         {
             var defaultSettings = GetDefaultSettings();
@@ -236,10 +238,7 @@ namespace Behind_Bars.Utils
                     MissingMemberHandling = MissingMemberHandling.Ignore,
                     NullValueHandling = NullValueHandling.Ignore,
                     Formatting = Formatting.Indented,
-                    ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
-                    MaxDepth = 10,
-                    Converters = converters,
-                    ContractResolver = contractResolver
+                    ReferenceLoopHandling = ReferenceLoopHandling.Ignore
                 };
             }
             catch (Exception ex)
@@ -278,7 +277,6 @@ namespace Behind_Bars.Utils
                 return new JsonSerializerSettings
                 {
                     ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
-                    MaxDepth = maxDepth,
                     NullValueHandling = NullValueHandling.Ignore
                 };
             }
@@ -309,7 +307,11 @@ namespace Behind_Bars.Utils
                 // If settings is still null, use JsonConvert without settings (uses defaults)
                 if (settings == null)
                 {
+#if !MONO
+                    return STJ.JsonSerializer.Serialize(value);
+#else
                     return JsonConvert.SerializeObject(value);
+#endif
                 }
 
 #if MONO
@@ -317,7 +319,7 @@ namespace Behind_Bars.Utils
                 // But if it does, just use the no-settings overload
                 return JsonConvert.SerializeObject(value);
 #else
-                return JsonConvert.SerializeObject(value, (JsonSerializerSettings)settings);
+                return STJ.JsonSerializer.Serialize(value);
 #endif
             }
             catch (Exception ex)
@@ -338,6 +340,10 @@ namespace Behind_Bars.Utils
         {
             try
             {
+#if !MONO
+                // IL2CPP: Il2CppNewtonsoft generic methods fail with managed types; use System.Text.Json
+                return STJ.JsonSerializer.Deserialize<T>(json);
+#else
                 if (settings == null)
                 {
                     settings = GetDefaultSettings();
@@ -349,11 +355,8 @@ namespace Behind_Bars.Utils
                     return JsonConvert.DeserializeObject<T>(json);
                 }
 
-#if MONO
                 // In Mono, settings is always null, so this should never execute
                 return JsonConvert.DeserializeObject<T>(json);
-#else
-                return JsonConvert.DeserializeObject<T>(json, (JsonSerializerSettings)settings);
 #endif
             }
             catch (Exception ex)
@@ -382,7 +385,13 @@ namespace Behind_Bars.Utils
                 // If settings is still null, use JsonConvert without settings (uses defaults)
                 if (settings == null)
                 {
+#if !MONO
+                    // System.Text.Json doesn't have a direct PopulateObject equivalent
+                    // Deserialize to a dictionary and merge properties via reflection
+                    PopulateObjectFallback(json, target);
+#else
                     JsonConvert.PopulateObject(json, target);
+#endif
                     return;
                 }
 
@@ -390,7 +399,7 @@ namespace Behind_Bars.Utils
                 // In Mono, settings is always null, so this should never execute
                 JsonConvert.PopulateObject(json, target);
 #else
-                JsonConvert.PopulateObject(json, target, (JsonSerializerSettings)settings);
+                PopulateObjectFallback(json, target);
 #endif
             }
             catch (Exception ex)
@@ -399,6 +408,43 @@ namespace Behind_Bars.Utils
                 throw;
             }
         }
+
+#if !MONO
+        /// <summary>
+        /// Fallback for PopulateObject under IL2CPP using System.Text.Json
+        /// Deserializes JSON and copies matching properties to the target object
+        /// </summary>
+        private static void PopulateObjectFallback(string json, object target)
+        {
+            if (target == null) return;
+            var targetType = target.GetType();
+            var deserialized = STJ.JsonSerializer.Deserialize(json, targetType);
+            if (deserialized == null) return;
+
+            foreach (var prop in targetType.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            {
+                if (!prop.CanRead || !prop.CanWrite) continue;
+                try
+                {
+                    var val = prop.GetValue(deserialized);
+                    if (val != null)
+                        prop.SetValue(target, val);
+                }
+                catch { /* skip properties that can't be set */ }
+            }
+
+            foreach (var field in targetType.GetFields(BindingFlags.Public | BindingFlags.Instance))
+            {
+                try
+                {
+                    var val = field.GetValue(deserialized);
+                    if (val != null)
+                        field.SetValue(target, val);
+                }
+                catch { /* skip fields that can't be set */ }
+            }
+        }
+#endif
     }
 }
 

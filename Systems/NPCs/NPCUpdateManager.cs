@@ -29,11 +29,6 @@ namespace Behind_Bars.Systems.NPCs
         private static NPCUpdateManager _instance;
         public static NPCUpdateManager Instance => _instance;
 
-        // Events for NPC subsystems
-        public event Action<float> OnNPCStateUpdate;      // For state machine updates
-        public event Action<float> OnNPCMovementCheck;    // For stuck detection
-        public event Action OnNPCActionProcess;           // For action queues
-
         // Registered NPCs
         private readonly List<BaseJailNPC> _registeredNPCs = new List<BaseJailNPC>();
 
@@ -60,26 +55,47 @@ namespace Behind_Bars.Systems.NPCs
         void Update()
         {
             float currentTime = Time.time;
+            CleanupNullNpcs();
 
-            // State updates (10 Hz) - Reduced from 60 fps
-            if (currentTime - _lastStateUpdate >= STATE_UPDATE_INTERVAL)
+            bool runStateUpdate = currentTime - _lastStateUpdate >= STATE_UPDATE_INTERVAL;
+            bool runMovementCheck = currentTime - _lastMovementCheck >= MOVEMENT_CHECK_INTERVAL;
+            bool runActionProcess = currentTime - _lastActionProcess >= ACTION_PROCESS_INTERVAL;
+
+            if (!runStateUpdate && !runMovementCheck && !runActionProcess)
+                return;
+
+            for (int i = 0; i < _registeredNPCs.Count; i++)
             {
-                OnNPCStateUpdate?.Invoke(currentTime);
+                var npc = _registeredNPCs[i];
+                if (npc == null)
+                    continue;
+
+                if (runStateUpdate)
+                    npc.DispatchStateUpdate(currentTime);
+
+                if (runMovementCheck)
+                    npc.DispatchMovementCheck(currentTime);
+
+                if (runActionProcess)
+                    npc.DispatchActionProcess();
+            }
+
+            if (runStateUpdate)
                 _lastStateUpdate = currentTime;
-            }
 
-            // Movement checks (2 Hz) - Reduced from 60 fps
-            if (currentTime - _lastMovementCheck >= MOVEMENT_CHECK_INTERVAL)
-            {
-                OnNPCMovementCheck?.Invoke(currentTime);
+            if (runMovementCheck)
                 _lastMovementCheck = currentTime;
-            }
 
-            // Action processing (30 Hz) - Reduced from 60 fps
-            if (currentTime - _lastActionProcess >= ACTION_PROCESS_INTERVAL)
-            {
-                OnNPCActionProcess?.Invoke();
+            if (runActionProcess)
                 _lastActionProcess = currentTime;
+        }
+
+        private void CleanupNullNpcs()
+        {
+            for (int i = _registeredNPCs.Count - 1; i >= 0; i--)
+            {
+                if (_registeredNPCs[i] == null)
+                    _registeredNPCs.RemoveAt(i);
             }
         }
 

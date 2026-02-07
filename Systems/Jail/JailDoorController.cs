@@ -47,14 +47,17 @@ namespace Behind_Bars.Systems.Jail
             HandleDoorKeyboardShortcuts();
         }
 
-        public void Initialize(List<CellDetail> prisonCells, List<CellDetail> holdingCells, BookingArea bookingArea, JailController controller = null)
+        public void Initialize(List<CellDetail> prisonCells, List<CellDetail> holdingCells, BookingArea bookingArea, JailController controller = null, bool setupDoorsImmediately = true)
         {
             this.cells = prisonCells;
             this.holdingCells = holdingCells;
             this.booking = bookingArea;
             this.jailController = controller;
 
-            SetupDoors();
+            if (setupDoorsImmediately)
+            {
+                SetupDoors();
+            }
             InitializeHoldingCellDoorReferences();
         }
 

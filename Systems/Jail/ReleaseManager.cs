@@ -10,12 +10,20 @@ using Behind_Bars.Players;
 using Behind_Bars.Systems.NPCs;
 using Behind_Bars.Systems.CrimeTracking;
 using Behind_Bars.Systems;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
+#if !MONO
+using ActiveReleaseOfficerBehavior = Behind_Bars.Systems.NPCs.ReleaseOfficerBehavior;
+#else
+using ActiveReleaseOfficerBehavior = Behind_Bars.Systems.NPCs.ReleaseOfficerBehavior;
+#endif
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
+using Il2CppScheduleOne.NPCs;
 using Il2CppInterop.Runtime.Attributes;
 #else
 using ScheduleOne.PlayerScripts;
+using ScheduleOne.NPCs;
 #endif
 
 namespace Behind_Bars.Systems.Jail
@@ -89,7 +97,7 @@ namespace Behind_Bars.Systems.Jail
             public Vector3 exitPosition;
             public bool inventoryProcessed;
             public List<string> itemsToReturn = new List<string>();
-            public ReleaseOfficerBehavior assignedOfficer;
+            public ActiveReleaseOfficerBehavior assignedOfficer;
 
             public ReleaseRequest(Player player, ReleaseType type, string reason = "")
             {
@@ -108,6 +116,7 @@ namespace Behind_Bars.Systems.Jail
 
         public Transform prisonExitPoint; // Set in inspector or found automatically
         public float releaseProcessTimeout = 300f; // 5 minutes max
+        private float _nextQueueProcessTime;
 
         // Active releases being processed
         private Dictionary<Player, ReleaseRequest> activeReleases = new Dictionary<Player, ReleaseRequest>();
@@ -116,7 +125,8 @@ namespace Behind_Bars.Systems.Jail
         private Queue<ReleaseRequest> releaseQueue = new Queue<ReleaseRequest>();
 
         // Available release officers
-        private List<ReleaseOfficerBehavior> availableOfficers = new List<ReleaseOfficerBehavior>();
+        private List<ActiveReleaseOfficerBehavior> availableOfficers = new List<ActiveReleaseOfficerBehavior>();
+
 
         #endregion
 
@@ -186,7 +196,7 @@ namespace Behind_Bars.Systems.Jail
         private void InitializeOfficers()
         {
             // Find existing release officers
-            var existingOfficers = FindObjectsOfType<ReleaseOfficerBehavior>();
+            var existingOfficers = BBHelpers.FindObjectsOfTypeSafe<ActiveReleaseOfficerBehavior>();
             foreach (var officer in existingOfficers)
             {
                 if (officer.IsAvailable())
@@ -210,8 +220,9 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Info($"Looking for existing guard at booking spawn [1]: {guardSpawn.position}");
 
                 // First, look for any existing guard near guardSpawn[1] (Booking1 assignment)
-                var allGuards = FindObjectsOfType<PrisonGuard>();
+                var allGuards = BBHelpers.FindObjectsOfTypeSafe<PrisonGuard>();
                 PrisonGuard booking1Guard = null;
+                GameObject releaseOfficerHost = null;
 
                 foreach (var guard in allGuards)
                 {
@@ -224,19 +235,60 @@ namespace Behind_Bars.Systems.Jail
                     }
                 }
 
+                if (booking1Guard == null && allGuards != null && allGuards.Length > 0)
+                {
+                    booking1Guard = allGuards[0];
+                    ModLogger.Warn($"Booking1 guard not found - using fallback guard {booking1Guard.name} for release escort");
+                }
+
                 if (booking1Guard != null)
                 {
+                    releaseOfficerHost = booking1Guard.gameObject;
+                }
+
+                if (releaseOfficerHost == null)
+                {
+                    var allNpcs = BBHelpers.FindObjectsOfTypeSafe<NPC>();
+                    NPC bookingNpc = null;
+
+                    foreach (var npc in allNpcs)
+                    {
+                        if (npc == null || npc.gameObject == null)
+                            continue;
+
+                        string npcName = npc.gameObject.name;
+                        if (!npcName.StartsWith("PrisonGuard_", StringComparison.OrdinalIgnoreCase))
+                            continue;
+
+                        if (npcName.Contains("Booking1", StringComparison.OrdinalIgnoreCase))
+                        {
+                            bookingNpc = npc;
+                            break;
+                        }
+
+                        if (bookingNpc == null)
+                            bookingNpc = npc;
+                    }
+
+                    if (bookingNpc != null)
+                    {
+                        releaseOfficerHost = bookingNpc.gameObject;
+                        ModLogger.Warn($"Using NPC fallback host for release escort: {releaseOfficerHost.name}");
+                    }
+                }
+
+                if (releaseOfficerHost != null)
+                {
                     // Use the existing guard - just add ReleaseOfficerBehavior component
-                    var existingReleaseOfficer = booking1Guard.GetComponent<ReleaseOfficerBehavior>();
+                    var existingReleaseOfficer = BBHelpers.GetComponentSafe<ActiveReleaseOfficerBehavior>(releaseOfficerHost);
                     if (existingReleaseOfficer == null)
                     {
                         // Add ReleaseOfficerBehavior to existing guard
-                        var releaseOfficer = booking1Guard.gameObject.AddComponent<ReleaseOfficerBehavior>();
+                        var releaseOfficer = BBHelpers.AddComponentSafe<ActiveReleaseOfficerBehavior>(releaseOfficerHost);
                         if (releaseOfficer != null)
                         {
-                            releaseOfficer.SetAvailable(true);
                             availableOfficers.Add(releaseOfficer);
-                            ModLogger.Debug($"✅ Added ReleaseOfficerBehavior to existing Booking1 guard: {releaseOfficer.GetBadgeNumber()}");
+                            ModLogger.Debug($"✅ Added release officer behavior to guard: {releaseOfficer.GetBadgeNumber()}");
                         }
                     }
                     else
@@ -251,7 +303,7 @@ namespace Behind_Bars.Systems.Jail
                 }
                 else
                 {
-                    ModLogger.Warn("No Booking1 guard found - release system will not work properly");
+                    ModLogger.Warn("No valid release officer host guard found - release system will not work properly");
                 }
             }
             else
@@ -280,10 +332,17 @@ namespace Behind_Bars.Systems.Jail
                 var existingRequest = activeReleases[player];
                 ModLogger.Warn($"Release already in progress for {player.name} with status {existingRequest.status}");
 
+                double releaseAgeSeconds = (DateTime.Now - existingRequest.releaseTime).TotalSeconds;
+                if (releaseAgeSeconds < 20)
+                {
+                    ModLogger.Debug($"Duplicate release request ignored for {player.name} (age: {releaseAgeSeconds:F1}s)");
+                    return true;
+                }
+
                 // If the existing release is stuck (older than 1 minute) or officer is missing, force clean it up
                 bool isStuck = (DateTime.Now - existingRequest.releaseTime).TotalMinutes > 1;
                 bool officerMissing = existingRequest.assignedOfficer == null;
-                bool officerIdle = existingRequest.assignedOfficer?.GetCurrentState() == ReleaseOfficerBehavior.ReleaseState.Idle;
+                bool officerIdle = existingRequest.assignedOfficer?.GetCurrentState() == ActiveReleaseOfficerBehavior.ReleaseState.Idle;
 
                 if (isStuck || officerMissing || officerIdle)
                 {
@@ -294,7 +353,7 @@ namespace Behind_Bars.Systems.Jail
                 }
                 else
                 {
-                    return false;
+                    return true;
                 }
             }
 
@@ -318,22 +377,21 @@ namespace Behind_Bars.Systems.Jail
                 OnReleaseStarted?.Invoke(player, releaseType);
                 return true;
             }
-            else
-            {
-                // Queue the release if no officers available
-                releaseQueue.Enqueue(releaseRequest);
-                ModLogger.Debug($"Release for {player.name} queued - no officers available");
 
-                // Notify player they're being processed
-                if (BehindBarsUIManager.Instance != null)
-                {
-                    BehindBarsUIManager.Instance.ShowNotification(
-                        "Release processing - please wait",
-                        NotificationType.Instruction
-                    );
-                }
-                return true;
+            // Queue the release if no officers available
+            releaseQueue.Enqueue(releaseRequest);
+            ModLogger.Debug($"Release for {player.name} queued - no officers available");
+
+            // Notify player they're being processed
+            if (BehindBarsUIManager.Instance != null)
+            {
+                BehindBarsUIManager.Instance.ShowNotification(
+                    "Release processing - please wait",
+                    NotificationType.Instruction
+                );
             }
+
+            return true;
         }
 
         /// <summary>
@@ -379,9 +437,11 @@ namespace Behind_Bars.Systems.Jail
                     officer.SetAvailable(false);
 
                     // Subscribe to officer events
+#if MONO
                     officer.OnEscortCompleted += (player) => HandleEscortCompleted(request, player);
                     officer.OnEscortFailed += (player, reason) => HandleEscortFailed(request, player, reason);
                     officer.OnStatusUpdate += (player, state) => HandleStatusUpdate(request, player, state);
+#endif
 
                     ModLogger.Debug($"SUCCESS: Assigned officer {officer.GetBadgeNumber()} to release {request.player.name}");
                     return true;
@@ -405,9 +465,11 @@ namespace Behind_Bars.Systems.Jail
                         officer.SetAvailable(false);
 
                         // Subscribe to officer events
+#if MONO
                         officer.OnEscortCompleted += (player) => HandleEscortCompleted(request, player);
                         officer.OnEscortFailed += (player, reason) => HandleEscortFailed(request, player, reason);
                         officer.OnStatusUpdate += (player, state) => HandleStatusUpdate(request, player, state);
+#endif
 
                         ModLogger.Debug($"Assigned newly created officer {officer.GetBadgeNumber()} to release {request.player.name}");
                         return true;
@@ -445,6 +507,58 @@ namespace Behind_Bars.Systems.Jail
 
             // Start the Release Officer's state machine - it will handle everything
             request.assignedOfficer.StartReleaseEscort(request.player);
+
+#if !MONO
+            float il2cppStartTime = Time.time;
+            bool sawNonIdleState = false;
+            while (request.status != ReleaseStatus.Completed && request.status != ReleaseStatus.Failed)
+            {
+                if (request.assignedOfficer == null)
+                {
+                    FailRelease(request, "Assigned release officer became null");
+                    yield break;
+                }
+
+                var officerState = request.assignedOfficer.GetCurrentState();
+
+                if (officerState != ActiveReleaseOfficerBehavior.ReleaseState.Idle)
+                {
+                    sawNonIdleState = true;
+                }
+
+                request.status = officerState switch
+                {
+                    ActiveReleaseOfficerBehavior.ReleaseState.EscortingToStorage => ReleaseStatus.EscortingToStorage,
+                    ActiveReleaseOfficerBehavior.ReleaseState.WaitingAtStorage => ReleaseStatus.InventoryProcessing,
+                    ActiveReleaseOfficerBehavior.ReleaseState.EscortingToExitScanner => ReleaseStatus.EscortingToExit,
+                    ActiveReleaseOfficerBehavior.ReleaseState.WaitingForExitScan => ReleaseStatus.EscortingToExit,
+                    ActiveReleaseOfficerBehavior.ReleaseState.ProcessingExit => ReleaseStatus.EscortingToExit,
+                    _ => request.status
+                };
+
+                if (officerState == ActiveReleaseOfficerBehavior.ReleaseState.ProcessingExit)
+                {
+                    CompleteRelease(request);
+                    yield break;
+                }
+
+                if (sawNonIdleState && officerState == ActiveReleaseOfficerBehavior.ReleaseState.Idle && Time.time - il2cppStartTime > 10f)
+                {
+                    FailRelease(request, "Release officer returned to idle before completion");
+                    yield break;
+                }
+
+                if (Time.time - il2cppStartTime > releaseProcessTimeout)
+                {
+                    FailRelease(request, "Release process timeout");
+                    yield break;
+                }
+
+                yield return new WaitForSeconds(0.5f);
+            }
+
+            yield break;
+#endif
 
             // Wait for the Release Officer to complete the entire process
             // The Release Officer will call OnEscortCompleted when done
@@ -499,7 +613,7 @@ namespace Behind_Bars.Systems.Jail
             if (request.assignedOfficer != null)
             {
                 // Tell the officer to stay at storage and wait
-                request.assignedOfficer.ChangeReleaseState(ReleaseOfficerBehavior.ReleaseState.WaitingAtStorage);
+                request.assignedOfficer.ChangeReleaseState(ActiveReleaseOfficerBehavior.ReleaseState.WaitingAtStorage);
                 ModLogger.Debug($"Officer {request.assignedOfficer.GetBadgeNumber()} waiting at storage for player to exit");
             }
 
@@ -692,7 +806,7 @@ namespace Behind_Bars.Systems.Jail
                 }
 
                 // Fallback to inventory pickup station if it exists
-                var pickupStation = FindObjectOfType<InventoryPickupStation>();
+                var pickupStation = BBHelpers.FindObjectOfTypeSafe<InventoryPickupStation>();
                 if (pickupStation != null)
                 {
                     return pickupStation.transform.position;
@@ -778,7 +892,7 @@ namespace Behind_Bars.Systems.Jail
                 var playerMovement = Il2CppScheduleOne.DevUtilities.PlayerSingleton<Il2CppScheduleOne.PlayerScripts.PlayerMovement>.Instance;
                 if (playerMovement != null)
                 {
-                    playerMovement.canMove = true;
+                    playerMovement.CanMove = true;
                     playerMovement.enabled = true;
                     ModLogger.Info($"Restored player movement for {player.name}");
                 }
@@ -1333,7 +1447,7 @@ namespace Behind_Bars.Systems.Jail
                 var playerMovement = Il2CppScheduleOne.DevUtilities.PlayerSingleton<Il2CppScheduleOne.PlayerScripts.PlayerMovement>.Instance;
                 if (playerMovement != null)
                 {
-                    playerMovement.canMove = false;
+                    playerMovement.CanMove = false;
                     ModLogger.Info($"Froze player movement for {player.name}");
                 }
 #else
@@ -1362,7 +1476,7 @@ namespace Behind_Bars.Systems.Jail
                 var playerMovement = Il2CppScheduleOne.DevUtilities.PlayerSingleton<Il2CppScheduleOne.PlayerScripts.PlayerMovement>.Instance;
                 if (playerMovement != null)
                 {
-                    playerMovement.canMove = true;
+                    playerMovement.CanMove = true;
                     ModLogger.Info($"Unfroze player movement for {player.name}");
                 }
 #else
@@ -1476,7 +1590,7 @@ namespace Behind_Bars.Systems.Jail
             return activeReleases.ContainsKey(player) ? activeReleases[player].status : ReleaseStatus.NotStarted;
         }
 
-        public void RegisterOfficer(ReleaseOfficerBehavior officer)
+        public void RegisterOfficer(ActiveReleaseOfficerBehavior officer)
         {
             if (!availableOfficers.Contains(officer))
             {
@@ -1485,7 +1599,7 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
-        public void UnregisterOfficer(ReleaseOfficerBehavior officer)
+        public void UnregisterOfficer(ActiveReleaseOfficerBehavior officer)
         {
             if (availableOfficers.Contains(officer))
             {
@@ -1635,7 +1749,7 @@ namespace Behind_Bars.Systems.Jail
         /// <summary>
         /// Called when a Release Officer updates their status during escort
         /// </summary>
-        private void HandleStatusUpdate(ReleaseRequest request, Player player, ReleaseOfficerBehavior.ReleaseState officerState)
+        private void HandleStatusUpdate(ReleaseRequest request, Player player, ActiveReleaseOfficerBehavior.ReleaseState officerState)
         {
             if (request.player != player)
             {
@@ -1646,10 +1760,10 @@ namespace Behind_Bars.Systems.Jail
             // Map Release Officer states to ReleaseManager statuses
             ReleaseStatus newStatus = officerState switch
             {
-                ReleaseOfficerBehavior.ReleaseState.EscortingToStorage => ReleaseStatus.EscortingToStorage,
-                ReleaseOfficerBehavior.ReleaseState.WaitingAtStorage => ReleaseStatus.InventoryProcessing,
-                ReleaseOfficerBehavior.ReleaseState.EscortingToExitScanner => ReleaseStatus.EscortingToExit,
-                ReleaseOfficerBehavior.ReleaseState.WaitingForExitScan => ReleaseStatus.EscortingToExit,
+                ActiveReleaseOfficerBehavior.ReleaseState.EscortingToStorage => ReleaseStatus.EscortingToStorage,
+                ActiveReleaseOfficerBehavior.ReleaseState.WaitingAtStorage => ReleaseStatus.InventoryProcessing,
+                ActiveReleaseOfficerBehavior.ReleaseState.EscortingToExitScanner => ReleaseStatus.EscortingToExit,
+                ActiveReleaseOfficerBehavior.ReleaseState.WaitingForExitScan => ReleaseStatus.EscortingToExit,
                 _ => request.status // Keep current status if no mapping
             };
 
@@ -1666,6 +1780,12 @@ namespace Behind_Bars.Systems.Jail
 
         void Update()
         {
+            if (releaseQueue.Count > 0 && Time.time >= _nextQueueProcessTime)
+            {
+                _nextQueueProcessTime = Time.time + 1f;
+                ProcessQueuedReleases();
+            }
+
             // Debug: Monitor active releases
             if (activeReleases.Count > 0 && Time.frameCount % 300 == 0) // Every 5 seconds
             {

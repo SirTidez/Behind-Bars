@@ -4,7 +4,11 @@ using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.Utils;
+
+#if MONO
 using Newtonsoft.Json;
+using JsonSerialization = Newtonsoft.Json.Serialization;
+#endif
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -16,6 +20,7 @@ using ScheduleOne.ItemFramework;
 
 namespace Behind_Bars.Systems.Data
 {
+#if MONO
     /// <summary>
     /// Custom JSON converter for Unity Vector3 to avoid circular reference issues
     /// Serializes Vector3 as a simple object with x, y, z properties
@@ -78,9 +83,9 @@ namespace Behind_Bars.Systems.Data
     /// <summary>
     /// Contract resolver to ignore problematic Vector3 properties
     /// </summary>
-    public class Vector3ContractResolver : Newtonsoft.Json.Serialization.DefaultContractResolver
+    public class Vector3ContractResolver : JsonSerialization.DefaultContractResolver
     {
-        protected override Newtonsoft.Json.Serialization.JsonProperty CreateProperty(
+        protected override JsonSerialization.JsonProperty CreateProperty(
             System.Reflection.MemberInfo member,
             Newtonsoft.Json.MemberSerialization memberSerialization)
         {
@@ -100,6 +105,7 @@ namespace Behind_Bars.Systems.Data
             return property;
         }
     }
+#endif
 
     /// <summary>
     /// Handles persistent storage of player data across saves and sessions
@@ -1013,6 +1019,7 @@ namespace Behind_Bars.Systems.Data
             {
                 gameData.lastSaveTime = DateTime.Now;
 
+#if MONO
                 var settings = JsonHelper.GetSettingsWithConvertersAndResolver(
                     new List<JsonConverter> { new Vector3JsonConverter() },
                     new Vector3ContractResolver()
@@ -1024,6 +1031,10 @@ namespace Behind_Bars.Systems.Data
                 {
                     dataToSerialize = ConvertGameDataToSerializable(gameData);
                 }
+#else
+                var settings = JsonHelper.GetDefaultSettings();
+                object dataToSerialize = ConvertGameDataToSerializable(gameData);
+#endif
 
                 string jsonData = JsonHelper.SerializeObject(dataToSerialize, settings);
                 PlayerPrefs.SetString(SAVE_KEY, jsonData);
@@ -1046,6 +1057,7 @@ namespace Behind_Bars.Systems.Data
                     string jsonData = PlayerPrefs.GetString(SAVE_KEY);
                     if (!string.IsNullOrEmpty(jsonData))
                     {
+#if MONO
                         var settings = JsonHelper.GetSettingsWithConvertersAndResolver(
                             new List<JsonConverter> { new Vector3JsonConverter() },
                             new Vector3ContractResolver()
@@ -1093,6 +1105,18 @@ namespace Behind_Bars.Systems.Data
                                 gameData = new PersistentGameData();
                             }
                         }
+#else
+                        var settings = JsonHelper.GetDefaultSettings();
+                        var serializableData = JsonHelper.DeserializeObject<SerializablePersistentGameData>(jsonData, settings);
+                        if (serializableData != null)
+                        {
+                            gameData = ConvertSerializableToGameData(serializableData);
+                        }
+                        else
+                        {
+                            gameData = new PersistentGameData();
+                        }
+#endif
 
                         ModLogger.Info($"Loaded player data - {gameData.playerSnapshots.Count} snapshots, {gameData.storedExitPositions.Count} positions");
                         CleanupOldData();

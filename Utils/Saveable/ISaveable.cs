@@ -1,12 +1,11 @@
-﻿#if !MONO
-using Il2CppSystem.Collections.Generic;
+#if !MONO
 using ListString = Il2CppSystem.Collections.Generic.List<string>;
+using Il2CppNewtonsoft.Json;
 #else
 using System.Collections.Generic;
 using ListString = System.Collections.Generic.List<string>;
-#endif
-
 using Newtonsoft.Json;
+#endif
 
 namespace Behind_Bars.Utils.Saveable
 {
@@ -45,7 +44,11 @@ namespace Behind_Bars.Utils.Saveable
             new JsonSerializerSettings
             {
                 ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
+#if MONO
                 Converters = new System.Collections.Generic.List<JsonConverter>() { new GUIDReferenceConverter() }
+#else
+                Converters = null
+#endif
             };
     }
 }

@@ -13,7 +13,7 @@
 
     <Target Name="Clean mod folder and copy requested mods" AfterTargets="PostBuildEvent" Condition="'$(RunPostBuildEvent)' == 'OnBuildSuccess'">
         <Message Text="Cleaning mods directory: $(S1ModsDir)" Importance="high" />
-        <Exec Command='powershell -Command "Remove-Item \"$(S1ModsDir)\*\" -Recurse -Force"' />
+        <!--<Exec Command='powershell -Command "Remove-Item \"$(S1ModsDir)\*\" -Recurse -Force"' />-->
 
         <Message Text="Checking if mods in ModList exist..." Importance="high" />
         <Exec WorkingDirectory="$(ProjectDir)"

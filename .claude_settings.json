@@ -1,0 +1,34 @@
+{
+  "sandbox": {
+    "enabled": true,
+    "autoAllowBashIfSandboxed": true
+  },
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read(./**)",
+      "Write(./**)",
+      "Edit(./**)",
+      "Glob(./**)",
+      "Grep(./**)",
+      "Read(D:\\Schedule 1 Modding\\behindbars-il2cpp/**)",
+      "Write(D:\\Schedule 1 Modding\\behindbars-il2cpp/**)",
+      "Edit(D:\\Schedule 1 Modding\\behindbars-il2cpp/**)",
+      "Glob(D:\\Schedule 1 Modding\\behindbars-il2cpp/**)",
+      "Grep(D:\\Schedule 1 Modding\\behindbars-il2cpp/**)",
+      "Read(D:\\Schedule 1 Modding\\behindbars-il2cpp\\.auto-claude\\roadmap/**)",
+      "Write(D:\\Schedule 1 Modding\\behindbars-il2cpp\\.auto-claude\\roadmap/**)",
+      "Edit(D:\\Schedule 1 Modding\\behindbars-il2cpp\\.auto-claude\\roadmap/**)",
+      "Bash(*)",
+      "WebFetch(*)",
+      "WebSearch(*)",
+      "mcp__context7__resolve-library-id(*)",
+      "mcp__context7__get-library-docs(*)",
+      "mcp__graphiti-memory__search_nodes(*)",
+      "mcp__graphiti-memory__search_facts(*)",
+      "mcp__graphiti-memory__add_episode(*)",
+      "mcp__graphiti-memory__get_episodes(*)",
+      "mcp__graphiti-memory__get_entity_edge(*)"
+    ]
+  }
+}

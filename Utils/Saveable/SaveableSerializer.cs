@@ -3,8 +3,14 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
 using Behind_Bars.Helpers;
-using Newtonsoft.Json;
 using UnityEngine;
+
+#if !MONO
+using Il2CppNewtonsoft.Json;
+using STJ = System.Text.Json;
+#else
+using Newtonsoft.Json;
+#endif
 
 namespace Behind_Bars.Utils.Saveable
 {
@@ -88,7 +94,11 @@ namespace Behind_Bars.Utils.Saveable
                 }
 
                 // Convert dictionary to JSON
+#if !MONO
+                return STJ.JsonSerializer.Serialize(saveData, new STJ.JsonSerializerOptions { WriteIndented = true });
+#else
                 return JsonConvert.SerializeObject(saveData, Formatting.Indented);
+#endif
             }
             catch (Exception ex)
             {
@@ -118,7 +128,20 @@ namespace Behind_Bars.Utils.Saveable
             try
             {
                 // Parse JSON to dictionary
+#if !MONO
+                var rawData = STJ.JsonSerializer.Deserialize<Dictionary<string, STJ.JsonElement>>(json);
+                Dictionary<string, object> saveData = null;
+                if (rawData != null)
+                {
+                    saveData = new Dictionary<string, object>(rawData.Count);
+                    foreach (var kvp in rawData)
+                    {
+                        saveData[kvp.Key] = ConvertJsonElementToPlainObject(kvp.Value);
+                    }
+                }
+#else
                 var saveData = JsonConvert.DeserializeObject<Dictionary<string, object>>(json);
+#endif
                 if (saveData == null)
                 {
                     ModLogger.Warn("[SAVEABLE SERIALIZER] Failed to parse JSON to dictionary");
@@ -177,6 +200,53 @@ namespace Behind_Bars.Utils.Saveable
                 ModLogger.Error($"[SAVEABLE SERIALIZER] Stack trace: {ex.StackTrace}");
             }
         }
+
+#if !MONO
+        private static object ConvertJsonElementToPlainObject(STJ.JsonElement element)
+        {
+            switch (element.ValueKind)
+            {
+                case STJ.JsonValueKind.Object:
+                    {
+                        var dict = new Dictionary<string, object>();
+                        foreach (var property in element.EnumerateObject())
+                        {
+                            dict[property.Name] = ConvertJsonElementToPlainObject(property.Value);
+                        }
+                        return dict;
+                    }
+                case STJ.JsonValueKind.Array:
+                    {
+                        var list = new List<object>();
+                        foreach (var item in element.EnumerateArray())
+                        {
+                            list.Add(ConvertJsonElementToPlainObject(item));
+                        }
+                        return list;
+                    }
+                case STJ.JsonValueKind.String:
+                    if (element.TryGetDateTime(out var dateTime))
+                        return dateTime;
+                    return element.GetString();
+                case STJ.JsonValueKind.Number:
+                    if (element.TryGetInt32(out var int32Value))
+                        return int32Value;
+                    if (element.TryGetInt64(out var int64Value))
+                        return int64Value;
+                    if (element.TryGetSingle(out var floatValue))
+                        return floatValue;
+                    return element.GetDouble();
+                case STJ.JsonValueKind.True:
+                    return true;
+                case STJ.JsonValueKind.False:
+                    return false;
+                case STJ.JsonValueKind.Null:
+                case STJ.JsonValueKind.Undefined:
+                default:
+                    return null;
+            }
+        }
+#endif
 
         /// <summary>
         /// Serializes a single value to a format suitable for JSON.
@@ -286,8 +356,13 @@ namespace Behind_Bars.Utils.Saveable
             // This ensures proper serialization of complex objects
             try
             {
+#if !MONO
+                var jsonString = STJ.JsonSerializer.Serialize(value);
+                return STJ.JsonSerializer.Deserialize<object>(jsonString);
+#else
                 var jsonString = JsonConvert.SerializeObject(value);
                 return JsonConvert.DeserializeObject<object>(jsonString);
+#endif
             }
             catch
             {
@@ -310,24 +385,49 @@ namespace Behind_Bars.Utils.Saveable
                 return null;
             }
 
+#if !MONO
+            if (value is STJ.JsonElement element)
+            {
+                value = ConvertJsonElementToPlainObject(element);
+                if (value == null)
+                {
+                    if (targetType.IsValueType)
+                        return Activator.CreateInstance(targetType);
+                    return null;
+                }
+            }
+#endif
+
             // Handle Unity types
             if (targetType == typeof(Vector3))
             {
+#if !MONO
+                var dict = STJ.JsonSerializer.Deserialize<Dictionary<string, float>>(value.ToString());
+#else
                 var dict = JsonConvert.DeserializeObject<Dictionary<string, float>>(value.ToString());
+#endif
                 if (dict != null && dict.ContainsKey("x") && dict.ContainsKey("y") && dict.ContainsKey("z"))
                     return new Vector3(dict["x"], dict["y"], dict["z"]);
                 return Vector3.zero;
             }
             if (targetType == typeof(Vector2))
             {
+#if !MONO
+                var dict = STJ.JsonSerializer.Deserialize<Dictionary<string, float>>(value.ToString());
+#else
                 var dict = JsonConvert.DeserializeObject<Dictionary<string, float>>(value.ToString());
+#endif
                 if (dict != null && dict.ContainsKey("x") && dict.ContainsKey("y"))
                     return new Vector2(dict["x"], dict["y"]);
                 return Vector2.zero;
             }
             if (targetType == typeof(Color))
             {
+#if !MONO
+                var dict = STJ.JsonSerializer.Deserialize<Dictionary<string, float>>(value.ToString());
+#else
                 var dict = JsonConvert.DeserializeObject<Dictionary<string, float>>(value.ToString());
+#endif
                 if (dict != null && dict.ContainsKey("r") && dict.ContainsKey("g") && dict.ContainsKey("b"))
                     return new Color(dict["r"], dict["g"], dict["b"], dict.ContainsKey("a") ? dict["a"] : 1f);
                 return Color.white;
@@ -477,8 +577,13 @@ namespace Behind_Bars.Utils.Saveable
             // For custom types without SaveableField attributes, try JSON deserialization
             try
             {
+#if !MONO
+                var jsonString = STJ.JsonSerializer.Serialize(value);
+                return STJ.JsonSerializer.Deserialize(jsonString, targetType);
+#else
                 var jsonString = JsonConvert.SerializeObject(value);
                 return JsonConvert.DeserializeObject(jsonString, targetType);
+#endif
             }
             catch
             {

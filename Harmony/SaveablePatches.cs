@@ -55,7 +55,7 @@ namespace Behind_Bars.Harmony
                 {
                     try
                     {
-                        ListString extra = new ListString();
+                        System.Collections.Generic.List<string> extra = new System.Collections.Generic.List<string>();
                         string folder = saveable.GetType().Name;
                         string path = Path.Combine(basePath, folder);
                         Directory.CreateDirectory(path);
@@ -93,13 +93,12 @@ namespace Behind_Bars.Harmony
                                     continue;
                                 }
                                 
-                                // Use the SaveFolderName from RapSheet via ISaveable interface to determine the save path
-                                ScheduleOne.Persistence.ISaveable saveableInterface = rapSheet;
-                                string rapSheetFolder = saveableInterface.SaveFolderName;
+                                // Use RapSheet save folder to determine the save path
+                                string rapSheetFolder = rapSheet.SaveFolderNameInternal;
                                 string rapSheetPath = Path.Combine(basePath, rapSheetFolder);
                                 Directory.CreateDirectory(rapSheetPath);
                                 
-                                List<string> extra = new List<string>();
+                                System.Collections.Generic.List<string> extra = new System.Collections.Generic.List<string>();
                                 rapSheet.SaveInternal(rapSheetPath, ref extra);
                                 
                                 // Mark as unchanged after successful save

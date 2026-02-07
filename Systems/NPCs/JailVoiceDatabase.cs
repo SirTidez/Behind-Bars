@@ -399,7 +399,18 @@ namespace Behind_Bars.Systems.NPCs
         /// <returns>Configured voice database</returns>
         public static JailVoiceDatabase CreateDefault()
         {
-            var database = ScriptableObject.CreateInstance<JailVoiceDatabase>();
+            JailVoiceDatabase database;
+#if !MONO
+            var created = ScriptableObject.CreateInstance(Il2CppInterop.Runtime.Il2CppType.Of<JailVoiceDatabase>());
+            database = created?.TryCast<JailVoiceDatabase>();
+#else
+            database = ScriptableObject.CreateInstance<JailVoiceDatabase>();
+#endif
+            if (database == null)
+            {
+                ModLogger.Error("Failed to create JailVoiceDatabase instance");
+                return null;
+            }
             database.Initialize();
             return database;
         }
@@ -413,7 +424,18 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                var database = ScriptableObject.CreateInstance<JailVoiceDatabase>();
+                JailVoiceDatabase database;
+#if !MONO
+                var created = ScriptableObject.CreateInstance(Il2CppInterop.Runtime.Il2CppType.Of<JailVoiceDatabase>());
+                database = created?.TryCast<JailVoiceDatabase>();
+#else
+                database = ScriptableObject.CreateInstance<JailVoiceDatabase>();
+#endif
+                if (database == null)
+                {
+                    ModLogger.Error("Failed to create JailVoiceDatabase instance from bundle");
+                    return CreateDefault();
+                }
                 database.Initialize();
                 database.LoadVoiceClipsFromBundle(bundlePath);
                 return database;

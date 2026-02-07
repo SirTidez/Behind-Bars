@@ -10,10 +10,8 @@ using UnityEngine;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
-using Il2CppScheduleOne.Persistence;
 #else
 using ScheduleOne.PlayerScripts;
-using ScheduleOne.Persistence;
 #endif
 
 namespace Behind_Bars.Systems.Testing
@@ -24,6 +22,10 @@ namespace Behind_Bars.Systems.Testing
     /// </summary>
     public class SaveableTestSystem : MonoBehaviour
     {
+#if !MONO
+        public SaveableTestSystem(System.IntPtr ptr) : base(ptr) { }
+#endif
+
         private static SaveableTestSystem? _instance;
         public static SaveableTestSystem Instance
         {
@@ -130,11 +132,7 @@ namespace Behind_Bars.Systems.Testing
                         string path = Path.Combine(basePath, folder);
                         Directory.CreateDirectory(path);
 
-#if !MONO
-                        Il2CppSystem.Collections.Generic.List<string> extra = new Il2CppSystem.Collections.Generic.List<string>();
-#else
                         System.Collections.Generic.List<string> extra = new System.Collections.Generic.List<string>();
-#endif
                         saveable.SaveInternal(path, ref extra);
                         ModLogger.Info($"✓ Saved {saveable.GetType().Name} to {path}");
                         savedCount++;
@@ -259,11 +257,7 @@ namespace Behind_Bars.Systems.Testing
                 string path = Path.Combine(basePath, "RapSheet");
                 Directory.CreateDirectory(path);
 
-#if !MONO
-                Il2CppSystem.Collections.Generic.List<string> extra = new Il2CppSystem.Collections.Generic.List<string>();
-#else
                 System.Collections.Generic.List<string> extra = new System.Collections.Generic.List<string>();
-#endif
                 rapSheet.SaveInternal(path, ref extra);
                 
                 ModLogger.Info($"✓ Saved RapSheet test data to {path}");
@@ -325,11 +319,7 @@ namespace Behind_Bars.Systems.Testing
                 string path = Path.Combine(basePath, "RapSheet");
                 Directory.CreateDirectory(path);
 
-#if !MONO
-                Il2CppSystem.Collections.Generic.List<string> extra = new Il2CppSystem.Collections.Generic.List<string>();
-#else
                 System.Collections.Generic.List<string> extra = new System.Collections.Generic.List<string>();
-#endif
                 rapSheet.SaveInternal(path, ref extra);
                 
                 ModLogger.Info($"✓ Saved ParoleRecord test data to {path}");
@@ -357,10 +347,9 @@ namespace Behind_Bars.Systems.Testing
                 foreach (var saveable in saveables)
                 {
                     ModLogger.Info($"  - {saveable.GetType().FullName}");
-                    ScheduleOne.Persistence.ISaveable gameInterface = saveable;
-                    ModLogger.Info($"    Folder: {gameInterface.SaveFolderName}");
-                    ModLogger.Info($"    File: {gameInterface.SaveFileName}");
-                    ModLogger.Info($"    Save Under Folder: {gameInterface.ShouldSaveUnderFolder}");
+                    ModLogger.Info($"    Folder: {saveable.SaveFolderNameInternal}");
+                    ModLogger.Info($"    File: {saveable.SaveFileNameInternal}");
+                    ModLogger.Info($"    Save Under Folder: {saveable.ShouldSaveUnderFolderInternal}");
                     ModLogger.Info($"    Has Changed: {saveable.HasChanged}");
                 }
                 

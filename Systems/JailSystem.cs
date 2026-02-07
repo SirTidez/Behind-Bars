@@ -10,6 +10,7 @@ using Behind_Bars.Systems.CrimeTracking;
 using Behind_Bars.Systems;
 using UnityEngine;
 using MelonLoader;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 
 #if !MONO
@@ -226,7 +227,7 @@ namespace Behind_Bars.Systems
 #if MONO
                     PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
 #else
-                    PlayerSingleton<PlayerMovement>.Instance.canMove = false;
+                    PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
 #endif
                     PlayerSingleton<PlayerCamera>.Instance.SetCanLook(false);
                     ModLogger.Info("Using fallback 'busted' effect - controls disabled briefly");
@@ -248,7 +249,7 @@ namespace Behind_Bars.Systems
 #if MONO
                     PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
 #else
-                    PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+                    PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
 #endif
                     PlayerSingleton<PlayerCamera>.Instance.SetCanLook(true);
                     ModLogger.Info("Re-enabled controls after fallback busted effect");
@@ -491,7 +492,7 @@ namespace Behind_Bars.Systems
             ModLogger.Debug("Initializing JailSystem components");
 
             // Find the inventory pickup station
-            _inventoryPickupStation = UnityEngine.Object.FindObjectOfType<InventoryPickupStation>();
+            _inventoryPickupStation = BBHelpers.FindObjectOfTypeSafe<InventoryPickupStation>();
             if (_inventoryPickupStation != null)
             {
                 ModLogger.Debug("Found existing InventoryPickupStation reference");
@@ -502,7 +503,7 @@ namespace Behind_Bars.Systems
                 CreateInventoryPickupStation();
 
                 // Verify it was created
-                _inventoryPickupStation = UnityEngine.Object.FindObjectOfType<InventoryPickupStation>();
+                _inventoryPickupStation = BBHelpers.FindObjectOfTypeSafe<InventoryPickupStation>();
                 if (_inventoryPickupStation != null)
                 {
                     ModLogger.Debug("InventoryPickupStation successfully created and found");
@@ -558,7 +559,7 @@ namespace Behind_Bars.Systems
                 stationObject.transform.position = stationPosition;
 
                 // Add the InventoryPickupStation component
-                _inventoryPickupStation = stationObject.AddComponent<InventoryPickupStation>();
+                _inventoryPickupStation = BBHelpers.AddComponentSafe<InventoryPickupStation>(stationObject);
 
                 ModLogger.Debug($"Created InventoryPickupStation at position {stationPosition}");
             }
@@ -589,7 +590,7 @@ namespace Behind_Bars.Systems
 #if MONO
                     PlayerSingleton<PlayerMovement>.Instance.CanMove = true; // Allow movement
 #else
-                    PlayerSingleton<PlayerMovement>.Instance.canMove = true; // Allow movement
+                    PlayerSingleton<PlayerMovement>.Instance.CanMove = true; // Allow movement
 #endif
 
                     // Keep HUD enabled
@@ -613,7 +614,7 @@ namespace Behind_Bars.Systems
 #if MONO
                     PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
 #else
-                    PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+                    PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
 #endif
                     PlayerSingleton<PlayerInventory>.Instance.enabled = true;
                     PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
@@ -658,7 +659,7 @@ namespace Behind_Bars.Systems
 #if MONO
                     PlayerSingleton<PlayerMovement>.Instance.CanMove = true; // Enable movement in jail
 #else
-                    PlayerSingleton<PlayerMovement>.Instance.canMove = true; // Enable movement in jail
+                    PlayerSingleton<PlayerMovement>.Instance.CanMove = true; // Enable movement in jail
 #endif
                     Singleton<HUD>.Instance.canvas.enabled = true;
                     Singleton<HUD>.Instance.SetCrosshairVisible(true);
@@ -770,7 +771,7 @@ namespace Behind_Bars.Systems
 #if MONO
                     PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
 #else
-                    PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+                    PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
 #endif
                     Singleton<HUD>.Instance.canvas.enabled = true;
                     Singleton<HUD>.Instance.SetCrosshairVisible(true);
@@ -1178,7 +1179,7 @@ namespace Behind_Bars.Systems
 #if MONO
             PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
 #else
-            PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+            PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
 #endif
             Singleton<BlackOverlay>.Instance.Open(2f);
 
@@ -1483,7 +1484,7 @@ namespace Behind_Bars.Systems
 #if MONO
                 PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
 #else
-                PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+                PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
 #endif
                 PlayerSingleton<PlayerMovement>.Instance.enabled = true;
                 ModLogger.Debug("Re-enabled PlayerMovement");
@@ -1757,7 +1758,7 @@ namespace Behind_Bars.Systems
 
                 // 1. Clear any active booking process
                 // Note: BookingProcess handles its own cleanup when player is arrested
-                var bookingProcess = UnityEngine.Object.FindObjectOfType<BookingProcess>();
+                var bookingProcess = BBHelpers.FindObjectOfTypeSafe<BookingProcess>();
                 if (bookingProcess != null)
                 {
                     ModLogger.Info("BookingProcess found - it will handle its own cleanup");
@@ -1855,7 +1856,7 @@ namespace Behind_Bars.Systems
             try
             {
                 // Reset exit scanner station - most important for preventing "Already completed" issues
-                var exitScannerStation = UnityEngine.Object.FindObjectOfType<ExitScannerStation>();
+                var exitScannerStation = BBHelpers.FindObjectOfTypeSafe<ExitScannerStation>();
                 if (exitScannerStation != null)
                 {
                     // Reset completion flags
@@ -1869,7 +1870,7 @@ namespace Behind_Bars.Systems
                 }
 
                 // Re-enable jail inventory pickup stations for new inmate
-                var jailInventoryStations = UnityEngine.Object.FindObjectsOfType<JailInventoryPickupStation>();
+                var jailInventoryStations = BBHelpers.FindObjectsOfTypeSafe<JailInventoryPickupStation>();
                 foreach (var station in jailInventoryStations)
                 {
                     station.gameObject.SetActive(true);
@@ -1883,7 +1884,7 @@ namespace Behind_Bars.Systems
                 }
 
                 // Re-enable inventory pickup stations
-                var inventoryPickupStations = UnityEngine.Object.FindObjectsOfType<InventoryPickupStation>();
+                var inventoryPickupStations = BBHelpers.FindObjectsOfTypeSafe<InventoryPickupStation>();
                 foreach (var station in inventoryPickupStations)
                 {
                     station.gameObject.SetActive(true);

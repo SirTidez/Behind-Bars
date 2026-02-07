@@ -6,6 +6,7 @@ using UnityEngine.AI;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.Jail;
 using MelonLoader;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppScheduleOne.NPCs;
@@ -61,7 +62,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             // Get components
             npcComponent = GetComponent<NPC>();
-            inmateComponent = GetComponent<PrisonInmate>();
+            inmateComponent = BBHelpers.GetComponentSafe<PrisonInmate>(gameObject);
             navAgent = GetComponent<NavMeshAgent>();
 
             // Ensure NavMeshAgent is present and configured

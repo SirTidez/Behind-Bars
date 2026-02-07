@@ -175,7 +175,7 @@ namespace Behind_Bars.Systems.NPCs
 #if MONO
             PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
 #else
-            PlayerSingleton<PlayerMovement>.Instance.canMove = false;
+            PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
 #endif
             ModLogger.Debug($"Frozen player {player.name} movement for parole search");
 
@@ -358,7 +358,7 @@ namespace Behind_Bars.Systems.NPCs
 #if MONO
             PlayerSingleton<PlayerMovement>.Instance.CanMove = shouldBeMovable;
 #else
-            PlayerSingleton<PlayerMovement>.Instance.canMove = shouldBeMovable;
+            PlayerSingleton<PlayerMovement>.Instance.CanMove = shouldBeMovable;
 #endif
             ModLogger.Debug($"Restored player {player.name} movement to {shouldBeMovable}");
         }

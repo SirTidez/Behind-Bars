@@ -6,6 +6,7 @@ using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.Jail;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -59,6 +60,7 @@ namespace Behind_Bars.Systems.NPCs
             RespondingToIncident
         }
 
+#if MONO
         [System.Serializable]
         public class PatrolRoute
         {
@@ -77,6 +79,7 @@ namespace Behind_Bars.Systems.NPCs
             public bool requiresPrisoner = true;
             public float processingTime = 5f;
         }
+#endif
 
         #endregion
 
@@ -86,7 +89,12 @@ namespace Behind_Bars.Systems.NPCs
         public GuardAssignment assignment;
         public string badgeNumber = "";
         public int experienceLevel = 1;
+#if MONO
         public PatrolRoute patrolRoute = new PatrolRoute();
+#else
+        private float patrolWaitTime = 3f;
+        private Vector3[] patrolRoutePoints = Array.Empty<Vector3>();
+#endif
         public float shiftStartTime = 0f;
         public float shiftDuration = 480f; // 8 minutes default
 
@@ -106,8 +114,10 @@ namespace Behind_Bars.Systems.NPCs
 
         // Intake processing
         private Player currentPrisoner;
+#if MONO
         private Dictionary<string, IntakeStationInfo> intakeStations;
         private HashSet<string> completedStations = new HashSet<string>();
+#endif
         private string currentTargetStation = "";
         private bool isProcessingIntake = false;
 
@@ -139,10 +149,10 @@ namespace Behind_Bars.Systems.NPCs
 
         protected override void InitializeNPC()
         {
-            doorBehavior = GetComponent<SecurityDoorBehavior>();
+            doorBehavior = BBHelpers.GetComponentSafe<SecurityDoorBehavior>(gameObject);
             if (doorBehavior == null)
             {
-                doorBehavior = gameObject.AddComponent<SecurityDoorBehavior>();
+                doorBehavior = BBHelpers.AddComponentSafe<SecurityDoorBehavior>(gameObject);
             }
 
             if (string.IsNullOrEmpty(badgeNumber))
@@ -196,14 +206,14 @@ namespace Behind_Bars.Systems.NPCs
             try
             {
                 // Get audio controller (should be added by DirectNPCBuilder)
-                audioController = GetComponent<JailNPCAudioController>();
+                audioController = BBHelpers.GetComponentSafe<JailNPCAudioController>(gameObject);
                 if (audioController == null)
                 {
                     ModLogger.Warn($"Guard {badgeNumber}: No JailNPCAudioController found");
                 }
 
                 // Get dialogue controller
-                dialogueController = GetComponent<JailNPCDialogueController>();
+                dialogueController = BBHelpers.GetComponentSafe<JailNPCDialogueController>(gameObject);
                 if (dialogueController == null)
                 {
                     ModLogger.Warn($"Guard {badgeNumber}: No JailNPCDialogueController found");
@@ -317,6 +327,7 @@ namespace Behind_Bars.Systems.NPCs
 
         private void InitializeIntakeStations()
         {
+#if MONO
             intakeStations = new Dictionary<string, IntakeStationInfo>();
 
             // Define standard intake stations
@@ -339,6 +350,7 @@ namespace Behind_Bars.Systems.NPCs
 
                 intakeStations[config.name] = stationInfo;
             }
+#endif
         }
 
         private string GenerateBadgeNumber()
@@ -403,7 +415,14 @@ namespace Behind_Bars.Systems.NPCs
         {
             if (!patrolInitialized || availablePatrolPoints.Count == 0) return;
 
-            if (Time.time - lastPatrolTime >= patrolRoute.waitTime)
+            float waitTime =
+#if MONO
+                patrolRoute.waitTime;
+#else
+                patrolWaitTime;
+#endif
+
+            if (Time.time - lastPatrolTime >= waitTime)
             {
                 MoveToNextPatrolPoint();
             }
@@ -439,9 +458,16 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Debug($"Guard {badgeNumber} patrolling to point {currentPatrolIndex}");
         }
 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         public void AssignPatrolRoute(Vector3[] points)
         {
+#if MONO
             patrolRoute.points = points;
+#else
+            patrolRoutePoints = points ?? Array.Empty<Vector3>();
+#endif
             if (currentActivity == GuardActivity.Patrolling)
             {
                 StartPatrol();
@@ -472,10 +498,10 @@ namespace Behind_Bars.Systems.NPCs
             // Initialize intake state machine if not already present
             if (intakeStateMachine == null)
             {
-                intakeStateMachine = GetComponent<IntakeOfficerStateMachine>();
+                intakeStateMachine = BBHelpers.GetComponentSafe<IntakeOfficerStateMachine>(gameObject);
                 if (intakeStateMachine == null)
                 {
-                    intakeStateMachine = gameObject.AddComponent<IntakeOfficerStateMachine>();
+                    intakeStateMachine = BBHelpers.AddComponentSafe<IntakeOfficerStateMachine>(gameObject);
                 }
             }
 
@@ -607,15 +633,18 @@ namespace Behind_Bars.Systems.NPCs
         private void OnTriggerEnter(Collider other)
         {
             // Handle door triggers - delegate to intake state machine if processing intake
-            var doorTrigger = other.GetComponent<DoorTriggerHandler>();
+            var doorTrigger = BBHelpers.GetComponentSafe<DoorTriggerHandler>(other.gameObject);
             if (doorTrigger != null && doorBehavior != null)
             {
+                bool handledByIntakeStateMachine = false;
                 if (role == GuardRole.IntakeOfficer && intakeStateMachine != null && intakeStateMachine.IsProcessingIntake())
                 {
                     // Let intake state machine handle door triggers during intake
                     intakeStateMachine.HandleDoorTrigger(other.name);
+                    handledByIntakeStateMachine = true;
                 }
-                else
+
+                if (!handledByIntakeStateMachine)
                 {
                     // Standard door behavior for non-intake operations
                     bool escorting = currentActivity == GuardActivity.EscortingPrisoner;
@@ -665,7 +694,10 @@ namespace Behind_Bars.Systems.NPCs
         public GuardActivity GetCurrentActivity() => currentActivity;
         public string GetBadgeNumber() => badgeNumber;
         public bool IsOnDuty() => isOnDuty;
-        public bool IsProcessingIntake() => intakeStateMachine != null ? intakeStateMachine.IsProcessingIntake() : isProcessingIntake;
+        public bool IsProcessingIntake()
+        {
+            return intakeStateMachine != null ? intakeStateMachine.IsProcessingIntake() : isProcessingIntake;
+        }
         public Player GetCurrentPrisoner() => currentPrisoner;
         public float GetGuardPatience() => guardPatience;
 

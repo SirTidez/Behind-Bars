@@ -5,6 +5,7 @@ using Behind_Bars.Utils;
 using HarmonyLib;
 using MelonLoader;
 using System.Collections;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 
 
@@ -176,7 +177,7 @@ namespace Behind_Bars.Systems.NPCs
                 if (npcType == NPCType.JailGuard)
                 {
                     // Add new GuardBehavior component instead of old GuardStateMachine
-                    var guardBehavior = npcObject.AddComponent<GuardBehavior>();
+                    var guardBehavior = BBHelpers.AddComponentSafe<GuardBehavior>(npcObject);
                     // Note: Initialize method will be called by PrisonNPCManager with proper assignment
 
                     ModLogger.Debug($"✓ GuardBehavior component added to {firstName} {lastName}");
@@ -195,7 +196,7 @@ namespace Behind_Bars.Systems.NPCs
                 {
                     // Test NPC gets NO specialized behaviors - only basic movement
                     // Remove any existing behavior components that might have been added
-                    var existingGuardBehavior = npcObject.GetComponent<GuardBehavior>();
+                    var existingGuardBehavior = BBHelpers.GetComponentSafe<GuardBehavior>(npcObject);
                     if (existingGuardBehavior != null)
                     {
                         GameObject.DestroyImmediate(existingGuardBehavior);
@@ -214,7 +215,7 @@ namespace Behind_Bars.Systems.NPCs
                 else if (npcType == NPCType.ParoleOfficer)
                 {
                     // Add new ParoleOfficerBehavior component
-                    var paroleBehavior = npcObject.AddComponent<ParoleOfficerBehavior>();
+                    var paroleBehavior = BBHelpers.AddComponentSafe<ParoleOfficerBehavior>(npcObject);
                     if (paroleBehavior != null)
                     {
                         // Add any essential initialization here
@@ -545,7 +546,7 @@ namespace Behind_Bars.Systems.NPCs
                     // Direct assignment to public field (optimized from reflection)
                     npc_casted.Behaviour = behaviour as
 #if !MONO
-                        Il2CppScheduleOne.NPCs.NPCBehaviour;
+                        NPCBehaviour;
 #else
                         NPCBehaviour;
 #endif
@@ -672,7 +673,7 @@ namespace Behind_Bars.Systems.NPCs
                     dialogueController.UseDialogueBehaviour = true;
 
                     // Add our custom JailNPCDialogueController for enhanced functionality
-                    var jailDialogueController = npc.AddComponent<JailNPCDialogueController>();
+                    var jailDialogueController = BBHelpers.AddComponentSafe<JailNPCDialogueController>(npc);
 
                     // Set up default greetings based on NPC type
                     SetupNPCDialogueByType(jailDialogueController, npcType);
@@ -1120,9 +1121,16 @@ namespace Behind_Bars.Systems.NPCs
                     avatarCopy.SetActive(true);
                     
                     // RADICAL APPROACH: Just add the TestNPCController that we know works
-                    var testController = target.AddComponent<TestNPCController>();
-                    testController.usePatrolMode = true; // Use patrol mode for prison NPCs
-                    ModLogger.Info($"✓ Added working TestNPCController to {target.name} for guaranteed animations");
+                    var testController = BBHelpers.AddComponentSafe<TestNPCController>(target);
+                    if (testController != null)
+                    {
+                        testController.usePatrolMode = true; // Use patrol mode for prison NPCs
+                        ModLogger.Info($"✓ Added working TestNPCController to {target.name} for guaranteed animations");
+                    }
+                    else
+                    {
+                        ModLogger.Warn($"Could not add TestNPCController to {target.name}");
+                    }
                     
                     ModLogger.Info($"✓ Copied and enabled complete avatar structure to {target.name} ({avatarCopy.transform.childCount} child objects)");
                 }
@@ -1536,11 +1544,11 @@ namespace Behind_Bars.Systems.NPCs
                     navAgent.enabled = true;
                     
                     // Start basic patrol behavior (except for TestNPC and guards with GuardBehavior)
-                    if (!npc.name.Contains("TestNPC") && npc.GetComponent<GuardBehavior>() == null)
+                    if (!npc.name.Contains("TestNPC") && BBHelpers.GetComponentSafe<GuardBehavior>(npc) == null)
                     {
                         MelonLoader.MelonCoroutines.Start(BasicPatrolBehavior(npc, navAgent));
                     }
-                    else if (npc.GetComponent<GuardBehavior>() != null)
+                    else if (BBHelpers.GetComponentSafe<GuardBehavior>(npc) != null)
                     {
                         ModLogger.Info($"Skipped BasicPatrolBehavior for JailGuard with GuardBehavior: {npc.name}");
                     }
@@ -1561,11 +1569,11 @@ namespace Behind_Bars.Systems.NPCs
                         ModLogger.Info($"✓ Positioned {npc.name} on distant NavMesh at {hit.position}");
                         
                         // Start basic patrol behavior (except for TestNPC and guards with GuardBehavior)
-                        if (!npc.name.Contains("TestNPC") && npc.GetComponent<GuardBehavior>() == null)
+                        if (!npc.name.Contains("TestNPC") && BBHelpers.GetComponentSafe<GuardBehavior>(npc) == null)
                         {
                             MelonCoroutines.Start(BasicPatrolBehavior(npc, navAgent));
                         }
-                        else if (npc.GetComponent<GuardBehavior>() != null)
+                        else if (BBHelpers.GetComponentSafe<GuardBehavior>(npc) != null)
                         {
                             ModLogger.Info($"Skipped BasicPatrolBehavior for distant NavMesh JailGuard: {npc.name}");
                         }
@@ -1967,7 +1975,7 @@ namespace Behind_Bars.Systems.NPCs
                 // For guards, add our custom JailNPCAudioController
                 if (npcType == NPCType.JailGuard)
                 {
-                    var jailAudioController = npc.AddComponent<JailNPCAudioController>();
+                    var jailAudioController = BBHelpers.AddComponentSafe<JailNPCAudioController>(npc);
                     ModLogger.Debug($"✓ JailNPCAudioController added to guard {npc.name}");
                 }
 

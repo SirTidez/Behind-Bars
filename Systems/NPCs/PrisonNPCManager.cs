@@ -7,6 +7,7 @@ using Behind_Bars.Helpers;
 using Behind_Bars.Utils;
 using Behind_Bars.Systems.Jail;
 using MelonLoader;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 
 #if !MONO
@@ -14,6 +15,7 @@ using Il2CppFishNet;
 using Il2CppFishNet.Managing;
 using Il2CppFishNet.Managing.Object;
 using Il2CppFishNet.Object;
+using Il2CppInterop.Runtime.Attributes;
 using Il2CppScheduleOne.NPCs;
 using Il2CppScheduleOne.AvatarFramework;
 using Il2CppScheduleOne;
@@ -53,6 +55,11 @@ namespace Behind_Bars.Systems.NPCs
         private List<GuardBehavior> registeredGuards = new List<GuardBehavior>();
         private List<ParoleOfficerBehavior> registeredParoleOfficers = new List<ParoleOfficerBehavior>();
         private GuardBehavior intakeOfficer = null;
+#if !MONO
+        private GameObject intakeOfficerFallbackGuardObject = null;
+        private bool intakeOfficerFallbackInProgress = false;
+        private object intakeOfficerFallbackCoroutine = null;
+#endif
         private ParoleOfficerBehavior paroleSupervisor = null;
         private bool isPatrolInProgress = false;
         private float nextPatrolTime = 0f;
@@ -84,6 +91,10 @@ namespace Behind_Bars.Systems.NPCs
             ParoleOfficerBehavior.ParoleOfficerAssignment.WestsidePatrol,           // West route
             ParoleOfficerBehavior.ParoleOfficerAssignment.DocksPatrol               // Canal route
         };
+
+        private bool _guardBehaviorUnavailable;
+        private bool _paroleOfficerBehaviorUnavailable;
+        private bool _lastGuardSpawnWasFallback;
         
         private void Awake()
         {
@@ -244,13 +255,24 @@ namespace Behind_Bars.Systems.NPCs
             try
             {
                 ModLogger.Debug("Initializing DynamicParoleOfficerManager...");
+
+#if !MONO
+                ModLogger.Warn("Skipping DynamicParoleOfficerManager initialization on IL2CPP until component injection is stabilized");
+                return;
+#endif
                 
                 // Create GameObject for the manager
                 GameObject managerObject = new GameObject("DynamicParoleOfficerManager");
                 managerObject.transform.SetParent(transform); // Parent to NPC manager for organization
                 
                 // Add the component
-                var manager = managerObject.AddComponent<DynamicParoleOfficerManager>();
+                var manager = BBHelpers.AddComponentSafe<DynamicParoleOfficerManager>(managerObject);
+                if (manager == null)
+                {
+                    ModLogger.Error("Failed to add DynamicParoleOfficerManager component");
+                    UnityEngine.Object.Destroy(managerObject);
+                    return;
+                }
                 
                 // Initialize it
                 manager.Initialize();
@@ -300,7 +322,14 @@ namespace Behind_Bars.Systems.NPCs
                 }
                 else
                 {
-                    ModLogger.Error($"Failed to spawn guard for assignment {assignment}");
+                    if (_lastGuardSpawnWasFallback)
+                    {
+                        ModLogger.Debug($"✓ Spawned static fallback guard at {assignment} ({spawnPoint.name})");
+                    }
+                    else
+                    {
+                        ModLogger.Error($"Failed to spawn guard for assignment {assignment}");
+                    }
                 }
 
                 // Small delay between spawns
@@ -511,7 +540,7 @@ namespace Behind_Bars.Systems.NPCs
                     inmate.assignedCell = assignedCell; // Store cell assignment
 
                     // Add InmateBehavior for random cell movement
-                    var inmateBehavior = inmate.gameObject.AddComponent<InmateBehavior>();
+                    var inmateBehavior = BBHelpers.AddComponentSafe<InmateBehavior>(inmate.gameObject);
                     if (inmateBehavior != null)
                     {
                         inmateBehavior.SetCellNumber(assignedCell);
@@ -733,6 +762,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
+                _lastGuardSpawnWasFallback = false;
                 ModLogger.Debug($"🎯 Spawning guard using BaseNPC: {firstName} at {assignment}");
 
                 // Get BaseNPC prefab directly
@@ -803,13 +833,48 @@ namespace Behind_Bars.Systems.NPCs
                 FixNPCAppearance(guardObject, "guard");
 
                 // Add GuardBehavior component
-                var guardBehavior = guardObject.AddComponent<GuardBehavior>();
+                GuardBehavior guardBehavior = null;
+                if (!_guardBehaviorUnavailable)
+                {
+                    guardBehavior = BBHelpers.AddComponentSafe<GuardBehavior>(guardObject);
+                }
+                bool hasDynamicGuardBehavior = guardBehavior != null;
+                if (guardBehavior == null)
+                {
+                    _guardBehaviorUnavailable = true;
+                    ModLogger.Warn("GuardBehavior could not be added - spawning static fallback guard");
+                }
 
                 // Add audio system components for voice commands
-                AddAudioSystemToGuard(guardObject, npcComponent);
+                AddAudioSystemToGuard(guardObject, npcComponent, hasDynamicGuardBehavior);
+
+                // For IL2CPP fallback guards, avoid adding PrisonGuard wrapper because it references GuardBehavior types.
+                if (!hasDynamicGuardBehavior)
+                {
+                    _lastGuardSpawnWasFallback = true;
+
+#if !MONO
+                    if (assignment == GuardBehavior.GuardAssignment.Booking0)
+                    {
+                        intakeOfficerFallbackGuardObject = guardObject;
+                        ModLogger.Debug("✓ Booking0 fallback guard reserved for IL2CPP intake escort");
+                    }
+#endif
+
+                    SpawnOnNetworkIfServer(guardObject);
+                    PositionOnNavMesh(guardObject, position);
+                    ModLogger.Debug($"✓ Static fallback guard spawned: {firstName} ({assignment})");
+                    return null;
+                }
 
                 // Add PrisonGuard wrapper component
-                var prisonGuard = guardObject.AddComponent<PrisonGuard>();
+                var prisonGuard = BBHelpers.AddComponentSafe<PrisonGuard>(guardObject);
+                if (prisonGuard == null)
+                {
+                    ModLogger.Error("❌ Failed to add PrisonGuard wrapper to BaseNPC guard");
+                    UnityEngine.Object.Destroy(guardObject);
+                    return null;
+                }
                 prisonGuard.Initialize(badgeNumber, firstName, assignment);
 
                 // Spawn on network if we're server
@@ -905,13 +970,30 @@ namespace Behind_Bars.Systems.NPCs
                 FixParoleOfficerAppearance(paroleOfficerObject, firstName);
 
                 // Add ParoleOfficerBehavior component
-                var paroleBehavior = paroleOfficerObject.AddComponent<ParoleOfficerBehavior>();
+                ParoleOfficerBehavior paroleBehavior = null;
+                if (!_paroleOfficerBehaviorUnavailable)
+                {
+                    paroleBehavior = BBHelpers.AddComponentSafe<ParoleOfficerBehavior>(paroleOfficerObject);
+                }
+                if (paroleBehavior == null)
+                {
+                    _paroleOfficerBehaviorUnavailable = true;
+                    ModLogger.Error("❌ Failed to add ParoleOfficerBehavior to BaseNPC parole officer");
+                    UnityEngine.Object.Destroy(paroleOfficerObject);
+                    return null;
+                }
 
                 // Add audio system components for voice commands
-                AddAudioSystemToGuard(paroleOfficerObject, npcComponent);
+                AddAudioSystemToGuard(paroleOfficerObject, npcComponent, true);
 
                 // Add ParoleOfficer wrapper component
-                var paroleOfficer = paroleOfficerObject.AddComponent<ParoleOfficer>();
+                var paroleOfficer = BBHelpers.AddComponentSafe<ParoleOfficer>(paroleOfficerObject);
+                if (paroleOfficer == null)
+                {
+                    ModLogger.Error("❌ Failed to add ParoleOfficer wrapper to BaseNPC parole officer");
+                    UnityEngine.Object.Destroy(paroleOfficerObject);
+                    return null;
+                }
                 paroleOfficer.Initialize(badgeNumber, firstName, assignment);
 
                 // Spawn on network if we're server
@@ -955,7 +1037,7 @@ namespace Behind_Bars.Systems.NPCs
 
                 // The NPC component is already configured by BaseNPCSpawner
                 // Just add our PrisonInmate component for jail-specific behavior
-                var prisonInmate = inmateObject.AddComponent<PrisonInmate>();
+                var prisonInmate = BBHelpers.AddComponentSafe<PrisonInmate>(inmateObject);
                 prisonInmate.Initialize(prisonerID, firstName, crimeType);
 
                 // BaseNPCSpawner already handles network spawning and NavMesh positioning
@@ -2343,7 +2425,19 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         public bool IsIntakeOfficerAvailable()
         {
-            return intakeOfficer != null && !intakeOfficer.IsProcessingIntake();
+            if (intakeOfficer != null)
+            {
+                return !intakeOfficer.IsProcessingIntake();
+            }
+
+#if !MONO
+            if (intakeOfficerFallbackGuardObject != null)
+            {
+                return !intakeOfficerFallbackInProgress;
+            }
+#endif
+
+            return false;
         }
         
         /// <summary>
@@ -2351,31 +2445,198 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         public bool RequestPrisonerEscort(GameObject prisoner)
         {
-            if (IsIntakeOfficerAvailable() && prisoner != null)
+            if (prisoner == null)
             {
-                // Convert GameObject to Player component
+                ModLogger.Warn($"Cannot request prisoner escort - intake officer not available");
+                return false;
+            }
+
+            // Convert GameObject to Player component
 #if !MONO
-                var playerComponent = prisoner.GetComponent<Il2CppScheduleOne.PlayerScripts.Player>();
+            var playerComponent = prisoner.GetComponent<Il2CppScheduleOne.PlayerScripts.Player>();
 #else
-                var playerComponent = prisoner.GetComponent<ScheduleOne.PlayerScripts.Player>();
+            var playerComponent = prisoner.GetComponent<ScheduleOne.PlayerScripts.Player>();
 #endif
 
-                if (playerComponent != null)
-                {
-                    intakeOfficer.StartIntakeProcess(playerComponent);
-                    ModLogger.Info($"Requested prisoner escort for {prisoner.name} from intake officer");
-                    return true;
-                }
-                else
-                {
-                    ModLogger.Error($"GameObject {prisoner.name} does not have a Player component");
-                    return false;
-                }
+            if (playerComponent == null)
+            {
+                ModLogger.Error($"GameObject {prisoner.name} does not have a Player component");
+                return false;
             }
+
+#if !MONO
+            if (intakeOfficer != null && !intakeOfficer.IsProcessingIntake())
+            {
+                intakeOfficer.StartIntakeProcess(playerComponent);
+                ModLogger.Info($"Requested prisoner escort for {prisoner.name} from intake officer");
+                return true;
+            }
+
+            GameObject preferredGuardObject = intakeOfficer != null ? intakeOfficer.gameObject : intakeOfficerFallbackGuardObject;
+            if (TryStartIl2CppIntakeFallbackEscort(playerComponent, preferredGuardObject))
+            {
+                ModLogger.Warn($"Requested prisoner escort for {prisoner.name} using IL2CPP manager fallback escort");
+                return true;
+            }
+#endif
 
             ModLogger.Warn($"Cannot request prisoner escort - intake officer not available");
             return false;
         }
+
+#if !MONO
+        [HideFromIl2Cpp]
+        private IEnumerator IntakeFallbackEscortRoutine(Il2CppScheduleOne.PlayerScripts.Player prisoner)
+        {
+            intakeOfficerFallbackInProgress = true;
+
+            if (prisoner == null)
+            {
+                intakeOfficerFallbackInProgress = false;
+                intakeOfficerFallbackCoroutine = null;
+                yield break;
+            }
+
+            var guardObject = intakeOfficerFallbackGuardObject;
+            if (guardObject == null)
+            {
+                ModLogger.Error("IL2CPP intake fallback escort aborted: no fallback guard object");
+                intakeOfficerFallbackInProgress = false;
+                intakeOfficerFallbackCoroutine = null;
+                yield break;
+            }
+
+            yield return MoveFallbackGuardTo(guardObject, prisoner.transform.position, 20f, 2.5f, "prisoner");
+
+            var cellManager = CellAssignmentManager.Instance;
+            if (cellManager == null)
+            {
+                ModLogger.Error("IL2CPP intake fallback escort aborted: CellAssignmentManager unavailable");
+                intakeOfficerFallbackInProgress = false;
+                intakeOfficerFallbackCoroutine = null;
+                yield break;
+            }
+
+            int assignedCell = cellManager.GetPlayerCellNumber(prisoner);
+            if (assignedCell < 0)
+            {
+                assignedCell = cellManager.AssignPlayerToCell(prisoner);
+            }
+
+            if (assignedCell < 0)
+            {
+                ModLogger.Error("IL2CPP intake fallback escort aborted: failed to assign player to cell");
+                intakeOfficerFallbackInProgress = false;
+                intakeOfficerFallbackCoroutine = null;
+                yield break;
+            }
+
+            var jailController = Core.JailController;
+            var cell = jailController?.GetCellByIndex(assignedCell);
+            if (cell == null)
+            {
+                ModLogger.Error($"IL2CPP intake fallback escort aborted: invalid cell index {assignedCell}");
+                intakeOfficerFallbackInProgress = false;
+                intakeOfficerFallbackCoroutine = null;
+                yield break;
+            }
+
+            jailController?.doorController?.OpenJailCellDoor(assignedCell);
+
+            Vector3 escortPoint = prisoner.transform.position;
+            if (cell.cellDoor?.doorPoint != null)
+            {
+                escortPoint = cell.cellDoor.doorPoint.position;
+            }
+            else if (cell.cellTransform != null)
+            {
+                escortPoint = cell.cellTransform.position;
+            }
+
+            yield return MoveFallbackGuardTo(guardObject, escortPoint, 28f, 2.1f, "cell door");
+
+            Vector3 playerDestination = prisoner.transform.position;
+            if (cell.spawnPoints != null && cell.spawnPoints.Count > 0 && cell.spawnPoints[0] != null)
+            {
+                playerDestination = cell.spawnPoints[0].position;
+            }
+            else if (cell.cellTransform != null)
+            {
+                playerDestination = cell.cellTransform.position;
+            }
+
+            prisoner.transform.position = playerDestination;
+            jailController?.doorController?.CloseJailCellDoor(assignedCell);
+
+            ModLogger.Info($"IL2CPP intake fallback escort completed for {prisoner.name} (cell {assignedCell})");
+            intakeOfficerFallbackInProgress = false;
+            intakeOfficerFallbackCoroutine = null;
+        }
+
+        private bool TryStartIl2CppIntakeFallbackEscort(Il2CppScheduleOne.PlayerScripts.Player prisoner, GameObject preferredGuardObject = null)
+        {
+            if (prisoner == null)
+                return false;
+
+            if (preferredGuardObject != null)
+                intakeOfficerFallbackGuardObject = preferredGuardObject;
+
+            if (intakeOfficerFallbackGuardObject == null || intakeOfficerFallbackInProgress)
+                return false;
+
+            if (intakeOfficerFallbackCoroutine != null)
+            {
+                MelonCoroutines.Stop(intakeOfficerFallbackCoroutine);
+                intakeOfficerFallbackCoroutine = null;
+            }
+
+            intakeOfficerFallbackCoroutine = MelonCoroutines.Start(IntakeFallbackEscortRoutine(prisoner));
+            return true;
+        }
+
+        [HideFromIl2Cpp]
+        private IEnumerator MoveFallbackGuardTo(GameObject guardObject, Vector3 destination, float timeoutSeconds, float distanceTolerance, string label)
+        {
+            if (guardObject == null)
+                yield break;
+
+            var agent = BBHelpers.GetComponentSafe<UnityEngine.AI.NavMeshAgent>(guardObject);
+            if (agent == null)
+            {
+                var agents = guardObject.GetComponentsInChildren<UnityEngine.AI.NavMeshAgent>(true);
+                if (agents != null && agents.Length > 0)
+                    agent = agents[0];
+            }
+
+            if (agent != null)
+            {
+                if (!agent.enabled)
+                    agent.enabled = true;
+                agent.isStopped = false;
+                agent.SetDestination(destination);
+            }
+
+            float startTime = Time.time;
+            while (Time.time - startTime < timeoutSeconds)
+            {
+                if (guardObject == null)
+                    yield break;
+
+                float distance = Vector3.Distance(guardObject.transform.position, destination);
+                if (distance <= distanceTolerance)
+                    yield break;
+
+                if (agent == null)
+                {
+                    guardObject.transform.position = Vector3.MoveTowards(guardObject.transform.position, destination, 2.2f * Time.deltaTime);
+                }
+
+                yield return null;
+            }
+
+            ModLogger.Warn($"IL2CPP intake fallback timed out moving to {label}");
+        }
+#endif
         
         /// <summary>
         /// Get all registered guards
@@ -2585,11 +2846,19 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Add audio system components to a guard for voice commands
         /// </summary>
-        private void AddAudioSystemToGuard(GameObject guardObject, object npcComponent)
+        private void AddAudioSystemToGuard(GameObject guardObject, object npcComponent, bool hasDynamicGuardBehavior)
         {
             try
             {
                 ModLogger.Debug($"Adding audio system to guard: {guardObject.name}");
+
+#if !MONO
+                if (!hasDynamicGuardBehavior)
+                {
+                    ModLogger.Warn($"Skipping jail dialogue/audio components for fallback guard {guardObject.name} (no GuardBehavior)");
+                    return;
+                }
+#endif
 
                 // Add AudioSourceController for managing audio playback
 #if !MONO
@@ -2617,7 +2886,7 @@ namespace Behind_Bars.Systems.NPCs
                 }
 
                 // Add JailNPCAudioController for guard voice management
-                var jailAudioController = guardObject.AddComponent<JailNPCAudioController>();
+                var jailAudioController = BBHelpers.AddComponentSafe<JailNPCAudioController>(guardObject);
                 ModLogger.Debug($"✓ JailNPCAudioController added to guard {guardObject.name}");
 
                 // Add base DialogueController (required by JailNPCDialogueController)
@@ -2629,7 +2898,7 @@ namespace Behind_Bars.Systems.NPCs
                 ModLogger.Debug($"✓ Base DialogueController added to guard {guardObject.name}");
 
                 // Add JailNPCDialogueController for dialogue integration
-                var dialogueController = guardObject.AddComponent<JailNPCDialogueController>();
+                var dialogueController = BBHelpers.AddComponentSafe<JailNPCDialogueController>(guardObject);
                 ModLogger.Debug($"✓ JailNPCDialogueController added to guard {guardObject.name}");
 
                 ModLogger.Debug($"✓ Audio system configured for guard: {guardObject.name}");
@@ -2644,8 +2913,8 @@ namespace Behind_Bars.Systems.NPCs
     }
 
     /// <summary>
-    /// Custom prison guard class with enhanced behaviors and assignment system
-    /// </summary>
+     /// Custom prison guard class with enhanced behaviors and assignment system
+     /// </summary>
     public class PrisonGuard : MonoBehaviour
     {
 #if !MONO
@@ -2665,11 +2934,7 @@ namespace Behind_Bars.Systems.NPCs
             assignment = guardAssignment;
 
             // Get or add the guard behavior component
-            guardBehavior = GetComponent<GuardBehavior>();
-            if (guardBehavior == null)
-            {
-                guardBehavior = gameObject.AddComponent<GuardBehavior>();
-            }
+            guardBehavior = BBHelpers.GetComponentSafe<GuardBehavior>(gameObject);
 
             if (guardBehavior != null)
             {
@@ -2696,7 +2961,7 @@ namespace Behind_Bars.Systems.NPCs
             }
             else
             {
-                ModLogger.Error($"GuardBehavior component not found on guard {name}");
+                ModLogger.Warn($"GuardBehavior component not found on guard {name} - guard will remain as static fallback");
             }
 
             ModLogger.Debug($"Prison guard {name} initialized with badge {badge} and assignment {assignment}");
@@ -2735,11 +3000,7 @@ namespace Behind_Bars.Systems.NPCs
             assignment = guardAssignment;
 
             // Get or add the guard behavior component
-            officerBehavior = GetComponent<ParoleOfficerBehavior>();
-            if (officerBehavior == null)
-            {
-                officerBehavior = gameObject.AddComponent<ParoleOfficerBehavior>();
-            }
+            officerBehavior = BBHelpers.GetComponentSafe<ParoleOfficerBehavior>(gameObject);
 
             if (officerBehavior != null)
             {

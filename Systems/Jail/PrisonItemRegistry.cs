@@ -4,6 +4,7 @@ using UnityEngine;
 using MelonLoader;
 using HarmonyLib;
 using Behind_Bars.Helpers;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 
 
@@ -27,6 +28,10 @@ namespace Behind_Bars.Systems.Jail
     /// </summary>
     public class PrisonItemEquippable : Equippable_Viewmodel
     {
+#if !MONO
+        public PrisonItemEquippable(System.IntPtr ptr) : base(ptr) { }
+#endif
+
         public override void Equip(ItemInstance item)
         {
             base.Equip(item);
@@ -322,7 +327,7 @@ namespace Behind_Bars.Systems.Jail
                     }
                     
                     // Add our custom PrisonItemEquippable component
-                    var prisonEquippable = prefab.AddComponent<PrisonItemEquippable>();
+                    var prisonEquippable = BBHelpers.AddComponentSafe<PrisonItemEquippable>(prefab);
                     ModLogger.Debug($"Added PrisonItemEquippable component to {itemInfo.name}");
                 }
                 catch (Exception ex)

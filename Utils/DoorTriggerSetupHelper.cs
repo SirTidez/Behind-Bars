@@ -2,6 +2,7 @@ using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.NPCs;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 namespace Behind_Bars.Utils
 {
@@ -78,7 +79,7 @@ namespace Behind_Bars.Utils
                 if (existingHandler == null)
                 {
                     // Add the handler
-                    var handler = trigger.gameObject.AddComponent<DoorTriggerHandler>();
+                    var handler = BBHelpers.AddComponentSafe<DoorTriggerHandler>(trigger.gameObject);
                     
                     // Configure it
                     handler.associatedDoor = door;
@@ -226,7 +227,7 @@ namespace Behind_Bars.Utils
             boxCollider.size = new Vector3(3f, 3f, 1f); // Reasonable size for a door trigger
 
             // Add and configure the DoorTriggerHandler
-            var handler = triggerGO.AddComponent<DoorTriggerHandler>();
+            var handler = BBHelpers.AddComponentSafe<DoorTriggerHandler>(triggerGO);
             handler.associatedDoor = door;
             handler.autoDetectDoor = false;
 

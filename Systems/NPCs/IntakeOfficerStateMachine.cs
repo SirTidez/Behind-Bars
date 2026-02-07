@@ -6,6 +6,7 @@ using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.Jail;
 using Behind_Bars.UI;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -57,14 +58,15 @@ namespace Behind_Bars.Systems.NPCs
             public string doorPointName;
             public string guardMessage;
             public float messageDuration = 3f;
+#if MONO
             public System.Func<bool> completionCheck;
+#endif
         }
 
         #endregion
 
         #region Component References
 
-        private GuardBehavior guardBehavior;
         private BookingProcess bookingProcess;
 
         #endregion
@@ -108,10 +110,12 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Events
 
+#if MONO
         public new System.Action<IntakeState> OnStateChanged;
         public System.Action<Player> OnIntakeStarted;
         public System.Action<Player> OnIntakeCompleted;
         public System.Action<string> OnStationReached;
+#endif
 
         #endregion
 
@@ -120,7 +124,6 @@ namespace Behind_Bars.Systems.NPCs
         protected override void Awake()
         {
             base.Awake(); // Initialize BaseJailNPC
-            guardBehavior = GetComponent<GuardBehavior>();
             // SecurityDoor will be retrieved from JailController when needed
         }
 
@@ -243,8 +246,7 @@ namespace Behind_Bars.Systems.NPCs
                 ModLogger.Warn("IntakeOfficer: No SecurityDoor component found - will use fallback direct door control");
             }
 
-            // Subscribe to movement completion events
-            OnDestinationReached += HandleDestinationReached;
+            // Movement completion is handled via BaseJailNPC.NotifyDestinationReached override.
         }
 
         private void InitializeDialogueSystem()
@@ -256,6 +258,9 @@ namespace Behind_Bars.Systems.NPCs
 #if MONO
         private System.Collections.IEnumerator WaitForDialogueController()
 #else
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private IEnumerator WaitForDialogueController()
 #endif
         {
@@ -265,7 +270,7 @@ namespace Behind_Bars.Systems.NPCs
             while (retryCount < maxRetries)
             {
                 // Try to get the dialogue controller that should have been added by PrisonNPCManager
-                dialogueController = GetComponent<JailNPCDialogueController>();
+                dialogueController = BBHelpers.GetComponentSafe<JailNPCDialogueController>(gameObject);
 
                 if (dialogueController != null)
                 {
@@ -334,37 +339,20 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         protected override void OnEnable()
         {
-            // Subscribe to NPCUpdateManager events (custom handler for state updates)
-            if (NPCUpdateManager.Instance != null)
-            {
-                NPCUpdateManager.Instance.RegisterNPC(this);
-                NPCUpdateManager.Instance.OnNPCStateUpdate += HandleIntakeStateUpdate;  // Custom handler
-                NPCUpdateManager.Instance.OnNPCMovementCheck += HandleMovementCheck;
-                NPCUpdateManager.Instance.OnNPCActionProcess += HandleActionProcess;
-            }
+            base.OnEnable();
         }
 
         protected override void OnDisable()
         {
-            // Unsubscribe from events
-            if (NPCUpdateManager.Instance != null)
-            {
-                NPCUpdateManager.Instance.UnregisterNPC(this);
-                NPCUpdateManager.Instance.OnNPCStateUpdate -= HandleIntakeStateUpdate;  // Custom handler
-                NPCUpdateManager.Instance.OnNPCMovementCheck -= HandleMovementCheck;
-                NPCUpdateManager.Instance.OnNPCActionProcess -= HandleActionProcess;
-            }
+            base.OnDisable();
         }
 
         /// <summary>
         /// Custom state update handler that includes intake state machine logic
         /// </summary>
-        private void HandleIntakeStateUpdate(float currentTime)
+        protected override void OnStateUpdateTick(float currentTime)
         {
-            if (!isInitialized) return;
-
-            // Call base state update
-            UpdateState();
+            base.OnStateUpdateTick(currentTime);
 
             // Handle intake state machine
             UpdateStateMachine();
@@ -374,18 +362,6 @@ namespace Behind_Bars.Systems.NPCs
             {
                 CheckForDoorTriggers();
             }
-        }
-
-        private void HandleMovementCheck(float currentTime)
-        {
-            if (!isInitialized) return;
-            CheckStuckMovement();
-        }
-
-        private void HandleActionProcess()
-        {
-            if (!isInitialized) return;
-            ProcessActionQueue();
         }
 
         private void UpdateStateMachine()
@@ -456,7 +432,9 @@ namespace Behind_Bars.Systems.NPCs
             currentState = newState;
             stateStartTime = Time.time;
 
+#if MONO
             OnStateChanged?.Invoke(newState);
+#endif
             ModLogger.Info($"IntakeOfficer: {oldState} → {newState}");
 
             // Update dialogue state
@@ -591,6 +569,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Get command data for the current state
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private OfficerCommandData? GetCommandDataForState(IntakeState state)
         {
             bool isEscorting = IsCurrentlyEscorting();
@@ -903,7 +884,7 @@ namespace Behind_Bars.Systems.NPCs
                 // Check if we've reached destination manually (Unity precision issues)
                 if (distance < 2.0f || (navAgent != null && !navAgent.pathPending && navAgent.remainingDistance < 2.0f))
                 {
-                    OnDestinationReached?.Invoke(currentDestination);
+                    HandleDestinationReached(currentDestination);
                     return;
                 }
 
@@ -943,7 +924,9 @@ namespace Behind_Bars.Systems.NPCs
             // Send guard message
             SendGuardMessage(station.guardMessage, station.messageDuration);
 
+#if MONO
             OnStationReached?.Invoke(stationName);
+#endif
             ModLogger.Info($"IntakeOfficer: Navigating to {stationName}");
         }
 
@@ -1444,7 +1427,7 @@ namespace Behind_Bars.Systems.NPCs
             {
                 ModLogger.Info($"IntakeOfficer: Movement destination reached during state {currentState}");
                 // Trigger our own destination reached handler instead of base class
-                OnDestinationReached?.Invoke(currentDestination);
+                HandleDestinationReached(currentDestination);
                 // DON'T call ChangeState(NPCState.Idle) like the base class does
             }
         }
@@ -1499,7 +1482,9 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             ModLogger.Info($"IntakeOfficer: Player {player.name} found in holding cell {currentHoldingCellIndex}");
+#if MONO
             OnIntakeStarted?.Invoke(player);
+#endif
 
             ChangeIntakeState(IntakeState.DelayBeforeFetch);
             ModLogger.Info($"IntakeOfficer: Starting intake process for {player.name}");
@@ -1769,7 +1754,9 @@ namespace Behind_Bars.Systems.NPCs
 
         private void CompleteIntakeProcess()
         {
+#if MONO
             OnIntakeCompleted?.Invoke(currentPrisoner);
+#endif
 
             // Unregister from officer coordination
             OfficerCoordinator.Instance.UnregisterEscort(this);
@@ -1917,6 +1904,9 @@ namespace Behind_Bars.Systems.NPCs
 #if MONO
         private System.Collections.IEnumerator ContinuousPlayerLookingCoroutine()
 #else
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private IEnumerator ContinuousPlayerLookingCoroutine()
 #endif
         {
@@ -1968,6 +1958,9 @@ namespace Behind_Bars.Systems.NPCs
 #if MONO
         private System.Collections.IEnumerator SmoothRotateToTarget(Quaternion targetRotation, float duration)
 #else
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private IEnumerator SmoothRotateToTarget(Quaternion targetRotation, float duration)
 #endif
         {
@@ -2077,7 +2070,13 @@ namespace Behind_Bars.Systems.NPCs
                 securityDoor.OnDoorOperationFailed -= HandleSecurityDoorOperationFailed;
             }
 
-            OnDestinationReached -= HandleDestinationReached;
+            // Movement completion is handled via BaseJailNPC.NotifyDestinationReached override.
+        }
+
+        protected override void NotifyDestinationReached(Vector3 destination)
+        {
+            base.NotifyDestinationReached(destination);
+            HandleDestinationReached(destination);
         }
 
         #endregion

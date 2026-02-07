@@ -59,6 +59,14 @@
     <ItemGroup>
       <EmbeddedResource Include="behind_bars" />
       <EmbeddedResource Include="behind_bars.bundle" />
+      <None Remove="Icons\behindbars.bedroll.png" />
+      <EmbeddedResource Include="Icons\behindbars.bedroll.png" />
+      <None Remove="Icons\behindbars.cup.png" />
+      <EmbeddedResource Include="Icons\behindbars.cup.png" />
+      <None Remove="Icons\behindbars.sheetsnpillows.png" />
+      <EmbeddedResource Include="Icons\behindbars.sheetsnpillows.png" />
+      <None Remove="Icons\behindbars.toothbrush.png" />
+      <EmbeddedResource Include="Icons\behindbars.toothbrush.png" />
     </ItemGroup>
 
 </Project>

@@ -3,6 +3,7 @@ using System.Linq;
 using UnityEngine;
 using Behind_Bars.Utils;
 using Behind_Bars.Helpers;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppInterop.Runtime.Attributes;
@@ -315,7 +316,7 @@ namespace Behind_Bars.Systems.Jail
             PrisonBedInteractable bedInteractable = bedTransform.GetComponent<PrisonBedInteractable>();
             if (bedInteractable == null)
             {
-                bedInteractable = bedTransform.gameObject.AddComponent<PrisonBedInteractable>();
+                bedInteractable = BBHelpers.AddComponentSafe<PrisonBedInteractable>(bedTransform.gameObject);
                 ModLogger.Debug($"Added PrisonBedInteractable component to {bedTransform.name}");
             }
 

@@ -216,6 +216,11 @@ namespace Behind_Bars.Systems.NPCs
             {
                 // Try to load from asset bundle first, fallback to default
                 voiceDatabase = JailVoiceDatabaseFactory.CreateDefault();
+                if (voiceDatabase == null)
+                {
+                    ModLogger.Warn("Voice database factory returned null - voice commands will use fallback only");
+                    return;
+                }
 
                 if (Behind_Bars.Core.CachedJailBundle != null)
                 {
@@ -231,6 +236,10 @@ namespace Behind_Bars.Systems.NPCs
 
                 // Fallback to basic database
                 voiceDatabase = JailVoiceDatabaseFactory.CreateDefault();
+                if (voiceDatabase == null)
+                {
+                    ModLogger.Warn("Voice database fallback creation failed");
+                }
             }
         }
 

@@ -1,38 +1,33 @@
-﻿using MelonLoader;
+using MelonLoader;
 using UnityEngine;
 using System.Collections.Generic;
+using System.Linq;
 using Behind_Bars.Helpers;
 
 namespace Behind_Bars.Utils
 {
+#if MONO
+    using RuntimeAssetBundle = UnityEngine.AssetBundle;
+#else
+    using RuntimeAssetBundle = UnityEngine.Il2CppAssetBundle;
+#endif
+
     public static class AssetBundleUtils
     {
         private static readonly Core mod = MelonAssembly.FindMelonInstance<Core>();
         private static readonly MelonAssembly melonAssembly = mod.MelonAssembly;
         
         // Asset bundle cache for O(1) lookups instead of O(n) searches
-#if !MONO
-        private static Dictionary<string, Il2CppAssetBundle> _bundleCache = new Dictionary<string, Il2CppAssetBundle>();
-#else
-        private static Dictionary<string, AssetBundle> _bundleCache = new Dictionary<string, AssetBundle>();
-#endif
+        private static Dictionary<string, RuntimeAssetBundle> _bundleCache = new Dictionary<string, RuntimeAssetBundle>();
 
-        public static
-#if !MONO
-            Il2CppAssetBundle
-#elif MONO
-            AssetBundle
-#endif
-            LoadAssetBundle(string bundleFileName)
+        public static RuntimeAssetBundle LoadAssetBundle(string bundleFileName)
         {
             Stream? bundleStream = null;
-#if !MONO
-            Il2CppSystem.IO.MemoryStream? il2cppStream = null;
-#endif
+            string tempFilePath = null;
 
             try
             {
-                AssetBundle bundle = null;
+                RuntimeAssetBundle bundle = null;
                 string streamPath = bundleFileName;
                 bundleStream = melonAssembly.Assembly.GetManifestResourceStream($"{streamPath}");
                 if (bundleStream == null)
@@ -40,7 +35,6 @@ namespace Behind_Bars.Utils
                     mod.Unregister($"AssetBundle: '{streamPath}' not found. \nOpen .csproj file and search for '{bundleFileName}'.\nIf it doesn't exist,\nCopy your asset to Assets/ folder then look for 'your.assetbundle' in .csproj file.");
                     return null;
                 }
-#if !MONO
                 byte[] bundleData;
                 using (MemoryStream ms = new())
                 {
@@ -52,20 +46,34 @@ namespace Behind_Bars.Utils
                 bundleStream.Dispose();
                 bundleStream = null;
 
-                il2cppStream = new Il2CppSystem.IO.MemoryStream(bundleData);
-                bundle = Il2CppAssetBundle.LoadFromStream(il2cppStream);
+#if !MONO
+                // IL2CPP: use Il2CppAssetBundleManager wrapper to avoid AssetBundle wrapper init issues.
+                tempFilePath = System.IO.Path.Combine(System.IO.Path.GetTempPath(), $"bb_{bundleFileName}");
+                System.IO.File.WriteAllBytes(tempFilePath, bundleData);
+                bundle = Il2CppAssetBundleManager.LoadFromFile(tempFilePath);
 
-                // Dispose IL2CPP stream after bundle loads - frees ~15-25 MB
-                il2cppStream.Dispose();
-                il2cppStream = null;
+                if (bundle == null)
+                {
+                    ModLogger.Warn($"IL2CPP LoadFromFile returned null for '{bundleFileName}', retrying with LoadFromMemory");
+                    var il2CppData = new Il2CppInterop.Runtime.InteropTypes.Arrays.Il2CppStructArray<byte>(bundleData.Length);
+                    for (int i = 0; i < bundleData.Length; i++)
+                    {
+                        il2CppData[i] = bundleData[i];
+                    }
 
-                return bundle;
-#elif MONO
-                bundle = AssetBundle.LoadFromStream(bundleStream);
-                bundleStream.Close();
-                bundleStream = null;
-                return bundle;
+                    bundle = Il2CppAssetBundleManager.LoadFromMemory(il2CppData);
+                }
+#else
+                bundle = RuntimeAssetBundle.LoadFromMemory(bundleData);
 #endif
+
+                if (bundle == null)
+                {
+                    mod.Unregister($"AssetBundle load returned null for '{bundleFileName}'.");
+                    return null;
+                }
+
+                return bundle;
             }
             catch (Exception e)
             {
@@ -76,26 +84,13 @@ namespace Behind_Bars.Utils
             {
                 // Safety cleanup - dispose streams even on error
                 bundleStream?.Dispose();
-#if !MONO
-                il2cppStream?.Dispose();
-#endif
             }
         }
 
-        public static
-#if !MONO
-            Il2CppAssetBundle
-#elif MONO
-            AssetBundle
-#endif
-            GetLoadedAssetBundle(string asset_name_flag)
+        public static RuntimeAssetBundle GetLoadedAssetBundle(string asset_name_flag)
         {
             // Check cache first - O(1) lookup
-#if !MONO
-            if (_bundleCache.TryGetValue(asset_name_flag, out Il2CppAssetBundle cachedBundle))
-#else
-            if (_bundleCache.TryGetValue(asset_name_flag, out AssetBundle cachedBundle))
-#endif
+            if (_bundleCache.TryGetValue(asset_name_flag, out RuntimeAssetBundle cachedBundle))
             {
                 // Verify bundle is still valid (not unloaded)
                 if (cachedBundle != null)
@@ -111,10 +106,9 @@ namespace Behind_Bars.Utils
             
             // Cache miss - search through loaded bundles (existing logic)
 #if !MONO
-
-            Il2CppAssetBundle[] loadedBundles = Il2CppAssetBundleManager.GetAllLoadedAssetBundles();
-#elif MONO
-            AssetBundle[] loadedBundles = AssetBundle.GetAllLoadedAssetBundles().ToArray();
+            RuntimeAssetBundle[] loadedBundles = Il2CppAssetBundleManager.GetAllLoadedAssetBundles();
+#else
+            RuntimeAssetBundle[] loadedBundles = RuntimeAssetBundle.GetAllLoadedAssetBundles().ToArray();
 #endif
             try
             {
@@ -128,18 +122,33 @@ namespace Behind_Bars.Utils
                     }
                 }
                 string assetNames = "";
+#if MONO
                 foreach (var bundle in loadedBundles)
                 {
                     string[] bundleAssetNames = bundle.GetAllAssetNames();
                     string bundleAssetNamesString = string.Join("\n\r -", bundleAssetNames);
                     assetNames +=
-#if !MONO
-                        bundle
-#elif MONO
                         bundle.name
-#endif
                         +$"({bundleAssetNames.Length} assets):" + bundleAssetNamesString;
                 }
+#else
+                for (int i = 0; i < loadedBundles.Length; i++)
+                {
+                    var bundle = loadedBundles[i];
+                    var bundleAssetNames = bundle.GetAllAssetNames();
+                    var readableNames = new List<string>();
+                    if (bundleAssetNames != null)
+                    {
+                        for (int j = 0; j < bundleAssetNames.Length; j++)
+                        {
+                            readableNames.Add(bundleAssetNames[j]?.ToString() ?? "<null>");
+                        }
+                    }
+
+                    string bundleAssetNamesString = string.Join("\n\r -", readableNames);
+                    assetNames += $"bundle[{i}] ({readableNames.Count} assets):" + bundleAssetNamesString;
+                }
+#endif
                 throw new Exception($"Asset '{asset_name_flag}' not found in {loadedBundles.Length} bundle(s).\n{assetNames}");
             }
             catch (Exception e)
@@ -153,7 +162,11 @@ namespace Behind_Bars.Utils
         public static GameObject LoadAssetFromBundle(string asset_name)
         {
             var bundle = GetLoadedAssetBundle(asset_name);
+#if MONO
             return bundle.LoadAsset<GameObject>(asset_name);
+#else
+            return bundle.LoadAsset(asset_name, Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>();
+#endif
         }
 
         /// <summary>

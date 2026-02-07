@@ -6,6 +6,7 @@ using Behind_Bars.Helpers;
 using Behind_Bars.UI;
 using Behind_Bars.Systems.NPCs;
 using Behind_Bars.Systems;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 
 
@@ -101,14 +102,14 @@ namespace Behind_Bars.Systems.Jail
         void FindBookingStations()
         {
             if (mugshotStation == null)
-                mugshotStation = FindObjectOfType<MugshotStation>();
+                mugshotStation = BBHelpers.FindObjectOfTypeSafe<MugshotStation>();
                 
             if (scannerStation == null)
-                scannerStation = FindObjectOfType<ScannerStation>();
+                scannerStation = BBHelpers.FindObjectOfTypeSafe<ScannerStation>();
                 
             if (inventoryDropOffStation == null)
             {
-                inventoryDropOffStation = FindObjectOfType<InventoryDropOffStation>();
+                inventoryDropOffStation = BBHelpers.FindObjectOfTypeSafe<InventoryDropOffStation>();
 
                 // Disable the InventoryDropOffStation - we're replacing it with prison gear pickup
                 if (inventoryDropOffStation != null)
@@ -200,7 +201,7 @@ namespace Behind_Bars.Systems.Jail
                 var jailInventoryPickupTransform = jailController.transform.Find("Storage/JailInventoryPickup");
                 if (jailInventoryPickupTransform != null)
                 {
-                    var jailInventoryStation = jailInventoryPickupTransform.GetComponent<JailInventoryPickupStation>();
+                    var jailInventoryStation = BBHelpers.GetComponentSafe<JailInventoryPickupStation>(jailInventoryPickupTransform.gameObject);
                     if (jailInventoryStation != null)
                     {
                         jailInventoryStation.ResetForNewInmate();
@@ -226,7 +227,7 @@ namespace Behind_Bars.Systems.Jail
                     ModLogger.Warn("Intake officer still processing from previous arrest - canceling old intake");
 
                     // Get the IntakeOfficerStateMachine component
-                    var intakeOfficerStateMachine = intakeOfficerBehavior.GetComponent<IntakeOfficerStateMachine>();
+                    var intakeOfficerStateMachine = BBHelpers.GetComponentSafe<IntakeOfficerStateMachine>(intakeOfficerBehavior.gameObject);
                     if (intakeOfficerStateMachine != null)
                     {
                         intakeOfficerStateMachine.CancelIntake();
@@ -681,7 +682,7 @@ namespace Behind_Bars.Systems.Jail
             try
             {
                 // Find the jail controller to access door controls
-                var jailController = UnityEngine.Object.FindObjectOfType<JailController>();
+                var jailController = BBHelpers.FindObjectOfTypeSafe<JailController>();
                 if (jailController == null)
                 {
                     ModLogger.Warn("JailController not found for guard door control");

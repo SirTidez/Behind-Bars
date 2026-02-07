@@ -5,6 +5,7 @@ using UnityEngine;
 using UnityEngine.AI;
 using MelonLoader;
 using Behind_Bars.Helpers;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppScheduleOne.NPCs;
@@ -26,7 +27,7 @@ namespace Behind_Bars.Systems.NPCs
     /// Base class for all jail NPCs - consolidates common functionality
     /// Replaces NPCStateMachine, GuardStateMachine, and core NPC behavior
     /// </summary>
-    public abstract class BaseJailNPC : MonoBehaviour
+    public class BaseJailNPC : MonoBehaviour
     {
 #if !MONO
         public BaseJailNPC(System.IntPtr ptr) : base(ptr) { }
@@ -79,7 +80,7 @@ namespace Behind_Bars.Systems.NPCs
         protected const float minMovementDistance = 0.1f;
 
         // State Management
-        protected Dictionary<NPCState, System.Action> stateHandlers = new Dictionary<NPCState, System.Action>();
+#if MONO
         protected Queue<System.Action> actionQueue = new Queue<System.Action>();
 
         // Events
@@ -87,6 +88,7 @@ namespace Behind_Bars.Systems.NPCs
         public System.Action<Vector3> OnDestinationReached;
         public System.Action OnStuck;
         public System.Action<Player> OnAttacked;
+#endif
 
         protected virtual void Awake()
         {
@@ -120,9 +122,6 @@ namespace Behind_Bars.Systems.NPCs
             if (NPCUpdateManager.Instance != null)
             {
                 NPCUpdateManager.Instance.RegisterNPC(this);
-                NPCUpdateManager.Instance.OnNPCStateUpdate += HandleStateUpdate;
-                NPCUpdateManager.Instance.OnNPCMovementCheck += HandleMovementCheck;
-                NPCUpdateManager.Instance.OnNPCActionProcess += HandleActionProcess;
             }
         }
 
@@ -131,28 +130,39 @@ namespace Behind_Bars.Systems.NPCs
             if (NPCUpdateManager.Instance != null)
             {
                 NPCUpdateManager.Instance.UnregisterNPC(this);
-                NPCUpdateManager.Instance.OnNPCStateUpdate -= HandleStateUpdate;
-                NPCUpdateManager.Instance.OnNPCMovementCheck -= HandleMovementCheck;
-                NPCUpdateManager.Instance.OnNPCActionProcess -= HandleActionProcess;
             }
         }
 
-        // Event handlers replace Update() methods
-        private void HandleStateUpdate(float currentTime)
+        internal void DispatchStateUpdate(float currentTime)
         {
             if (!isInitialized) return;
+            OnStateUpdateTick(currentTime);
+        }
+
+        internal void DispatchMovementCheck(float currentTime)
+        {
+            if (!isInitialized) return;
+            OnMovementCheckTick(currentTime);
+        }
+
+        internal void DispatchActionProcess()
+        {
+            if (!isInitialized) return;
+            OnActionProcessTick();
+        }
+
+        protected virtual void OnStateUpdateTick(float currentTime)
+        {
             UpdateState();
         }
 
-        private void HandleMovementCheck(float currentTime)
+        protected virtual void OnMovementCheckTick(float currentTime)
         {
-            if (!isInitialized) return;
             CheckStuckMovement();
         }
 
-        private void HandleActionProcess()
+        protected virtual void OnActionProcessTick()
         {
-            if (!isInitialized) return;
             ProcessActionQueue();
         }
 
@@ -196,12 +206,7 @@ namespace Behind_Bars.Systems.NPCs
 
         protected virtual void InitializeStateHandlers()
         {
-            stateHandlers[NPCState.Idle] = HandleIdleState;
-            stateHandlers[NPCState.Moving] = HandleMovingState;
-            stateHandlers[NPCState.Interacting] = HandleInteractingState;
-            stateHandlers[NPCState.Waiting] = HandleWaitingState;
-            stateHandlers[NPCState.Working] = HandleWorkingState;
-            stateHandlers[NPCState.Error] = HandleErrorState;
+            // Intentionally empty. State dispatch uses a direct switch for IL2CPP safety.
         }
 
         protected virtual void SetupAttackDetection()
@@ -211,10 +216,10 @@ namespace Behind_Bars.Systems.NPCs
                 try
                 {
                     // Create a wrapper component to monitor health changes
-                    var attackMonitor = gameObject.GetComponent<NPCAttackMonitor>();
+                    var attackMonitor = BBHelpers.GetComponentSafe<NPCAttackMonitor>(gameObject);
                     if (attackMonitor == null)
                     {
-                        attackMonitor = gameObject.AddComponent<NPCAttackMonitor>();
+                        attackMonitor = BBHelpers.AddComponentSafe<NPCAttackMonitor>(gameObject);
                         attackMonitor.Initialize(this);
                     }
                     ModLogger.Debug($"BaseJailNPC: Attack detection setup for {gameObject.name}");
@@ -234,10 +239,13 @@ namespace Behind_Bars.Systems.NPCs
         public virtual void OnAttackedByPlayer(Player attacker)
         {
             ModLogger.Info($"BaseJailNPC: {gameObject.name} was attacked by {attacker?.name}");
-            OnAttacked?.Invoke(attacker);
+            NotifyAttacked(attacker);
         }
 
-        protected abstract void InitializeNPC();
+        protected virtual void InitializeNPC()
+        {
+            // Derived behaviors override this to provide role-specific initialization.
+        }
 
         #endregion
 
@@ -253,7 +261,7 @@ namespace Behind_Bars.Systems.NPCs
             stateStartTime = Time.time;
             EnterState(newState);
 
-            OnStateChanged?.Invoke(oldState, newState);
+            NotifyStateChanged(oldState, newState);
             ModLogger.Debug($"{gameObject.name} changed state: {oldState} → {newState}");
         }
 
@@ -269,9 +277,26 @@ namespace Behind_Bars.Systems.NPCs
 
         protected virtual void UpdateState()
         {
-            if (stateHandlers.ContainsKey(currentState))
+            switch (currentState)
             {
-                stateHandlers[currentState]?.Invoke();
+                case NPCState.Idle:
+                    HandleIdleState();
+                    break;
+                case NPCState.Moving:
+                    HandleMovingState();
+                    break;
+                case NPCState.Interacting:
+                    HandleInteractingState();
+                    break;
+                case NPCState.Waiting:
+                    HandleWaitingState();
+                    break;
+                case NPCState.Working:
+                    HandleWorkingState();
+                    break;
+                case NPCState.Error:
+                    HandleErrorState();
+                    break;
             }
         }
 
@@ -289,7 +314,7 @@ namespace Behind_Bars.Systems.NPCs
             if (HasReachedDestination())
             {
                 // ModLogger.Info($"BaseJailNPC: Destination reached, firing OnDestinationReached event for {gameObject.name}");
-                OnDestinationReached?.Invoke(currentDestination);
+                NotifyDestinationReached(currentDestination);
                 ChangeState(NPCState.Idle);
             }
         }
@@ -380,7 +405,7 @@ namespace Behind_Bars.Systems.NPCs
                 if (stuckCheckTime >= stuckThreshold)
                 {
                     // ModLogger.Warn($"NPC {gameObject.name} appears stuck. Attempting to resolve...");
-                    OnStuck?.Invoke();
+                    NotifyStuck();
 
                     // Try to resolve by re-setting destination
                     if (navAgent != null && navAgent.enabled)
@@ -406,24 +431,60 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
 #endif
-        public virtual void QueueAction(System.Action action)
+#if MONO
+        public void QueueAction(System.Action action)
+#else
+        public void QueueAction(object action)
+#endif
         {
+#if MONO
             if (action != null)
             {
                 actionQueue.Enqueue(action);
             }
+#endif
         }
 
 #if !MONO
         [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
 #endif
-        protected virtual void ProcessActionQueue()
+        protected void ProcessActionQueue()
         {
+#if MONO
             if (actionQueue.Count > 0 && currentState == NPCState.Idle)
             {
                 var action = actionQueue.Dequeue();
                 action?.Invoke();
             }
+#endif
+        }
+
+        protected virtual void NotifyStateChanged(NPCState oldState, NPCState newState)
+        {
+#if MONO
+            OnStateChanged?.Invoke(oldState, newState);
+#endif
+        }
+
+        protected virtual void NotifyDestinationReached(Vector3 destination)
+        {
+#if MONO
+            OnDestinationReached?.Invoke(destination);
+#endif
+        }
+
+        protected virtual void NotifyStuck()
+        {
+#if MONO
+            OnStuck?.Invoke();
+#endif
+        }
+
+        protected virtual void NotifyAttacked(Player attacker)
+        {
+#if MONO
+            OnAttacked?.Invoke(attacker);
+#endif
         }
 
         #endregion
@@ -450,7 +511,7 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
 #endif
-        protected virtual IEnumerator LookAtTarget(Vector3 target, float duration)
+        protected IEnumerator LookAtTarget(Vector3 target, float duration)
         {
             if (!lookControllerAvailable) yield break;
 
@@ -473,7 +534,7 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
 #if !MONO
         [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
-        protected virtual Il2CppScheduleOne.AvatarFramework.Animation.AvatarLookController GetAvatarLookController()
+        protected Il2CppScheduleOne.AvatarFramework.Animation.AvatarLookController GetAvatarLookController()
         {
             if (npcComponent == null)
             {
@@ -508,7 +569,7 @@ namespace Behind_Bars.Systems.NPCs
             return lookController;
         }
 #else
-        protected virtual ScheduleOne.AvatarFramework.Animation.AvatarLookController GetAvatarLookController()
+        protected ScheduleOne.AvatarFramework.Animation.AvatarLookController GetAvatarLookController()
         {
             if (npcComponent == null)
             {

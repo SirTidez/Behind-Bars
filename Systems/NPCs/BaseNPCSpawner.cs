@@ -2,6 +2,7 @@ using System;
 using UnityEngine;
 using Behind_Bars.Helpers;
 using Behind_Bars.Utils;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 
 #if !MONO
@@ -585,10 +586,10 @@ namespace Behind_Bars.Systems.NPCs
         private static void AddGuardBehavior(GameObject npcInstance, NPCRole role, string badgeNumber)
         {
             // Add GuardBehavior component
-            var guardBehavior = npcInstance.GetComponent<GuardBehavior>();
+            var guardBehavior = BBHelpers.GetComponentSafe<GuardBehavior>(npcInstance);
             if (guardBehavior == null)
             {
-                guardBehavior = npcInstance.AddComponent<GuardBehavior>();
+                guardBehavior = BBHelpers.AddComponentSafe<GuardBehavior>(npcInstance);
             }
 
             // Determine assignment based on role
@@ -628,10 +629,14 @@ namespace Behind_Bars.Systems.NPCs
         private static void AddTestNPCBehavior(GameObject npcInstance)
         {
             // TestNPC should have minimal components for testing pathfinding
-            var testController = npcInstance.GetComponent<TestNPCController>();
+            var testController = BBHelpers.GetComponentSafe<TestNPCController>(npcInstance);
             if (testController == null)
             {
-                testController = npcInstance.AddComponent<TestNPCController>();
+                testController = BBHelpers.AddComponentSafe<TestNPCController>(npcInstance);
+            }
+
+            if (testController != null)
+            {
                 testController.usePatrolMode = true;
             }
 

@@ -9,6 +9,7 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine.UI;
 using Object = UnityEngine.Object;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppTMPro;
@@ -245,10 +246,8 @@ namespace Behind_Bars.UI
                 try
                 {
                     ModLogger.Debug("Using IL2CPP component addition method");
-                    var wrapperComponent = _activeUI.AddComponent(Il2CppInterop.Runtime.Il2CppType.Of<BehindBarsUIWrapper>());
-                    ModLogger.Debug("IL2CPP AddComponent succeeded, casting to BehindBarsUIWrapper");
-                    _uiWrapper = wrapperComponent.Cast<BehindBarsUIWrapper>();
-                    ModLogger.Debug("Cast to BehindBarsUIWrapper succeeded");
+                    _uiWrapper = BBHelpers.AddComponentSafe<BehindBarsUIWrapper>(_activeUI);
+                    ModLogger.Debug("IL2CPP AddComponent succeeded for BehindBarsUIWrapper");
                 }
                 catch (System.Exception ex)
                 {
@@ -891,9 +890,7 @@ namespace Behind_Bars.UI
                 // Add the OfficerCommandUI component
 #if !MONO
                 // IL2CPP-safe component addition
-                var componentType = Il2CppInterop.Runtime.Il2CppType.Of<OfficerCommandUI>();
-                var component = _officerCommandManager.AddComponent(componentType);
-                _officerCommandUI = component.Cast<OfficerCommandUI>();
+                _officerCommandUI = BBHelpers.AddComponentSafe<OfficerCommandUI>(_officerCommandManager);
 #else
                 _officerCommandUI = _officerCommandManager.AddComponent<OfficerCommandUI>();
 #endif
@@ -1064,9 +1061,7 @@ namespace Behind_Bars.UI
                 // Add the ParoleStatusUI component
 #if !MONO
                 // IL2CPP-safe component addition
-                var componentType = Il2CppInterop.Runtime.Il2CppType.Of<ParoleStatusUI>();
-                var component = _paroleStatusManager.AddComponent(componentType);
-                _paroleStatusUI = component.Cast<ParoleStatusUI>();
+                _paroleStatusUI = BBHelpers.AddComponentSafe<ParoleStatusUI>(_paroleStatusManager);
 #else
                 _paroleStatusUI = _paroleStatusManager.AddComponent<ParoleStatusUI>();
 #endif
@@ -1473,9 +1468,7 @@ namespace Behind_Bars.UI
                 // Add the ParoleConditionsUI component
 #if !MONO
                 // IL2CPP-safe component addition
-                var componentType = Il2CppInterop.Runtime.Il2CppType.Of<ParoleConditionsUI>();
-                var component = _paroleConditionsManager.AddComponent(componentType);
-                _paroleConditionsUI = component.Cast<ParoleConditionsUI>();
+                _paroleConditionsUI = BBHelpers.AddComponentSafe<ParoleConditionsUI>(_paroleConditionsManager);
 #else
                 _paroleConditionsUI = _paroleConditionsManager.AddComponent<ParoleConditionsUI>();
 #endif
@@ -1509,9 +1502,7 @@ namespace Behind_Bars.UI
                 // Add the BailUI component
 #if !MONO
                 // IL2CPP-safe component addition
-                var componentType = Il2CppInterop.Runtime.Il2CppType.Of<BailUI>();
-                var component = _bailManager.AddComponent(componentType);
-                _bailUI = component.Cast<BailUI>();
+                _bailUI = BBHelpers.AddComponentSafe<BailUI>(_bailManager);
 #else
                 _bailUI = _bailManager.AddComponent<BailUI>();
 #endif
@@ -1567,9 +1558,7 @@ namespace Behind_Bars.UI
                 // Add the WantedLevelUI component
 #if !MONO
                 // IL2CPP-safe component addition
-                var componentType = Il2CppInterop.Runtime.Il2CppType.Of<WantedLevelUI>();
-                var component = _wantedLevelManager.AddComponent(componentType);
-                _wantedLevelUI = component.Cast<WantedLevelUI>();
+                _wantedLevelUI = BBHelpers.AddComponentSafe<WantedLevelUI>(_wantedLevelManager);
 #else
                 _wantedLevelUI = _wantedLevelManager.AddComponent<WantedLevelUI>();
 #endif

@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Events;
 using Behind_Bars.Helpers;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppScheduleOne.Dialogue;
@@ -49,11 +50,12 @@ namespace Behind_Bars.Systems.NPCs
             jailNPC = GetComponent<BaseJailNPC>();
             baseController = GetComponent<DialogueController>();
             dialogueHandler = GetComponent<DialogueHandler>();
-            audioController = GetComponent<JailNPCAudioController>();
+            audioController = BBHelpers.GetComponentSafe<JailNPCAudioController>(gameObject);
 
             if (jailNPC == null)
             {
-                ModLogger.Error($"JailNPCDialogueController on {gameObject.name} requires BaseJailNPC component");
+                ModLogger.Warn($"JailNPCDialogueController on {gameObject.name} has no BaseJailNPC - disabling dialogue integration for fallback NPC");
+                enabled = false;
                 return;
             }
 

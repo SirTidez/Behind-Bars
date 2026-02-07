@@ -154,21 +154,42 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
 
     void InitializeControllers()
     {
+        ModLogger.Debug("InitializeControllers: ensuring jail controller components");
+
         // Create controllers if they don't exist
+        ModLogger.Debug("InitializeControllers: JailLightingController");
         if (lightingController == null)
-            lightingController = gameObject.AddComponent<JailLightingController>();
+            lightingController = Helpers.AddComponentSafe<JailLightingController>(gameObject);
+
+        ModLogger.Debug("InitializeControllers: JailMonitorController");
         if (monitorController == null)
-            monitorController = gameObject.AddComponent<JailMonitorController>();
+            monitorController = Helpers.AddComponentSafe<JailMonitorController>(gameObject);
+
+        ModLogger.Debug("InitializeControllers: SecurityCameraCullingManager");
         if (cameraCullingManager == null)
-            cameraCullingManager = gameObject.AddComponent<SecurityCameraCullingManager>();
+            cameraCullingManager = Helpers.AddComponentSafe<SecurityCameraCullingManager>(gameObject);
+
+        ModLogger.Debug("InitializeControllers: JailDoorController");
         if (doorController == null)
-            doorController = gameObject.AddComponent<JailDoorController>();
+            doorController = Helpers.AddComponentSafe<JailDoorController>(gameObject);
+
+        ModLogger.Debug("InitializeControllers: JailCellManager");
         if (cellManager == null)
-            cellManager = gameObject.AddComponent<JailCellManager>();
+            cellManager = Helpers.AddComponentSafe<JailCellManager>(gameObject);
+
+        ModLogger.Debug("InitializeControllers: JailPatrolManager");
         if (patrolManager == null)
-            patrolManager = gameObject.AddComponent<JailPatrolManager>();
+            patrolManager = Helpers.AddComponentSafe<JailPatrolManager>(gameObject);
+
+        ModLogger.Debug("InitializeControllers: JailAreaManager");
         if (areaManager == null)
-            areaManager = gameObject.AddComponent<JailAreaManager>();
+            areaManager = Helpers.AddComponentSafe<JailAreaManager>(gameObject);
+
+        if (lightingController == null || monitorController == null || doorController == null || cellManager == null || patrolManager == null || areaManager == null)
+        {
+            ModLogger.Error("Failed to initialize one or more jail controllers - aborting jail controller initialization");
+            return;
+        }
 
         // Initialize each controller
         cellManager.Initialize(transform);
@@ -182,7 +203,12 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         doorController.jailDoorPrefab = jailDoorPrefab;
         doorController.steelDoorPrefab = steelDoorPrefab;
         doorController.modifierKey = modifierKey;
-        doorController.Initialize(cellManager.cells, cellManager.holdingCells, areaManager.GetBooking(), this);
+        doorController.Initialize(cellManager.cells, cellManager.holdingCells, areaManager.GetBooking(), this, false);
+
+        if (jailDoorPrefab != null || steelDoorPrefab != null)
+        {
+            doorController.SetupDoors();
+        }
 
         lightingController.Initialize(transform);
 
@@ -222,11 +248,11 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     void InitializeNPCUpdateSystem()
     {
         // Create NPCUpdateManager if it doesn't exist
-        var updateManager = GameObject.FindObjectOfType<Behind_Bars.Systems.NPCs.NPCUpdateManager>();
+        var updateManager = Helpers.FindObjectOfTypeSafe<Behind_Bars.Systems.NPCs.NPCUpdateManager>();
         if (updateManager == null)
         {
             var managerObj = new GameObject("NPCUpdateManager");
-            managerObj.AddComponent<Behind_Bars.Systems.NPCs.NPCUpdateManager>();
+            Helpers.AddComponentSafe<Behind_Bars.Systems.NPCs.NPCUpdateManager>(managerObj);
             ModLogger.Info("✓ NPCUpdateManager initialized - Event-driven NPC updates enabled");
         }
         else
@@ -310,7 +336,7 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
 
     void SetupSecurityCameras(Transform cameraPosition)
     {
-        SecurityCamera existingCamera = cameraPosition.GetComponent<SecurityCamera>();
+        SecurityCamera existingCamera = Helpers.GetComponentSafe<SecurityCamera>(cameraPosition.gameObject);
         if (existingCamera != null)
         {
             if (!securityCameras.Contains(existingCamera))
@@ -321,7 +347,7 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
             return;
         }
 
-        SecurityCamera camera = cameraPosition.gameObject.AddComponent<SecurityCamera>();
+        SecurityCamera camera = Helpers.AddComponentSafe<SecurityCamera>(cameraPosition.gameObject);
         securityCameras.Add(camera);
         ConfigureSecurityCamera(camera, cameraPosition.name);
     }
@@ -407,7 +433,15 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     public string GetPlayerCurrentArea(Vector3 playerPosition) => areaManager?.GetPlayerCurrentArea(playerPosition) ?? "Unknown";
     public List<Transform> GetPatrolPoints() => patrolManager?.GetPatrolPoints() ?? new List<Transform>();
     public void InitializePatrolPoints() => patrolManager?.Initialize(transform);
-    public void SetupDoors() => doorController?.SetupDoors();
+    public void SetupDoors()
+    {
+        if (doorController == null)
+            return;
+
+        doorController.jailDoorPrefab = jailDoorPrefab;
+        doorController.steelDoorPrefab = steelDoorPrefab;
+        doorController.SetupDoors();
+    }
     public List<JailLightingController.AreaLighting> areaLights => lightingController?.areaLights ?? new List<JailLightingController.AreaLighting>();
 
     // Test methods - delegate to appropriate controllers

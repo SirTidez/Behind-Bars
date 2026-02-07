@@ -5,8 +5,10 @@ using Behind_Bars.Helpers;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
+using S1Persistence = Il2CppScheduleOne.Persistence;
 #else
 using ScheduleOne.PlayerScripts;
+using S1Persistence = ScheduleOne.Persistence;
 #endif
 
 namespace Behind_Bars.Systems.CrimeTracking
@@ -62,7 +64,7 @@ namespace Behind_Bars.Systems.CrimeTracking
             string savePath = null;
             try
             {
-                var loadManager = ScheduleOne.Persistence.LoadManager.Instance;
+                var loadManager = S1Persistence.LoadManager.Instance;
                 if (loadManager != null && !string.IsNullOrEmpty(loadManager.LoadedGameFolderPath))
                 {
                     // RapSheet saves to Modded/Saveables/BehindBars/{PlayerName}/

@@ -1,7 +1,10 @@
-﻿using System;
+using System;
 using System.Reflection;
-using Newtonsoft.Json;
 using Behind_Bars.Utils;
+
+#if MONO
+using Newtonsoft.Json;
+
 
 namespace Behind_Bars.Utils.Saveable
 {
@@ -69,3 +72,5 @@ namespace Behind_Bars.Utils.Saveable
         public override bool CanRead => true;
     }
 }
+
+#endif

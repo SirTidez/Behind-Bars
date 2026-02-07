@@ -7,6 +7,7 @@ using Behind_Bars.Helpers;
 using Behind_Bars.Systems.Jail;
 using Behind_Bars.Systems.Dialogue;
 using Behind_Bars.UI;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -114,11 +115,13 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Events
 
+#if MONO
         public new System.Action<ReleaseState> OnStateChanged;
         public System.Action<Player> OnEscortStarted;
         public System.Action<Player> OnEscortCompleted;
         public System.Action<Player, string> OnEscortFailed;
         public System.Action<Player, ReleaseState> OnStatusUpdate;
+#endif
 
         #endregion
 
@@ -137,7 +140,9 @@ namespace Behind_Bars.Systems.NPCs
             // Register with ReleaseManager
             if (ReleaseManager.Instance != null)
             {
+#if MONO
                 ReleaseManager.Instance.RegisterOfficer(this);
+#endif
             }
 
             // Subscribe to SecurityDoor events (like IntakeOfficer)
@@ -153,8 +158,7 @@ namespace Behind_Bars.Systems.NPCs
                 ModLogger.Warn($"ReleaseOfficer {badgeNumber}: No SecurityDoor component - will use fallback direct control");
             }
 
-            // Subscribe to movement completion events
-            OnDestinationReached += HandleDestinationReached;
+            // Movement completion is handled via BaseJailNPC.NotifyDestinationReached override.
 
             // CRITICAL FIX: Only set to Idle if not already in an active release
             if (currentReleasee == null && currentReleaseState == ReleaseState.Idle)
@@ -209,13 +213,13 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                audioController = GetComponent<JailNPCAudioController>();
+                audioController = BBHelpers.GetComponentSafe<JailNPCAudioController>(gameObject);
                 if (audioController == null)
                 {
                     ModLogger.Warn($"ReleaseOfficer {badgeNumber}: No JailNPCAudioController found");
                 }
 
-                dialogueController = GetComponent<JailNPCDialogueController>();
+                dialogueController = BBHelpers.GetComponentSafe<JailNPCDialogueController>(gameObject);
                 if (dialogueController == null)
                 {
                     ModLogger.Warn($"ReleaseOfficer {badgeNumber}: No JailNPCDialogueController found");
@@ -580,7 +584,7 @@ namespace Behind_Bars.Systems.NPCs
                 if (jailController?.storage?.inventoryPickup != null)
                 {
                     // Mark as disabled by officer to prevent reopening
-                    var inventoryPickupStation = jailController.storage.inventoryPickup.GetComponent<InventoryPickupStation>();
+                    var inventoryPickupStation = BBHelpers.GetComponentSafe<InventoryPickupStation>(jailController.storage.inventoryPickup.gameObject);
                     if (inventoryPickupStation != null)
                     {
                         inventoryPickupStation.MarkDisabledByOfficer();
@@ -627,14 +631,7 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         protected override void OnEnable()
         {
-            // Subscribe to NPCUpdateManager events (custom handler for state updates)
-            if (NPCUpdateManager.Instance != null)
-            {
-                NPCUpdateManager.Instance.RegisterNPC(this);
-                NPCUpdateManager.Instance.OnNPCStateUpdate += HandleReleaseStateUpdate;  // Custom handler
-                NPCUpdateManager.Instance.OnNPCMovementCheck += HandleMovementCheck;
-                NPCUpdateManager.Instance.OnNPCActionProcess += HandleActionProcess;
-            }
+            base.OnEnable();
 
             // Process dialogue setup once when enabled (not every frame)
             ProcessDialogueSetup();
@@ -642,14 +639,7 @@ namespace Behind_Bars.Systems.NPCs
 
         protected override void OnDisable()
         {
-            // Unsubscribe from events
-            if (NPCUpdateManager.Instance != null)
-            {
-                NPCUpdateManager.Instance.UnregisterNPC(this);
-                NPCUpdateManager.Instance.OnNPCStateUpdate -= HandleReleaseStateUpdate;  // Custom handler
-                NPCUpdateManager.Instance.OnNPCMovementCheck -= HandleMovementCheck;
-                NPCUpdateManager.Instance.OnNPCActionProcess -= HandleActionProcess;
-            }
+            base.OnDisable();
         }
 
         /// <summary>
@@ -677,7 +667,16 @@ namespace Behind_Bars.Systems.NPCs
             {
                 if (_cachedReadyContainer == null)
                 {
-                    _cachedReadyContainer = dialogueHandler.dialogueContainers.Find(c => c != null && c.name == READY_TO_LEAVE_CONTAINER_NAME);
+                    // Manual search instead of .Find() lambda (IL2CPP list doesn't support managed delegates)
+                    for (int i = 0; i < dialogueHandler.dialogueContainers.Count; i++)
+                    {
+                        var container = dialogueHandler.dialogueContainers[i];
+                        if (container != null && container.name == READY_TO_LEAVE_CONTAINER_NAME)
+                        {
+                            _cachedReadyContainer = container;
+                            break;
+                        }
+                    }
                 }
 
                 // Only reorder if needed
@@ -692,27 +691,12 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Override state update handler to include release state machine
         /// </summary>
-        private void HandleReleaseStateUpdate(float currentTime)
+        protected override void OnStateUpdateTick(float currentTime)
         {
-            if (!isInitialized) return;
-
-            // Call base state update
-            UpdateState();
+            base.OnStateUpdateTick(currentTime);
 
             // Update release-specific state machine
             UpdateReleaseStateMachine();
-        }
-
-        private void HandleMovementCheck(float currentTime)
-        {
-            if (!isInitialized) return;
-            CheckStuckMovement();
-        }
-
-        private void HandleActionProcess()
-        {
-            if (!isInitialized) return;
-            ProcessActionQueue();
         }
 
         private void HandleDestinationReached(Vector3 destination)
@@ -887,13 +871,17 @@ namespace Behind_Bars.Systems.NPCs
             currentReleaseState = newState;
             stateStartTime = Time.time;
 
+#if MONO
             OnStateChanged?.Invoke(newState);
+#endif
             ModLogger.Debug($"ReleaseOfficer {badgeNumber}: {oldState} → {newState}");
 
             // Notify ReleaseManager of status updates for key states
             if (currentReleasee != null && ShouldNotifyStatusUpdate(newState))
             {
+#if MONO
                 OnStatusUpdate?.Invoke(currentReleasee, newState);
+#endif
                 ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Notified ReleaseManager of status update: {newState}");
             }
 
@@ -1455,7 +1443,9 @@ namespace Behind_Bars.Systems.NPCs
             lastKnownPlayerPosition = player.transform.position;
 
             ResetDoorTracking(); // Reset door operations for new release
+#if MONO
             OnEscortStarted?.Invoke(player);
+#endif
 
             ModLogger.Info($"ReleaseOfficer {badgeNumber}: Starting release escort for {player.name} at position {player.transform.position}");
             ModLogger.Info($"ReleaseOfficer {badgeNumber}: Officer position: {transform.position}");
@@ -1471,10 +1461,15 @@ namespace Behind_Bars.Systems.NPCs
         {
             yield return new WaitForSeconds(delay);
 
-            // Try again
-            if (isAvailable && currentReleasee == null)
+            if (player == null)
             {
-                ModLogger.Info($"ReleaseOfficer {badgeNumber}: Retrying escort for {player?.name} after coordination delay");
+                yield break;
+            }
+
+            // Try again unless another releasee was already assigned.
+            if (currentReleasee == null || currentReleasee == player)
+            {
+                ModLogger.Info($"ReleaseOfficer {badgeNumber}: Retrying escort for {player?.name} after delay ({delay:F1}s)");
                 StartReleaseEscort(player);
             }
         }
@@ -1614,7 +1609,9 @@ namespace Behind_Bars.Systems.NPCs
             if (storageLocation == Vector3.zero)
             {
                 ModLogger.Error($"ReleaseOfficer {badgeNumber}: Could not find storage location");
+#if MONO
                 OnEscortFailed?.Invoke(currentReleasee, "Could not find storage location");
+#endif
                 ChangeReleaseState(ReleaseState.ReturningToPost);
                 return;
             }
@@ -1639,7 +1636,7 @@ namespace Behind_Bars.Systems.NPCs
             else
             {
                 // If not registered, try to find and register it
-                var exitScannerStation = FindObjectOfType<ExitScannerStation>();
+                var exitScannerStation = BBHelpers.FindObjectOfTypeSafe<ExitScannerStation>();
                 if (exitScannerStation != null)
                 {
                     var guardPointTransform = exitScannerStation.transform.Find("GuardPoint");
@@ -1738,10 +1735,10 @@ namespace Behind_Bars.Systems.NPCs
                 }
 
                 // Get or add InventoryPickupStation component
-                var inventoryPickupStation = pickupTransform.GetComponent<InventoryPickupStation>();
+                var inventoryPickupStation = BBHelpers.GetComponentSafe<InventoryPickupStation>(pickupTransform.gameObject);
                 if (inventoryPickupStation == null)
                 {
-                    inventoryPickupStation = pickupTransform.gameObject.AddComponent<InventoryPickupStation>();
+                    inventoryPickupStation = BBHelpers.AddComponentSafe<InventoryPickupStation>(pickupTransform.gameObject);
                     ModLogger.Info($"ReleaseOfficer {badgeNumber}: Added InventoryPickupStation component");
                 }
 
@@ -2024,7 +2021,7 @@ namespace Behind_Bars.Systems.NPCs
             try
             {
                 // Find the ExitScannerStation
-                var exitScannerStation = UnityEngine.Object.FindObjectOfType<ExitScannerStation>();
+                var exitScannerStation = BBHelpers.FindObjectOfTypeSafe<ExitScannerStation>();
                 if (exitScannerStation != null)
                 {
                     exitScannerStation.EnableForRelease();
@@ -2263,7 +2260,7 @@ namespace Behind_Bars.Systems.NPCs
                 }
 
                 // Fallback to inventory pickup station if it exists
-                var pickupStation = FindObjectOfType<InventoryPickupStation>();
+                var pickupStation = BBHelpers.FindObjectOfTypeSafe<InventoryPickupStation>();
                 if (pickupStation != null)
                 {
                     ModLogger.Warn($"ReleaseOfficer {badgeNumber}: Fallback to InventoryPickupStation at {pickupStation.transform.position}");
@@ -2705,7 +2702,9 @@ namespace Behind_Bars.Systems.NPCs
         {
             if (currentReleasee != null)
             {
+#if MONO
                 OnEscortCompleted?.Invoke(currentReleasee);
+#endif
                 ModLogger.Info($"ReleaseOfficer {badgeNumber}: Release process completed for {currentReleasee.name}");
             }
 
@@ -2842,7 +2841,9 @@ namespace Behind_Bars.Systems.NPCs
             // Unregister from ReleaseManager
             if (ReleaseManager.Instance != null)
             {
+#if MONO
                 ReleaseManager.Instance.UnregisterOfficer(this);
+#endif
             }
 
             // Unsubscribe from SecurityDoor events
@@ -2853,14 +2854,19 @@ namespace Behind_Bars.Systems.NPCs
                 securityDoor.OnDoorOperationFailed -= HandleSecurityDoorOperationFailed;
             }
 
-            // Unsubscribe from movement events
-            OnDestinationReached -= HandleDestinationReached;
+            // Movement completion is handled via BaseJailNPC.NotifyDestinationReached override.
 
             // Clean up state
             currentReleasee = null;
             isAvailable = true;
 
             base.OnDestroy();
+        }
+
+        protected override void NotifyDestinationReached(Vector3 destination)
+        {
+            base.NotifyDestinationReached(destination);
+            HandleDestinationReached(destination);
         }
 
         #endregion

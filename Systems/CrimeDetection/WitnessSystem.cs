@@ -6,15 +6,16 @@ using Behind_Bars.Utils;
 using Behind_Bars.Systems.CrimeTracking;
 using MelonLoader;
 using Behind_Bars.Systems.Crimes;
-using ScheduleOne.DevUtilities;
 
 #if !MONO
+using Il2CppScheduleOne.DevUtilities;
 using Il2CppScheduleOne.PlayerScripts;
 using Il2CppScheduleOne.NPCs;
 using Il2CppScheduleOne.Police;
 using Il2CppScheduleOne.Law;
 using Il2CppScheduleOne.NPCs.Behaviour;
 #else
+using ScheduleOne.DevUtilities;
 using ScheduleOne.PlayerScripts;
 using ScheduleOne.NPCs;
 using ScheduleOne.Police;

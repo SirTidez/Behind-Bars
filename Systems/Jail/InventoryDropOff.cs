@@ -5,6 +5,7 @@ using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.UI;
 using Behind_Bars.Systems.Jail;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 
 #if !MONO
@@ -44,7 +45,7 @@ namespace Behind_Bars.Systems.Jail
         void Start()
         {
             // Find booking process
-            bookingProcess = FindObjectOfType<BookingProcess>();
+            bookingProcess = BBHelpers.FindObjectOfTypeSafe<BookingProcess>();
 
             // Set up interaction directly
             SetMessage("Process inventory");
@@ -256,7 +257,7 @@ namespace Behind_Bars.Systems.Jail
 
                 // Mark prison gear pickup as complete in booking process
                 ModLogger.Info("Attempting to find BookingProcess to mark gear pickup complete...");
-                var bookingProcess = FindObjectOfType<BookingProcess>();
+                var bookingProcess = BBHelpers.FindObjectOfTypeSafe<BookingProcess>();
                 if (bookingProcess != null)
                 {
                     ModLogger.Info($"Found BookingProcess! Current state - Mugshot: {bookingProcess.mugshotComplete}, Fingerprint: {bookingProcess.fingerprintComplete}, Prison Gear: {bookingProcess.prisonGearPickupComplete}");

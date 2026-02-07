@@ -13,6 +13,7 @@ using Behind_Bars.Systems.Jail;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using static Behind_Bars.Systems.NPCs.PresetParoleOfficerRoutes;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 using Object = UnityEngine.Object;
 #if !MONO
@@ -58,7 +59,7 @@ using Il2CppScheduleOne.DevUtilities;
     Constants.MOD_AUTHOR
 )]
 [assembly: MelonColor(0, 255, 0, 255)]
-[assembly: MelonAdditionalCredits("Dreous - Jail Scripting and Unity work | Spec - Assets")]
+[assembly: MelonAdditionalCredits("Dreous - Jail Scripting and Unity work")]
 [assembly: MelonGame("TVGS", "Schedule I")]
 
 namespace Behind_Bars
@@ -107,84 +108,129 @@ namespace Behind_Bars
         private static MelonPreferences_Entry<bool>? _enableDebugLoggingEntry;
         public static bool EnableDebugLogging => _enableDebugLoggingEntry?.Value ?? false;
 
+#if !MONO
+        /// <summary>
+        /// Registers all IL2CPP types with ClassInjector. Each registration is wrapped in
+        /// try-catch so a single vtable/registration failure doesn't prevent the mod from loading.
+        /// </summary>
+        private static void RegisterIl2CppTypes()
+        {
+            void TryRegister<T>(string name) where T : class
+            {
+                try
+                {
+                    ModLogger.Debug($"[IL2CPP] Registering {name}");
+                    ClassInjector.RegisterTypeInIl2Cpp<T>();
+
+                    try
+                    {
+                        var resolvedType = Il2CppInterop.Runtime.Il2CppType.Of<T>();
+                        if (resolvedType == null)
+                        {
+                            ModLogger.Error($"[IL2CPP] Registered {name} but type pointer resolution returned null");
+                        }
+                        else
+                        {
+                            ModLogger.Debug($"[IL2CPP] Registered {name} (type pointer resolved)");
+                        }
+                    }
+                    catch (Exception resolveEx)
+                    {
+                        ModLogger.Error($"[IL2CPP] Failed to resolve {name} after registration: {resolveEx}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Error($"[IL2CPP] Failed to register {name}: {ex}");
+                }
+            }
+
+            // Jail System Components
+            TryRegister<JailController>("JailController");
+            TryRegister<SecurityCamera>("SecurityCamera");
+            TryRegister<MonitorController>("MonitorController");
+            TryRegister<JailMonitorController>("JailMonitorController");
+            TryRegister<SecurityCameraCullingManager>("SecurityCameraCullingManager");
+            TryRegister<JailLightingController>("JailLightingController");
+            TryRegister<JailCellManager>("JailCellManager");
+            TryRegister<JailAreaManager>("JailAreaManager");
+            TryRegister<JailDoorController>("JailDoorController");
+            TryRegister<JailPatrolManager>("JailPatrolManager");
+
+            // Prison NPC System Components
+            TryRegister<NPCUpdateManager>("NPCUpdateManager");
+            TryRegister<PrisonNPCManager>("PrisonNPCManager");
+            TryRegister<DynamicParoleOfficerManager>("DynamicParoleOfficerManager");
+            TryRegister<PlayerLocationTracker>("PlayerLocationTracker");
+            TryRegister<InmateBehavior>("InmateBehavior");
+            TryRegister<NPCAttackMonitor>("NPCAttackMonitor");
+            TryRegister<PrisonGuard>("PrisonGuard");
+            TryRegister<PrisonInmate>("PrisonInmate");
+
+            // NPC support components (register before behavior classes)
+            TryRegister<SecurityDoorBehavior>("SecurityDoorBehavior");
+            TryRegister<JailNPCDialogueController>("JailNPCDialogueController");
+            TryRegister<JailNPCAudioController>("JailNPCAudioController");
+            TryRegister<StationaryBehavior>("StationaryBehavior");
+            TryRegister<ParoleCheckInSystem>("ParoleCheckInSystem");
+
+            // BaseJailNPC-derived behavior classes
+            TryRegister<BaseJailNPC>("BaseJailNPC");
+            TryRegister<IntakeOfficerStateMachine>("IntakeOfficerStateMachine");
+            TryRegister<GuardBehavior>("GuardBehavior");
+            TryRegister<ParoleIntakeStateMachine>("ParoleIntakeStateMachine");
+            TryRegister<ParoleOfficerBehavior>("ParoleOfficerBehavior");
+            TryRegister<OfficerCoordinator>("OfficerCoordinator");
+            TryRegister<DoorTriggerHandler>("DoorTriggerHandler");
+
+            // Test Components
+            TryRegister<TestNPCController>("TestNPCController");
+            TryRegister<MoveableTargetController>("MoveableTargetController");
+
+            // UI Components
+            TryRegister<BehindBarsUIWrapper>("BehindBarsUIWrapper");
+            TryRegister<WantedLevelUI>("WantedLevelUI");
+            TryRegister<OfficerCommandUI>("OfficerCommandUI");
+            TryRegister<UpdateNotificationUI>("UpdateNotificationUI");
+            TryRegister<UI.ParoleStatusUI>("ParoleStatusUI");
+            TryRegister<UI.ParoleConditionsUI>("ParoleConditionsUI");
+            TryRegister<UI.BailUI>("BailUI");
+
+            // Booking System Components
+            TryRegister<BookingProcess>("BookingProcess");
+            TryRegister<MugshotStation>("MugshotStation");
+            TryRegister<ScannerStation>("ScannerStation");
+            TryRegister<InventoryDropOff>("InventoryDropOff");          // extends InteractableObject (game class)
+            TryRegister<InventoryDropOffStation>("InventoryDropOffStation");
+            TryRegister<JailBed>("JailBed");
+            TryRegister<PrisonBedInteractable>("PrisonBedInteractable");
+            TryRegister<PrisonItemEquippable>("PrisonItemEquippable");  // extends Equippable_Viewmodel (game class)
+
+            // Cell Management Components
+            TryRegister<CellAssignmentManager>("CellAssignmentManager");
+
+            // Jail Inventory System
+            TryRegister<JailInventoryPickupStation>("JailInventoryPickupStation");
+            TryRegister<InventoryPickupStation>("InventoryPickupStation");
+            TryRegister<ExitScannerStation>("ExitScannerStation");
+            TryRegister<SimpleExitDoor>("SimpleExitDoor");
+            TryRegister<PrisonStorageEntity>("PrisonStorageEntity");
+
+            // Release System
+            TryRegister<ReleaseManager>("ReleaseManager");
+            TryRegister<ReleaseOfficerBehavior>("ReleaseOfficerBehavior");
+            TryRegister<ParoleOfficer>("ParoleOfficer");
+
+            // Testing
+            TryRegister<Systems.Testing.SaveableTestSystem>("SaveableTestSystem");
+        }
+#endif
+
         public override void OnInitializeMelon()
         {
             Instance = this;
 #if !MONO
-            /*ClassInjector.RegisterTypeInIl2Cpp<ToiletSink>();
-            ClassInjector.RegisterTypeInIl2Cpp<ToiletSinkManager>();
-            ClassInjector.RegisterTypeInIl2Cpp<BunkBed>();
-            ClassInjector.RegisterTypeInIl2Cpp<BunkBedManager>();
-            ClassInjector.RegisterTypeInIl2Cpp<CommonRoomTable>();
-            ClassInjector.RegisterTypeInIl2Cpp<CommonRoomTableManager>();
-            ClassInjector.RegisterTypeInIl2Cpp<CellTable>();
-            ClassInjector.RegisterTypeInIl2Cpp<CellTableManager>();
-            ClassInjector.RegisterTypeInIl2Cpp<JailAsset>();
-            ClassInjector.RegisterTypeInIl2Cpp<JailManager>();*/
-
-            // Register Jail System Components
-            ClassInjector.RegisterTypeInIl2Cpp<JailController>();
-            ClassInjector.RegisterTypeInIl2Cpp<SecurityCamera>();
-            ClassInjector.RegisterTypeInIl2Cpp<MonitorController>();
-            ClassInjector.RegisterTypeInIl2Cpp<JailMonitorController>();
-            ClassInjector.RegisterTypeInIl2Cpp<JailLightingController>();
-            ClassInjector.RegisterTypeInIl2Cpp<JailCellManager>();
-            ClassInjector.RegisterTypeInIl2Cpp<JailAreaManager>();
-            ClassInjector.RegisterTypeInIl2Cpp<JailDoorController>();
-            ClassInjector.RegisterTypeInIl2Cpp<JailPatrolManager>();
-
-            // Register Prison NPC System Components
-            // NOTE: BaseJailNPC is abstract and shouldn't be registered directly
-            ClassInjector.RegisterTypeInIl2Cpp<PrisonNPCManager>();
-            ClassInjector.RegisterTypeInIl2Cpp<PrisonGuard>();
-            ClassInjector.RegisterTypeInIl2Cpp<PrisonInmate>();
-
-            // Testing BaseJailNPC-derived types one at a time
-            // ClassInjector.RegisterTypeInIl2Cpp<ParoleOfficerBehavior>();
-            ClassInjector.RegisterTypeInIl2Cpp<IntakeOfficerStateMachine>();
-            // ClassInjector.RegisterTypeInIl2Cpp<ReleaseOfficerBehavior>(); // Moved here for testing
-
-            // Re-enabling registrations after fixing trampoline error
-            ClassInjector.RegisterTypeInIl2Cpp<SecurityDoorBehavior>();
-            ClassInjector.RegisterTypeInIl2Cpp<JailNPCDialogueController>();
-            ClassInjector.RegisterTypeInIl2Cpp<JailNPCAudioController>();
-            ClassInjector.RegisterTypeInIl2Cpp<OfficerCoordinator>();
-            ClassInjector.RegisterTypeInIl2Cpp<DoorTriggerHandler>();
-
-            // Register Test Components
-            ClassInjector.RegisterTypeInIl2Cpp<TestNPCController>();
-            ClassInjector.RegisterTypeInIl2Cpp<MoveableTargetController>();
-
-            // Register UI Components
-            ClassInjector.RegisterTypeInIl2Cpp<BehindBarsUIWrapper>();
-            ClassInjector.RegisterTypeInIl2Cpp<WantedLevelUI>();
-            ClassInjector.RegisterTypeInIl2Cpp<OfficerCommandUI>();
-            ClassInjector.RegisterTypeInIl2Cpp<UpdateNotificationUI>();
-
-            // Register Booking System Components
-            ClassInjector.RegisterTypeInIl2Cpp<BookingProcess>();
-            ClassInjector.RegisterTypeInIl2Cpp<MugshotStation>();
-            ClassInjector.RegisterTypeInIl2Cpp<ScannerStation>();
-            ClassInjector.RegisterTypeInIl2Cpp<InventoryDropOff>();
-            ClassInjector.RegisterTypeInIl2Cpp<JailBed>();
-            ClassInjector.RegisterTypeInIl2Cpp<PrisonBedInteractable>();
-            ClassInjector.RegisterTypeInIl2Cpp<PrisonItemEquippable>();
-
-            // Register Cell Management Components
-            ClassInjector.RegisterTypeInIl2Cpp<CellAssignmentManager>();
-
-            // Register Jail Inventory System
-            ClassInjector.RegisterTypeInIl2Cpp<JailInventoryPickupStation>();
-            ClassInjector.RegisterTypeInIl2Cpp<InventoryPickupStation>();
-            // ClassInjector.RegisterTypeInIl2Cpp<PrisonStorageEntity>(); // REMOVED - inherits from StorageEntity which has NetworkConnection methods
-            ClassInjector.RegisterTypeInIl2Cpp<ExitScannerStation>();
-            ClassInjector.RegisterTypeInIl2Cpp<SimpleExitDoor>();
-
-            // Register Release System
-            ClassInjector.RegisterTypeInIl2Cpp<ReleaseManager>();
-            ClassInjector.RegisterTypeInIl2Cpp<ReleaseOfficerBehavior>(); // Re-enabled after fixing IEnumerator issue
-            ClassInjector.RegisterTypeInIl2Cpp<ParoleOfficer>();
-            // NOTE: ParoleOfficerBehavior and PrisonNPCManager already registered above - removed duplicates
+            RegisterIl2CppTypes();
 #endif
             // Initialize MelonPreferences
             _prefsCategory = MelonPreferences.CreateCategory(Constants.PREF_CATEGORY);
@@ -846,7 +892,7 @@ namespace Behind_Bars
                 ModLogger.Debug("Initializing JailController system...");
 
                 // Check if the jail already has a JailController
-                var existingController = jail.GetComponent<JailController>();
+                var existingController = BBHelpers.GetComponentSafe<JailController>(jail);
                 if (existingController != null)
                 {
                     ModLogger.Debug("Found existing JailController on jail prefab");
@@ -855,7 +901,7 @@ namespace Behind_Bars
                 else
                 {
                     ModLogger.Debug("Adding JailController component to jail");
-                    JailController = jail.AddComponent<JailController>();
+                    JailController = BBHelpers.AddComponentSafe<JailController>(jail);
                 }
 
                 // Load and assign prefabs from bundle, then trigger door setup
@@ -865,8 +911,15 @@ namespace Behind_Bars
                     ModLogger.Debug("✓ JailController prefabs loaded");
 
                     // Manually call SetupDoors after prefabs are loaded
-                    JailController.SetupDoors();
-                    ModLogger.Debug("✓ Door setup completed after prefab loading");
+                    if (JailController.jailDoorPrefab != null || JailController.steelDoorPrefab != null)
+                    {
+                        JailController.SetupDoors();
+                        ModLogger.Debug("✓ Door setup completed after prefab loading");
+                    }
+                    else
+                    {
+                        ModLogger.Error("Skipping door setup - no door prefabs were resolved from bundle");
+                    }
 
                     // Setup exit door specifically
                     SetupExitDoor(JailController);
@@ -910,11 +963,11 @@ namespace Behind_Bars
             // Create PrisonNPCManager to handle all NPC spawning and management
             if (JailController != null)
             {
-                var npcManager = JailController.gameObject.AddComponent<PrisonNPCManager>();
+                var npcManager = BBHelpers.AddComponentSafe<PrisonNPCManager>(JailController.gameObject);
                 ModLogger.Debug("✓ PrisonNPCManager added to JailController");
                 
                 // Add CellAssignmentManager for cell tracking
-                var cellManager = JailController.gameObject.AddComponent<CellAssignmentManager>();
+                var cellManager = BBHelpers.AddComponentSafe<CellAssignmentManager>(JailController.gameObject);
                 ModLogger.Debug("✓ CellAssignmentManager added to JailController");
             }
             else
@@ -969,10 +1022,10 @@ namespace Behind_Bars
                 GameObject jailGameObject = JailController.gameObject;
 
                 // Add BookingProcess component if it doesn't exist
-                JailController.BookingProcessController = jailGameObject.GetComponent<Behind_Bars.Systems.Jail.BookingProcess>();
+                JailController.BookingProcessController = BBHelpers.GetComponentSafe<Behind_Bars.Systems.Jail.BookingProcess>(jailGameObject);
                 if (JailController.BookingProcessController == null)
                 {
-                    JailController.BookingProcessController = jailGameObject.AddComponent<Behind_Bars.Systems.Jail.BookingProcess>();
+                    JailController.BookingProcessController = BBHelpers.AddComponentSafe<Behind_Bars.Systems.Jail.BookingProcess>(jailGameObject);
                     ModLogger.Debug("✓ BookingProcess component added to jail");
                 }
                 else
@@ -1010,10 +1063,10 @@ namespace Behind_Bars
                 Transform mugshotStation = bookingArea.Find("MugshotStation");
                 if (mugshotStation != null)
                 {
-                    var mugshotComponent = mugshotStation.GetComponent<Behind_Bars.Systems.Jail.MugshotStation>();
+                    var mugshotComponent = BBHelpers.GetComponentSafe<Behind_Bars.Systems.Jail.MugshotStation>(mugshotStation.gameObject);
                     if (mugshotComponent == null)
                     {
-                        mugshotComponent = mugshotStation.gameObject.AddComponent<Behind_Bars.Systems.Jail.MugshotStation>();
+                        mugshotComponent = BBHelpers.AddComponentSafe<Behind_Bars.Systems.Jail.MugshotStation>(mugshotStation.gameObject);
                         ModLogger.Debug("✓ MugshotStation component added to main GameObject");
                     }
                     
@@ -1029,10 +1082,10 @@ namespace Behind_Bars
                 Transform scannerStation = bookingArea.Find("ScannerStation");
                 if (scannerStation != null)
                 {
-                    var scannerComponent = scannerStation.GetComponent<Behind_Bars.Systems.Jail.ScannerStation>();
+                    var scannerComponent = BBHelpers.GetComponentSafe<Behind_Bars.Systems.Jail.ScannerStation>(scannerStation.gameObject);
                     if (scannerComponent == null)
                     {
-                        scannerComponent = scannerStation.gameObject.AddComponent<Behind_Bars.Systems.Jail.ScannerStation>();
+                        scannerComponent = BBHelpers.AddComponentSafe<Behind_Bars.Systems.Jail.ScannerStation>(scannerStation.gameObject);
                         ModLogger.Debug("✓ ScannerStation component added to main GameObject");
                     }
                     
@@ -1078,10 +1131,10 @@ namespace Behind_Bars
 
                 if (exitScannerStation != null)
                 {
-                    var exitScannerComponent = exitScannerStation.GetComponent<Behind_Bars.Systems.Jail.ExitScannerStation>();
+                    var exitScannerComponent = BBHelpers.GetComponentSafe<Behind_Bars.Systems.Jail.ExitScannerStation>(exitScannerStation.gameObject);
                     if (exitScannerComponent == null)
                     {
-                        exitScannerComponent = exitScannerStation.gameObject.AddComponent<Behind_Bars.Systems.Jail.ExitScannerStation>();
+                        exitScannerComponent = BBHelpers.AddComponentSafe<Behind_Bars.Systems.Jail.ExitScannerStation>(exitScannerStation.gameObject);
                         ModLogger.Debug("✓ ExitScannerStation component added to GameObject at " + exitScannerStation.name);
                     }
                     else
@@ -1125,10 +1178,10 @@ namespace Behind_Bars
                 
                 if (inventoryDropOff != null)
                 {
-                    var inventoryComponent = inventoryDropOff.GetComponent<Behind_Bars.Systems.Jail.InventoryDropOffStation>();
+                    var inventoryComponent = BBHelpers.GetComponentSafe<Behind_Bars.Systems.Jail.InventoryDropOffStation>(inventoryDropOff.gameObject);
                     if (inventoryComponent == null)
                     {
-                        inventoryComponent = inventoryDropOff.gameObject.AddComponent<Behind_Bars.Systems.Jail.InventoryDropOffStation>();
+                        inventoryComponent = BBHelpers.AddComponentSafe<Behind_Bars.Systems.Jail.InventoryDropOffStation>(inventoryDropOff.gameObject);
                         ModLogger.Debug("✓ InventoryDropOffStation component added to InventoryDropOff GameObject");
                     }
                     
@@ -1148,10 +1201,10 @@ namespace Behind_Bars
 
                 if (jailInventoryPickup != null)
                 {
-                    var jailPickupComponent = jailInventoryPickup.GetComponent<Behind_Bars.Systems.Jail.JailInventoryPickupStation>();
+                    var jailPickupComponent = BBHelpers.GetComponentSafe<Behind_Bars.Systems.Jail.JailInventoryPickupStation>(jailInventoryPickup.gameObject);
                     if (jailPickupComponent == null)
                     {
-                        jailPickupComponent = jailInventoryPickup.gameObject.AddComponent<Behind_Bars.Systems.Jail.JailInventoryPickupStation>();
+                        jailPickupComponent = BBHelpers.AddComponentSafe<Behind_Bars.Systems.Jail.JailInventoryPickupStation>(jailInventoryPickup.gameObject);
                         ModLogger.Debug("✓ JailInventoryPickupStation component added to JailInventoryPickup GameObject");
                     }
 
@@ -1171,10 +1224,10 @@ namespace Behind_Bars
 
                 if (inventoryPickup != null)
                 {
-                    var pickupComponent = inventoryPickup.GetComponent<Behind_Bars.Systems.Jail.InventoryPickupStation>();
+                    var pickupComponent = BBHelpers.GetComponentSafe<Behind_Bars.Systems.Jail.InventoryPickupStation>(inventoryPickup.gameObject);
                     if (pickupComponent == null)
                     {
-                        pickupComponent = inventoryPickup.gameObject.AddComponent<Behind_Bars.Systems.Jail.InventoryPickupStation>();
+                        pickupComponent = BBHelpers.AddComponentSafe<Behind_Bars.Systems.Jail.InventoryPickupStation>(inventoryPickup.gameObject);
                         ModLogger.Debug("✓ InventoryPickupStation component added to InventoryPickup GameObject");
                     }
 
@@ -1193,6 +1246,31 @@ namespace Behind_Bars
             }
         }
 
+        private static string NormalizeAssetLookup(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return string.Empty;
+
+            var chars = value.ToLowerInvariant().Where(char.IsLetterOrDigit).ToArray();
+            return new string(chars);
+        }
+
+        private static bool AssetNameMatchesCandidate(string assetName, string candidate)
+        {
+            if (string.IsNullOrWhiteSpace(assetName) || string.IsNullOrWhiteSpace(candidate))
+                return false;
+
+            string normalizedAsset = NormalizeAssetLookup(assetName);
+            string normalizedFileName = NormalizeAssetLookup(System.IO.Path.GetFileNameWithoutExtension(assetName));
+            string normalizedCandidate = NormalizeAssetLookup(candidate);
+            string normalizedCandidateFile = NormalizeAssetLookup(System.IO.Path.GetFileNameWithoutExtension(candidate));
+
+            return normalizedAsset == normalizedCandidate ||
+                   normalizedFileName == normalizedCandidate ||
+                   normalizedAsset == normalizedCandidateFile ||
+                   normalizedFileName == normalizedCandidateFile;
+        }
+
         private static void LoadAndAssignJailPrefabs(JailController controller)
         {
             try
@@ -1207,16 +1285,70 @@ namespace Behind_Bars
                     return;
                 }
 
-                // Load JailDoor prefab - try multiple naming variations
 #if MONO
-                var jailDoorPrefab = jailBundle.LoadAsset<GameObject>("JailDoor") ??
-                                   jailBundle.LoadAsset<GameObject>("jaildoor") ??
-                                   jailBundle.LoadAsset<GameObject>("assets/behindbars/jaildoor.prefab");
+                var allAssetNames = jailBundle.GetAllAssetNames() ?? Array.Empty<string>();
+                int allAssetNameCount = allAssetNames.Length;
 #else
-                var jailDoorPrefab = jailBundle.LoadAsset("JailDoor", Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>() ??
-                                   jailBundle.LoadAsset("jaildoor", Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>() ??
-                                   jailBundle.LoadAsset("assets/behindbars/jaildoor.prefab", Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>();
+                var allAssetNames = new List<string>();
+                var il2CppAssetNames = jailBundle.GetAllAssetNames();
+                if (il2CppAssetNames != null)
+                {
+                    for (int i = 0; i < il2CppAssetNames.Length; i++)
+                    {
+                        if (il2CppAssetNames[i] != null)
+                            allAssetNames.Add(il2CppAssetNames[i].ToString());
+                    }
+                }
+                int allAssetNameCount = allAssetNames.Count;
 #endif
+
+                GameObject TryLoadPrefabByName(string assetName)
+                {
+#if MONO
+                    return jailBundle.LoadAsset<GameObject>(assetName);
+#else
+                    return jailBundle.LoadAsset(assetName, Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>();
+#endif
+                }
+
+                GameObject LoadPrefabWithFallback(string label, params string[] candidates)
+                {
+                    foreach (var candidate in candidates)
+                    {
+                        var prefab = TryLoadPrefabByName(candidate);
+                        if (prefab != null)
+                            return prefab;
+                    }
+
+                    foreach (var assetName in allAssetNames)
+                    {
+                        foreach (var candidate in candidates)
+                        {
+                            if (!AssetNameMatchesCandidate(assetName, candidate))
+                                continue;
+
+                            var matchedPrefab = TryLoadPrefabByName(assetName);
+                            if (matchedPrefab != null)
+                            {
+                                ModLogger.Warn($"{label} matched by asset name fallback: {assetName}");
+                                return matchedPrefab;
+                            }
+                        }
+                    }
+
+                    return null;
+                }
+
+                // Load JailDoor prefab - try multiple naming variations
+                var jailDoorPrefab = LoadPrefabWithFallback(
+                    "JailDoor prefab",
+                    "JailDoor",
+                    "jaildoor",
+                    "CellDoor",
+                    "celldoor",
+                    "assets/behindbars/jaildoor.prefab",
+                    "assets/behindbars/celldoor.prefab"
+                );
                 if (jailDoorPrefab != null)
                 {
                     controller.jailDoorPrefab = jailDoorPrefab;
@@ -1228,15 +1360,18 @@ namespace Behind_Bars
                 }
 
                 // Load GuardDoors prefab - try multiple naming variations
-#if MONO
-                var steelDoorPrefab = jailBundle.LoadAsset<GameObject>("GuardDoors") ??
-                                    jailBundle.LoadAsset<GameObject>("guarddoors") ??
-                                    jailBundle.LoadAsset<GameObject>("assets/behindbars/guarddoors.prefab");
-#else
-                var steelDoorPrefab = jailBundle.LoadAsset("GuardDoors", Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>() ??
-                                    jailBundle.LoadAsset("guarddoors", Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>() ??
-                                    jailBundle.LoadAsset("assets/behindbars/guarddoors.prefab", Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>();
-#endif
+                var steelDoorPrefab = LoadPrefabWithFallback(
+                    "Steel door prefab",
+                    "GuardDoors",
+                    "guarddoors",
+                    "GuardDoor",
+                    "guarddoor",
+                    "SteelDoor",
+                    "steeldoor",
+                    "assets/behindbars/guarddoors.prefab",
+                    "assets/behindbars/guarddoor.prefab",
+                    "assets/behindbars/steeldoor.prefab"
+                );
                 if (steelDoorPrefab != null)
                 {
                     controller.steelDoorPrefab = steelDoorPrefab;
@@ -1248,11 +1383,13 @@ namespace Behind_Bars
                 }
 
                 // Load SecurityCamera prefab (if available)
-#if MONO
-                var cameraPrefab = jailBundle.LoadAsset<GameObject>("SecurityCameraPlaceHolder");
-#else
-                var cameraPrefab = jailBundle.LoadAsset("SecurityCameraPlaceHolder", Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>();
-#endif
+                var cameraPrefab = LoadPrefabWithFallback(
+                    "SecurityCamera prefab",
+                    "SecurityCameraPlaceHolder",
+                    "SecurityCameraPlaceholder",
+                    "securitycameraplaceholder",
+                    "assets/behindbars/securitycameraplaceholder.prefab"
+                );
                 if (cameraPrefab != null)
                 {
                     controller.securityCameraPrefab = cameraPrefab;
@@ -1261,6 +1398,11 @@ namespace Behind_Bars
                 else
                 {
                     ModLogger.Warn("SecurityCamera prefab not found in bundle (optional)");
+                }
+
+                if (controller.jailDoorPrefab == null && controller.steelDoorPrefab == null)
+                {
+                    ModLogger.Error($"No door prefabs resolved from bundle. Asset count scanned: {allAssetNameCount}");
                 }
 
                 ModLogger.Debug("Jail prefab loading completed");

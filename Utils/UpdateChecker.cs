@@ -4,6 +4,9 @@ using UnityEngine;
 using UnityEngine.Networking;
 using Behind_Bars.Helpers;
 using MelonLoader;
+#if !MONO
+using STJ = System.Text.Json;
+#endif
 
 namespace Behind_Bars.Utils
 {
@@ -174,7 +177,12 @@ namespace Behind_Bars.Utils
                     return null;
                 }
 
+#if !MONO
+                // IL2CPP: JsonUtility.FromJson doesn't work with managed types; use System.Text.Json
+                VersionInfo versionInfo = STJ.JsonSerializer.Deserialize<VersionInfo>(jsonText);
+#else
                 VersionInfo versionInfo = JsonUtility.FromJson<VersionInfo>(jsonText);
+#endif
                 
                 if (string.IsNullOrEmpty(versionInfo.version))
                 {

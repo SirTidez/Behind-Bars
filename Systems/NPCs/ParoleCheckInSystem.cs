@@ -3,6 +3,7 @@ using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.CrimeTracking;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -52,8 +53,8 @@ namespace Behind_Bars.Systems.NPCs
 
         private void Awake()
         {
-            paroleOfficer = GetComponent<ParoleOfficerBehavior>();
-            dialogueController = GetComponent<JailNPCDialogueController>();
+            paroleOfficer = BBHelpers.GetComponentSafe<ParoleOfficerBehavior>(gameObject);
+            dialogueController = BBHelpers.GetComponentSafe<JailNPCDialogueController>(gameObject);
             stationaryBehavior = GetComponent<StationaryBehavior>();
         }
 

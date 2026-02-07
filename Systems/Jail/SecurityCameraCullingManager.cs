@@ -27,28 +27,40 @@ namespace Behind_Bars.Systems.Jail
 #endif
     {
 #if MONO
-        [Header("Culling Configuration")]
+        [UnityEngine.HeaderAttribute("Culling Configuration")]
 #endif
+#if MONO
         [Tooltip("Interval in seconds between visibility checks (lower = more responsive, higher = better performance)")]
+#endif
         public float checkInterval = 2.0f;  // Increased from 0.5s to 2s to reduce frame impact
 
+#if MONO
         [Tooltip("Maximum distance in meters a player can be from a monitor to view it")]
+#endif
         public float viewDistance = 10f;
 
+#if MONO
         [Tooltip("Maximum distance in meters from jail center - cameras disabled beyond this")]
+#endif
         public float maxJailDistance = 50f;  // Disable all cameras if player is more than this distance from jail
 
+#if MONO
         [Tooltip("Maximum angle in degrees from player forward direction to monitor (180 = any angle)")]
+#endif
         public float viewAngleThreshold = 75f;  // Increased from 60 to 75 for more lenient detection
 
+#if MONO
         [Tooltip("Use frustum culling check (expensive - can cause frame spikes if enabled)")]
+#endif
         public bool useFrustumCheck = false;  // Disabled by default to prevent frame stuttering
 
+#if MONO
         [Tooltip("Enable/disable the culling system entirely")]
+#endif
         public bool enabled = true;
 
 #if MONO
-        [Header("Debug")]
+        [UnityEngine.HeaderAttribute("Debug")]
 #endif
         public bool showDebugInfo = false;
 

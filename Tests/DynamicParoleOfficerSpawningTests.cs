@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.NPCs;
 using Behind_Bars.Systems;
@@ -137,7 +138,7 @@ namespace Behind_Bars.Tests
                 }
 
                 // Wait a moment for spawning
-                StartCoroutine(CheckSupervisingOfficerAfterDelay());
+                MelonCoroutines.Start(CheckSupervisingOfficerAfterDelay());
             }
             catch (Exception ex)
             {
@@ -205,7 +206,7 @@ namespace Behind_Bars.Tests
                 manager.ForceUpdate();
 
                 // Wait and check
-                StartCoroutine(CheckPatrolOfficersAfterDelay(player));
+                MelonCoroutines.Start(CheckPatrolOfficersAfterDelay(player));
             }
             catch (Exception ex)
             {
@@ -291,7 +292,7 @@ namespace Behind_Bars.Tests
                 }
 
                 // Wait and check
-                StartCoroutine(CheckOfficersDespawnedAfterDelay());
+                MelonCoroutines.Start(CheckOfficersDespawnedAfterDelay());
             }
             catch (Exception ex)
             {
@@ -409,7 +410,7 @@ namespace Behind_Bars.Tests
         public void RunAllTests()
         {
             ModLogger.Info("=== RUNNING ALL TESTS ===");
-            StartCoroutine(RunAllTestsCoroutine());
+            MelonCoroutines.Start(RunAllTestsCoroutine());
         }
 
         private IEnumerator RunAllTestsCoroutine()

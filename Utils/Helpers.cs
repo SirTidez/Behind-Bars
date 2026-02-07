@@ -10,6 +10,7 @@ using ScheduleOne.PlayerScripts;
 using FishNet;
 #else
 using Il2CppInterop.Runtime;
+using Il2CppInterop.Runtime.Injection;
 using Il2CppScheduleOne;
 using Il2CppScheduleOne.DevUtilities;
 using Il2CppScheduleOne.ItemFramework;
@@ -87,6 +88,121 @@ namespace Behind_Bars.Helpers
     /// </summary>
     public static class Helpers
     {
+#if !MONO
+        private static readonly HashSet<string> _typeResolutionFailuresLogged = new HashSet<string>();
+        private static readonly object _typeResolutionLock = new object();
+
+        private static void LogTypeResolutionFailureOnce(string typeName, string reason)
+        {
+            lock (_typeResolutionLock)
+            {
+                if (_typeResolutionFailuresLogged.Add(typeName))
+                {
+                    ModLogger.Error($"[IL2CPP] Failed to resolve type '{typeName}': {reason}");
+                }
+            }
+        }
+
+        private static bool TryResolveIl2CppType<T>(out Il2CppSystem.Type il2CppType)
+            where T : UnityEngine.Object
+        {
+            il2CppType = null;
+            var type = typeof(T);
+            string typeName = type.FullName ?? type.Name;
+
+            try
+            {
+                il2CppType = Il2CppType.Of<T>();
+                return il2CppType != null;
+            }
+            catch (Exception firstEx)
+            {
+                LogTypeResolutionFailureOnce(typeName, firstEx.Message);
+                return false;
+            }
+        }
+#endif
+
+        public static T GetComponentSafe<T>(GameObject gameObject)
+            where T : Component
+        {
+            if (gameObject == null)
+                return null;
+
+#if MONO
+            return gameObject.GetComponent<T>();
+#else
+            if (!TryResolveIl2CppType<T>(out var componentType))
+                return null;
+
+            var component = gameObject.GetComponent(componentType);
+            return component?.TryCast<T>();
+#endif
+        }
+
+        public static T AddComponentSafe<T>(GameObject gameObject)
+            where T : Component
+        {
+            if (gameObject == null)
+                return null;
+
+#if MONO
+            return gameObject.AddComponent<T>();
+#else
+            if (!TryResolveIl2CppType<T>(out var componentType))
+                return null;
+
+            var component = gameObject.AddComponent(componentType);
+            return component?.TryCast<T>();
+#endif
+        }
+
+        public static T GetOrAddComponentSafe<T>(GameObject gameObject)
+            where T : Component
+        {
+            var existing = GetComponentSafe<T>(gameObject);
+            return existing ?? AddComponentSafe<T>(gameObject);
+        }
+
+        public static T FindObjectOfTypeSafe<T>()
+            where T : UnityEngine.Object
+        {
+#if MONO
+            return UnityEngine.Object.FindObjectOfType<T>();
+#else
+            if (!TryResolveIl2CppType<T>(out var targetType))
+                return null;
+
+            var found = UnityEngine.Object.FindObjectOfType(targetType);
+            return found?.TryCast<T>();
+#endif
+        }
+
+        public static T[] FindObjectsOfTypeSafe<T>()
+            where T : UnityEngine.Object
+        {
+#if MONO
+            return UnityEngine.Object.FindObjectsOfType<T>();
+#else
+            if (!TryResolveIl2CppType<T>(out var targetType))
+                return Array.Empty<T>();
+
+            var objects = UnityEngine.Object.FindObjectsOfType(targetType);
+            if (objects == null)
+                return Array.Empty<T>();
+
+            var typed = new List<T>(objects.Length);
+            for (int i = 0; i < objects.Length; i++)
+            {
+                var cast = objects[i]?.TryCast<T>();
+                if (cast != null)
+                    typed.Add(cast);
+            }
+
+            return typed.ToArray();
+#endif
+        }
+
         /// <summary>
         /// Searches all loaded objects of type <typeparamref name="T"/> and returns the first one matching the given name.
         /// </summary>

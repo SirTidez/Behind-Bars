@@ -1,6 +1,7 @@
 using UnityEngine;
 using Behind_Bars.Helpers;
 using Behind_Bars.UI;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppInterop.Runtime.Attributes;
@@ -39,9 +40,7 @@ namespace Behind_Bars.Systems.CrimeDetection
                 // Add the WantedLevelUI component using IL2CPP-safe method
 #if !MONO
                 // IL2CPP-safe component addition
-                var componentType = Il2CppInterop.Runtime.Il2CppType.Of<WantedLevelUI>();
-                var component = _uiManager.AddComponent(componentType);
-                _wantedLevelUI = component.Cast<WantedLevelUI>();
+                _wantedLevelUI = BBHelpers.AddComponentSafe<WantedLevelUI>(_uiManager);
 #else
                 _wantedLevelUI = _uiManager.AddComponent<WantedLevelUI>();
 #endif

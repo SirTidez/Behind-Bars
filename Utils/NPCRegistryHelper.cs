@@ -38,7 +38,17 @@ namespace Behind_Bars.Utils
                     return new List<NPC>();
                 }
 
-                return registry.Where(npc => npc != null).ToList();
+                var npcs = new List<NPC>();
+                for (int i = 0; i < registry.Count; i++)
+                {
+                    var npc = registry[i];
+                    if (npc != null)
+                    {
+                        npcs.Add(npc);
+                    }
+                }
+
+                return npcs;
             }
             catch (System.Exception e)
             {
