@@ -12,6 +12,7 @@ using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
+using Il2CppInterop.Runtime.Attributes;
 #else
 using ScheduleOne.PlayerScripts;
 #endif
@@ -183,7 +184,14 @@ namespace Behind_Bars.Systems.NPCs
                 {
                     GameObject trackerObject = new GameObject("PlayerLocationTracker");
                     locationTracker = BBHelpers.AddComponentSafe<PlayerLocationTracker>(trackerObject);
-                    locationTracker.Initialize();
+                    if (locationTracker != null)
+                    {
+                        locationTracker.Initialize();
+                    }
+                    else
+                    {
+                        ModLogger.Warn("DynamicParoleOfficerManager: PlayerLocationTracker could not be created - continuing without tracker events");
+                    }
                 }
 
                 // Get parole system
@@ -215,7 +223,10 @@ namespace Behind_Bars.Systems.NPCs
                 }
 
                 isInitialized = true;
-                ModLogger.Debug("DynamicParoleOfficerManager: Initialized successfully");
+                ModLogger.Info($"DynamicParoleOfficerManager: Initialized successfully (player={currentPlayer.name}, onParole={isPlayerOnParole})");
+
+                // Run an immediate spawn pass once initialization succeeds.
+                UpdateOfficerSpawning();
             }
             catch (Exception ex)
             {
@@ -227,6 +238,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Retry initialization if dependencies not ready
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private IEnumerator RetryInitialize()
         {
             int retries = 0;
@@ -279,15 +293,17 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
+#if MONO
                 // Subscribe to location tracker events
                 PlayerLocationTracker.OnPlayerRegionChanged += OnPlayerRegionChanged;
                 PlayerLocationTracker.OnPlayerSignificantMovement += OnPlayerSignificantMovement;
+#endif
 
                 // Subscribe to parole system events
                 ParoleSystem.OnParoleStarted += OnParoleStarted;
                 ParoleSystem.OnParoleEnded += OnParoleEnded;
 
-                ModLogger.Debug("DynamicParoleOfficerManager: Subscribed to events");
+                ModLogger.Info("DynamicParoleOfficerManager: Subscribed to parole/location events");
             }
             catch (Exception ex)
             {
@@ -302,12 +318,15 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
+#if MONO
                 PlayerLocationTracker.OnPlayerRegionChanged -= OnPlayerRegionChanged;
                 PlayerLocationTracker.OnPlayerSignificantMovement -= OnPlayerSignificantMovement;
+#endif
+
                 ParoleSystem.OnParoleStarted -= OnParoleStarted;
                 ParoleSystem.OnParoleEnded -= OnParoleEnded;
 
-                ModLogger.Debug("DynamicParoleOfficerManager: Unsubscribed from events");
+                ModLogger.Info("DynamicParoleOfficerManager: Unsubscribed from parole/location events");
             }
             catch (Exception ex)
             {
@@ -438,7 +457,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             if (player == null || player != currentPlayer) return;
 
-            ModLogger.Debug($"DynamicParoleOfficerManager: Parole started for {player.name}");
+            ModLogger.Info($"DynamicParoleOfficerManager: Parole started for {player.name}");
             isPlayerOnParole = true;
 
             // Update officer spawning based on current location
@@ -452,6 +471,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Delay intake notification to allow supervising officer to spawn
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private IEnumerator DelayedIntakeNotification(Player player)
         {
             yield return new WaitForSeconds(2f); // Wait 2 seconds for officer to spawn
@@ -475,7 +497,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             if (player == null || player != currentPlayer) return;
 
-            ModLogger.Debug($"DynamicParoleOfficerManager: Parole ended for {player.name}");
+            ModLogger.Info($"DynamicParoleOfficerManager: Parole ended for {player.name}");
             isPlayerOnParole = false;
 
             // Despawn all officers
@@ -630,7 +652,7 @@ namespace Behind_Bars.Systems.NPCs
                     var behavior = BBHelpers.GetComponentSafe<ParoleOfficerBehavior>(paroleOfficer.gameObject);
                     activeOfficers[assignment] = behavior;
                     spawnedAssignments.Add(assignment);
-                    ModLogger.Debug($"DynamicParoleOfficerManager: ✓ Spawned {assignment} officer {badge}");
+                    ModLogger.Info($"DynamicParoleOfficerManager: Spawned {assignment} officer {badge} at {spawnPosition}");
                 }
                 else
                 {

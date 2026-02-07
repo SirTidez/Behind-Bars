@@ -5,6 +5,7 @@ using Behind_Bars.Helpers;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
+using Il2CppInterop.Runtime.Attributes;
 // Try to use game's EMapRegion if available, otherwise use fallback
 // Note: If game's enum is not accessible, we'll use the fallback enum defined below
 #else
@@ -29,12 +30,16 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Event fired when player changes map region
         /// </summary>
+#if MONO
         public static event Action<Player, EMapRegion> OnPlayerRegionChanged;
+#endif
 
         /// <summary>
         /// Event fired when player moves significantly (beyond threshold)
         /// </summary>
+#if MONO
         public static event Action<Player, Vector3> OnPlayerSignificantMovement;
+#endif
 
         #endregion
 
@@ -138,6 +143,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Retry initialization if player not found initially
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private IEnumerator RetryInitialize()
         {
             int retries = 0;
@@ -232,7 +240,9 @@ namespace Behind_Bars.Systems.NPCs
                 {
                     ModLogger.Debug($"PlayerLocationTracker: Region changed from {currentRegion} to {newRegion}");
                     currentRegion = newRegion;
+#if MONO
                     OnPlayerRegionChanged?.Invoke(trackedPlayer, newRegion);
+#endif
                 }
             }
             catch (Exception ex)
@@ -313,7 +323,9 @@ namespace Behind_Bars.Systems.NPCs
                 {
                     ModLogger.Debug($"PlayerLocationTracker: Significant movement detected: {distance:F1}m");
                     lastCheckedPosition = currentPosition;
+#if MONO
                     OnPlayerSignificantMovement?.Invoke(trackedPlayer, currentPosition);
+#endif
                 }
             }
             catch (Exception ex)

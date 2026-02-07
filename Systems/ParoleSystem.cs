@@ -6,6 +6,7 @@ using UnityEngine;
 using MelonLoader;
 using System.Collections.Generic;
 using Behind_Bars.Systems.NPCs;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -116,6 +117,18 @@ namespace Behind_Bars.Systems
             OnParoleStarted?.Invoke(player);
             ModLogger.Debug($"ParoleSystem: Emitted OnParoleStarted event for {player.name}");
 
+            // Ensure dynamic parole manager exists and process immediate spawn update.
+            EnsureDynamicParoleOfficerManager();
+            if (DynamicParoleOfficerManager.Instance != null)
+            {
+                ModLogger.Info($"ParoleSystem: Triggering immediate parole officer spawn update for {player.name}");
+                DynamicParoleOfficerManager.Instance.ForceUpdate();
+            }
+            else
+            {
+                ModLogger.Warn("ParoleSystem: DynamicParoleOfficerManager still unavailable after ensure call");
+            }
+
             // Notify supervising officer to start intake process
             NotifySupervisingOfficerOfParoleStart(player);
 
@@ -131,6 +144,8 @@ namespace Behind_Bars.Systems
         {
             try
             {
+                EnsureDynamicParoleOfficerManager();
+
                 var npcManager = PrisonNPCManager.Instance;
                 if (npcManager != null)
                 {
@@ -149,6 +164,38 @@ namespace Behind_Bars.Systems
             catch (System.Exception ex)
             {
                 ModLogger.Error($"Error notifying supervising officer of parole start: {ex.Message}");
+            }
+        }
+
+        private void EnsureDynamicParoleOfficerManager()
+        {
+            try
+            {
+                if (DynamicParoleOfficerManager.Instance != null)
+                    return;
+
+                var existing = BBHelpers.FindObjectOfTypeSafe<DynamicParoleOfficerManager>();
+                if (existing != null)
+                {
+                    existing.Initialize();
+                    return;
+                }
+
+                var managerObj = new GameObject("DynamicParoleOfficerManager");
+                var manager = BBHelpers.AddComponentSafe<DynamicParoleOfficerManager>(managerObj);
+                if (manager != null)
+                {
+                    manager.Initialize();
+                    ModLogger.Info("ParoleSystem: Created DynamicParoleOfficerManager on demand");
+                }
+                else
+                {
+                    ModLogger.Error("ParoleSystem: Failed to create DynamicParoleOfficerManager on demand");
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"ParoleSystem: Error ensuring DynamicParoleOfficerManager: {ex.Message}");
             }
         }
 

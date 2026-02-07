@@ -254,12 +254,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                ModLogger.Debug("Initializing DynamicParoleOfficerManager...");
-
-#if !MONO
-                ModLogger.Warn("Skipping DynamicParoleOfficerManager initialization on IL2CPP until component injection is stabilized");
-                return;
-#endif
+                ModLogger.Info("Initializing DynamicParoleOfficerManager...");
                 
                 // Create GameObject for the manager
                 GameObject managerObject = new GameObject("DynamicParoleOfficerManager");
@@ -277,7 +272,7 @@ namespace Behind_Bars.Systems.NPCs
                 // Initialize it
                 manager.Initialize();
                 
-                ModLogger.Debug("✓ DynamicParoleOfficerManager initialized");
+                ModLogger.Info("✓ DynamicParoleOfficerManager initialized");
             }
             catch (Exception ex)
             {
@@ -970,11 +965,7 @@ namespace Behind_Bars.Systems.NPCs
                 FixParoleOfficerAppearance(paroleOfficerObject, firstName);
 
                 // Add ParoleOfficerBehavior component
-                ParoleOfficerBehavior paroleBehavior = null;
-                if (!_paroleOfficerBehaviorUnavailable)
-                {
-                    paroleBehavior = BBHelpers.AddComponentSafe<ParoleOfficerBehavior>(paroleOfficerObject);
-                }
+                ParoleOfficerBehavior paroleBehavior = BBHelpers.AddComponentSafe<ParoleOfficerBehavior>(paroleOfficerObject);
                 if (paroleBehavior == null)
                 {
                     _paroleOfficerBehaviorUnavailable = true;
@@ -982,6 +973,7 @@ namespace Behind_Bars.Systems.NPCs
                     UnityEngine.Object.Destroy(paroleOfficerObject);
                     return null;
                 }
+                _paroleOfficerBehaviorUnavailable = false;
 
                 // Add audio system components for voice commands
                 AddAudioSystemToGuard(paroleOfficerObject, npcComponent, true);
