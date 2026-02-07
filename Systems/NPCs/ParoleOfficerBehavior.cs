@@ -1502,6 +1502,27 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        public void ReturnToAssignedPost(Vector3 fallbackPosition)
+        {
+            try
+            {
+                if (stationaryBehavior != null)
+                {
+                    stationaryBehavior.ReturnToPosition();
+                    ChangeParoleActivity(ParoleOfficerActivity.Idle);
+                    return;
+                }
+
+                Vector3 destination = assignedSpawnPoint != null ? assignedSpawnPoint.position : fallbackPosition;
+                MoveTo(destination);
+                ChangeParoleActivity(ParoleOfficerActivity.RespondingToIncident);
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"ParoleOfficer {badgeNumber}: failed to return to assigned post: {ex.Message}");
+            }
+        }
+
         /// <summary>
         /// Override BaseJailNPC attack handling for guard-specific responses
         /// </summary>

@@ -9,6 +9,8 @@ using Behind_Bars.UI;
 using Behind_Bars.Players;
 using Behind_Bars.Systems.NPCs;
 using Behind_Bars.Systems.CrimeTracking;
+using Behind_Bars.Systems.Crimes;
+using Behind_Bars.Systems.Dialogue;
 using Behind_Bars.Systems;
 using BBHelpers = Behind_Bars.Helpers.Helpers;
 #if !MONO
@@ -18,10 +20,12 @@ using ActiveReleaseOfficerBehavior = Behind_Bars.Systems.NPCs.ReleaseOfficerBeha
 #endif
 
 #if !MONO
+using Il2CppScheduleOne.Law;
 using Il2CppScheduleOne.PlayerScripts;
 using Il2CppScheduleOne.NPCs;
 using Il2CppInterop.Runtime.Attributes;
 #else
+using ScheduleOne.Law;
 using ScheduleOne.PlayerScripts;
 using ScheduleOne.NPCs;
 #endif
@@ -127,6 +131,14 @@ namespace Behind_Bars.Systems.Jail
         // Available release officers
         private List<ActiveReleaseOfficerBehavior> availableOfficers = new List<ActiveReleaseOfficerBehavior>();
 
+
+        private const float PostReleaseOfficerTeleportDistance = 2f;
+        private const float PostReleaseImmediateArrestDistance = 2.25f;
+        private const float PostReleaseWarningDurationSeconds = 10f;
+        private const float PostReleaseOfficerSideDistance = 1.25f;
+        private const float PostReleaseOfficerForwardOffset = 0.4f;
+        private const string PostReleaseDialogueContainerName = "Parole_PostRelease_Compliance";
+        private const string PostReleaseFinalChoiceLabel = "confirm_conditions";
 
         #endregion
 
@@ -1494,6 +1506,408 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        private IEnumerator HandlePostReleaseOfficerCompliance(Player player, System.Action onImmediateArrestTriggered)
+        {
+            if (player == null)
+            {
+                yield break;
+            }
+
+            bool playerUnfrozen = false;
+            bool violationRecorded = false;
+            bool warningActive = false;
+            float warningEndTime = 0f;
+            float nextWarningUiUpdateTime = 0f;
+
+            ParoleOfficerBehavior officer = null;
+            NPCDialogueWrapper dialogue = null;
+            bool completedDialogue = false;
+            bool dialogueEverActive = false;
+            Vector3 officerOriginalPosition = Vector3.zero;
+            bool officerHadOriginalPosition = false;
+
+            try
+            {
+                officer = ResolvePostReleaseOfficer(player);
+
+                if (officer != null)
+                {
+                    officerOriginalPosition = officer.transform.position;
+                    officerHadOriginalPosition = true;
+                    TeleportOfficerInFrontOfPlayer(officer, player, PostReleaseOfficerTeleportDistance);
+                    dialogue = BuildPostReleaseComplianceDialogue(officer, player, () => completedDialogue = true);
+
+                    if (dialogue != null)
+                    {
+                        dialogue.UseContainerOnInteract(PostReleaseDialogueContainerName);
+                        dialogue.Start(PostReleaseDialogueContainerName, true, "ENTRY");
+                        dialogueEverActive = dialogue.IsDialogueInProgress;
+                    }
+                }
+                else
+                {
+                    ModLogger.Warn($"Post-release compliance: no parole officer available for {player.name}");
+                }
+
+                // Requirement: begin dialogue before unfreeze.
+                UnfreezePlayer(player);
+                playerUnfrozen = true;
+
+                // If dialogue couldn't start, don't block release flow.
+                if (officer == null || dialogue == null)
+                {
+                    yield break;
+                }
+
+                bool wasDialogueActive = dialogue.IsDialogueInProgress;
+                dialogueEverActive |= wasDialogueActive;
+
+                while (!completedDialogue)
+                {
+                    if (player == null)
+                    {
+                        break;
+                    }
+
+                    if (officer != null)
+                    {
+                        KeepOfficerAtPlayerSide(officer, player);
+                    }
+
+                    bool isDialogueActive = dialogue.IsDialogueInProgress;
+                    if (isDialogueActive)
+                    {
+                        dialogueEverActive = true;
+                    }
+
+                    if (!warningActive)
+                    {
+                        if (dialogueEverActive && wasDialogueActive && !isDialogueActive)
+                        {
+                            warningActive = true;
+                            warningEndTime = Time.time + PostReleaseWarningDurationSeconds;
+                            nextWarningUiUpdateTime = 0f;
+                            dialogue.UseContainerOnInteract(PostReleaseDialogueContainerName);
+                            ModLogger.Info($"Post-release compliance: warning window started for {player.name}");
+                        }
+                    }
+                    else
+                    {
+                        if (officer != null)
+                        {
+                            float distanceToOfficer = Vector3.Distance(player.transform.position, officer.transform.position);
+                            if (distanceToOfficer <= PostReleaseImmediateArrestDistance)
+                            {
+                                if (!violationRecorded)
+                                {
+                                    RecordPostReleaseDialogueViolation(player, "Failed to complete initial parole compliance dialogue while in close proximity to supervising officer.");
+                                    violationRecorded = true;
+                                }
+
+                                BehindBarsUIManager.Instance?.HideOfficerCommand();
+                                TriggerImmediateParoleComplianceArrest(player);
+                                onImmediateArrestTriggered?.Invoke();
+                                yield break;
+                            }
+                        }
+
+                        int secondsRemaining = Mathf.Max(0, Mathf.CeilToInt(warningEndTime - Time.time));
+                        if (Time.time >= nextWarningUiUpdateTime)
+                        {
+                            ShowPostReleaseComplianceWarningCommand(secondsRemaining);
+                            nextWarningUiUpdateTime = Time.time + 1f;
+                        }
+
+                        if (!isDialogueActive)
+                        {
+                            dialogue.UseContainerOnInteract(PostReleaseDialogueContainerName);
+                        }
+
+                        if (Time.time >= warningEndTime)
+                        {
+                            if (!violationRecorded)
+                            {
+                                RecordPostReleaseDialogueViolation(player, "Failed to complete initial parole compliance dialogue before warning deadline.");
+                                violationRecorded = true;
+                            }
+
+                            BehindBarsUIManager.Instance?.HideOfficerCommand();
+                            TriggerPoliceCallForParoleNonCompliance(player);
+                            yield break;
+                        }
+                    }
+
+                    wasDialogueActive = isDialogueActive;
+                    yield return null;
+                }
+
+                BehindBarsUIManager.Instance?.HideOfficerCommand();
+                dialogue.End();
+                if (completedDialogue && officer != null)
+                {
+                    ReturnOfficerToPost(officer, officerOriginalPosition, officerHadOriginalPosition);
+                }
+                ModLogger.Info($"Post-release compliance: dialogue completed for {player.name}");
+            }
+            finally
+            {
+                BehindBarsUIManager.Instance?.HideOfficerCommand();
+                if (!playerUnfrozen)
+                {
+                    UnfreezePlayer(player);
+                }
+            }
+        }
+
+        private ParoleOfficerBehavior ResolvePostReleaseOfficer(Player player)
+        {
+            var npcManager = PrisonNPCManager.Instance;
+            if (npcManager == null)
+            {
+                return null;
+            }
+
+            var supervisingOfficer = npcManager.GetSupervisingOfficer();
+            if (IsOfficerAvailableForPostRelease(supervisingOfficer))
+            {
+                return supervisingOfficer;
+            }
+
+            var officers = npcManager.GetRegisteredParoleOfficers();
+            if (officers == null || officers.Count == 0)
+            {
+                return null;
+            }
+
+            return officers
+                .Where(IsOfficerAvailableForPostRelease)
+                .OrderBy(o => Vector3.Distance(o.transform.position, player.transform.position))
+                .FirstOrDefault();
+        }
+
+        private bool IsOfficerAvailableForPostRelease(ParoleOfficerBehavior officer)
+        {
+            return officer != null && officer.isActiveAndEnabled && officer.gameObject != null && officer.gameObject.activeInHierarchy;
+        }
+
+        private void TeleportOfficerInFrontOfPlayer(ParoleOfficerBehavior officer, Player player, float distanceFromPlayer)
+        {
+            if (officer == null || player == null)
+            {
+                return;
+            }
+
+            Vector3 planarForward = player.transform.forward;
+            planarForward.y = 0f;
+
+            if (planarForward.sqrMagnitude < 0.001f)
+            {
+                planarForward = (officer.transform.position - player.transform.position);
+                planarForward.y = 0f;
+            }
+
+            if (planarForward.sqrMagnitude < 0.001f)
+            {
+                planarForward = Vector3.forward;
+            }
+
+            planarForward.Normalize();
+
+            Vector3 targetPosition = player.transform.position + planarForward * distanceFromPlayer;
+            if (Physics.Raycast(targetPosition + Vector3.up * 8f, Vector3.down, out RaycastHit hit, 20f, ~0, QueryTriggerInteraction.Ignore))
+            {
+                targetPosition.y = hit.point.y;
+            }
+            else
+            {
+                targetPosition.y = player.transform.position.y;
+            }
+
+            officer.transform.position = targetPosition;
+
+            Vector3 lookDirection = player.transform.position - targetPosition;
+            lookDirection.y = 0f;
+            if (lookDirection.sqrMagnitude > 0.001f)
+            {
+                officer.transform.rotation = Quaternion.LookRotation(lookDirection.normalized, Vector3.up);
+            }
+
+            KeepOfficerAtPlayerSide(officer, player, true);
+        }
+
+        private void KeepOfficerAtPlayerSide(ParoleOfficerBehavior officer, Player player, bool instant = false)
+        {
+            if (officer == null || player == null)
+            {
+                return;
+            }
+
+            Vector3 right = player.transform.right;
+            right.y = 0f;
+            if (right.sqrMagnitude < 0.001f)
+            {
+                right = Vector3.right;
+            }
+            right.Normalize();
+
+            Vector3 forward = player.transform.forward;
+            forward.y = 0f;
+            if (forward.sqrMagnitude < 0.001f)
+            {
+                forward = Vector3.forward;
+            }
+            forward.Normalize();
+
+            Vector3 targetPosition = player.transform.position + (right * PostReleaseOfficerSideDistance) + (forward * PostReleaseOfficerForwardOffset);
+            if (Physics.Raycast(targetPosition + Vector3.up * 8f, Vector3.down, out RaycastHit hit, 20f, ~0, QueryTriggerInteraction.Ignore))
+            {
+                targetPosition.y = hit.point.y;
+            }
+            else
+            {
+                targetPosition.y = player.transform.position.y;
+            }
+
+            if (instant)
+            {
+                officer.transform.position = targetPosition;
+            }
+            else
+            {
+                officer.transform.position = Vector3.MoveTowards(officer.transform.position, targetPosition, 8f * Time.deltaTime);
+            }
+
+            Vector3 lookDirection = player.transform.position - officer.transform.position;
+            lookDirection.y = 0f;
+            if (lookDirection.sqrMagnitude > 0.001f)
+            {
+                officer.transform.rotation = Quaternion.LookRotation(lookDirection.normalized, Vector3.up);
+            }
+        }
+
+        private void ReturnOfficerToPost(ParoleOfficerBehavior officer, Vector3 originalPosition, bool hasOriginalPosition)
+        {
+            if (officer == null)
+            {
+                return;
+            }
+
+            Vector3 fallbackPosition = hasOriginalPosition ? originalPosition : officer.transform.position;
+            officer.ReturnToAssignedPost(fallbackPosition);
+        }
+
+        private NPCDialogueWrapper BuildPostReleaseComplianceDialogue(ParoleOfficerBehavior officer, Player player, System.Action onComplete)
+        {
+            if (officer == null || player == null)
+            {
+                return null;
+            }
+
+            var wrapper = new NPCDialogueWrapper(officer.gameObject);
+            wrapper.BuildAndRegisterContainer(PostReleaseDialogueContainerName, builder =>
+            {
+                builder.SetAllowExit(true);
+                builder.AddNode("ENTRY",
+                    "Stop right there. Before you proceed, confirm you understand your parole obligations.",
+                    choices =>
+                    {
+                        choices.Add("review", "Review obligations.", "review_node");
+                    });
+
+                builder.AddNode("review_node",
+                    "You must report when instructed, avoid violations, and follow all supervision commands. Confirm now.",
+                    choices =>
+                    {
+                        choices.Add(PostReleaseFinalChoiceLabel, "I understand and will comply.", "confirmed_node");
+                    });
+
+                builder.AddNode("confirmed_node",
+                    "Acknowledged. You are now under parole supervision. Do not violate your conditions.");
+            });
+
+            wrapper.OnChoiceSelected(PostReleaseFinalChoiceLabel, onComplete);
+            return wrapper;
+        }
+
+        private void ShowPostReleaseComplianceWarningCommand(int secondsRemaining)
+        {
+            var uiManager = BehindBarsUIManager.Instance;
+            if (uiManager == null)
+            {
+                return;
+            }
+
+            string message = $"Interact with the supervising officer now. {secondsRemaining}s remaining - stay close or risk arrest/police pursuit.";
+            var commandData = new OfficerCommandData("SUPERVISING OFFICER", message, 1, 1, false);
+            uiManager.UpdateOfficerCommand(commandData);
+        }
+
+        private void RecordPostReleaseDialogueViolation(Player player, string details)
+        {
+            try
+            {
+                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                if (rapSheet?.CurrentParoleRecord == null || !rapSheet.CurrentParoleRecord.IsOnParole())
+                {
+                    return;
+                }
+
+                var violation = new ViolationRecord(ViolationType.Other, details, 2.5f);
+                if (rapSheet.AddParoleViolation(violation))
+                {
+                    rapSheet.UpdateLSILevel();
+                    ModLogger.Info($"Post-release compliance violation recorded for {player.name}");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error recording post-release compliance violation for {player?.name}: {ex.Message}");
+            }
+        }
+
+        private void TriggerImmediateParoleComplianceArrest(Player player)
+        {
+            try
+            {
+                var jailSystem = Core.Instance?.JailSystem;
+                if (jailSystem == null)
+                {
+                    ModLogger.Error("Post-release compliance arrest failed: JailSystem unavailable");
+                    return;
+                }
+
+                ModLogger.Info($"Post-release compliance: immediate arrest triggered for {player.name}");
+                MelonCoroutines.Start(jailSystem.HandleImmediateArrest(player));
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error triggering immediate parole compliance arrest for {player?.name}: {ex.Message}");
+            }
+        }
+
+        private void TriggerPoliceCallForParoleNonCompliance(Player player)
+        {
+            try
+            {
+                ModLogger.Info($"Post-release compliance: escalating non-compliance to police call for {player.name}");
+
+                var lawManager = LawManager.Instance;
+                if (lawManager != null)
+                {
+                    lawManager.PoliceCalled(player, new WitnessIntimidation());
+                }
+
+                if (player?.CrimeData != null)
+                {
+                    player.CrimeData.SetPursuitLevel(PlayerCrimeData.EPursuitLevel.Arresting);
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error escalating parole non-compliance police call for {player?.name}: {ex.Message}");
+            }
+        }
+
         /// <summary>
         /// Wait for player to acknowledge parole conditions UI
         /// Freezes player, shows UI, waits for dismissal, then starts grace period
@@ -1546,33 +1960,38 @@ namespace Behind_Bars.Systems.Jail
                 yield return null;
             }
 
-            // Hide UI and start grace period
+            // Hide UI first, then run post-release compliance flow
             try
             {
                 BehindBarsUIManager.Instance.HideParoleConditionsUI();
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error hiding parole conditions UI: {ex.Message}");
+            }
 
+            bool immediateArrestTriggered = false;
+            yield return HandlePostReleaseOfficerCompliance(player, () => immediateArrestTriggered = true);
+
+            try
+            {
                 // IMPORTANT: Grace period was already started when release completed
                 // No need to record release time again - it's already recorded
                 // Parole term timer is already running from teleportation,
                 // and grace period for searches started immediately upon release
 
-                // Unfreeze player
-                UnfreezePlayer(player);
-
                 // Show parole status UI now that release summary UI is dismissed
-                if (BehindBarsUIManager.Instance != null)
+                if (!immediateArrestTriggered && BehindBarsUIManager.Instance != null)
                 {
                     BehindBarsUIManager.Instance.ShowParoleStatus();
                     ModLogger.Debug($"Showing parole status UI for {player.name} after release summary dismissal");
                 }
-                
-                ModLogger.Info($"Parole conditions acknowledged by {player.name} - parole status UI shown");
+
+                ModLogger.Info($"Parole conditions acknowledged by {player.name} - post-release compliance handled");
             }
             catch (System.Exception ex)
             {
-                ModLogger.Error($"Error in WaitForParoleConditionsAcknowledgment cleanup: {ex.Message}");
-                // Ensure player is unfrozen even on error
-                UnfreezePlayer(player);
+                ModLogger.Error($"Error finalizing parole conditions acknowledgment flow: {ex.Message}");
             }
         }
 

@@ -168,10 +168,26 @@ namespace Behind_Bars.Utils.Saveable
         public void MarkChanged()
         {
             HasChanged = true;
-            
+
+#if MONO
+            // Request a delayed save from SaveManager
+            try
+            {
+                if (Singleton<S1Persistence.SaveManager>.Instance != null)
+                {
+                    Singleton<S1Persistence.SaveManager>.Instance.Save();
+                    ModLogger.Debug($"[SAVEABLE] Requested delayed save for {GetType().Name}");
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"[SAVEABLE] Error requesting delayed save for {GetType().Name}: {ex.Message}");
+            }
+#else
             // Save is handled by Harmony patches on SaveManager.Save;
             // MarkChanged sets HasChanged flag which patches check during save cycle
             ModLogger.Debug($"[SAVEABLE] MarkChanged for {GetType().Name}");
+#endif
         }
 
         /// <summary>
