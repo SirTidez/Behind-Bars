@@ -4,12 +4,12 @@
         <PostWaitSeconds Condition="'$(IsMultiplayerTest)' != 'true'">1</PostWaitSeconds>
     </PropertyGroup>
 
-    <Target Name="Kill running S1 instances" AfterTargets="PostBuildEvent" Condition="'$(RunPostBuildEvent)' == 'OnBuildSuccess'">
+    <!--<Target Name="Kill running S1 instances" AfterTargets="PostBuildEvent" Condition="'$(RunPostBuildEvent)' == 'OnBuildSuccess'">
         <Message Text="Checking for running S1 instances..." Importance="high" />
         <Exec Command='(tasklist | findstr /I "Schedule.*I.exe" &gt;nul || exit 0) &amp;&amp; taskkill /F /IM "$(S1ExeName)"' />
         <Message Text="Waiting for S1 processes to terminate..." Importance="normal" />
         <Exec Command='powershell -Command "while (Get-Process -Name \"$(S1ExeName)\" -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 200 }; Start-Sleep -Seconds $(PostWaitSeconds)"' />
-    </Target>
+    </Target>-->
 
     <Target Name="Clean mod folder and copy requested mods" AfterTargets="PostBuildEvent" Condition="'$(RunPostBuildEvent)' == 'OnBuildSuccess'">
         <Message Text="Cleaning mods directory: $(S1ModsDir)" Importance="high" />

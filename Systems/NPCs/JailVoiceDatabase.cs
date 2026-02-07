@@ -19,7 +19,11 @@ namespace Behind_Bars.Systems.NPCs
 #if MONO
     [CreateAssetMenu(fileName = "JailVoiceDatabase", menuName = "Behind Bars/Jail Voice Database")]
 #endif
+#if MONO
     public class JailVoiceDatabase : ScriptableObject
+#else
+    public class JailVoiceDatabase
+#endif
     {
 #if MONO
         [Header("Database Settings")]
@@ -400,11 +404,10 @@ namespace Behind_Bars.Systems.NPCs
         public static JailVoiceDatabase CreateDefault()
         {
             JailVoiceDatabase database;
-#if !MONO
-            var created = ScriptableObject.CreateInstance(Il2CppInterop.Runtime.Il2CppType.Of<JailVoiceDatabase>());
-            database = created?.TryCast<JailVoiceDatabase>();
-#else
+#if MONO
             database = ScriptableObject.CreateInstance<JailVoiceDatabase>();
+#else
+            database = new JailVoiceDatabase();
 #endif
             if (database == null)
             {
@@ -425,11 +428,10 @@ namespace Behind_Bars.Systems.NPCs
             try
             {
                 JailVoiceDatabase database;
-#if !MONO
-                var created = ScriptableObject.CreateInstance(Il2CppInterop.Runtime.Il2CppType.Of<JailVoiceDatabase>());
-                database = created?.TryCast<JailVoiceDatabase>();
-#else
+#if MONO
                 database = ScriptableObject.CreateInstance<JailVoiceDatabase>();
+#else
+                database = new JailVoiceDatabase();
 #endif
                 if (database == null)
                 {

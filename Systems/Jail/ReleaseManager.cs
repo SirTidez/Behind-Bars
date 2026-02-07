@@ -1525,6 +1525,8 @@ namespace Behind_Bars.Systems.Jail
             bool dialogueEverActive = false;
             Vector3 officerOriginalPosition = Vector3.zero;
             bool officerHadOriginalPosition = false;
+            Vector3 dialogueAnchorPosition = Vector3.zero;
+            bool hasDialogueAnchorPosition = false;
 
             try
             {
@@ -1535,13 +1537,32 @@ namespace Behind_Bars.Systems.Jail
                     officerOriginalPosition = officer.transform.position;
                     officerHadOriginalPosition = true;
                     TeleportOfficerInFrontOfPlayer(officer, player, PostReleaseOfficerTeleportDistance);
+                    dialogueAnchorPosition = officer.transform.position;
+                    hasDialogueAnchorPosition = true;
                     dialogue = BuildPostReleaseComplianceDialogue(officer, player, () => completedDialogue = true);
 
                     if (dialogue != null)
                     {
+                        officer.StopMovement();
                         dialogue.UseContainerOnInteract(PostReleaseDialogueContainerName);
+
+#if !MONO
+                        // IL2CPP: start without dialogue behaviour first to avoid camera lockups.
+                        dialogue.Start(PostReleaseDialogueContainerName, false, "ENTRY");
+                        if (!dialogue.IsDialogueInProgress)
+                        {
+                            dialogue.Start(PostReleaseDialogueContainerName, true, "ENTRY");
+                        }
+#else
                         dialogue.Start(PostReleaseDialogueContainerName, true, "ENTRY");
+#endif
+
                         dialogueEverActive = dialogue.IsDialogueInProgress;
+                        if (!dialogueEverActive)
+                        {
+                            ModLogger.Warn($"Post-release compliance: dialogue failed to start for {player.name}");
+                            dialogue = null;
+                        }
                     }
                 }
                 else
@@ -1569,15 +1590,15 @@ namespace Behind_Bars.Systems.Jail
                         break;
                     }
 
-                    if (officer != null)
-                    {
-                        KeepOfficerAtPlayerSide(officer, player);
-                    }
-
                     bool isDialogueActive = dialogue.IsDialogueInProgress;
                     if (isDialogueActive)
                     {
                         dialogueEverActive = true;
+
+                        if (officer != null)
+                        {
+                            HoldOfficerForDialogue(officer, player, dialogueAnchorPosition, hasDialogueAnchorPosition);
+                        }
                     }
 
                     if (!warningActive)
@@ -1593,6 +1614,11 @@ namespace Behind_Bars.Systems.Jail
                     }
                     else
                     {
+                        if (officer != null && !isDialogueActive)
+                        {
+                            KeepOfficerAtPlayerSide(officer, player);
+                        }
+
                         if (officer != null)
                         {
                             float distanceToOfficer = Vector3.Distance(player.transform.position, officer.transform.position);
@@ -1697,21 +1723,7 @@ namespace Behind_Bars.Systems.Jail
                 return;
             }
 
-            Vector3 planarForward = player.transform.forward;
-            planarForward.y = 0f;
-
-            if (planarForward.sqrMagnitude < 0.001f)
-            {
-                planarForward = (officer.transform.position - player.transform.position);
-                planarForward.y = 0f;
-            }
-
-            if (planarForward.sqrMagnitude < 0.001f)
-            {
-                planarForward = Vector3.forward;
-            }
-
-            planarForward.Normalize();
+            Vector3 planarForward = GetPlayerFacingDirection(player);
 
             Vector3 targetPosition = player.transform.position + planarForward * distanceFromPlayer;
             if (Physics.Raycast(targetPosition + Vector3.up * 8f, Vector3.down, out RaycastHit hit, 20f, ~0, QueryTriggerInteraction.Ignore))
@@ -1732,7 +1744,42 @@ namespace Behind_Bars.Systems.Jail
                 officer.transform.rotation = Quaternion.LookRotation(lookDirection.normalized, Vector3.up);
             }
 
-            KeepOfficerAtPlayerSide(officer, player, true);
+            ModLogger.Debug($"Post-release compliance: positioned officer {officer.GetBadgeNumber()} at {targetPosition} facing player");
+        }
+
+        private Vector3 GetPlayerFacingDirection(Player player)
+        {
+            Vector3 forward = Vector3.zero;
+
+            try
+            {
+#if !MONO
+                var playerCamera = Il2CppScheduleOne.DevUtilities.PlayerSingleton<Il2CppScheduleOne.PlayerScripts.PlayerCamera>.Instance;
+#else
+                var playerCamera = ScheduleOne.DevUtilities.PlayerSingleton<ScheduleOne.PlayerScripts.PlayerCamera>.Instance;
+#endif
+                if (playerCamera != null)
+                {
+                    forward = playerCamera.transform.forward;
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"Post-release compliance: failed to read player camera forward ({ex.Message})");
+            }
+
+            if (forward.sqrMagnitude < 0.001f)
+            {
+                forward = player.transform.forward;
+            }
+
+            forward.y = 0f;
+            if (forward.sqrMagnitude < 0.001f)
+            {
+                forward = Vector3.forward;
+            }
+
+            return forward.normalized;
         }
 
         private void KeepOfficerAtPlayerSide(ParoleOfficerBehavior officer, Player player, bool instant = false)
@@ -1775,6 +1822,28 @@ namespace Behind_Bars.Systems.Jail
             else
             {
                 officer.transform.position = Vector3.MoveTowards(officer.transform.position, targetPosition, 8f * Time.deltaTime);
+            }
+
+            Vector3 lookDirection = player.transform.position - officer.transform.position;
+            lookDirection.y = 0f;
+            if (lookDirection.sqrMagnitude > 0.001f)
+            {
+                officer.transform.rotation = Quaternion.LookRotation(lookDirection.normalized, Vector3.up);
+            }
+        }
+
+        private void HoldOfficerForDialogue(ParoleOfficerBehavior officer, Player player, Vector3 anchorPosition, bool hasAnchorPosition)
+        {
+            if (officer == null || player == null)
+            {
+                return;
+            }
+
+            officer.StopMovement();
+
+            if (hasAnchorPosition)
+            {
+                officer.transform.position = anchorPosition;
             }
 
             Vector3 lookDirection = player.transform.position - officer.transform.position;
