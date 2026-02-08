@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
@@ -5,6 +6,8 @@ using Behind_Bars.Helpers;
 using Behind_Bars.Utils;
 using Behind_Bars.Systems.Crimes;
 using Behind_Bars.Systems.CrimeTracking;
+using Behind_Bars.Systems.NPCs;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -30,11 +33,13 @@ namespace Behind_Bars.Systems.CrimeDetection
         private CrimeRecord _crimeRecord;
         public WitnessSystem _witnessSystem;
         private ContrabandDetectionSystem _contrabandDetectionSystem;
+        private readonly Dictionary<string, float> _nativeMirrorSuppressionUntil = new Dictionary<string, float>();
         
         // Detection settings
         public float MurderDetectionRadius = 50f;
         public float AssaultDetectionRadius = 30f;
         public float WeaponDetectionRadius = 65f;
+        private const float DefaultNativeMirrorSuppressionSeconds = 4f;
         
         public CrimeRecord CrimeRecord => _crimeRecord;
         public ContrabandDetectionSystem ContrabandDetection => _contrabandDetectionSystem;
@@ -146,9 +151,9 @@ namespace Behind_Bars.Systems.CrimeDetection
         {
             if (victim == null || perpetrator == null)
                 return;
-                
-            // Don't double-process police assaults (already handled by game)
-            if (victim is PoliceOfficer)
+                 
+            // Do not process law enforcement assaults as civilian assaults.
+            if (IsLawEnforcementNpc(victim))
                 return;
                 
             ModLogger.Info($"Processing civilian assault - Victim: {victim.name}, Perpetrator: {perpetrator.name}, Lethal: {isLethal}");
@@ -166,27 +171,62 @@ namespace Behind_Bars.Systems.CrimeDetection
                 _witnessSystem.NPCWitnessesCrime(witness, crimeInstance, perpetrator);
             }
             
-            // Add to player's Schedule I crime data
+            // Register assault in mod-managed tracking and suppress mirrored native AddCrime ingestion
+            // for this event so wanted UI does not double count the same assault.
             if (perpetrator.IsOwner)
             {
-                // TODO: Commented out CrimeData.AddCrime and testing adding the crime directly to the dictionary.
-                //perpetrator.CrimeData.AddCrime(crime);
-                perpetrator.CrimeData.Crimes.Add(crime, 1);
-                if (perpetrator.CrimeData.CurrentPursuitLevel == PlayerCrimeData.EPursuitLevel.None)
+                var crimeData = perpetrator.CrimeData;
+                if (crimeData?.Crimes != null)
                 {
-                    perpetrator.CrimeData.SetPursuitLevel(PlayerCrimeData.EPursuitLevel.Investigating);
+                    SuppressNativeCrimeMirror(perpetrator, crime, DefaultNativeMirrorSuppressionSeconds, includeAssaultFamilyAlias: true);
+                    crimeData.Crimes.Add(crime, 1);
                 }
-                
-                // Call police if witnessed by police
+
+                if (crimeData != null && crimeData.CurrentPursuitLevel == PlayerCrimeData.EPursuitLevel.None)
+                {
+                    crimeData.SetPursuitLevel(PlayerCrimeData.EPursuitLevel.Investigating);
+                }
+
                 var policeWitnesses = witnesses.OfType<PoliceOfficer>();
                 foreach (var policeWitness in policeWitnesses)
                 {
                     NetworkHelper.TryBeginFootPursuit(policeWitness, perpetrator);
                 }
             }
-            
-            // Add to cumulative record
+
             _crimeRecord.AddCrime(crimeInstance);
+            ModLogger.Debug($"Processed civilian assault using mod-managed tracking for {victim.name}");
+        }
+
+        /// <summary>
+        /// Process an assault on law-enforcement NPCs spawned by Behind Bars systems.
+        /// This applies an additional Assault charge and escalates pursuit for immediate arrest flow.
+        /// </summary>
+        public void ProcessOfficerAssault(NPC victim, Player perpetrator)
+        {
+            if (victim == null || perpetrator == null)
+                return;
+
+            if (!IsLawEnforcementNpc(victim))
+                return;
+
+            Crime assaultCrime = new Assault();
+            var crimeInstance = new CrimeInstance(assaultCrime, victim.transform.position, 2.0f);
+
+            if (perpetrator.IsOwner && perpetrator.CrimeData != null)
+            {
+                // Use direct dictionary insertion (same pattern as civilian assault) to avoid duplicate
+                // AddCrime postfix interactions while still reflecting in native crime data.
+                if (perpetrator.CrimeData.Crimes != null)
+                {
+                    SuppressNativeCrimeMirror(perpetrator, assaultCrime, DefaultNativeMirrorSuppressionSeconds, includeAssaultFamilyAlias: false);
+                    perpetrator.CrimeData.Crimes.Add(assaultCrime, 1);
+                }
+                perpetrator.CrimeData.SetPursuitLevel(PlayerCrimeData.EPursuitLevel.Arresting);
+            }
+
+            _crimeRecord.AddCrime(crimeInstance);
+            ModLogger.Info($"Processed officer assault by {perpetrator.name} on {victim.name}");
         }
         
         /// <summary>
@@ -299,7 +339,7 @@ namespace Behind_Bars.Systems.CrimeDetection
         /// </summary>
         private string GetVictimType(NPC victim)
         {
-            if (victim is PoliceOfficer)
+            if (IsLawEnforcementNpc(victim))
                 return "Police";
                 
             // Check if victim has employee-type components
@@ -315,7 +355,7 @@ namespace Behind_Bars.Systems.CrimeDetection
         /// </summary>
         private float GetMurderSeverity(NPC victim)
         {
-            if (victim is PoliceOfficer)
+            if (IsLawEnforcementNpc(victim))
                 return 4.0f; // Killing police is very serious
                 
             var employee = victim.GetComponent<Employee>();
@@ -323,6 +363,185 @@ namespace Behind_Bars.Systems.CrimeDetection
                 return 2.5f; // Killing employees is serious
                 
             return 2.0f; // Standard murder
+        }
+
+        /// <summary>
+        /// True when NPC is a native police officer or a mod officer role.
+        /// </summary>
+        public bool IsLawEnforcementNpc(NPC npc)
+        {
+            if (npc == null)
+                return false;
+
+            if (npc is PoliceOfficer)
+                return true;
+
+            return IsModLawEnforcementNpc(npc);
+        }
+
+        /// <summary>
+        /// True for Behind Bars officer roles that are not native PoliceOfficer.
+        /// </summary>
+        public bool IsModLawEnforcementNpc(NPC npc)
+        {
+            if (npc == null)
+                return false;
+
+            var npcObject = npc.gameObject;
+            if (npcObject == null)
+                return false;
+
+            // Keep native police out of mod-officer handling paths.
+            if (npc is PoliceOfficer || BBHelpers.GetComponentSafe<PoliceOfficer>(npcObject) != null)
+                return false;
+
+            if (BBHelpers.GetComponentSafe<GuardBehavior>(npcObject) != null)
+                return true;
+
+            if (BBHelpers.GetComponentSafe<ParoleOfficerBehavior>(npcObject) != null)
+                return true;
+
+            if (BBHelpers.GetComponentSafe<ReleaseOfficerBehavior>(npcObject) != null)
+                return true;
+
+            if (BBHelpers.GetComponentSafe<IntakeOfficerStateMachine>(npcObject) != null)
+                return true;
+
+            if (BBHelpers.GetComponentSafe<PrisonGuard>(npcObject) != null)
+                return true;
+
+            if (BBHelpers.GetComponentSafe<ParoleOfficer>(npcObject) != null)
+                return true;
+
+            string npcName = npc.name ?? string.Empty;
+            return npcName.StartsWith("Intake Officer ", StringComparison.OrdinalIgnoreCase)
+                   || npcName.StartsWith("Release Officer ", StringComparison.OrdinalIgnoreCase)
+                   || npcName.StartsWith("Parole Officer ", StringComparison.OrdinalIgnoreCase)
+                   || npcName.StartsWith("Supervising Officer ", StringComparison.OrdinalIgnoreCase)
+                   || npcName.StartsWith("Station Officer ", StringComparison.OrdinalIgnoreCase);
+        }
+
+        public bool ShouldMirrorNativeCrime(Player player, Crime crime)
+        {
+            if (player == null || crime == null)
+            {
+                return true;
+            }
+
+            CleanupNativeMirrorSuppressions();
+
+            if (IsNativeMirrorSuppressed(player, crime.GetType().FullName))
+            {
+                return false;
+            }
+
+            if (IsNativeMirrorSuppressed(player, crime.CrimeName))
+            {
+                return false;
+            }
+
+            if (IsAssaultFamilyCrime(crime) && IsNativeMirrorSuppressed(player, "ASSAULT_FAMILY"))
+            {
+                return false;
+            }
+
+            return true;
+        }
+
+        private void SuppressNativeCrimeMirror(Player player, Crime crime, float durationSeconds, bool includeAssaultFamilyAlias)
+        {
+            if (player == null || crime == null)
+            {
+                return;
+            }
+
+            float expiresAt = Time.time + Mathf.Max(0.1f, durationSeconds);
+
+            SetNativeMirrorSuppression(player, crime.GetType().FullName, expiresAt);
+            SetNativeMirrorSuppression(player, crime.CrimeName, expiresAt);
+
+            if (includeAssaultFamilyAlias && IsAssaultFamilyCrime(crime))
+            {
+                SetNativeMirrorSuppression(player, "ASSAULT_FAMILY", expiresAt);
+            }
+        }
+
+        private void SetNativeMirrorSuppression(Player player, string crimeKey, float expiresAt)
+        {
+            if (player == null || string.IsNullOrEmpty(crimeKey))
+            {
+                return;
+            }
+
+            _nativeMirrorSuppressionUntil[BuildNativeMirrorKey(player, crimeKey)] = expiresAt;
+        }
+
+        private bool IsNativeMirrorSuppressed(Player player, string crimeKey)
+        {
+            if (player == null || string.IsNullOrEmpty(crimeKey))
+            {
+                return false;
+            }
+
+            string key = BuildNativeMirrorKey(player, crimeKey);
+            if (_nativeMirrorSuppressionUntil.TryGetValue(key, out float expiresAt))
+            {
+                if (Time.time <= expiresAt)
+                {
+                    return true;
+                }
+
+                _nativeMirrorSuppressionUntil.Remove(key);
+            }
+
+            return false;
+        }
+
+        private string BuildNativeMirrorKey(Player player, string crimeKey)
+        {
+            string playerKey = string.IsNullOrEmpty(player.PlayerCode) ? player.name : player.PlayerCode;
+            if (string.IsNullOrEmpty(playerKey))
+            {
+                playerKey = "unknown";
+            }
+
+            return $"{playerKey}:{crimeKey}";
+        }
+
+        private void CleanupNativeMirrorSuppressions()
+        {
+            if (_nativeMirrorSuppressionUntil.Count == 0)
+            {
+                return;
+            }
+
+            float now = Time.time;
+            var expiredKeys = _nativeMirrorSuppressionUntil
+                .Where(kvp => kvp.Value < now)
+                .Select(kvp => kvp.Key)
+                .ToList();
+
+            foreach (string expiredKey in expiredKeys)
+            {
+                _nativeMirrorSuppressionUntil.Remove(expiredKey);
+            }
+        }
+
+        private bool IsAssaultFamilyCrime(Crime crime)
+        {
+            if (crime == null)
+            {
+                return false;
+            }
+
+            string typeName = crime.GetType().Name;
+            if (!string.IsNullOrEmpty(typeName) && typeName.IndexOf("Assault", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return true;
+            }
+
+            string crimeName = crime.CrimeName;
+            return !string.IsNullOrEmpty(crimeName) && crimeName.IndexOf("Assault", StringComparison.OrdinalIgnoreCase) >= 0;
         }
         
         /// <summary>

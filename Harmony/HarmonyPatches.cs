@@ -315,6 +315,12 @@ namespace Behind_Bars.Harmony
                 var cds = CrimeDetectionSystem.Instance;
                 if (cds != null && crime != null)
                 {
+                    if (!cds.ShouldMirrorNativeCrime(__instance.Player, crime))
+                    {
+                        ModLogger.Debug($"[Crime Tracking] Skipping mirrored native crime {crime.CrimeName} (mod-managed event already recorded)");
+                        return;
+                    }
+
                     var crimeInstance = new CrimeInstance(
                         crime: crime,
                         location: __instance.Player.transform.position,
@@ -840,9 +846,9 @@ namespace Behind_Bars.Harmony
                 var localPlayer = Player.Local;
                 if (localPlayer == null)
                     return;
-                
-                // Skip if this is a police officer (handled by game's system)
-                if (__instance.npc is PoliceOfficer)
+                 
+                // Skip if this is a native police officer (handled by game's system)
+                if (__instance.npc is PoliceOfficer || Behind_Bars.Helpers.Helpers.GetComponentSafe<PoliceOfficer>(__instance.npc.gameObject) != null)
                     return;
                 
                 // Only process if damage is significant (avoid noise from minor damage)
@@ -866,6 +872,47 @@ namespace Behind_Bars.Harmony
                             ModLogger.Debug($"Skipping duplicate assault detection for {__instance.npc.name} (cooldown: {timeSinceLastAssault:F2}s)");
                             return;
                         }
+                    }
+
+                    // Check if NPC was recently attacked by player
+                    // HoursSinceAttackedByPlayer is 0 when just attacked, 9999 if never attacked
+                    bool playerAttacked = false;
+                    try
+                    {
+                        if (__instance.HoursSinceAttackedByPlayer == 0 || __instance.HoursSinceAttackedByPlayer < 1)
+                        {
+                            playerAttacked = true;
+                        }
+                    }
+                    catch
+                    {
+                        // Fallback: if we can't check, use proximity as indicator
+                        playerAttacked = true;
+                    }
+
+                    if (!playerAttacked)
+                    {
+                        return;
+                    }
+
+                    // Update cooldown
+                    _assaultCooldown[npcId] = currentTime;
+
+                    // Clean up old cooldown entries (older than cooldown period)
+                    var keysToRemove = _assaultCooldown.Where(kvp => currentTime - kvp.Value > ASSAULT_COOLDOWN_SECONDS).Select(kvp => kvp.Key).ToList();
+                    foreach (var key in keysToRemove)
+                    {
+                        _assaultCooldown.Remove(key);
+                    }
+
+                    // Mod law-enforcement officers should not be treated as civilians.
+                    // They trigger immediate re-arrest and an additional Assault charge.
+                    if (_crimeDetectionSystem.IsModLawEnforcementNpc(__instance.npc))
+                    {
+                        ModLogger.Info($"Officer assault detected: Player attacked law enforcement NPC {__instance.npc.name} (damage: {damage:F1}, distance: {distanceToPlayer:F1}m)");
+                        _crimeDetectionSystem.ProcessOfficerAssault(__instance.npc, localPlayer);
+                        TriggerImmediateOfficerReArrest(localPlayer, __instance.npc.name);
+                        return;
                     }
                     
                     // CRITICAL: Check if this NPC recently witnessed a crime
@@ -895,46 +942,44 @@ namespace Behind_Bars.Harmony
                         ModLogger.Debug($"Could not check witness status: {ex.Message}");
                         // Continue with normal processing if we can't check
                     }
-                    
-                    // Check if NPC was recently attacked by player
-                    // HoursSinceAttackedByPlayer is 0 when just attacked, 9999 if never attacked
-                    bool playerAttacked = false;
-                    try
-                    {
-                        // If HoursSinceAttackedByPlayer is 0, it was just attacked by a player
-                        // If it's a small number (< 1 hour), it was recently attacked
-                        if (__instance.HoursSinceAttackedByPlayer == 0 || __instance.HoursSinceAttackedByPlayer < 1)
-                        {
-                            playerAttacked = true;
-                        }
-                    }
-                    catch
-                    {
-                        // Fallback: if we can't check, use proximity as indicator
-                        playerAttacked = true;
-                    }
-                    
-                    if (playerAttacked)
-                    {
-                        // Update cooldown
-                        _assaultCooldown[npcId] = currentTime;
-                        
-                        // Clean up old cooldown entries (older than cooldown period)
-                        var keysToRemove = _assaultCooldown.Where(kvp => currentTime - kvp.Value > ASSAULT_COOLDOWN_SECONDS).Select(kvp => kvp.Key).ToList();
-                        foreach (var key in keysToRemove)
-                        {
-                            _assaultCooldown.Remove(key);
-                        }
-                        
-                        ModLogger.Info($"Assault detected: Player attacked {__instance.npc.name} (damage: {damage:F1}, lethal: {isLethal}, distance: {distanceToPlayer:F1}m)");
-                        _crimeDetectionSystem.ProcessCivilianAssault(__instance.npc, localPlayer, isLethal);
-                    }
+
+                    ModLogger.Info($"Assault detected: Player attacked {__instance.npc.name} (damage: {damage:F1}, lethal: {isLethal}, distance: {distanceToPlayer:F1}m)");
+                    _crimeDetectionSystem.ProcessCivilianAssault(__instance.npc, localPlayer, isLethal);
                 }
             }
             catch (Exception ex)
             {
                 ModLogger.Error($"Error in assault detection: {ex.Message}");
             }
+        }
+
+        private static void TriggerImmediateOfficerReArrest(Player player, string officerName)
+        {
+            if (player == null)
+            {
+                return;
+            }
+
+            if (JailTimeTracker.Instance != null && JailTimeTracker.Instance.IsInJail(player))
+            {
+                ModLogger.Debug($"Skipping immediate re-arrest for {player.name}; already in jail status");
+                return;
+            }
+
+            if (player.IsArrested)
+            {
+                ModLogger.Debug($"Skipping immediate re-arrest for {player.name}; already arrested");
+                return;
+            }
+
+            if (_core?.JailSystem == null)
+            {
+                ModLogger.Error($"Cannot trigger immediate re-arrest after officer assault on {officerName}: JailSystem unavailable");
+                return;
+            }
+
+            MelonCoroutines.Start(_core.JailSystem.HandleImmediateArrest(player));
+            ModLogger.Info($"Triggered immediate re-arrest for {player.name} after assaulting officer {officerName}");
         }
         
         /// <summary>

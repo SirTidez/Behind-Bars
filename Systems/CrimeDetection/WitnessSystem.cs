@@ -1,9 +1,11 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using Behind_Bars.Helpers;
 using Behind_Bars.Utils;
 using Behind_Bars.Systems.CrimeTracking;
+using Behind_Bars.Systems.Jail;
 using MelonLoader;
 using Behind_Bars.Systems.Crimes;
 
@@ -61,6 +63,12 @@ namespace Behind_Bars.Systems.CrimeDetection
             if (witness is PoliceOfficer policeWitness)
             {
                 HandlePoliceWitness(policeWitness, crime, perpetrator);
+            }
+            else if (CrimeDetectionSystem.Instance != null && CrimeDetectionSystem.Instance.IsModLawEnforcementNpc(witness))
+            {
+                // Mod officers are handled by officer behavior and arrest flows.
+                // Do not treat them as civilian witnesses.
+                ModLogger.Debug($"Skipping civilian witness behavior for law enforcement NPC {witness.name}");
             }
             else
             {
@@ -242,6 +250,20 @@ namespace Behind_Bars.Systems.CrimeDetection
                 yield break;
             }
 
+            // Abort stale witness calls once arrest/jail processing has started.
+            if (ShouldSuppressPoliceCall(perpetrator))
+            {
+                ModLogger.Debug($"Skipping delayed police call because {perpetrator?.name} is already in arrest/jail flow");
+                yield break;
+            }
+
+            // Avoid duplicate native crime additions when the same offense is already active.
+            if (ShouldSkipDuplicatePoliceCall(perpetrator, crime))
+            {
+                ModLogger.Debug($"Skipping delayed duplicate police call for {perpetrator?.name} on crime {crime?.GetCrimeName()}");
+                yield break;
+            }
+
             // Check if witness was intimidated (attacked after witnessing)
             string witnessId = witness.ID;
             if (_witnesses.ContainsKey(witnessId) && _witnesses[witnessId].WasIntimidated)
@@ -271,6 +293,82 @@ namespace Behind_Bars.Systems.CrimeDetection
                     perpetrator.CrimeData.SetPursuitLevel(PlayerCrimeData.EPursuitLevel.NonLethal);
                 }
             }
+        }
+
+        private bool ShouldSuppressPoliceCall(Player perpetrator)
+        {
+            if (perpetrator == null)
+            {
+                return true;
+            }
+
+            if (perpetrator.IsArrested)
+            {
+                return true;
+            }
+
+            try
+            {
+                return JailTimeTracker.Instance != null && JailTimeTracker.Instance.IsInJail(perpetrator);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private bool ShouldSkipDuplicatePoliceCall(Player perpetrator, CrimeInstance crimeInstance)
+        {
+            if (perpetrator == null || crimeInstance == null || crimeInstance.Crime == null)
+            {
+                return false;
+            }
+
+            var crimeData = perpetrator.CrimeData;
+            if (crimeData == null)
+            {
+                return false;
+            }
+
+            if (crimeData.CurrentPursuitLevel != PlayerCrimeData.EPursuitLevel.None)
+            {
+                return true;
+            }
+
+            if (crimeData.Crimes == null || crimeData.Crimes.Count == 0)
+            {
+                return false;
+            }
+
+            string targetType = crimeInstance.Crime.GetType().Name;
+            string targetName = crimeInstance.Crime.CrimeName ?? string.Empty;
+            bool targetIsAssaultFamily = targetType.IndexOf("Assault", StringComparison.OrdinalIgnoreCase) >= 0
+                                        || targetName.IndexOf("Assault", StringComparison.OrdinalIgnoreCase) >= 0;
+
+            foreach (var crimeEntry in crimeData.Crimes)
+            {
+                var existingCrime = crimeEntry.Key;
+                if (existingCrime == null)
+                    continue;
+
+                string existingType = existingCrime.GetType().Name;
+                string existingName = existingCrime.CrimeName ?? string.Empty;
+
+                if (string.Equals(existingType, targetType, StringComparison.Ordinal)
+                    || string.Equals(existingName, targetName, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                bool existingIsAssaultFamily = existingType.IndexOf("Assault", StringComparison.OrdinalIgnoreCase) >= 0
+                                             || existingName.IndexOf("Assault", StringComparison.OrdinalIgnoreCase) >= 0;
+                if (targetIsAssaultFamily && existingIsAssaultFamily)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>

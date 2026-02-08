@@ -56,7 +56,15 @@ namespace Behind_Bars.Systems
         /// </summary>
         public IEnumerator HandleImmediateArrest(Player player)
         {
+            if (player == null)
+            {
+                yield break;
+            }
+
             ModLogger.Info($"Processing IMMEDIATE arrest for player: {player.name}");
+
+            // Mark jail status immediately so delayed witness calls can be suppressed reliably.
+            JailTimeTracker.Instance.SetInJail(player);
 
             // CRITICAL: Check if player is on parole and record violation BEFORE any other processing
             RecordParoleViolationIfNeeded(player);
@@ -1337,6 +1345,8 @@ namespace Behind_Bars.Systems
             try
             {
                 ModLogger.Info($"Clearing jail status for {player.name}");
+
+                JailTimeTracker.Instance.ClearInJail(player);
 
                 // Clear stored exit position
                 if (_lastKnownPlayerPosition.ContainsKey(player.name))
