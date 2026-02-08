@@ -44,6 +44,10 @@ namespace Behind_Bars.UI
         /// </summary>
         public void Show(VersionInfo versionInfo)
         {
+            
+            //TODO: Temporarily disable showing the update notification until its been reworked
+            return;
+            
             if (versionInfo == null || string.IsNullOrEmpty(versionInfo.version))
             {
                 ModLogger.Error("Cannot show update notification - invalid version info");
