@@ -1,7 +1,7 @@
 {
-  "version": "alpha-1.1.0",
-  "description": "Security cameras now power down unless you are close enough and actually looking at a monitor display. This keeps the jail scene lighter when you are away while preserving live feeds when you need them.",
-  "release_date": "2025-01-27",
+  "version": "alpha-1.2.0",
+  "description": "Major IL2CPP jail and parole parity improvements, mod-first witness and assault tracking with duplicate suppression, and post-release compliance/dialogue flow fixes.",
+  "release_date": "2026-02-07",
   "download_url": "",
   "changelog_url": "https://github.com/SirTidez/Behind-Bars/blob/parole-development/CHANGELOG.md"
 }
