@@ -229,6 +229,7 @@ namespace Behind_Bars
         public override void OnInitializeMelon()
         {
             Instance = this;
+            Utils.MelonLoaderVersionChecker.CheckMelonLoaderVersion();
 #if !MONO
             RegisterIl2CppTypes();
 #endif
