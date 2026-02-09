@@ -179,12 +179,17 @@ namespace Behind_Bars.Utils
 
 #if !MONO
                 // IL2CPP: JsonUtility.FromJson doesn't work with managed types; use System.Text.Json
-                VersionInfo versionInfo = STJ.JsonSerializer.Deserialize<VersionInfo>(jsonText);
+                var options = new STJ.JsonSerializerOptions
+                {
+                    PropertyNameCaseInsensitive = true,
+                    IncludeFields = true
+                };
+                VersionInfo? versionInfo = STJ.JsonSerializer.Deserialize<VersionInfo>(jsonText, options);
 #else
                 VersionInfo versionInfo = JsonUtility.FromJson<VersionInfo>(jsonText);
 #endif
                 
-                if (string.IsNullOrEmpty(versionInfo.version))
+                if (versionInfo == null || string.IsNullOrEmpty(versionInfo.version))
                 {
                     ModLogger.Error("Invalid version data - version field is empty");
                     return null;

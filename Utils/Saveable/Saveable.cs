@@ -505,7 +505,17 @@ namespace Behind_Bars.Utils.Saveable
                 try
                 {
 #if !MONO
-                    string data = STJ.JsonSerializer.Serialize(value);
+                    string data;
+                    var valueType = value.GetType();
+                    if (HasSaveableFields(valueType))
+                    {
+                        object serializedValue = SaveableSerializer.SerializeValue(value);
+                        data = STJ.JsonSerializer.Serialize(serializedValue);
+                    }
+                    else
+                    {
+                        data = STJ.JsonSerializer.Serialize(value);
+                    }
 #else
                     string data = JsonConvert.SerializeObject(value, Formatting.None, ISaveable.SerializerSettings);
 #endif
@@ -548,6 +558,22 @@ namespace Behind_Bars.Utils.Saveable
                     Type type = saveableField.FieldType;
 #if !MONO
                     object? value = STJ.JsonSerializer.Deserialize(json, type);
+                    if (HasSaveableFields(type))
+                    {
+                        var jsonObject = STJ.JsonSerializer.Deserialize<Dictionary<string, object>>(json);
+                        if (jsonObject != null)
+                        {
+                            value = SaveableSerializer.DeserializeValue(type, jsonObject);
+                        }
+                        else
+                        {
+                            continue;
+                        }
+                    }
+                    else
+                    {
+                        value = STJ.JsonSerializer.Deserialize(json, type);
+                    }
 #else
                     object? value = JsonConvert.DeserializeObject(json, type, ISaveable.SerializerSettings);
 #endif

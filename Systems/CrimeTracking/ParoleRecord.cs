@@ -461,6 +461,18 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// </summary>
         public void RecordMissedCheckIn()
         {
+            if (!isOnParole)
+            {
+                ModLogger.Warn($"Player {player.name} is not on parole. Cannot record missed check-in.");
+                return;
+            }
+
+            if (isPaused)
+            {
+                ModLogger.Warn($"Player {player.name}'s parole is paused. Cannot record missed check-in.");
+                return;
+            }
+
             missedCheckIns++;
             // Decrease compliance score for missed check-in
             complianceScore = Mathf.Max(0f, complianceScore - 5f);
@@ -495,6 +507,9 @@ namespace Behind_Bars.Systems.CrimeTracking
 
             // Deduct points for missed check-ins
             score -= missedCheckIns * 5f; // -5 points per missed check-in
+
+            // Add points for check-ins
+            score += checkInCount * 2f; // +2 points per check-in
 
             // Ensure score stays in valid range
             complianceScore = Mathf.Clamp(score, 0f, 100f);

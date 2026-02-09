@@ -16,7 +16,7 @@ namespace Behind_Bars.Utils
     {
         private static readonly Core mod = MelonAssembly.FindMelonInstance<Core>();
         private static readonly MelonAssembly melonAssembly = mod.MelonAssembly;
-        
+
         // Asset bundle cache for O(1) lookups instead of O(n) searches
         private static Dictionary<string, RuntimeAssetBundle> _bundleCache = new Dictionary<string, RuntimeAssetBundle>();
 
@@ -73,6 +73,13 @@ namespace Behind_Bars.Utils
                     return null;
                 }
 
+                // Clean up temp file after successful load
+                if (tempFilePath != null && System.IO.File.Exists(tempFilePath)) {
+                    try {
+                        System.IO.File.Delete(tempFilePath);
+                    } catch {}
+                }
+
                 return bundle;
             }
             catch (Exception e)
@@ -103,7 +110,7 @@ namespace Behind_Bars.Utils
                     _bundleCache.Remove(asset_name_flag);
                 }
             }
-            
+
             // Cache miss - search through loaded bundles (existing logic)
 #if !MONO
             RuntimeAssetBundle[] loadedBundles = Il2CppAssetBundleManager.GetAllLoadedAssetBundles();
@@ -162,6 +169,10 @@ namespace Behind_Bars.Utils
         public static GameObject LoadAssetFromBundle(string asset_name)
         {
             var bundle = GetLoadedAssetBundle(asset_name);
+            if (bundle == null) {
+                ModLogger.Error($"AssetBundle not found for asset '{asset_name}'");
+                return null;
+            }
 #if MONO
             return bundle.LoadAsset<GameObject>(asset_name);
 #else

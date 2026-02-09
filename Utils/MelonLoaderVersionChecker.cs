@@ -52,9 +52,6 @@ public static class MelonLoaderVersionChecker
     {
         try
         {
-            Assembly melonAssembly = Assembly.GetExecutingAssembly();
-            string assemblyName = melonAssembly.FullName;
-
             Type melonType = Type.GetType("MelonLoader.MelonMod, MelonLoader");
             if (melonType != null)
             {

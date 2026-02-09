@@ -146,6 +146,11 @@ namespace Behind_Bars.Systems
             {
                 EnsureDynamicParoleOfficerManager();
 
+                if (player == null) {
+                    ModLogger.Error("NotifySupervisingOfficerOfParoleStart: Player is null");
+                    return;
+                }
+
                 var npcManager = PrisonNPCManager.Instance;
                 if (npcManager != null)
                 {
@@ -486,6 +491,11 @@ namespace Behind_Bars.Systems
         /// </summary>
         private void NotifySupervisingOfficerOfViolation(Player player, string violationType)
         {
+            if (player == null) {
+                ModLogger.Error("NotifySupervisingOfficerOfViolation: Player is null");
+                return;
+            }
+
             try
             {
                 var npcManager = PrisonNPCManager.Instance;
@@ -580,7 +590,7 @@ namespace Behind_Bars.Systems
                 ModLogger.Warn("Cannot complete parole for null player");
                 return;
             }
-            
+
             if (_paroleRecords.TryGetValue(player, out var record))
             {
                 CompleteParole(record);
@@ -598,7 +608,7 @@ namespace Behind_Bars.Systems
                         rapSheet.ArchiveCurrentParoleRecord();
                         RapSheetManager.Instance.MarkRapSheetChanged(player);
                         ModLogger.Info($"Completed parole in RapSheet for {player.name}");
-                        
+
                         // Emit parole ended event
                         OnParoleEnded?.Invoke(player);
                         ModLogger.Debug($"ParoleSystem: Emitted OnParoleEnded event for {player.name} (completed via CompleteParoleForPlayer)");
@@ -730,11 +740,11 @@ namespace Behind_Bars.Systems
             {
                 record.DurationGameMinutes += additionalGameMinutes;
                 record.TimeRemainingGameMinutes += additionalGameMinutes;
-                
+
                 // Update ParoleTimeTracker with new duration
                 ParoleTimeTracker.Instance.StopTracking(player);
                 ParoleTimeTracker.Instance.StartTracking(player, record.DurationGameMinutes, OnParoleComplete);
-                
+
                 ModLogger.Info($"Extended parole for {player.name} by {additionalGameMinutes} game minutes ({GameTimeManager.FormatGameTime(additionalGameMinutes)})");
             }
         }
