@@ -940,8 +940,10 @@ namespace Behind_Bars.Systems.NPCs
                 
                 if (npcComponent != null)
                 {
+                    bool isSupervisingOfficer = assignment == ParoleOfficerBehavior.ParoleOfficerAssignment.PoliceStationSupervisor;
+
                     npcComponent.FirstName = firstName;
-                    npcComponent.LastName = "Parole Officer";
+                    npcComponent.LastName = isSupervisingOfficer ? string.Empty : "Parole Officer";
                     npcComponent.ID = $"paroleofficer_{System.Guid.NewGuid().ToString().Substring(0, 8)}";
                     ModLogger.Debug($"✓ NPC component configured: {npcComponent.FirstName} {npcComponent.LastName} (ID: {npcComponent.ID})");
                 }
@@ -1248,6 +1250,10 @@ namespace Behind_Bars.Systems.NPCs
                             // Ensure Avatar GameObject is active
                             avatar.gameObject.SetActive(true);
 
+                            // IL2CPP startup can throw in ApplyAccessorySettings when accessory prefabs are unresolved.
+                            // For parole officers, use accessory-free settings to keep spawn stable.
+                            SanitizeParoleOfficerAvatarSettings(avatarSettings);
+
                             // Apply the settings to the NPC's own Avatar
                             avatar.LoadAvatarSettings(avatarSettings);
                             ModLogger.Debug($"✓ Avatar settings loaded from NPCAppearanceManager for {npcInstance.name}");
@@ -1299,6 +1305,42 @@ namespace Behind_Bars.Systems.NPCs
                 }
             }
         }
+
+#if !MONO
+        private void SanitizeParoleOfficerAvatarSettings(Il2CppScheduleOne.AvatarFramework.AvatarSettings avatarSettings)
+        {
+            if (avatarSettings == null)
+            {
+                return;
+            }
+
+            try
+            {
+                avatarSettings.AccessorySettings.Clear();
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"Failed to sanitize IL2CPP parole accessory settings: {ex.Message}");
+            }
+        }
+#else
+        private void SanitizeParoleOfficerAvatarSettings(ScheduleOne.AvatarFramework.AvatarSettings avatarSettings)
+        {
+            if (avatarSettings == null)
+            {
+                return;
+            }
+
+            try
+            {
+                avatarSettings.AccessorySettings.Clear();
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"Failed to sanitize Mono parole accessory settings: {ex.Message}");
+            }
+        }
+#endif
 
         /// <summary>
         /// Fix BaseNPC appearance by copying from existing NPCs

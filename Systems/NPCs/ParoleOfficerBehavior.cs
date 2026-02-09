@@ -343,6 +343,15 @@ namespace Behind_Bars.Systems.NPCs
                 dialogueController.AddStateDialogue("CheckInWarning", "I've noticed some concerns. Stay compliant.",
                     new[] { "Be careful.", "Don't slip up.", "Watch yourself." }, true, EVOLineType.Angry);
 
+                dialogueController.AddStateDialogue("CheckInTooEarly", "You're early. Return during your scheduled appointment window.",
+                    new[] { "Come back during your assigned time.", "You're not on the clock yet." }, true, EVOLineType.Command);
+
+                dialogueController.AddStateDialogue("CheckInMissedWindow", "You missed your appointment window.",
+                    new[] { "You're out of compliance.", "A missed report will be recorded." }, true, EVOLineType.Angry);
+
+                dialogueController.AddStateDialogue("CheckInNoSchedule", "You do not have an active check-in appointment right now.",
+                    new[] { "Wait for your next check-in text.", "No appointment is active at this time." }, true, EVOLineType.Greeting);
+
                 dialogueController.AddStateDialogue("CheckInComplete", "Check-in complete. See you next time.",
                     new[] { "Until next time.", "Stay out of trouble." }, true, EVOLineType.Acknowledge);
 

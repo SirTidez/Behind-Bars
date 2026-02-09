@@ -1966,6 +1966,8 @@ namespace Behind_Bars
                 {
                     BehindBarsUIManager.Instance.DestroyJailInfoUI();
                 }
+
+                _paroleSystem?.Shutdown();
             }
             catch (Exception e)
             {

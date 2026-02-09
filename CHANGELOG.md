@@ -1,5 +1,15 @@
 # Changelog
 
+## alpha-1.2.0
+- **IL2CPP Jail/NPC Parity Pass**: Integrated the latest jail and parole IL2CPP fixes to preserve canonical NPC flows and improve runtime stability
+  - Expanded IL2CPP-safe handling across jail processing, NPC coordination, spawn/behavior paths, and supporting utilities
+  - Added post-release compliance flow updates and parole officer runtime fixes
+- **Crime and Witness Reliability**: Reworked witness/crime handling to prioritize Behind Bars tracking while preventing duplicate crime entries
+  - Added mod-managed assault registration with mirrored native crime suppression to avoid double counting in wanted/crime UI
+  - Excluded mod law-enforcement officers from civilian witness behavior and routed officer assaults to immediate re-arrest with an added Assault charge
+  - Suppressed stale/delayed witness police calls once arrest/jail flow is already in progress
+- **Post-Release Dialogue/Voice Fixes**: Fixed post-release dialogue flow and jail voice database creation for IL2CPP paths
+
 ## alpha-1.1.0
 - **Security Camera Performance**: Cameras now only render when you are close enough and can actually see a monitor screen
   - Added monitor face visibility checks and tightened the activation range to 10m

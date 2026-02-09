@@ -649,6 +649,46 @@ namespace Behind_Bars.Systems.NPCs
             return false;
         }
 
+        public virtual bool TrySendNPCTextMessage(string message)
+        {
+            if (string.IsNullOrWhiteSpace(message))
+            {
+                return false;
+            }
+
+            try
+            {
+                if (npcComponent == null)
+                {
+                    return false;
+                }
+
+#if !MONO
+                var npc = npcComponent as Il2CppScheduleOne.NPCs.NPC;
+#else
+                var npc = npcComponent as ScheduleOne.NPCs.NPC;
+#endif
+                if (npc == null)
+                {
+                    return false;
+                }
+
+                if (npc.MSGConversation == null)
+                {
+                    npc.CreateMessageConversation();
+                }
+
+                npc.SendTextMessage(message);
+                ModLogger.Debug($"NPC {gameObject.name} sent text message: {message}");
+                return true;
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Debug($"Text message unavailable for {gameObject.name}: {ex.Message}");
+                return false;
+            }
+        }
+
         #endregion
 
         protected virtual void OnDestroy()

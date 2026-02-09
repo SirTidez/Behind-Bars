@@ -7,6 +7,7 @@ using Behind_Bars.Systems;
 using Il2CppScheduleOne.Law;
 using Il2CppScheduleOne.NPCs;
 #else
+using Newtonsoft.Json;
 using ScheduleOne.Law;
 using ScheduleOne.NPCs;
 #endif
@@ -44,6 +45,11 @@ namespace Behind_Bars.Systems.CrimeTracking
         private string _description;
 
         // Properties for safe access
+#if !MONO
+        [System.Text.Json.Serialization.JsonIgnore]
+#else
+        [Newtonsoft.Json.JsonIgnore]
+#endif
         public Crime Crime
         {
             get => _crime;
