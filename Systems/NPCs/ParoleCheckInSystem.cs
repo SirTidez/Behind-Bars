@@ -1,14 +1,18 @@
+using System;
 using System.Collections;
 using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.CrimeTracking;
+using Behind_Bars.Systems.Dialogue;
 using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
+using Il2CppScheduleOne.Dialogue;
 using Il2CppScheduleOne.PlayerScripts;
 using Il2CppInterop.Runtime.Attributes;
 #else
+using ScheduleOne.Dialogue;
 using ScheduleOne.PlayerScripts;
 #endif
 
@@ -29,6 +33,8 @@ namespace Behind_Bars.Systems.NPCs
         private const float CHECK_IN_PROXIMITY = 5f; // Distance to trigger check-in
         private const float CHECK_IN_COOLDOWN = 30f; // Cooldown between check-ins (real seconds)
         private const float CHECK_IN_PROCESSING_TIME = 3f; // Time to process check-in
+        private const string CHECK_IN_DIALOGUE_CONTAINER_NAME = "ParoleOfficer_CheckIn";
+        private const string CHECK_IN_CHOICE_LABEL = "checkin_request";
 
         #endregion
 
@@ -37,6 +43,10 @@ namespace Behind_Bars.Systems.NPCs
         private ParoleOfficerBehavior paroleOfficer;
         private JailNPCDialogueController dialogueController;
         private StationaryBehavior stationaryBehavior;
+        private NPCDialogueWrapper dialogueWrapper;
+        private DialogueHandler dialogueHandler;
+        private DialogueController baseDialogueController;
+        private bool interactionHooked;
 
         #endregion
 
@@ -44,7 +54,6 @@ namespace Behind_Bars.Systems.NPCs
 
         private Player currentCheckInParolee;
         private bool isProcessingCheckIn = false;
-        private float lastCheckInTime = 0f;
         private Dictionary<Player, float> lastCheckInTimes = new Dictionary<Player, float>();
 
         #endregion
@@ -60,53 +69,236 @@ namespace Behind_Bars.Systems.NPCs
 
         private void Start()
         {
-            // Start checking for nearby parolees
-            MelonCoroutines.Start(CheckForNearbyParolees());
+            MelonCoroutines.Start(WaitForInteractionTrigger());
         }
+
+        private void OnDestroy() { }
 
         #endregion
 
         #region Check-In Detection
 
-        private IEnumerator CheckForNearbyParolees()
+        private IEnumerator WaitForInteractionTrigger()
         {
-            while (true)
+            int retries = 0;
+            while (!interactionHooked && retries < 20)
             {
-                yield return new WaitForSeconds(2f); // Check every 2 seconds
-
-                if (isProcessingCheckIn) continue;
-                if (paroleOfficer == null || paroleOfficer.GetRole() != ParoleOfficerBehavior.ParoleOfficerRole.SupervisingOfficer) continue;
-
-                // Check for players on parole nearby
-                var players = GameObject.FindObjectsOfType<Player>();
-                if (players == null || players.Length == 0) continue;
-
-                foreach (var player in players)
+                SetupInteractionTrigger();
+                if (!interactionHooked)
                 {
-                    if (player == null) continue;
-
-                    // Check if player is on parole
-                    var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
-                    if (rapSheet == null || rapSheet.CurrentParoleRecord == null) continue;
-                    if (!rapSheet.CurrentParoleRecord.IsOnParole()) continue;
-
-                    // Check distance
-                    float distance = Vector3.Distance(transform.position, player.transform.position);
-                    if (distance <= CHECK_IN_PROXIMITY)
-                    {
-                        // Check cooldown
-                        if (lastCheckInTimes.ContainsKey(player))
-                        {
-                            float timeSinceLastCheckIn = Time.time - lastCheckInTimes[player];
-                            if (timeSinceLastCheckIn < CHECK_IN_COOLDOWN) continue;
-                        }
-
-                        // Initiate check-in
-                        InitiateCheckIn(player);
-                        break; // Only one check-in at a time
-                    }
+                    retries++;
+                    yield return new WaitForSeconds(0.5f);
                 }
             }
+
+            if (!interactionHooked)
+            {
+                ModLogger.Warn($"ParoleCheckInSystem: Failed to hook interaction trigger on {gameObject.name}");
+            }
+        }
+
+        private void SetupInteractionTrigger()
+        {
+            if (interactionHooked)
+            {
+                return;
+            }
+
+            try
+            {
+                dialogueWrapper = new NPCDialogueWrapper(gameObject);
+                dialogueWrapper.EnsureHandler();
+                dialogueHandler = dialogueWrapper.Handler;
+                if (dialogueHandler == null)
+                {
+                    ModLogger.Warn($"ParoleCheckInSystem: DialogueHandler not found on {gameObject.name}");
+                    return;
+                }
+
+                baseDialogueController = BBHelpers.GetComponentSafe<DialogueController>(dialogueHandler.gameObject);
+                if (baseDialogueController == null)
+                {
+                    ModLogger.Warn($"ParoleCheckInSystem: DialogueController not found on {gameObject.name}");
+                    return;
+                }
+
+                baseDialogueController.DialogueEnabled = true;
+                baseDialogueController.UseDialogueBehaviour = true;
+
+                DisableGreetingOverrides();
+                RegisterCheckInDialogueContainer();
+
+                dialogueWrapper.ClearCallbacks();
+                dialogueWrapper.OnChoiceSelected(CHECK_IN_CHOICE_LABEL, OnCheckInDialogueChoiceSelected);
+
+                if (!dialogueWrapper.UseContainerOnInteract(CHECK_IN_DIALOGUE_CONTAINER_NAME))
+                {
+                    ModLogger.Warn($"ParoleCheckInSystem: Failed to set check-in container override on {gameObject.name}");
+                    return;
+                }
+
+                interactionHooked = true;
+                ModLogger.Debug($"ParoleCheckInSystem: Check-in interaction hooked on {gameObject.name}");
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"ParoleCheckInSystem: Failed to set up interaction trigger: {ex.Message}");
+            }
+        }
+
+        private void DisableGreetingOverrides()
+        {
+            if (baseDialogueController?.GreetingOverrides == null)
+            {
+                return;
+            }
+
+            foreach (var greetingOverride in baseDialogueController.GreetingOverrides)
+            {
+                greetingOverride.ShouldShow = false;
+            }
+        }
+
+        private void RegisterCheckInDialogueContainer()
+        {
+            if (dialogueHandler == null)
+            {
+                return;
+            }
+
+            var builder = new DialogueContainerBuilder();
+            builder.AddNode("ENTRY", "Do you need to report for your parole check-in?", choices =>
+            {
+                choices.Add(CHECK_IN_CHOICE_LABEL, "Yes, I am here to check in.", "end");
+                choices.Add("checkin_later", "Not right now.", "end");
+            });
+            builder.AddNode("end", string.Empty, null);
+            builder.SetAllowExit(true);
+
+            var container = builder.Build(CHECK_IN_DIALOGUE_CONTAINER_NAME);
+
+            if (dialogueHandler.dialogueContainers == null)
+            {
+#if !MONO
+                dialogueHandler.dialogueContainers = new Il2CppSystem.Collections.Generic.List<DialogueContainer>();
+#else
+                dialogueHandler.dialogueContainers = new System.Collections.Generic.List<DialogueContainer>();
+#endif
+            }
+
+            bool replaced = false;
+            for (int i = 0; i < dialogueHandler.dialogueContainers.Count; i++)
+            {
+                var existing = dialogueHandler.dialogueContainers[i];
+                if (existing != null && existing.name == CHECK_IN_DIALOGUE_CONTAINER_NAME)
+                {
+                    dialogueHandler.dialogueContainers[i] = container;
+                    replaced = true;
+                    break;
+                }
+            }
+
+            if (!replaced)
+            {
+                dialogueHandler.dialogueContainers.Add(container);
+            }
+
+            dialogueHandler.dialogueContainers.Remove(container);
+            dialogueHandler.dialogueContainers.Insert(0, container);
+        }
+
+        private void EnsureContainerOnInteract()
+        {
+            if (dialogueWrapper == null)
+            {
+                return;
+            }
+
+            DisableGreetingOverrides();
+            dialogueWrapper.UseContainerOnInteract(CHECK_IN_DIALOGUE_CONTAINER_NAME);
+        }
+
+        private void OnCheckInDialogueChoiceSelected()
+        {
+            if (isProcessingCheckIn)
+            {
+                return;
+            }
+
+            if (paroleOfficer == null || paroleOfficer.GetRole() != ParoleOfficerBehavior.ParoleOfficerRole.SupervisingOfficer)
+            {
+                return;
+            }
+
+            if (paroleOfficer.IsIntakeProcessingActive())
+            {
+                var baseNpcBusy = GetComponent<BaseJailNPC>();
+                baseNpcBusy?.TrySendNPCMessage("I am processing intake right now. Come back in a moment.", 3f);
+                EnsureContainerOnInteract();
+                return;
+            }
+
+            var parolee = FindNearbyParoleeForInteraction();
+            if (parolee == null)
+            {
+                var baseNpcNoPlayer = GetComponent<BaseJailNPC>();
+                baseNpcNoPlayer?.TrySendNPCMessage("Step closer if you need to check in.", 3f);
+                EnsureContainerOnInteract();
+                return;
+            }
+
+            try
+            {
+                dialogueWrapper?.End();
+            }
+            catch { }
+
+            InitiateCheckIn(parolee);
+        }
+
+        private Player FindNearbyParoleeForInteraction()
+        {
+            var players = GameObject.FindObjectsOfType<Player>();
+            if (players == null || players.Length == 0)
+            {
+                return null;
+            }
+
+            Player closest = null;
+            float closestDistance = float.MaxValue;
+
+            foreach (var player in players)
+            {
+                if (player == null)
+                {
+                    continue;
+                }
+
+                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                if (rapSheet == null || rapSheet.CurrentParoleRecord == null || !rapSheet.CurrentParoleRecord.IsOnParole())
+                {
+                    continue;
+                }
+
+                float distance = Vector3.Distance(transform.position, player.transform.position);
+                if (distance > CHECK_IN_PROXIMITY || distance >= closestDistance)
+                {
+                    continue;
+                }
+
+                if (lastCheckInTimes.TryGetValue(player, out float lastAttemptTime))
+                {
+                    if (Time.time - lastAttemptTime < CHECK_IN_COOLDOWN)
+                    {
+                        continue;
+                    }
+                }
+
+                closest = player;
+                closestDistance = distance;
+            }
+
+            return closest;
         }
 
         #endregion
@@ -136,6 +328,18 @@ namespace Behind_Bars.Systems.NPCs
                 return;
             }
 
+            var paroleSystem = Core.Instance?.ParoleSystem;
+            if (paroleSystem != null)
+            {
+                if (!paroleSystem.TryBeginCheckInSession(parolee, out var status, out string windowText))
+                {
+                    ShowCheckInRejectedDialogue(status, windowText);
+                    lastCheckInTimes[parolee] = Time.time;
+                    EnsureContainerOnInteract();
+                    return;
+                }
+            }
+
             currentCheckInParolee = parolee;
             isProcessingCheckIn = true;
 
@@ -143,11 +347,51 @@ namespace Behind_Bars.Systems.NPCs
             MelonCoroutines.Start(ProcessCheckIn(parolee));
         }
 
+        private void ShowCheckInRejectedDialogue(ParoleSystem.DailyCheckInStatus status, string windowText)
+        {
+            if (dialogueController == null)
+            {
+                dialogueController = BBHelpers.GetComponentSafe<JailNPCDialogueController>(gameObject);
+            }
+
+            if (dialogueController == null)
+            {
+                var baseNpcFallback = GetComponent<BaseJailNPC>();
+                baseNpcFallback?.TrySendNPCMessage("You are not eligible to check in right now.", 3f);
+                EnsureContainerOnInteract();
+                return;
+            }
+
+            string state = status switch
+            {
+                ParoleSystem.DailyCheckInStatus.TooEarly => "CheckInTooEarly",
+                ParoleSystem.DailyCheckInStatus.MissedWindow => "CheckInMissedWindow",
+                ParoleSystem.DailyCheckInStatus.NoScheduledWindow => "CheckInNoSchedule",
+                _ => "CheckInWarning"
+            };
+
+            dialogueController.UpdateGreetingForState(state);
+            dialogueController.SendContextualMessage("interaction");
+
+            if (status == ParoleSystem.DailyCheckInStatus.TooEarly && !string.IsNullOrWhiteSpace(windowText))
+            {
+                var baseNpc = GetComponent<BaseJailNPC>();
+                baseNpc?.TrySendNPCMessage($"Your check-in window is between {windowText}.", 4f);
+            }
+
+            EnsureContainerOnInteract();
+        }
+
         /// <summary>
         /// Process the check-in
         /// </summary>
         private IEnumerator ProcessCheckIn(Player parolee)
         {
+            if (dialogueController == null)
+            {
+                dialogueController = BBHelpers.GetComponentSafe<JailNPCDialogueController>(gameObject);
+            }
+
             // Update dialogue to check-in greeting
             if (dialogueController != null)
             {
@@ -219,9 +463,16 @@ namespace Behind_Bars.Systems.NPCs
                 yield return new WaitForSeconds(2f);
             }
 
+            var completedParolee = currentCheckInParolee;
+
             // Reset state
             isProcessingCheckIn = false;
             currentCheckInParolee = null;
+
+            if (completedParolee != null)
+            {
+                Core.Instance?.ParoleSystem?.EndCheckInSession(completedParolee);
+            }
 
             // Return to idle dialogue
             if (dialogueController != null)
@@ -234,6 +485,8 @@ namespace Behind_Bars.Systems.NPCs
             {
                 stationaryBehavior.ReturnToPosition();
             }
+
+            EnsureContainerOnInteract();
         }
 
         /// <summary>
@@ -241,6 +494,16 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private void RecordCheckIn(Player parolee)
         {
+            var paroleSystem = Core.Instance?.ParoleSystem;
+            if (paroleSystem != null && !paroleSystem.NotifyDailyCheckInCompleted(parolee))
+            {
+                ModLogger.Info($"ParoleCheckInSystem: Check-in denied for {parolee.name} due to timing/scheduling rules");
+                var status = paroleSystem.GetDailyCheckInStatus(parolee, out string windowText, applyConsequences: false);
+                ShowCheckInRejectedDialogue(status, windowText);
+                lastCheckInTimes[parolee] = Time.time;
+                return;
+            }
+
             var rapSheet = RapSheetManager.Instance.GetRapSheet(parolee);
             if (rapSheet?.CurrentParoleRecord != null)
             {

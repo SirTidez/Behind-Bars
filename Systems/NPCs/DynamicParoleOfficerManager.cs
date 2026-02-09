@@ -213,8 +213,14 @@ namespace Behind_Bars.Systems.NPCs
                 // Subscribe to events
                 SubscribeToEvents();
 
-                // Check initial parole status
-                CheckParoleStatus();
+                // Check initial parole status without firing transition handlers.
+                // Loaded saves may already be on parole; we only want to sync state here.
+                CheckParoleStatus(false);
+
+                if (isPlayerOnParole)
+                {
+                    paroleSystem?.EnsureRuntimeParoleTrackingForLoadedPlayer(currentPlayer);
+                }
 
                 // Get initial region
                 if (locationTracker != null)
@@ -402,7 +408,7 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Check current parole status
         /// </summary>
-        private void CheckParoleStatus()
+        private void CheckParoleStatus(bool notifyTransitions = true)
         {
             if (currentPlayer == null)
             {
@@ -419,7 +425,12 @@ namespace Behind_Bars.Systems.NPCs
                     bool wasOnParole = isPlayerOnParole;
                     isPlayerOnParole = rapSheet.CurrentParoleRecord.IsOnParole();
 
-                    if (wasOnParole != isPlayerOnParole)
+                    if (isPlayerOnParole)
+                    {
+                        paroleSystem?.EnsureRuntimeParoleTrackingForLoadedPlayer(currentPlayer);
+                    }
+
+                    if (notifyTransitions && wasOnParole != isPlayerOnParole)
                     {
                         ModLogger.Debug($"DynamicParoleOfficerManager: Parole status changed to {(isPlayerOnParole ? "ON" : "OFF")} for {currentPlayer.name}");
                         
@@ -438,7 +449,7 @@ namespace Behind_Bars.Systems.NPCs
                     bool wasOnParole = isPlayerOnParole;
                     isPlayerOnParole = false;
                     
-                    if (wasOnParole && !isPlayerOnParole)
+                    if (notifyTransitions && wasOnParole && !isPlayerOnParole)
                     {
                         OnParoleEnded(currentPlayer);
                     }
@@ -577,9 +588,114 @@ namespace Behind_Bars.Systems.NPCs
         {
             var assignment = ParoleOfficerAssignment.PoliceStationSupervisor;
 
+            if (activeOfficers.TryGetValue(assignment, out var trackedOfficer) && trackedOfficer != null)
+            {
+                spawnedAssignments.Add(assignment);
+                DeduplicateSupervisingOfficers(trackedOfficer);
+                return;
+            }
+
+            var existingSupervisor = FindExistingSupervisingOfficer();
+            if (existingSupervisor != null)
+            {
+                activeOfficers[assignment] = existingSupervisor;
+                spawnedAssignments.Add(assignment);
+                return;
+            }
+
             if (!spawnedAssignments.Contains(assignment))
             {
                 SpawnOfficer(assignment);
+            }
+        }
+
+        private ParoleOfficerBehavior FindExistingSupervisingOfficer()
+        {
+            var allParoleOfficers = BBHelpers.FindObjectsOfTypeSafe<ParoleOfficerBehavior>();
+            if (allParoleOfficers == null || allParoleOfficers.Length == 0)
+            {
+                return null;
+            }
+
+            ParoleOfficerBehavior firstSupervisor = null;
+
+            foreach (var officer in allParoleOfficers)
+            {
+                if (officer == null)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    if (officer.GetRole() != ParoleOfficerBehavior.ParoleOfficerRole.SupervisingOfficer)
+                    {
+                        continue;
+                    }
+
+                    if (firstSupervisor == null)
+                    {
+                        firstSupervisor = officer;
+                    }
+                }
+                catch
+                {
+                    // Ignore partially initialized officers.
+                }
+            }
+
+            if (firstSupervisor != null)
+            {
+                DeduplicateSupervisingOfficers(firstSupervisor);
+            }
+
+            return firstSupervisor;
+        }
+
+        private void DeduplicateSupervisingOfficers(ParoleOfficerBehavior keeper)
+        {
+            if (keeper == null)
+            {
+                return;
+            }
+
+            var allParoleOfficers = BBHelpers.FindObjectsOfTypeSafe<ParoleOfficerBehavior>();
+            if (allParoleOfficers == null || allParoleOfficers.Length == 0)
+            {
+                return;
+            }
+
+            int removedCount = 0;
+
+            foreach (var officer in allParoleOfficers)
+            {
+                if (officer == null || officer == keeper)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    if (officer.GetRole() != ParoleOfficerBehavior.ParoleOfficerRole.SupervisingOfficer)
+                    {
+                        continue;
+                    }
+
+                    if (officer.gameObject != null)
+                    {
+                        Destroy(officer.gameObject);
+                        removedCount++;
+                    }
+                }
+                catch
+                {
+                    // Ignore transient object state while deduplicating.
+                }
+            }
+
+            if (removedCount > 0)
+            {
+                ModLogger.Warn($"DynamicParoleOfficerManager: Removed {removedCount} duplicate supervising officer(s)");
             }
         }
 

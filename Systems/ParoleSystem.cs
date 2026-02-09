@@ -1,6 +1,9 @@
 using System.Collections;
+using System;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.CrimeTracking;
+using Behind_Bars.Systems.Crimes;
+using Behind_Bars.Systems.Jail;
 using Behind_Bars.UI;
 using UnityEngine;
 using MelonLoader;
@@ -9,8 +12,14 @@ using Behind_Bars.Systems.NPCs;
 using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
+using Il2CppFishNet;
+using Il2CppScheduleOne.GameTime;
+using Il2CppScheduleOne.Law;
 using Il2CppScheduleOne.PlayerScripts;
 #else
+using FishNet;
+using ScheduleOne.GameTime;
+using ScheduleOne.Law;
 using ScheduleOne.PlayerScripts;
 #endif
 
@@ -40,6 +49,22 @@ namespace Behind_Bars.Systems
         private const float SEARCH_INTERVAL_MIN = 30f; // Minimum time between searches
         private const float SEARCH_INTERVAL_MAX = 120f; // Maximum time between searches
         private const float SEARCH_RADIUS = 50f; // How close PO needs to be to search
+        private const float LOW_LSI_CHECKIN_WINDOW_MINUTES = 180f; // 3 in-game hours
+        private const float HIGH_LSI_CHECKIN_WINDOW_MINUTES = 60f; // 1 in-game hour
+        private const float ACTIVE_WARRANT_ENFORCEMENT_INTERVAL_SECONDS = 2f;
+        private const int TEXT_MESSAGE_RETRY_MAX_ATTEMPTS = 8;
+        private const float TEXT_MESSAGE_RETRY_INTERVAL_SECONDS = 3f;
+        private const int CHECKIN_START_HOUR_24 = 10;
+        private const int CHECKIN_END_HOUR_24 = 20;
+        private const int GAME_MINUTES_PER_DAY = 1440;
+
+        public enum DailyCheckInStatus
+        {
+            Allowed = 0,
+            NoScheduledWindow = 1,
+            TooEarly = 2,
+            MissedWindow = 3
+        }
 
         /// <summary>
         /// Parole supervision status
@@ -71,9 +96,117 @@ namespace Behind_Bars.Systems
             public List<string> Violations { get; set; } = new();
         }
 
+        private class DailyCheckInRequirement
+        {
+            public int DayIndex { get; set; }
+            public int WindowStartMinuteOfDay { get; set; }
+            public int WindowEndMinuteOfDay { get; set; }
+            public bool ReminderSent { get; set; }
+            public bool Completed { get; set; }
+        }
+
+        private class PendingOfficerText
+        {
+            public string Message { get; set; }
+            public int Attempts { get; set; }
+            public float NextAttemptTime { get; set; }
+        }
+
         private Dictionary<Player, ParoleRuntimeRecord> _paroleRecords = new();
+        private Dictionary<Player, DailyCheckInRequirement> _dailyCheckInRequirements = new();
+        private Dictionary<Player, int> _dailyCheckInScheduledDay = new();
+        private Dictionary<Player, PendingOfficerText> _pendingOfficerTexts = new();
+        private HashSet<Player> _activeCheckInSessions = new();
+        private HashSet<Player> _playersWithActiveWarrants = new();
+        private Dictionary<Player, float> _lastWarrantEnforcementTime = new();
         private GameObject? _paroleOfficerPrefab;
         private Transform? _paroleOfficerInstance;
+        private bool _isSubscribedToDayPass;
+        private readonly Action _onDayPassHandler;
+        private object _timeManagerSubscriptionCoroutine;
+
+        public ParoleSystem()
+        {
+            _onDayPassHandler = HandleDayPassForParoleCheckIns;
+            EnsureDayPassSubscription();
+        }
+
+        public void Shutdown()
+        {
+            UnsubscribeFromDayPass();
+        }
+
+        private void EnsureDayPassSubscription()
+        {
+            if (_isSubscribedToDayPass || _timeManagerSubscriptionCoroutine != null)
+            {
+                return;
+            }
+
+            _timeManagerSubscriptionCoroutine = MelonCoroutines.Start(WaitForTimeManagerAndSubscribe());
+        }
+
+        private IEnumerator WaitForTimeManagerAndSubscribe()
+        {
+            int attempts = 0;
+
+            while (!_isSubscribedToDayPass && attempts < 600)
+            {
+                TimeManager timeManager = null;
+
+                try
+                {
+                    timeManager = TimeManager.Instance;
+                }
+                catch
+                {
+                    // TimeManager not available yet.
+                }
+
+                if (timeManager != null)
+                {
+                    timeManager.onDayPass += _onDayPassHandler;
+                    _isSubscribedToDayPass = true;
+                    _timeManagerSubscriptionCoroutine = null;
+                    ModLogger.Debug("ParoleSystem subscribed to TimeManager.onDayPass");
+                    yield break;
+                }
+
+                attempts++;
+                yield return new WaitForSeconds(0.5f);
+            }
+
+            _timeManagerSubscriptionCoroutine = null;
+
+            if (!_isSubscribedToDayPass)
+            {
+                ModLogger.Warn("ParoleSystem failed to subscribe to TimeManager.onDayPass");
+            }
+        }
+
+        private void UnsubscribeFromDayPass()
+        {
+            if (!_isSubscribedToDayPass)
+            {
+                return;
+            }
+
+            try
+            {
+                var timeManager = TimeManager.Instance;
+                if (timeManager != null)
+                {
+                    timeManager.onDayPass -= _onDayPassHandler;
+                }
+
+                _isSubscribedToDayPass = false;
+                ModLogger.Debug("ParoleSystem unsubscribed from TimeManager.onDayPass");
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"ParoleSystem: Failed to unsubscribe from TimeManager.onDayPass: {ex.Message}");
+            }
+        }
 
         /// <summary>
         /// Start parole supervision for a player
@@ -82,10 +215,13 @@ namespace Behind_Bars.Systems
         public void StartParole(Player player, float durationGameMinutes = PAROLE_DURATION, bool showUI = true)
         {
             ModLogger.Info($"Starting parole for {player.name} for {durationGameMinutes} game minutes ({GameTimeManager.FormatGameTime(durationGameMinutes)})");
+            EnsureDayPassSubscription();
 
             float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
             float searchIntervalMin = GameTimeManager.RealSecondsToGameMinutes(SEARCH_INTERVAL_MIN);
             float searchIntervalMax = GameTimeManager.RealSecondsToGameMinutes(SEARCH_INTERVAL_MAX);
+
+            ClearParoleRuntimeFlags(player);
 
             var record = new ParoleRuntimeRecord
             {
@@ -135,6 +271,84 @@ namespace Behind_Bars.Systems
             // NOTE: RecordReleaseTime is now called in ReleaseManager.WaitForParoleConditionsAcknowledgment()
             // after the player dismisses the parole conditions UI. This ensures the grace period
             // starts only after the player acknowledges their conditions, not immediately when parole starts.
+        }
+
+        public void EnsureRuntimeParoleTrackingForLoadedPlayer(Player player)
+        {
+            if (player == null)
+            {
+                return;
+            }
+
+            if (!IsAuthorityForParoleActions())
+            {
+                return;
+            }
+
+            EnsureDayPassSubscription();
+
+            var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+            var paroleRecord = rapSheet?.CurrentParoleRecord;
+            if (paroleRecord == null || !paroleRecord.IsOnParole() || paroleRecord.IsPaused())
+            {
+                return;
+            }
+
+            float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
+            int currentDayIndex = GetCurrentDayIndex();
+            int currentMinuteOfDay = GetCurrentMinuteOfDay();
+
+            if (_paroleRecords.TryGetValue(player, out var existingRecord) && existingRecord != null)
+            {
+                if (existingRecord.Status == ParoleStatus.Active)
+                {
+                    if (!JailTimeTracker.Instance.IsInJail(player))
+                    {
+                        ScheduleDailyCheckIn(player, currentDayIndex, currentMinuteOfDay);
+                    }
+
+                    return;
+                }
+
+                _paroleRecords.Remove(player);
+            }
+
+            var paroleStatus = paroleRecord.GetParoleStatus();
+            float remainingGameMinutes = Mathf.Max(0f, paroleStatus.remainingTime);
+            if (remainingGameMinutes <= 0f)
+            {
+                paroleRecord.CheckAndEndExpiredParole();
+                RapSheetManager.Instance.MarkRapSheetChanged(player);
+                return;
+            }
+
+            float searchIntervalMin = GameTimeManager.RealSecondsToGameMinutes(SEARCH_INTERVAL_MIN);
+            float searchIntervalMax = GameTimeManager.RealSecondsToGameMinutes(SEARCH_INTERVAL_MAX);
+
+            var runtimeRecord = new ParoleRuntimeRecord
+            {
+                Player = player,
+                Status = ParoleStatus.Active,
+                StartGameTimeMinutes = currentGameTime,
+                DurationGameMinutes = remainingGameMinutes,
+                TimeRemainingGameMinutes = remainingGameMinutes,
+                ViolationCount = paroleRecord.GetViolationCount(),
+                LastSearchGameTimeMinutes = 0f,
+                NextSearchGameTimeMinutes = currentGameTime + UnityEngine.Random.Range(searchIntervalMin, searchIntervalMax)
+            };
+
+            _paroleRecords[player] = runtimeRecord;
+
+            ParoleTimeTracker.Instance.StopTracking(player);
+            ParoleTimeTracker.Instance.StartTracking(player, remainingGameMinutes, OnParoleComplete);
+            MelonCoroutines.Start(MonitorParole(runtimeRecord));
+
+            ModLogger.Info($"ParoleSystem: Restored runtime parole tracking for loaded player {player.name} ({remainingGameMinutes:F1} game minutes remaining)");
+
+            if (!JailTimeTracker.Instance.IsInJail(player))
+            {
+                ScheduleDailyCheckIn(player, currentDayIndex, currentMinuteOfDay);
+            }
         }
 
         /// <summary>
@@ -202,6 +416,644 @@ namespace Behind_Bars.Systems
             {
                 ModLogger.Error($"ParoleSystem: Error ensuring DynamicParoleOfficerManager: {ex.Message}");
             }
+        }
+
+        private bool IsAuthorityForParoleActions()
+        {
+            try
+            {
+#if !MONO
+                var networkManager = InstanceFinder.NetworkManager;
+#else
+                var networkManager = FishNet.InstanceFinder.NetworkManager;
+#endif
+                if (networkManager == null)
+                {
+                    return true;
+                }
+
+                return networkManager.IsServer;
+            }
+            catch
+            {
+                return true;
+            }
+        }
+
+        private void HandleDayPassForParoleCheckIns()
+        {
+            if (!IsAuthorityForParoleActions())
+            {
+                return;
+            }
+
+            if (_paroleRecords.Count == 0)
+            {
+                return;
+            }
+
+            int currentDayIndex = GetCurrentDayIndex();
+            int currentMinuteOfDay = GetCurrentMinuteOfDay();
+
+            foreach (var record in _paroleRecords.Values)
+            {
+                if (record == null || record.Player == null)
+                {
+                    continue;
+                }
+
+                if (record.Status != ParoleStatus.Active)
+                {
+                    continue;
+                }
+
+                if (JailTimeTracker.Instance.IsInJail(record.Player))
+                {
+                    continue;
+                }
+
+                ProcessExpiredDailyCheckIn(record.Player, currentDayIndex, currentMinuteOfDay);
+                ScheduleDailyCheckIn(record.Player, currentDayIndex, currentMinuteOfDay);
+            }
+        }
+
+        private void ScheduleDailyCheckIn(Player player, int currentDayIndex, int currentMinuteOfDay)
+        {
+            if (_dailyCheckInScheduledDay.TryGetValue(player, out int lastScheduledDay) && lastScheduledDay == currentDayIndex)
+            {
+                return;
+            }
+
+            if (_dailyCheckInRequirements.TryGetValue(player, out var existingRequirement))
+            {
+                if (existingRequirement.DayIndex == currentDayIndex)
+                {
+                    _dailyCheckInScheduledDay[player] = currentDayIndex;
+                    return;
+                }
+
+                if (existingRequirement.Completed)
+                {
+                    _dailyCheckInRequirements.Remove(player);
+                }
+            }
+
+            float windowMinutes = GetDailyCheckInWindowMinutes(player);
+            if (!TryBuildDailyCheckInWindow(currentMinuteOfDay, windowMinutes, out int windowStartMinuteOfDay, out int windowEndMinuteOfDay))
+            {
+                _dailyCheckInScheduledDay[player] = currentDayIndex;
+                ModLogger.Warn($"ParoleSystem: Could not schedule check-in window for {player.name} on day index {currentDayIndex} within 10:00-20:00");
+                return;
+            }
+
+            _dailyCheckInRequirements[player] = new DailyCheckInRequirement
+            {
+                DayIndex = currentDayIndex,
+                WindowStartMinuteOfDay = windowStartMinuteOfDay,
+                WindowEndMinuteOfDay = windowEndMinuteOfDay,
+                ReminderSent = false,
+                Completed = false
+            };
+            _dailyCheckInScheduledDay[player] = currentDayIndex;
+
+            SendDailyCheckInInstructionText(player, windowStartMinuteOfDay, windowEndMinuteOfDay);
+            ModLogger.Info($"ParoleSystem: Scheduled daily check-in for {player.name} (day index {currentDayIndex}, {FormatMinuteOfDay(windowStartMinuteOfDay)} - {FormatMinuteOfDay(windowEndMinuteOfDay)})");
+        }
+
+        private float GetDailyCheckInWindowMinutes(Player player)
+        {
+            var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+            if (rapSheet == null)
+            {
+                return LOW_LSI_CHECKIN_WINDOW_MINUTES;
+            }
+
+            return rapSheet.LSILevel switch
+            {
+                LSILevel.High => HIGH_LSI_CHECKIN_WINDOW_MINUTES,
+                LSILevel.Severe => HIGH_LSI_CHECKIN_WINDOW_MINUTES,
+                _ => LOW_LSI_CHECKIN_WINDOW_MINUTES
+            };
+        }
+
+        private bool TryBuildDailyCheckInWindow(int currentMinuteOfDay, float windowMinutes, out int windowStartMinuteOfDay, out int windowEndMinuteOfDay)
+        {
+            windowStartMinuteOfDay = 0;
+            windowEndMinuteOfDay = 0;
+
+            int windowLengthMinutes = Mathf.RoundToInt(windowMinutes);
+            int earliestStart = CHECKIN_START_HOUR_24 * 60;
+            int latestEnd = CHECKIN_END_HOUR_24 * 60;
+            int latestStart = latestEnd - windowLengthMinutes;
+
+            int minStart = Mathf.Max(currentMinuteOfDay, earliestStart);
+            if (minStart > latestStart)
+            {
+                return false;
+            }
+
+            windowStartMinuteOfDay = UnityEngine.Random.Range(minStart, latestStart + 1);
+            windowEndMinuteOfDay = windowStartMinuteOfDay + windowLengthMinutes;
+            return true;
+        }
+
+        private string GetPlayerDisplayName(Player player)
+        {
+            string rawName = player?.name ?? "Parolee";
+            if (string.IsNullOrWhiteSpace(rawName))
+            {
+                return "Parolee";
+            }
+
+            string trimmedName = rawName.Trim();
+            int idStartIndex = trimmedName.LastIndexOf(" (", StringComparison.Ordinal);
+            if (idStartIndex > 0 && trimmedName.EndsWith(")", StringComparison.Ordinal))
+            {
+                string idSlice = trimmedName.Substring(idStartIndex + 2, trimmedName.Length - idStartIndex - 3);
+                if (long.TryParse(idSlice, out _))
+                {
+                    return trimmedName.Substring(0, idStartIndex).Trim();
+                }
+            }
+
+            return trimmedName;
+        }
+
+        private void SendDailyCheckInInstructionText(Player player, int windowStartMinuteOfDay, int windowEndMinuteOfDay)
+        {
+            string playerName = GetPlayerDisplayName(player);
+            string windowStartText = FormatMinuteOfDay(windowStartMinuteOfDay);
+            string windowEndText = FormatMinuteOfDay(windowEndMinuteOfDay);
+            string message =
+                $"{playerName}, this is your supervising officer. Your check-in appointment today is scheduled between " +
+                $"{windowStartText} and {windowEndText}. Report during this window.";
+
+            SendSupervisingOfficerText(player, message);
+        }
+
+        private string FormatMinuteOfDay(int minuteOfDay)
+        {
+            int normalized = minuteOfDay % GAME_MINUTES_PER_DAY;
+            if (normalized < 0)
+            {
+                normalized += GAME_MINUTES_PER_DAY;
+            }
+
+            int hour24 = normalized / 60;
+            int minute = normalized % 60;
+            int hour12 = hour24 % 12;
+            if (hour12 == 0)
+            {
+                hour12 = 12;
+            }
+
+            string designator = hour24 >= 12 ? "PM" : "AM";
+            return $"{hour12}:{minute:00} {designator}";
+        }
+
+        private int GetCurrentDayIndex()
+        {
+            try
+            {
+                var timeManager = TimeManager.Instance;
+                if (timeManager != null)
+                {
+                    return timeManager.DayIndex;
+                }
+            }
+            catch
+            {
+            }
+
+            return Mathf.Max(0, GameTimeManager.Instance.GetCurrentGameDay() - 1);
+        }
+
+        private int GetCurrentMinuteOfDay()
+        {
+            try
+            {
+                var timeManager = TimeManager.Instance;
+                if (timeManager != null)
+                {
+                    int currentTime = timeManager.CurrentTime;
+                    int hour = Mathf.Clamp(currentTime / 100, 0, 23);
+                    int minute = Mathf.Clamp(currentTime % 100, 0, 59);
+                    return hour * 60 + minute;
+                }
+            }
+            catch
+            {
+            }
+
+            int fallbackHour = GameTimeManager.Instance.GetCurrentGameHour();
+            int fallbackMinute = GameTimeManager.Instance.GetCurrentGameMinute();
+            return Mathf.Clamp(fallbackHour, 0, 23) * 60 + Mathf.Clamp(fallbackMinute, 0, 59);
+        }
+
+        private string FormatWindowText(DailyCheckInRequirement requirement)
+        {
+            return $"{FormatMinuteOfDay(requirement.WindowStartMinuteOfDay)} and {FormatMinuteOfDay(requirement.WindowEndMinuteOfDay)}";
+        }
+
+        public DailyCheckInStatus GetDailyCheckInStatus(Player player, out string windowText, bool applyConsequences = true)
+        {
+            windowText = string.Empty;
+
+            if (player == null)
+            {
+                return DailyCheckInStatus.NoScheduledWindow;
+            }
+
+            if (!_dailyCheckInRequirements.TryGetValue(player, out var requirement) || requirement == null)
+            {
+                return DailyCheckInStatus.NoScheduledWindow;
+            }
+
+            windowText = FormatWindowText(requirement);
+
+            int currentDayIndex = GetCurrentDayIndex();
+            int currentMinuteOfDay = GetCurrentMinuteOfDay();
+
+            if (currentDayIndex > requirement.DayIndex ||
+                (currentDayIndex == requirement.DayIndex && currentMinuteOfDay > requirement.WindowEndMinuteOfDay))
+            {
+                if (applyConsequences)
+                {
+                    HandleMissedDailyCheckIn(player, requirement);
+                    _dailyCheckInRequirements.Remove(player);
+                }
+
+                return DailyCheckInStatus.MissedWindow;
+            }
+
+            if (currentDayIndex < requirement.DayIndex)
+            {
+                return DailyCheckInStatus.NoScheduledWindow;
+            }
+
+            if (currentMinuteOfDay < requirement.WindowStartMinuteOfDay)
+            {
+                return DailyCheckInStatus.TooEarly;
+            }
+
+            return DailyCheckInStatus.Allowed;
+        }
+
+        public bool TryBeginCheckInSession(Player player, out DailyCheckInStatus status, out string windowText)
+        {
+            status = GetDailyCheckInStatus(player, out windowText, applyConsequences: true);
+            if (status != DailyCheckInStatus.Allowed)
+            {
+                return false;
+            }
+
+            _activeCheckInSessions.Add(player);
+            return true;
+        }
+
+        public void EndCheckInSession(Player player)
+        {
+            if (player == null)
+            {
+                return;
+            }
+
+            _activeCheckInSessions.Remove(player);
+        }
+
+        public bool NotifyDailyCheckInCompleted(Player player)
+        {
+            if (player == null)
+            {
+                return false;
+            }
+
+            _activeCheckInSessions.Remove(player);
+
+            if (_dailyCheckInRequirements.TryGetValue(player, out var requirement) && requirement != null)
+            {
+                requirement.Completed = true;
+                _dailyCheckInRequirements.Remove(player);
+                ModLogger.Info($"ParoleSystem: Daily check-in completed for {player.name}");
+                return true;
+            }
+
+            return false;
+        }
+
+        private void ProcessExpiredDailyCheckIn(Player player, int currentDayIndex, int currentMinuteOfDay)
+        {
+            if (player == null || _activeCheckInSessions.Contains(player))
+            {
+                return;
+            }
+
+            if (!_dailyCheckInRequirements.TryGetValue(player, out var requirement) || requirement == null)
+            {
+                return;
+            }
+
+            if (requirement.Completed)
+            {
+                _dailyCheckInRequirements.Remove(player);
+                return;
+            }
+
+            bool missed = currentDayIndex > requirement.DayIndex ||
+                          (currentDayIndex == requirement.DayIndex && currentMinuteOfDay > requirement.WindowEndMinuteOfDay);
+            if (!missed)
+            {
+                return;
+            }
+
+            HandleMissedDailyCheckIn(player, requirement);
+            _dailyCheckInRequirements.Remove(player);
+        }
+
+        private void ProcessUpcomingCheckInReminder(Player player, int currentDayIndex, int currentMinuteOfDay)
+        {
+            if (player == null)
+            {
+                return;
+            }
+
+            if (!_dailyCheckInRequirements.TryGetValue(player, out var requirement) || requirement == null)
+            {
+                return;
+            }
+
+            if (requirement.Completed || requirement.ReminderSent)
+            {
+                return;
+            }
+
+            if (requirement.DayIndex != currentDayIndex)
+            {
+                return;
+            }
+
+            int reminderMinute = requirement.WindowStartMinuteOfDay - 60;
+            if (currentMinuteOfDay < reminderMinute || currentMinuteOfDay >= requirement.WindowStartMinuteOfDay)
+            {
+                return;
+            }
+
+            requirement.ReminderSent = true;
+
+            string message =
+                $"{GetPlayerDisplayName(player)}, reminder: your parole check-in window starts in one hour. " +
+                $"Report between {FormatMinuteOfDay(requirement.WindowStartMinuteOfDay)} and {FormatMinuteOfDay(requirement.WindowEndMinuteOfDay)}.";
+            SendSupervisingOfficerText(player, message);
+        }
+
+        private void HandleMissedDailyCheckIn(Player player, DailyCheckInRequirement requirement)
+        {
+            var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+            if (rapSheet?.CurrentParoleRecord == null)
+            {
+                return;
+            }
+
+            var paroleRecord = rapSheet.CurrentParoleRecord;
+            paroleRecord.RecordMissedCheckIn();
+
+            int missedCheckIns = paroleRecord.GetMissedCheckIns();
+
+            if (missedCheckIns <= 1)
+            {
+                LSILevel previousLsi = rapSheet.LSILevel;
+                LSILevel escalatedLsi = EscalateLSILevel(previousLsi);
+                rapSheet.LSILevel = escalatedLsi;
+                RapSheetManager.Instance.MarkRapSheetChanged(player);
+
+                string message =
+                    $"{GetPlayerDisplayName(player)}, you missed your required check-in window ({FormatMinuteOfDay(requirement.WindowStartMinuteOfDay)} to {FormatMinuteOfDay(requirement.WindowEndMinuteOfDay)}). " +
+                    $"First offense recorded: compliance score decreased and supervision level increased to {escalatedLsi}.";
+                SendSupervisingOfficerText(player, message);
+
+                ModLogger.Warn($"ParoleSystem: First missed daily check-in recorded for {player.name}");
+                return;
+            }
+
+            var violation = new ViolationRecord(
+                ViolationType.MissedCheckIn,
+                $"Missed scheduled daily check-in window {FormatMinuteOfDay(requirement.WindowStartMinuteOfDay)} - {FormatMinuteOfDay(requirement.WindowEndMinuteOfDay)}",
+                2.5f);
+
+            rapSheet.AddParoleViolation(violation);
+            RapSheetManager.Instance.MarkRapSheetChanged(player);
+
+            IssueAgentWarrant(player);
+
+            string violationMessage =
+                $"{GetPlayerDisplayName(player)}, this is your second missed check-in. You are now in parole violation. " +
+                "Agent warrant issued. You will remain wanted until your next arrest.";
+            SendSupervisingOfficerText(player, violationMessage);
+
+            ModLogger.Warn($"ParoleSystem: Escalated missed check-in violation for {player.name}");
+        }
+
+        private LSILevel EscalateLSILevel(LSILevel currentLevel)
+        {
+            return currentLevel switch
+            {
+                LSILevel.None => LSILevel.Minimum,
+                LSILevel.Minimum => LSILevel.Medium,
+                LSILevel.Medium => LSILevel.High,
+                LSILevel.High => LSILevel.Severe,
+                _ => LSILevel.Severe
+            };
+        }
+
+        private void IssueAgentWarrant(Player player)
+        {
+            if (player == null)
+            {
+                return;
+            }
+
+            bool isNewWarrant = _playersWithActiveWarrants.Add(player);
+            TriggerPolicePursuitForWarrant(player);
+
+            if (isNewWarrant)
+            {
+                ModLogger.Warn($"ParoleSystem: Active warrant issued for {player.name}");
+            }
+        }
+
+        private void TriggerPolicePursuitForWarrant(Player player)
+        {
+            try
+            {
+                var lawManager = LawManager.Instance;
+                if (lawManager != null)
+                {
+                    lawManager.PoliceCalled(player, new WitnessIntimidation());
+                }
+
+                if (player?.CrimeData != null)
+                {
+                    player.CrimeData.SetPursuitLevel(PlayerCrimeData.EPursuitLevel.Arresting);
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"ParoleSystem: Failed to trigger warrant pursuit for {player?.name}: {ex.Message}");
+            }
+        }
+
+        private void EnforceActiveWarrant(Player player)
+        {
+            if (player == null || !_playersWithActiveWarrants.Contains(player))
+            {
+                return;
+            }
+
+            if (JailTimeTracker.Instance.IsInJail(player))
+            {
+                _playersWithActiveWarrants.Remove(player);
+                _lastWarrantEnforcementTime.Remove(player);
+                ModLogger.Info($"ParoleSystem: Cleared active warrant for {player.name} after arrest");
+                return;
+            }
+
+            float now = Time.time;
+            if (_lastWarrantEnforcementTime.TryGetValue(player, out float lastEnforcementTime) &&
+                now - lastEnforcementTime < ACTIVE_WARRANT_ENFORCEMENT_INTERVAL_SECONDS)
+            {
+                return;
+            }
+
+            _lastWarrantEnforcementTime[player] = now;
+
+            if (player.CrimeData != null && player.CrimeData.CurrentPursuitLevel != PlayerCrimeData.EPursuitLevel.Arresting)
+            {
+                player.CrimeData.SetPursuitLevel(PlayerCrimeData.EPursuitLevel.Arresting);
+            }
+        }
+
+        private void QueueOfficerTextRetry(Player player, string message)
+        {
+            if (player == null || string.IsNullOrWhiteSpace(message))
+            {
+                return;
+            }
+
+            if (_pendingOfficerTexts.TryGetValue(player, out var existing) && existing != null && existing.Message == message)
+            {
+                return;
+            }
+
+            _pendingOfficerTexts[player] = new PendingOfficerText
+            {
+                Message = message,
+                Attempts = 0,
+                NextAttemptTime = Time.time + TEXT_MESSAGE_RETRY_INTERVAL_SECONDS
+            };
+        }
+
+        private void ProcessPendingOfficerText(Player player)
+        {
+            if (player == null)
+            {
+                return;
+            }
+
+            if (!_pendingOfficerTexts.TryGetValue(player, out var pending) || pending == null)
+            {
+                return;
+            }
+
+            if (Time.time < pending.NextAttemptTime)
+            {
+                return;
+            }
+
+            pending.Attempts++;
+            pending.NextAttemptTime = Time.time + TEXT_MESSAGE_RETRY_INTERVAL_SECONDS;
+
+            if (SendSupervisingOfficerText(player, pending.Message, allowRetryQueue: false))
+            {
+                _pendingOfficerTexts.Remove(player);
+                return;
+            }
+
+            if (pending.Attempts >= TEXT_MESSAGE_RETRY_MAX_ATTEMPTS)
+            {
+                _pendingOfficerTexts.Remove(player);
+                ModLogger.Warn($"ParoleSystem: Failed to deliver supervising officer text after retries for {player.name}");
+                return;
+            }
+
+            _pendingOfficerTexts[player] = pending;
+        }
+
+        private bool SendSupervisingOfficerText(Player player, string message, bool allowRetryQueue = true)
+        {
+            if (string.IsNullOrWhiteSpace(message))
+            {
+                return false;
+            }
+
+            try
+            {
+                EnsureDynamicParoleOfficerManager();
+
+                var supervisingOfficer = PrisonNPCManager.Instance?.GetSupervisingOfficer();
+                if (supervisingOfficer == null)
+                {
+                    if (allowRetryQueue)
+                    {
+                        QueueOfficerTextRetry(player, message);
+                    }
+
+                    ModLogger.Warn($"ParoleSystem: Supervising officer unavailable for text message: {message}");
+                    return false;
+                }
+
+                if (supervisingOfficer.TrySendNPCTextMessage(message))
+                {
+                    if (player != null)
+                    {
+                        _pendingOfficerTexts.Remove(player);
+                    }
+
+                    return true;
+                }
+
+                if (allowRetryQueue)
+                {
+                    QueueOfficerTextRetry(player, message);
+                }
+
+                supervisingOfficer.TrySendNPCMessage(message, 5f);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                if (allowRetryQueue)
+                {
+                    QueueOfficerTextRetry(player, message);
+                }
+
+                ModLogger.Error($"ParoleSystem: Failed to send supervising officer text to {player?.name}: {ex.Message}");
+                return false;
+            }
+        }
+
+        private void ClearParoleRuntimeFlags(Player player)
+        {
+            if (player == null)
+            {
+                return;
+            }
+
+            _dailyCheckInRequirements.Remove(player);
+            _dailyCheckInScheduledDay.Remove(player);
+            _pendingOfficerTexts.Remove(player);
+            _activeCheckInSessions.Remove(player);
+            _playersWithActiveWarrants.Remove(player);
+            _lastWarrantEnforcementTime.Remove(player);
         }
 
         /// <summary>
@@ -275,6 +1127,17 @@ namespace Behind_Bars.Systems
 
                 // Check if it's time for a random search (using game time)
                 float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
+
+                if (IsAuthorityForParoleActions())
+                {
+                    int currentDayIndex = GetCurrentDayIndex();
+                    int currentMinuteOfDay = GetCurrentMinuteOfDay();
+                    ProcessUpcomingCheckInReminder(record.Player, currentDayIndex, currentMinuteOfDay);
+                    ProcessExpiredDailyCheckIn(record.Player, currentDayIndex, currentMinuteOfDay);
+                    EnforceActiveWarrant(record.Player);
+                    ProcessPendingOfficerText(record.Player);
+                }
+
                 if (currentGameTime >= record.NextSearchGameTimeMinutes)
                 {
                     yield return ConductRandomSearch(record);
@@ -559,6 +1422,7 @@ namespace Behind_Bars.Systems
 
             // Remove from active parole
             _paroleRecords.Remove(record.Player);
+            ClearParoleRuntimeFlags(record.Player);
 
             // Emit parole ended event
             OnParoleEnded?.Invoke(record.Player);
@@ -619,6 +1483,8 @@ namespace Behind_Bars.Systems
                     ModLogger.Error($"Error completing parole in RapSheet: {ex.Message}");
                 }
             }
+
+            ClearParoleRuntimeFlags(player);
         }
 
         /// <summary>
@@ -682,6 +1548,7 @@ namespace Behind_Bars.Systems
 
             // Remove from active parole
             _paroleRecords.Remove(record.Player);
+            ClearParoleRuntimeFlags(record.Player);
 
             // Check if we can despawn parole officer
             if (_paroleRecords.Count == 0)
