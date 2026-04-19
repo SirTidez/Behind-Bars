@@ -36,6 +36,26 @@ namespace Behind_Bars.UI
         /// Number of parole violations
         /// </summary>
         public int ViolationCount { get; set; } = 0;
+
+        /// <summary>
+        /// Curfew time display string (e.g., "10:00 PM"), empty if no curfew
+        /// </summary>
+        public string CurfewTime { get; set; } = "";
+
+        /// <summary>
+        /// Consecutive high compliance days for step-down progress
+        /// </summary>
+        public int ComplianceStreakDays { get; set; } = 0;
+
+        /// <summary>
+        /// Required consecutive days for next step-down
+        /// </summary>
+        public int ComplianceStreakRequired { get; set; } = 3;
+
+        /// <summary>
+        /// Outstanding parole fees owed
+        /// </summary>
+        public float OutstandingFees { get; set; } = 0f;
     }
 }
 

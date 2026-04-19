@@ -18,6 +18,7 @@ using Il2CppFishNet.Object;
 using Il2CppInterop.Runtime.Attributes;
 using Il2CppScheduleOne.NPCs;
 using Il2CppScheduleOne.AvatarFramework;
+using Il2CppScheduleOne.Dialogue;
 using Il2CppScheduleOne;
 #else
 using FishNet;
@@ -26,6 +27,7 @@ using FishNet.Managing.Object;
 using FishNet.Object;
 using ScheduleOne.NPCs;
 using ScheduleOne.AvatarFramework;
+using ScheduleOne.Dialogue;
 using ScheduleOne;
 #endif
 
@@ -54,6 +56,7 @@ namespace Behind_Bars.Systems.NPCs
         // Guard coordination for IL2CPP-safe management
         private List<GuardBehavior> registeredGuards = new List<GuardBehavior>();
         private List<ParoleOfficerBehavior> registeredParoleOfficers = new List<ParoleOfficerBehavior>();
+        private List<ReleaseOfficerBehavior> registeredReleaseOfficers = new List<ReleaseOfficerBehavior>();
         private GuardBehavior intakeOfficer = null;
 #if !MONO
         private GameObject intakeOfficerFallbackGuardObject = null;
@@ -476,7 +479,7 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private IEnumerator SpawnInmates()
         {
-            var cellManager = CellAssignmentManager.Instance;
+            var cellManager = Core.ResolveCellAssignmentManager();
             if (cellManager == null)
             {
                 ModLogger.Error("CellAssignmentManager not available - cannot spawn inmates in cells");
@@ -989,6 +992,19 @@ namespace Behind_Bars.Systems.NPCs
                     return null;
                 }
                 paroleOfficer.Initialize(badgeNumber, firstName, assignment);
+
+                if (assignment == ParoleOfficerBehavior.ParoleOfficerAssignment.PoliceStationSupervisor)
+                {
+                    var checkInSystem = BBHelpers.GetComponentSafe<ParoleCheckInSystem>(paroleOfficerObject);
+                    if (checkInSystem == null)
+                    {
+                        checkInSystem = BBHelpers.AddComponentSafe<ParoleCheckInSystem>(paroleOfficerObject);
+                        if (checkInSystem != null)
+                        {
+                            ModLogger.Debug($"✓ ParoleCheckInSystem added to supervising officer {paroleOfficerObject.name}");
+                        }
+                    }
+                }
 
                 // Spawn on network if we're server
                 SpawnOnNetworkIfServer(paroleOfficerObject);
@@ -2481,7 +2497,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             if (prisoner == null)
             {
-                ModLogger.Warn($"Cannot request prisoner escort - intake officer not available");
+                ModLogger.Warn("Cannot request prisoner escort - prisoner GameObject is null");
                 return false;
             }
 
@@ -2498,7 +2514,6 @@ namespace Behind_Bars.Systems.NPCs
                 return false;
             }
 
-#if !MONO
             if (intakeOfficer != null && !intakeOfficer.IsProcessingIntake())
             {
                 intakeOfficer.StartIntakeProcess(playerComponent);
@@ -2506,6 +2521,7 @@ namespace Behind_Bars.Systems.NPCs
                 return true;
             }
 
+#if !MONO
             GameObject preferredGuardObject = intakeOfficer != null ? intakeOfficer.gameObject : intakeOfficerFallbackGuardObject;
             if (TryStartIl2CppIntakeFallbackEscort(playerComponent, preferredGuardObject))
             {
@@ -2542,7 +2558,7 @@ namespace Behind_Bars.Systems.NPCs
 
             yield return MoveFallbackGuardTo(guardObject, prisoner.transform.position, 20f, 2.5f, "prisoner");
 
-            var cellManager = CellAssignmentManager.Instance;
+            var cellManager = Core.ResolveCellAssignmentManager();
             if (cellManager == null)
             {
                 ModLogger.Error("IL2CPP intake fallback escort aborted: CellAssignmentManager unavailable");
@@ -2726,6 +2742,48 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
+        /// Register a release officer with the manager for canonical release-officer ownership.
+        /// </summary>
+        public void RegisterReleaseOfficer(ReleaseOfficerBehavior officer)
+        {
+            if (officer == null)
+            {
+                return;
+            }
+
+            if (!registeredReleaseOfficers.Contains(officer))
+            {
+                registeredReleaseOfficers.Add(officer);
+                ModLogger.Debug($"Registered release officer {officer.GetBadgeNumber()} with PrisonNPCManager");
+            }
+        }
+
+        /// <summary>
+        /// Unregister a release officer from the manager.
+        /// </summary>
+        public void UnregisterReleaseOfficer(ReleaseOfficerBehavior officer)
+        {
+            if (officer == null)
+            {
+                return;
+            }
+
+            if (registeredReleaseOfficers.Remove(officer))
+            {
+                ModLogger.Debug($"Unregistered release officer {officer.GetBadgeNumber()} from PrisonNPCManager");
+            }
+        }
+
+        /// <summary>
+        /// Get all registered release officers.
+        /// </summary>
+        public List<ReleaseOfficerBehavior> GetRegisteredReleaseOfficers()
+        {
+            registeredReleaseOfficers.RemoveAll(officer => officer == null);
+            return new List<ReleaseOfficerBehavior>(registeredReleaseOfficers);
+        }
+
+        /// <summary>
         /// Try to assign a coordinated patrol to officers
         /// </summary>
         public IEnumerator TryAssignPatrol(ParoleOfficerBehavior requestingOfficer)
@@ -2894,52 +2952,114 @@ namespace Behind_Bars.Systems.NPCs
                 }
 #endif
 
-                // Add AudioSourceController for managing audio playback
-#if !MONO
-                var audioSourceController = guardObject.AddComponent<Il2CppScheduleOne.Audio.AudioSourceController>();
-#else
-                var audioSourceController = guardObject.AddComponent<ScheduleOne.Audio.AudioSourceController>();
-#endif
-
-                if (audioSourceController != null)
+                var audioSource = guardObject.GetComponent<AudioSource>();
+                if (audioSource == null)
                 {
-                    // Configure audio settings
-                    audioSourceController.DefaultVolume = 0.8f;
-                    audioSourceController.RandomizePitch = true;
-                    audioSourceController.MinPitch = 0.9f;
-                    audioSourceController.MaxPitch = 1.1f;
+                    audioSource = guardObject.AddComponent<AudioSource>();
+                }
 
-                    // Set audio type for guards
-#if !MONO
-                    audioSourceController.AudioType = Il2CppScheduleOne.Audio.EAudioType.FX;
-#else
-                    audioSourceController.AudioType = ScheduleOne.Audio.EAudioType.FX;
-#endif
-
-                    ModLogger.Debug($"✓ AudioSourceController added to guard {guardObject.name}");
+                if (audioSource != null)
+                {
+                    audioSource.volume = 0.8f;
+                    audioSource.pitch = 1.0f;
+                    audioSource.playOnAwake = false;
+                    audioSource.spatialBlend = 0.5f;
+                    ModLogger.Debug($"✓ AudioSource configured for guard {guardObject.name}");
                 }
 
                 // Add JailNPCAudioController for guard voice management
                 var jailAudioController = BBHelpers.AddComponentSafe<JailNPCAudioController>(guardObject);
                 ModLogger.Debug($"✓ JailNPCAudioController added to guard {guardObject.name}");
 
-                // Add base DialogueController (required by JailNPCDialogueController)
-#if !MONO
-                var baseDialogueController = guardObject.AddComponent<Il2CppScheduleOne.Dialogue.DialogueController>();
-#else
-                var baseDialogueController = guardObject.AddComponent<ScheduleOne.Dialogue.DialogueController>();
-#endif
-                ModLogger.Debug($"✓ Base DialogueController added to guard {guardObject.name}");
-
-                // Add JailNPCDialogueController for dialogue integration
-                var dialogueController = BBHelpers.AddComponentSafe<JailNPCDialogueController>(guardObject);
-                ModLogger.Debug($"✓ JailNPCDialogueController added to guard {guardObject.name}");
+                MelonCoroutines.Start(InitializeGuardDialogueWhenReady(guardObject, npcComponent));
 
                 ModLogger.Debug($"✓ Audio system configured for guard: {guardObject.name}");
             }
             catch (Exception e)
             {
                 ModLogger.Error($"Error adding audio system to guard {guardObject.name}: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Defer guard dialogue hookup until the spawned BaseNPC has completed its native initialization.
+        /// </summary>
+        private IEnumerator InitializeGuardDialogueWhenReady(GameObject guardObject, object npcComponent)
+        {
+            if (guardObject == null)
+            {
+                yield break;
+            }
+
+            const int maxAttempts = 20;
+            DialogueHandler dialogueHandler = null;
+            DialogueController baseDialogueController = null;
+
+            for (int attempt = 0; attempt < maxAttempts; attempt++)
+            {
+                if (guardObject == null)
+                {
+                    yield break;
+                }
+
+#if !MONO
+                var nativeNpc = npcComponent as Il2CppScheduleOne.NPCs.NPC;
+#else
+                var nativeNpc = npcComponent as ScheduleOne.NPCs.NPC;
+#endif
+
+                if (nativeNpc != null)
+                {
+                    dialogueHandler = nativeNpc.DialogueHandler;
+                }
+
+                dialogueHandler ??= guardObject.GetComponentInChildren<DialogueHandler>(true);
+                baseDialogueController = guardObject.GetComponentInChildren<DialogueController>(true);
+
+                if (dialogueHandler != null || baseDialogueController != null)
+                {
+                    break;
+                }
+
+                yield return null;
+            }
+
+            if (guardObject == null)
+            {
+                yield break;
+            }
+
+            if (baseDialogueController == null)
+            {
+                try
+                {
+#if !MONO
+                    baseDialogueController = guardObject.AddComponent<Il2CppScheduleOne.Dialogue.DialogueController>();
+#else
+                    baseDialogueController = guardObject.AddComponent<ScheduleOne.Dialogue.DialogueController>();
+#endif
+                    ModLogger.Debug($"✓ Base DialogueController added to guard {guardObject.name}");
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Error($"Failed to add DialogueController to guard {guardObject.name}: {ex.Message}");
+                    yield break;
+                }
+            }
+
+            baseDialogueController.DialogueEnabled = true;
+            baseDialogueController.UseDialogueBehaviour = true;
+
+            var dialogueController = BBHelpers.GetComponentSafe<JailNPCDialogueController>(guardObject)
+                ?? BBHelpers.AddComponentSafe<JailNPCDialogueController>(guardObject);
+
+            if (dialogueController != null)
+            {
+                ModLogger.Debug($"✓ JailNPCDialogueController ready on guard {guardObject.name}");
+            }
+            else
+            {
+                ModLogger.Warn($"Failed to add JailNPCDialogueController to {guardObject.name}");
             }
         }
 
@@ -2982,9 +3102,10 @@ namespace Behind_Bars.Systems.NPCs
                     if (assignment == GuardBehavior.GuardAssignment.Booking0)
                     {
                         ModLogger.Debug($"Manually registering intake officer {name}");
-                        if (PrisonNPCManager.Instance != null)
+                        var npcManager = Core.Instance?.NpcManager;
+                        if (npcManager != null)
                         {
-                            PrisonNPCManager.Instance.RegisterGuard(guardBehavior);
+                            npcManager.RegisterGuard(guardBehavior);
                         }
                     }
                 }
@@ -3048,9 +3169,10 @@ namespace Behind_Bars.Systems.NPCs
                     if (assignment == ParoleOfficerBehavior.ParoleOfficerAssignment.PoliceStationSupervisor)
                     {
                         ModLogger.Debug($"Manually registering supervising officer {name}");
-                        if (PrisonNPCManager.Instance != null)
+                        var npcManager = Core.Instance?.NpcManager;
+                        if (npcManager != null)
                         {
-                            PrisonNPCManager.Instance.RegisterParoleOfficer(officerBehavior);
+                            npcManager.RegisterParoleOfficer(officerBehavior);
                         }
                     }
                 }

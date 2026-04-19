@@ -77,6 +77,12 @@ namespace Behind_Bars.Systems.NPCs
         private bool isPlayerOnParole;
 
         /// <summary>
+        /// Private coordinator for supervising-officer interaction ownership.
+        /// Tracks intake and check-in sessions without exposing a new global singleton.
+        /// </summary>
+        private readonly SupervisingOfficerInteractionCoordinator supervisingOfficerInteractionCoordinator = new SupervisingOfficerInteractionCoordinator();
+
+        /// <summary>
         /// Current player region
         /// </summary>
         private EMapRegion currentPlayerRegion;
@@ -91,6 +97,12 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private bool isInitialized = false;
 
+        /// <summary>
+        /// Guards against overlapping initialization attempts from Start, direct manager bootstrap,
+        /// and retry paths.
+        /// </summary>
+        private bool isInitializing = false;
+
         #endregion
 
         #region References
@@ -103,12 +115,10 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Reference to parole system
         /// </summary>
-        private ParoleSystem paroleSystem;
-
         /// <summary>
         /// Reference to NPC manager for spawning
         /// </summary>
-        private PrisonNPCManager npcManager;
+        private NpcManager npcManager;
 
         #endregion
 
@@ -135,6 +145,8 @@ namespace Behind_Bars.Systems.NPCs
         {
             if (!isInitialized) return;
 
+            supervisingOfficerInteractionCoordinator.Poll();
+
             // Periodic update for spawning checks
             if (Time.time - lastUpdateTime >= UPDATE_INTERVAL)
             {
@@ -157,6 +169,13 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         public void Initialize()
         {
+            if (isInitialized || isInitializing)
+            {
+                return;
+            }
+
+            isInitializing = true;
+
             try
             {
                 ModLogger.Debug("DynamicParoleOfficerManager: Initializing...");
@@ -167,10 +186,10 @@ namespace Behind_Bars.Systems.NPCs
                 lastUpdateTime = Time.time;
 
                 // Get references
-                npcManager = PrisonNPCManager.Instance;
+                npcManager = Core.Instance?.NpcManager;
                 if (npcManager == null)
                 {
-                    ModLogger.Error("DynamicParoleOfficerManager: PrisonNPCManager not found");
+                    ModLogger.Error("DynamicParoleOfficerManager: NpcManager not found");
                     MelonCoroutines.Start(RetryInitialize());
                     return;
                 }
@@ -194,11 +213,11 @@ namespace Behind_Bars.Systems.NPCs
                     }
                 }
 
-                // Get parole system
-                paroleSystem = Core.Instance?.GetParoleSystem();
-                if (paroleSystem == null)
+                // Get parole manager
+                var paroleManager = Core.Instance?.ParoleManager;
+                if (paroleManager == null)
                 {
-                    ModLogger.Warn("DynamicParoleOfficerManager: ParoleSystem not found, will retry");
+                    ModLogger.Warn("DynamicParoleOfficerManager: ParoleManager not found, will retry");
                 }
 
                 // Get local player
@@ -219,7 +238,7 @@ namespace Behind_Bars.Systems.NPCs
 
                 if (isPlayerOnParole)
                 {
-                    paroleSystem?.EnsureRuntimeParoleTrackingForLoadedPlayer(currentPlayer);
+                    paroleManager?.EnsureRuntimeParoleTrackingForLoadedPlayer(currentPlayer);
                 }
 
                 // Get initial region
@@ -238,6 +257,10 @@ namespace Behind_Bars.Systems.NPCs
             {
                 ModLogger.Error($"DynamicParoleOfficerManager: Error during initialization: {ex.Message}");
                 ModLogger.Error($"Stack trace: {ex.StackTrace}");
+            }
+            finally
+            {
+                isInitializing = false;
             }
         }
 
@@ -260,7 +283,7 @@ namespace Behind_Bars.Systems.NPCs
                 // Retry getting dependencies
                 if (npcManager == null)
                 {
-                    npcManager = PrisonNPCManager.Instance;
+                    npcManager = Core.Instance?.NpcManager;
                 }
                 
                 if (currentPlayer == null)
@@ -268,11 +291,6 @@ namespace Behind_Bars.Systems.NPCs
                     currentPlayer = GetLocalPlayer();
                 }
                 
-                if (paroleSystem == null)
-                {
-                    paroleSystem = Core.Instance?.GetParoleSystem();
-                }
-
                 if (npcManager != null && currentPlayer != null)
                 {
                     Initialize();
@@ -293,7 +311,9 @@ namespace Behind_Bars.Systems.NPCs
         #region Event Subscription
 
         /// <summary>
-        /// Subscribe to relevant events
+        /// Subscribe to relevant scene-local events.
+        /// Parole lifecycle notifications are forwarded through <see cref="BehindBarsSystemManager"/>
+        /// so this manager does not subscribe directly to <see cref="ParoleSystem"/> statics.
         /// </summary>
         private void SubscribeToEvents()
         {
@@ -305,11 +325,7 @@ namespace Behind_Bars.Systems.NPCs
                 PlayerLocationTracker.OnPlayerSignificantMovement += OnPlayerSignificantMovement;
 #endif
 
-                // Subscribe to parole system events
-                ParoleSystem.OnParoleStarted += OnParoleStarted;
-                ParoleSystem.OnParoleEnded += OnParoleEnded;
-
-                ModLogger.Info("DynamicParoleOfficerManager: Subscribed to parole/location events");
+                ModLogger.Info("DynamicParoleOfficerManager: Subscribed to scene-local parole/location events");
             }
             catch (Exception ex)
             {
@@ -318,7 +334,7 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Unsubscribe from events
+        /// Unsubscribe from directly owned scene-local events.
         /// </summary>
         private void UnsubscribeFromEvents()
         {
@@ -329,10 +345,7 @@ namespace Behind_Bars.Systems.NPCs
                 PlayerLocationTracker.OnPlayerSignificantMovement -= OnPlayerSignificantMovement;
 #endif
 
-                ParoleSystem.OnParoleStarted -= OnParoleStarted;
-                ParoleSystem.OnParoleEnded -= OnParoleEnded;
-
-                ModLogger.Info("DynamicParoleOfficerManager: Unsubscribed from parole/location events");
+                ModLogger.Info("DynamicParoleOfficerManager: Unsubscribed from scene-local parole/location events");
             }
             catch (Exception ex)
             {
@@ -419,7 +432,7 @@ namespace Behind_Bars.Systems.NPCs
             try
             {
                 // Check via RapSheet
-                var rapSheet = RapSheetManager.Instance.GetRapSheet(currentPlayer);
+                var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(currentPlayer);
                 if (rapSheet != null && rapSheet.CurrentParoleRecord != null)
                 {
                     bool wasOnParole = isPlayerOnParole;
@@ -427,7 +440,7 @@ namespace Behind_Bars.Systems.NPCs
 
                     if (isPlayerOnParole)
                     {
-                        paroleSystem?.EnsureRuntimeParoleTrackingForLoadedPlayer(currentPlayer);
+                        Core.Instance?.ParoleManager?.EnsureRuntimeParoleTrackingForLoadedPlayer(currentPlayer);
                     }
 
                     if (notifyTransitions && wasOnParole != isPlayerOnParole)
@@ -436,11 +449,11 @@ namespace Behind_Bars.Systems.NPCs
                         
                         if (isPlayerOnParole)
                         {
-                            OnParoleStarted(currentPlayer);
+                            HandleParoleStarted(currentPlayer);
                         }
                         else
                         {
-                            OnParoleEnded(currentPlayer);
+                            HandleParoleEnded(currentPlayer);
                         }
                     }
                 }
@@ -451,7 +464,7 @@ namespace Behind_Bars.Systems.NPCs
                     
                     if (notifyTransitions && wasOnParole && !isPlayerOnParole)
                     {
-                        OnParoleEnded(currentPlayer);
+                        HandleParoleEnded(currentPlayer);
                     }
                 }
             }
@@ -462,9 +475,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Handle parole started event
+        /// Handle a parole-start lifecycle notification forwarded through the manager graph.
         /// </summary>
-        private void OnParoleStarted(Player player)
+        internal void HandleParoleStarted(Player player)
         {
             if (player == null || player != currentPlayer) return;
 
@@ -475,41 +488,111 @@ namespace Behind_Bars.Systems.NPCs
             // This will ensure supervising officer is spawned via EnsureSupervisingOfficer()
             UpdateOfficerSpawning();
 
-            // Notify supervising officer to start intake (with delay to allow spawning)
-            MelonCoroutines.Start(DelayedIntakeNotification(player));
+            // Queue the initial intake handoff exactly once.
+            TryQueueInitialIntakeStart(player);
         }
 
         /// <summary>
-        /// Delay intake notification to allow supervising officer to spawn
+        /// Queue the initial intake notification to allow the supervising officer to spawn.
+        /// The queue is idempotent so repeated parole-start signals do not duplicate intake.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        private bool TryQueueInitialIntakeStart(Player player)
+        {
+            if (player == null)
+            {
+                return false;
+            }
+
+            if (!supervisingOfficerInteractionCoordinator.TryQueueInitialIntake(player))
+            {
+                ModLogger.Debug($"DynamicParoleOfficerManager: Initial intake already queued for {player.name}");
+                return false;
+            }
+
+            MelonCoroutines.Start(DelayedIntakeNotification(player));
+            return true;
+        }
+
+        /// <summary>
+        /// Delayed intake handoff that retries until the supervising officer can actually take the player.
+        /// </summary>
         private IEnumerator DelayedIntakeNotification(Player player)
         {
-            yield return new WaitForSeconds(2f); // Wait 2 seconds for officer to spawn
+            try
+            {
+                const float retryIntervalSeconds = 2f;
+                const float maxWaitSeconds = 30f;
+                float elapsed = 0f;
 
-            var supervisingOfficer = PrisonNPCManager.Instance?.GetSupervisingOfficer();
-            if (supervisingOfficer != null)
-            {
-                supervisingOfficer.HandleParoleIntake(player);
-                ModLogger.Debug($"DynamicParoleOfficerManager: Triggered intake for {player.name}");
+                while (elapsed < maxWaitSeconds && isPlayerOnParole && player != null)
+                {
+                    yield return new WaitForSeconds(retryIntervalSeconds);
+                    elapsed += retryIntervalSeconds;
+
+                    var supervisingOfficer = npcManager?.GetSupervisingOfficer();
+                    if (supervisingOfficer == null)
+                    {
+                        ModLogger.Debug($"DynamicParoleOfficerManager: Supervising officer not available for intake yet ({player.name})");
+                        continue;
+                    }
+
+                    if (!TryBeginSupervisingOfficerInteraction(player, supervisingOfficer, SupervisingOfficerInteractionKind.Intake))
+                    {
+                        if (supervisingOfficer.IsHandlingIntakeFor(player))
+                        {
+                            ModLogger.Debug($"DynamicParoleOfficerManager: Intake already active for {player.name}");
+                            yield break;
+                        }
+
+                        if (supervisingOfficer.IsIntakeProcessingActive())
+                        {
+                            ModLogger.Debug($"DynamicParoleOfficerManager: Supervising officer is busy with another intake while waiting for {player.name}");
+                            continue;
+                        }
+
+                        ModLogger.Debug($"DynamicParoleOfficerManager: Intake handoff blocked for {player.name}, retrying");
+                        continue;
+                    }
+
+                    supervisingOfficer.HandleParoleIntake(player);
+
+                    if (supervisingOfficer.IsHandlingIntakeFor(player))
+                    {
+                        supervisingOfficerInteractionCoordinator.MarkIntakeStarted(player, supervisingOfficer);
+                        ModLogger.Debug($"DynamicParoleOfficerManager: Triggered intake for {player.name}");
+                        yield break;
+                    }
+
+                    ModLogger.Debug($"DynamicParoleOfficerManager: Intake handoff not yet accepted for {player.name}, retrying");
+                }
+
+                if (player != null && isPlayerOnParole)
+                {
+                    ModLogger.Warn($"DynamicParoleOfficerManager: Timed out waiting to hand off intake for {player.name}");
+                }
             }
-            else
+            finally
             {
-                ModLogger.Debug($"DynamicParoleOfficerManager: Supervising officer not available for intake");
+                if (player != null)
+                {
+                    supervisingOfficerInteractionCoordinator.ClearPendingIntake(player);
+                }
             }
         }
 
         /// <summary>
-        /// Handle parole ended event
+        /// Handle a parole-end lifecycle notification forwarded through the manager graph.
         /// </summary>
-        private void OnParoleEnded(Player player)
+        internal void HandleParoleEnded(Player player)
         {
             if (player == null || player != currentPlayer) return;
 
             ModLogger.Info($"DynamicParoleOfficerManager: Parole ended for {player.name}");
             isPlayerOnParole = false;
+            supervisingOfficerInteractionCoordinator.ClearPlayer(player);
 
             // Despawn all officers
             DespawnAllOfficers();
@@ -760,7 +843,7 @@ namespace Behind_Bars.Systems.NPCs
                 int badgeIndex = (int)assignment;
                 string badge = $"HCPO{1000 + badgeIndex}";
 
-                // Spawn via NPC manager
+                // Spawn via the manager-owned NPC seam.
                 var paroleOfficer = npcManager.SpawnParoleOfficer(spawnPosition, officerName, badge, assignment);
                 
                 if (paroleOfficer != null && BBHelpers.GetComponentSafe<ParoleOfficerBehavior>(paroleOfficer.gameObject) != null)
@@ -993,6 +1076,8 @@ namespace Behind_Bars.Systems.NPCs
         {
             UnsubscribeFromEvents();
             DespawnAllOfficers();
+            isInitialized = false;
+            isInitializing = false;
 
             if (Instance == this)
             {
@@ -1028,6 +1113,79 @@ namespace Behind_Bars.Systems.NPCs
         public void ForceUpdate()
         {
             UpdateOfficerSpawning();
+        }
+
+        /// <summary>
+        /// Gate a supervising-officer interaction through the private coordinator.
+        /// Used by intake handoff and check-in initiation to prevent duplicate controller starts.
+        /// </summary>
+        internal bool TryBeginSupervisingOfficerInteraction(Player parolee, ParoleOfficerBehavior officer, SupervisingOfficerInteractionKind interactionKind)
+        {
+            return supervisingOfficerInteractionCoordinator.TryBeginInteraction(parolee, officer, interactionKind);
+        }
+
+        /// <summary>
+        /// Reserve a supervising-officer check-in session before the downstream controller accepts it.
+        /// </summary>
+        internal bool TryReserveCheckIn(Player parolee, ParoleOfficerBehavior officer)
+        {
+            return supervisingOfficerInteractionCoordinator.TryReserveCheckIn(parolee, officer);
+        }
+
+        /// <summary>
+        /// Mark a supervising-officer interaction as actively started after the downstream controller accepts it.
+        /// </summary>
+        internal void MarkSupervisingOfficerInteractionStarted(Player parolee, ParoleOfficerBehavior officer, SupervisingOfficerInteractionKind interactionKind)
+        {
+            switch (interactionKind)
+            {
+                case SupervisingOfficerInteractionKind.Intake:
+                    supervisingOfficerInteractionCoordinator.MarkIntakeStarted(parolee, officer);
+                    break;
+                case SupervisingOfficerInteractionKind.CheckIn:
+                    supervisingOfficerInteractionCoordinator.MarkCheckInStarted(parolee, officer);
+                    break;
+            }
+        }
+
+        /// <summary>
+        /// End a supervising-officer interaction through the private coordinator.
+        /// </summary>
+        internal void EndSupervisingOfficerInteraction(Player parolee, ParoleOfficerBehavior officer, SupervisingOfficerInteractionKind interactionKind)
+        {
+            supervisingOfficerInteractionCoordinator.EndInteraction(parolee, officer, interactionKind);
+        }
+
+        /// <summary>
+        /// Complete a supervising-officer check-in session through the private coordinator.
+        /// </summary>
+        internal void CompleteSupervisingOfficerCheckIn(Player parolee, ParoleOfficerBehavior officer)
+        {
+            supervisingOfficerInteractionCoordinator.CompleteCheckIn(parolee, officer);
+        }
+
+        /// <summary>
+        /// Commit a supervising-officer check-in after the parole system has admitted the parolee.
+        /// </summary>
+        internal void StartCheckIn(Player parolee, ParoleOfficerBehavior officer)
+        {
+            supervisingOfficerInteractionCoordinator.StartCheckIn(parolee, officer);
+        }
+
+        /// <summary>
+        /// Cancel a supervising-officer intake reservation through the private coordinator.
+        /// </summary>
+        internal void CancelSupervisingOfficerIntake(Player parolee, ParoleOfficerBehavior officer)
+        {
+            supervisingOfficerInteractionCoordinator.CancelIntake(parolee, officer);
+        }
+
+        /// <summary>
+        /// Cancel a supervising-officer check-in reservation through the private coordinator.
+        /// </summary>
+        internal void CancelCheckIn(Player parolee, ParoleOfficerBehavior officer)
+        {
+            supervisingOfficerInteractionCoordinator.CompleteCheckIn(parolee, officer);
         }
 
         #endregion

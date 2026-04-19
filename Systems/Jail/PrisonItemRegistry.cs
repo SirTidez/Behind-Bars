@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using MelonLoader;
 using HarmonyLib;
@@ -42,7 +43,7 @@ namespace Behind_Bars.Systems.Jail
             base.transform.localEulerAngles = new Vector3(0f, 45f, 0f);
             base.transform.localScale = new Vector3(0.8f, 0.8f, 0.8f);
             
-            ModLogger.Info($"Prison item equipped: {item?.ID}");
+            ModLogger.Info($"Prison item equipped: {PrisonItemRegistry.GetItemInstanceIdentifier(item)}");
         }
         
         public override void Unequip()
@@ -68,7 +69,7 @@ namespace Behind_Bars.Systems.Jail
                 id = "behindbars.bedroll",
                 name = "Prison Bed Roll",
                 description = "A basic sleeping mat provided to inmates",
-                category = EItemCategory.Consumable,
+                categoryName = "Consumable",
                 iconResourcePath = "Behind_Bars.Icons.behindbars.bedroll",
                 prefabName = "BedRoll"
             },
@@ -77,7 +78,7 @@ namespace Behind_Bars.Systems.Jail
                 id = "behindbars.sheetsnpillows", 
                 name = "Prison Sheets & Pillow",
                 description = "Basic bedding provided to inmates",
-                category = EItemCategory.Consumable,
+                categoryName = "Consumable",
                 iconResourcePath = "Behind_Bars.Icons.behindbars.sheetsnpillows",
                 prefabName = "PillowAndSheets"
             },
@@ -86,7 +87,7 @@ namespace Behind_Bars.Systems.Jail
                 id = "behindbars.cup",
                 name = "Prison Cup", 
                 description = "Standard issue drinking cup for inmates",
-                category = EItemCategory.Consumable,
+                categoryName = "Consumable",
                 iconResourcePath = "Behind_Bars.Icons.behindbars.cup",
                 prefabName = "JailCup"
             },
@@ -95,7 +96,7 @@ namespace Behind_Bars.Systems.Jail
                 id = "behindbars.toothbrush",
                 name = "Prison Toothbrush",
                 description = "Basic hygiene item provided to inmates", 
-                category = EItemCategory.Consumable,
+                categoryName = "Consumable",
                 iconResourcePath = "Behind_Bars.Icons.behindbars.toothbrush",
                 prefabName = "JailToothBrush"
             }
@@ -109,31 +110,72 @@ namespace Behind_Bars.Systems.Jail
                 itemsRegistered = true;
             }
         }
+
+        public static void EnsureRegistered()
+        {
+            if (itemsRegistered)
+            {
+                return;
+            }
+
+            try
+            {
+#if MONO
+                var registry = ScheduleOne.Registry.Instance;
+#else
+                var registry = Il2CppScheduleOne.Registry.Instance;
+#endif
+                if (registry == null)
+                {
+                    ModLogger.Warn("PrisonItemRegistry: registry instance is null during EnsureRegistered");
+                    return;
+                }
+
+                RegisterPrisonItems(registry);
+                itemsRegistered = true;
+                ModLogger.Info("PrisonItemRegistry: explicitly registered prison items before use");
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"PrisonItemRegistry: EnsureRegistered failed: {ex.Message}");
+            }
+        }
         
         private static void RegisterPrisonItems(Registry registry)
         {
             try
             {
                 ModLogger.Debug("Registering prison items with Schedule I item framework...");
+
+                Core.EnsureJailBundleLoaded("prison item registration");
                 
                 foreach (var kvp in PrisonItems)
                 {
                     var itemInfo = kvp.Value;
-                    
-                    // Create BuildableItemDefinition for each prison item
+
+                    // Create item definition via the runtime-appropriate item framework type.
+#if MONO
                     var itemDef = ScriptableObject.CreateInstance<BuildableItemDefinition>();
-                    itemDef.name = itemInfo.name;
-                    
-                    // Set basic properties using the correct API
-                    itemDef.ID = itemInfo.id;
-                    itemDef.Name = itemInfo.name;
-                    itemDef.Description = itemInfo.description;
-                    itemDef.Category = itemInfo.category;
+#else
+                    // Create item definition via reflection to avoid IL2CPP base-type binding issues
+                    var itemDefType = Type.GetType("Il2CppScheduleOne.ItemFramework.BuildableItemDefinition, Il2CppScheduleOne.ItemFramework", false);
+                    var itemDef = itemDefType != null ? System.Activator.CreateInstance(itemDefType) : null;
+#endif
+                    if (itemDef == null)
+                    {
+                        ModLogger.Error($"Failed to create BuildableItemDefinition for {itemInfo.name}");
+                        continue;
+                    }
+                    SetItemDefinitionValue(itemDef, "name", itemInfo.name);
+                    SetItemDefinitionValue(itemDef, "ID", itemInfo.id);
+                    SetItemDefinitionValue(itemDef, "Name", itemInfo.name);
+                    SetItemDefinitionValue(itemDef, "Description", itemInfo.description);
+                    AssignItemCategory(itemDef, itemInfo.categoryName);
                     
                     // Set as inventory-only item
-                    itemDef.StackLimit = 1;
-                    itemDef.BasePurchasePrice = 0f; // Free items
-                    itemDef.ResellMultiplier = 0f; // Cannot be sold
+                    SetItemDefinitionValue(itemDef, "StackLimit", 1);
+                    SetItemDefinitionValue(itemDef, "BasePurchasePrice", 0f); // Free items
+                    SetItemDefinitionValue(itemDef, "ResellMultiplier", 0f); // Cannot be sold
                     
                     // Load icon from embedded resources
                     try
@@ -141,7 +183,7 @@ namespace Behind_Bars.Systems.Jail
                         var icon = LoadIconFromResources(itemInfo.iconResourcePath);
                         if (icon != null)
                         {
-                            itemDef.Icon = icon;
+                            SetItemDefinitionValue(itemDef, "Icon", icon);
                             ModLogger.Debug($"✓ Loaded icon for {itemInfo.name}");
                         }
                         else
@@ -200,7 +242,11 @@ namespace Behind_Bars.Systems.Jail
                     var guid = GenerateDeterministicGuid(itemInfo.id);
                     
                     // Add to registry
-                    registry.AddToRegistry(itemDef);
+                    var addToRegistryMethod = registry.GetType().GetMethod("AddToRegistry");
+                    if (addToRegistryMethod != null)
+                    {
+                        addToRegistryMethod.Invoke(registry, new object[] { itemDef });
+                    }
                     
                     ModLogger.Debug($"✓ Registered prison item: {itemInfo.name} ({itemInfo.id})");
                 }
@@ -289,7 +335,7 @@ namespace Behind_Bars.Systems.Jail
             }
         }
         
-        private static void SetupItemPrefab(BuildableItemDefinition itemDef, GameObject prefab, PrisonItemInfo itemInfo)
+        private static void SetupItemPrefab(object itemDef, GameObject prefab, PrisonItemInfo itemInfo)
         {
             try
             {
@@ -346,6 +392,151 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Error($"Error setting up prefab for {itemInfo.name}: {ex.Message}");
             }
         }
+
+        private static void AssignItemCategory(object itemDef, string categoryName)
+        {
+            try
+            {
+                if (itemDef == null)
+                {
+                    return;
+                }
+
+                var itemDefType = itemDef.GetType();
+                var categoryProperty = itemDefType.GetProperty("Category");
+                var categoryField = itemDefType.GetField("Category");
+                Type categoryType = categoryProperty?.PropertyType ?? categoryField?.FieldType;
+
+                if (categoryType == null)
+                {
+                    ModLogger.Warn($"Could not find Category field or property on prison item definition {GetItemDefinitionLabel(itemDef)}");
+                    return;
+                }
+
+                var categoryValue = Enum.Parse(categoryType, categoryName, ignoreCase: true);
+
+                if (categoryProperty != null && categoryProperty.CanWrite)
+                {
+                    categoryProperty.SetValue(itemDef, categoryValue);
+                    return;
+                }
+
+                if (categoryField != null)
+                {
+                    categoryField.SetValue(itemDef, categoryValue);
+                    return;
+                }
+
+                ModLogger.Warn($"Category member exists but is not writable on prison item definition {GetItemDefinitionLabel(itemDef)}");
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"Failed to assign category '{categoryName}' to prison item definition {GetItemDefinitionLabel(itemDef)}: {ex.Message}");
+            }
+        }
+
+        private static void SetItemDefinitionValue(object itemDef, string memberName, object value)
+        {
+            if (itemDef == null)
+            {
+                return;
+            }
+
+            var type = itemDef.GetType();
+            var property = type.GetProperty(memberName);
+            if (property != null && property.CanWrite)
+            {
+                property.SetValue(itemDef, value);
+                return;
+            }
+
+            var field = type.GetField(memberName);
+            if (field != null)
+            {
+                field.SetValue(itemDef, value);
+            }
+        }
+
+        private static string GetItemDefinitionLabel(object itemDef)
+        {
+            if (itemDef == null)
+            {
+                return "null";
+            }
+
+            var type = itemDef.GetType();
+            var nameProperty = type.GetProperty("Name") ?? type.GetProperty("name");
+            var nameValue = nameProperty?.GetValue(itemDef)?.ToString();
+            return string.IsNullOrWhiteSpace(nameValue) ? type.Name : nameValue;
+        }
+
+        public static object GetRegistryItemDefinition(object registry, string itemId)
+        {
+            if (registry == null || string.IsNullOrWhiteSpace(itemId))
+            {
+                return null;
+            }
+
+            try
+            {
+                var getItemMethod = registry.GetType()
+                    .GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Static)
+                    .FirstOrDefault(method =>
+                    {
+                        if (method.Name != "GetItem" || method.IsGenericMethodDefinition)
+                        {
+                            return false;
+                        }
+
+                        var parameters = method.GetParameters();
+                        return parameters.Length == 1 && parameters[0].ParameterType == typeof(string);
+                    });
+
+                if (getItemMethod == null)
+                {
+                    ModLogger.Warn($"PrisonItemRegistry: Could not resolve non-generic GetItem(string) on registry type {registry.GetType().FullName}");
+                    return null;
+                }
+
+                return getItemMethod.Invoke(registry, new object[] { itemId });
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"PrisonItemRegistry: Failed to resolve item definition for '{itemId}': {ex.Message}");
+                return null;
+            }
+        }
+
+        public static string GetItemInstanceIdentifier(object itemInstance)
+        {
+            if (itemInstance == null)
+            {
+                return "null";
+            }
+
+            var type = itemInstance.GetType();
+            var idProperty = type.GetProperty("ID");
+            if (idProperty != null)
+            {
+                var idValue = idProperty.GetValue(itemInstance)?.ToString();
+                if (!string.IsNullOrWhiteSpace(idValue))
+                {
+                    return idValue;
+                }
+            }
+
+            var nameProperty = type.GetProperty("Name");
+            if (nameProperty != null)
+            {
+                var nameValue = nameProperty.GetValue(itemInstance)?.ToString();
+                if (!string.IsNullOrWhiteSpace(nameValue))
+                {
+                    return nameValue;
+                }
+            }
+
+            return type.Name;
+        }
         
         
         /// <summary>
@@ -363,6 +554,18 @@ namespace Behind_Bars.Systems.Jail
         {
             return PrisonItems.Keys;
         }
+
+        public static string GetPrisonItemDisplayName(string itemId)
+        {
+            if (string.IsNullOrWhiteSpace(itemId))
+            {
+                return itemId ?? string.Empty;
+            }
+
+            return PrisonItems.TryGetValue(itemId, out var itemInfo) && !string.IsNullOrWhiteSpace(itemInfo.name)
+                ? itemInfo.name
+                : itemId;
+        }
     }
     
     /// <summary>
@@ -373,7 +576,7 @@ namespace Behind_Bars.Systems.Jail
         public string id;
         public string name;
         public string description;
-        public EItemCategory category;
+        public string categoryName;
         public string iconResourcePath;
         public string prefabName;
     }

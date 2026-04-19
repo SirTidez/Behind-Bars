@@ -377,18 +377,18 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info("Using main player camera for photo capture (player is now visible)");
             
             // Show notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification("Hold still for mugshot...", NotificationType.Instruction);
+                Core.ResolveUIManager().ShowNotification("Hold still for mugshot...", NotificationType.Instruction);
             }
             
             // Wait for positioning
             yield return new WaitForSeconds(positioningDuration);
 
             // Flash effect before capture
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification("3... 2... 1...", NotificationType.Instruction);
+                Core.ResolveUIManager().ShowNotification("3... 2... 1...", NotificationType.Instruction);
             }
             yield return new WaitForSeconds(1.5f);
             
@@ -400,9 +400,9 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Info("Flash light activated");
             }
             
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification("*FLASH*", NotificationType.Progress);
+                Core.ResolveUIManager().ShowNotification("*FLASH*", NotificationType.Progress);
             }
             
             // Wait a tiny moment for the flash to fully activate, then capture
@@ -429,9 +429,9 @@ namespace Behind_Bars.Systems.Jail
                     }
                     
                     // Show success notification
-                    if (BehindBarsUIManager.Instance != null)
+                    if (Core.ResolveUIManager() != null)
                     {
-                        BehindBarsUIManager.Instance.ShowNotification("Mugshot captured!", NotificationType.Progress);
+                        Core.ResolveUIManager().ShowNotification("Mugshot captured!", NotificationType.Progress);
                     }
                 }
                 else

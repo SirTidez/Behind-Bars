@@ -325,30 +325,60 @@ namespace Behind_Bars.Helpers
         /// Gets all storable item definitions from the item registry.
         /// </summary>
         /// <returns>A list of all storable item definitions.</returns>
-        public static List<StorableItemDefinition> GetAllStorableItemDefinitions()
+        public static List<object> GetAllStorableItemDefinitions()
         {
 #if !MONO
             var itemRegistry = Il2CppListExtensions.ConvertToList(Registry.Instance.ItemRegistry);
 #else
             var itemRegistry = Registry.Instance.ItemRegistry.ToList();
 #endif
-            var itemDefinitions = new List<StorableItemDefinition>();
+            var itemDefinitions = new List<object>();
 
             foreach (var item in itemRegistry)
             {
-                if (Helpers.Is<StorableItemDefinition>(item.Definition, out var definition))
+                var definition = GetItemDefinitionObject(item);
+                if (definition != null)
                 {
                     itemDefinitions.Add(definition);
                 }
                 else
                 {
                     ModLogger.Warn(
-                        $"Definition {item.Definition?.GetType().FullName} is not a StorableItemDefinition"
+                        $"Definition {GetDefinitionTypeName(item)} is not a storable item definition"
                     );
                 }
             }
 
             return itemDefinitions.ToList();
+        }
+
+        private static object GetItemDefinitionObject(object item)
+        {
+            if (item == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                var property = item.GetType().GetProperty("Definition");
+                if (property != null)
+                {
+                    return property.GetValue(item);
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"Failed to read item definition from {item.GetType().Name}: {ex.Message}");
+            }
+
+            return null;
+        }
+
+        private static string GetDefinitionTypeName(object item)
+        {
+            var definition = GetItemDefinitionObject(item);
+            return definition?.GetType().FullName ?? item?.GetType().FullName ?? "Unknown";
         }
 
         /// <summary>

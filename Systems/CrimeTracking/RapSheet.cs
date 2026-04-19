@@ -1,9 +1,11 @@
 ﻿using Behind_Bars.Helpers;
+using Behind_Bars.Systems.Parole;
 using Behind_Bars.Utils;
 using Behind_Bars.Utils.Saveable;
 using JetBrains.Annotations;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 using UnityEngine;
@@ -133,6 +135,9 @@ namespace Behind_Bars.Systems.CrimeTracking
         [SaveableField("fullName")]
         private string _fullName;
 
+        [SaveableField("playerKey")]
+        private string _playerKey;
+
         [SaveableField("crimesCommited")]
         private List<CrimeInstance> _crimesCommited;
 
@@ -153,6 +158,31 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// </summary>
         [SaveableField("lastLSIAssessment")]
         private DateTime _lastLSIAssessment = DateTime.MinValue;
+
+        /// <summary>
+        /// Compliance-based LSI reduction. Accumulated through sustained good behavior.
+        /// Subtracted from LSI score before tier determination.
+        /// </summary>
+        [SaveableField("complianceLSIReduction")]
+        private int _complianceLSIReduction = 0;
+
+        /// <summary>
+        /// Carry-over rapport score from previous parole term
+        /// </summary>
+        [SaveableField("carryOverRapport")]
+        private float _carryOverRapport = -1f; // -1 means no carry-over
+
+        /// <summary>
+        /// Sentence reduction modifier earned from good parole performance (0.0-0.5)
+        /// </summary>
+        [SaveableField("sentenceReductionModifier")]
+        private float _sentenceReductionModifier = 0f;
+
+        /// <summary>
+        /// Number of successfully completed parole terms
+        /// </summary>
+        [SaveableField("completedParoleCount")]
+        private int _completedParoleCount = 0;
 
         // Properties for safe access
         public string InmateID
@@ -181,6 +211,16 @@ namespace Behind_Bars.Systems.CrimeTracking
             set
             {
                 _crimesCommited = value;
+                MarkChanged();
+            }
+        }
+
+        public string PlayerKey
+        {
+            get => _playerKey;
+            set
+            {
+                _playerKey = value;
                 MarkChanged();
             }
         }
@@ -225,13 +265,53 @@ namespace Behind_Bars.Systems.CrimeTracking
             }
         }
 
+        public int ComplianceLSIReduction
+        {
+            get => _complianceLSIReduction;
+            set
+            {
+                _complianceLSIReduction = Math.Max(0, Math.Min(value, 40)); // Cap at 40 (2 tier drops max)
+                MarkChanged();
+            }
+        }
+
+        public float CarryOverRapport
+        {
+            get => _carryOverRapport;
+            set
+            {
+                _carryOverRapport = value;
+                MarkChanged();
+            }
+        }
+
+        public float SentenceReductionModifier
+        {
+            get => _sentenceReductionModifier;
+            set
+            {
+                _sentenceReductionModifier = Mathf.Clamp(value, 0f, 0.5f);
+                MarkChanged();
+            }
+        }
+
+        public int CompletedParoleCount
+        {
+            get => _completedParoleCount;
+            set
+            {
+                _completedParoleCount = value;
+                MarkChanged();
+            }
+        }
+
         // Non-Serialized fields
         [NonSerialized]
         public Player Player;
 
         // Saveable implementation
-        protected override string SaveFolderName => $"BehindBars/{_fullName ?? Player?.name ?? "Unknown"}";
-        protected override string SaveFileName => $"RapSheet_{_fullName ?? Player?.name ?? "Unknown"}";
+        protected override string SaveFolderName => $"BehindBars/{GetPersistenceIdentity()}";
+        protected override string SaveFileName => $"RapSheet_{GetPersistenceIdentity()}";
 
         /// <summary>
         /// Parameterless constructor for deserialization.
@@ -277,9 +357,18 @@ namespace Behind_Bars.Systems.CrimeTracking
         public void SetPlayer(Player player)
         {
             this.Player = player;
-            if (player != null && string.IsNullOrEmpty(_fullName))
+            if (player != null)
             {
-                _fullName = player.name;
+                string resolvedPlayerKey = ResolvePlayerKey(player);
+                if (!string.IsNullOrWhiteSpace(resolvedPlayerKey))
+                {
+                    _playerKey = resolvedPlayerKey;
+                }
+
+                if (string.IsNullOrEmpty(_fullName))
+                {
+                    _fullName = player.name;
+                }
             }
             
             // Set player reference on ParoleRecord if it exists
@@ -287,6 +376,67 @@ namespace Behind_Bars.Systems.CrimeTracking
             {
                 _currentParoleRecord.SetPlayer(player);
             }
+        }
+
+        internal static string GetPersistenceIdentityForPlayer(Player player)
+        {
+            if (player == null)
+            {
+                return "Unknown";
+            }
+
+            return GetPersistenceIdentity(ResolvePlayerKey(player), player.name);
+        }
+
+        private string GetPersistenceIdentity()
+        {
+            return GetPersistenceIdentity(_playerKey, _fullName ?? Player?.name);
+        }
+
+        private static string GetPersistenceIdentity(string playerKey, string fallbackName)
+        {
+            string rawIdentity = !string.IsNullOrWhiteSpace(playerKey) ? playerKey : fallbackName;
+            if (string.IsNullOrWhiteSpace(rawIdentity))
+            {
+                rawIdentity = "Unknown";
+            }
+
+            return SanitizePathSegment(rawIdentity);
+        }
+
+        private static string ResolvePlayerKey(Player player)
+        {
+            if (player == null)
+            {
+                return string.Empty;
+            }
+
+            return Behind_Bars.Core.ResolvePlayerKey(player);
+        }
+
+        private static string SanitizePathSegment(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return "Unknown";
+            }
+
+            char[] invalidChars = Path.GetInvalidFileNameChars();
+            var builder = new StringBuilder(value.Length);
+            foreach (char c in value)
+            {
+                if (c == Path.DirectorySeparatorChar || c == Path.AltDirectorySeparatorChar || Array.IndexOf(invalidChars, c) >= 0)
+                {
+                    builder.Append('_');
+                }
+                else
+                {
+                    builder.Append(c);
+                }
+            }
+
+            string sanitized = builder.ToString().Trim();
+            return string.IsNullOrWhiteSpace(sanitized) ? "Unknown" : sanitized;
         }
 
         /// <summary>
@@ -386,14 +536,15 @@ namespace Behind_Bars.Systems.CrimeTracking
             }
             
             int totalScore = crimeCountScore + severityScore + violationScore + pastParoleScore;
+            int adjustedScore = Math.Max(0, totalScore - _complianceLSIReduction);
             
             LSILevel resultingLevel;
-            if (totalScore < 20) resultingLevel = LSILevel.Minimum;
-            else if (totalScore < 40) resultingLevel = LSILevel.Medium;
-            else if (totalScore < 70) resultingLevel = LSILevel.High;
+            if (adjustedScore < 20) resultingLevel = LSILevel.Minimum;
+            else if (adjustedScore < 40) resultingLevel = LSILevel.Medium;
+            else if (adjustedScore < 70) resultingLevel = LSILevel.High;
             else resultingLevel = LSILevel.Severe;
             
-            return (totalScore, crimeCountScore, severityScore, violationScore, pastParoleScore, resultingLevel);
+            return (adjustedScore, crimeCountScore, severityScore, violationScore, pastParoleScore, resultingLevel);
         }
 
         /// <summary>
@@ -464,6 +615,14 @@ namespace Behind_Bars.Systems.CrimeTracking
                 ModLogger.Debug($"[LSI]   Factor 4 - Past Parole Failures: No past records = 0 points");
             }
 
+            // Apply compliance-based LSI reduction (good behavior step-down)
+            int rawScore = score;
+            if (_complianceLSIReduction > 0)
+            {
+                score = Math.Max(0, score - _complianceLSIReduction);
+                ModLogger.Debug($"[LSI]   Compliance Reduction: -{_complianceLSIReduction} (raw {rawScore} → adjusted {score})");
+            }
+
             // Determine LSI level based on score
             // Total possible: 100 points
             LSILevel calculatedLevel;
@@ -472,7 +631,7 @@ namespace Behind_Bars.Systems.CrimeTracking
             else if (score < 70) calculatedLevel = LSILevel.High;    // 40-69 points
             else calculatedLevel = LSILevel.Severe;                   // 70+ points
 
-            ModLogger.Debug($"[LSI] Total Score: {score}/100 → LSI Level: {calculatedLevel}");
+            ModLogger.Debug($"[LSI] Total Score: {score}/100 (raw: {rawScore}) → LSI Level: {calculatedLevel}");
 
             return calculatedLevel;
         }
@@ -567,6 +726,16 @@ namespace Behind_Bars.Systems.CrimeTracking
                 CurrentParoleRecord = new ParoleRecord(Player);
             }
 
+            // Initialize rapport from carry-over if available
+            if (_carryOverRapport >= 0f)
+            {
+                // Blend carry-over with default: 70% carry-over, 30% default (50)
+                float blendedRapport = (_carryOverRapport * 0.7f) + (50f * 0.3f);
+                CurrentParoleRecord.InitializeRapportFromCarryOver(blendedRapport);
+                ModLogger.Info($"[RAPPORT] Initialized rapport from carry-over: {_carryOverRapport:F1} → blended {blendedRapport:F1}");
+                _carryOverRapport = -1f; // Clear carry-over after use
+            }
+
             // Start parole (now uses game minutes)
             bool success = CurrentParoleRecord.StartParole(termLengthInGameMinutes);
 
@@ -613,8 +782,21 @@ namespace Behind_Bars.Systems.CrimeTracking
         }
 
         /// <summary>
+        /// Apply one LSI step-down (reduces effective LSI score by 20 points, max 40).
+        /// Called when sustained good compliance is achieved.
+        /// </summary>
+        public void ApplyLSIStepDown()
+        {
+            int oldReduction = _complianceLSIReduction;
+            _complianceLSIReduction = Math.Min(_complianceLSIReduction + 20, 40);
+            MarkChanged();
+            ModLogger.Info($"[LSI] Applied step-down for {FullName}: reduction {oldReduction} → {_complianceLSIReduction}");
+        }
+
+        /// <summary>
         /// Archive the current parole record to past records
-        /// Moves CurrentParoleRecord to PastParoleRecords and clears CurrentParoleRecord
+        /// Moves CurrentParoleRecord to PastParoleRecords and clears CurrentParoleRecord.
+        /// Carries over rapport score for next parole term.
         /// </summary>
         /// <returns>True if archived successfully, false if no current parole record exists</returns>
         public bool ArchiveCurrentParoleRecord()
@@ -624,6 +806,10 @@ namespace Behind_Bars.Systems.CrimeTracking
                 ModLogger.Debug($"No current parole record to archive for {FullName}");
                 return false;
             }
+
+            // Carry over rapport score for next parole term
+            _carryOverRapport = _currentParoleRecord.GetRapportScore();
+            ModLogger.Info($"[RAPPORT] Carrying over rapport score {_carryOverRapport:F1} for {FullName}");
 
             // Ensure PastParoleRecords list exists
             if (_pastParoleRecords == null)
@@ -762,7 +948,14 @@ namespace Behind_Bars.Systems.CrimeTracking
 
             // Update FullName from player if available
             if (Player != null && !string.IsNullOrEmpty(Player.name))
+            {
                 _fullName = Player.name;
+                string resolvedPlayerKey = ResolvePlayerKey(Player);
+                if (!string.IsNullOrWhiteSpace(resolvedPlayerKey))
+                {
+                    _playerKey = resolvedPlayerKey;
+                }
+            }
 
             // Set Player reference on ParoleRecord objects (they're non-serialized, so need to be restored)
             if (_currentParoleRecord != null && Player != null)
@@ -774,6 +967,28 @@ namespace Behind_Bars.Systems.CrimeTracking
                 {
                     if (pastRecord != null)
                         pastRecord.SetPlayer(Player);
+                }
+            }
+
+            // Restore active parole conditions from saved IDs
+            if (_currentParoleRecord != null && _currentParoleRecord.IsOnParole())
+            {
+                try
+                {
+                    var savedConditionIds = _currentParoleRecord.GetActiveConditionIds();
+                    if (savedConditionIds != null && savedConditionIds.Count > 0)
+                    {
+                        var conditionManager = Behind_Bars.Core.ResolveParoleConditionManager();
+                        if (conditionManager != null)
+                        {
+                            conditionManager.RestoreConditionsFromIds(savedConditionIds);
+                            ModLogger.Debug($"[SAVEABLE] Restored {savedConditionIds.Count} parole conditions from save");
+                        }
+                    }
+                }
+                catch (System.Exception ex)
+                {
+                    ModLogger.Warn($"[SAVEABLE] Failed to restore parole conditions: {ex.Message}");
                 }
             }
 

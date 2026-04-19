@@ -201,7 +201,7 @@ namespace Behind_Bars.Systems.Jail
             try
             {
                 // Get legal items from persistent storage
-                var persistentData = PersistentPlayerData.Instance;
+                var persistentData = Core.ResolvePersistentPlayerData();
                 var legalItems = persistentData.GetLegalItemsForPlayer(player);
 
                 if (legalItems != null && legalItems.Count > 0)
@@ -243,13 +243,17 @@ namespace Behind_Bars.Systems.Jail
                     break;
                 }
 
-                var itemInstance = CreateItemInstanceFromStoredItem(storedItem);
+                object itemInstance = CreateItemInstanceFromStoredItem(storedItem);
                 if (itemInstance != null)
                 {
                     try
                     {
-                        // Use the game's InsertItem method instead of directly setting slots
-                        InsertItem(itemInstance, false);
+                        // Use reflection to invoke InsertItem without hard-binding the IL2CPP item types
+                        var insertItemMethod = GetType().GetMethod("InsertItem", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+                        if (insertItemMethod != null)
+                        {
+                            insertItemMethod.Invoke(this, new object[] { itemInstance, false });
+                        }
                         ModLogger.Info($"✓ Inserted {storedItem.itemName} x{storedItem.stackCount} into storage");
                         slotIndex++;
                     }
@@ -273,7 +277,7 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
-        private ItemInstance CreateItemInstanceFromStoredItem(PersistentPlayerData.StoredItem storedItem)
+        private object CreateItemInstanceFromStoredItem(PersistentPlayerData.StoredItem storedItem)
         {
             ModLogger.Info($"Attempting to create ItemInstance for: {storedItem.itemName} (ID: {storedItem.itemId}, Count: {storedItem.stackCount})");
 
@@ -283,32 +287,32 @@ namespace Behind_Bars.Systems.Jail
                 {
                     ModLogger.Debug($"Trying registry lookup for item ID: {storedItem.itemId}");
 
-                    // Use static Registry.GetItem() directly - NO REFLECTION (same as working GivePrisonItem)
+                    // Use reflection to keep the IL2CPP item framework surface isolated
 #if !MONO
-                    var itemDef = Il2CppScheduleOne.Registry.GetItem(storedItem.itemId);
+                    var registry = Il2CppScheduleOne.Registry.Instance;
 #else
-                    var itemDef = ScheduleOne.Registry.GetItem(storedItem.itemId);
+                    var registry = ScheduleOne.Registry.Instance;
 #endif
+                    var itemDef = PrisonItemRegistry.GetRegistryItemDefinition(registry, storedItem.itemId);
 
                     if (itemDef != null)
                     {
                         ModLogger.Debug($"Found item definition for {storedItem.itemId}");
 
                         // Create ItemInstance using GetDefaultInstance - NO REFLECTION
-                        var itemInstance = itemDef.GetDefaultInstance(storedItem.stackCount);
+                        var getDefaultInstanceMethod = itemDef.GetType().GetMethod("GetDefaultInstance", new System.Type[] { typeof(int) });
+                        var itemInstance = getDefaultInstanceMethod != null
+                            ? getDefaultInstanceMethod.Invoke(itemDef, new object[] { storedItem.stackCount })
+                            : null;
                         if (itemInstance != null)
                         {
                             // Special handling for CashInstance - restore the Balance
                             if (storedItem.itemType == "CashInstance" && storedItem.cashBalance > 0f)
                             {
-#if !MONO
-                                var cashInstance = itemInstance as Il2CppScheduleOne.ItemFramework.CashInstance;
-#else
-                                var cashInstance = itemInstance as ScheduleOne.ItemFramework.CashInstance;
-#endif
-                                if (cashInstance != null)
+                                var setBalanceMethod = itemInstance.GetType().GetMethod("SetBalance");
+                                if (setBalanceMethod != null)
                                 {
-                                    cashInstance.SetBalance(storedItem.cashBalance);
+                                    setBalanceMethod.Invoke(itemInstance, new object[] { storedItem.cashBalance });
                                     ModLogger.Info($"✓ Set cash balance to ${storedItem.cashBalance:N2}");
                                 }
                             }
@@ -317,14 +321,10 @@ namespace Behind_Bars.Systems.Jail
                             // IntegerItemInstance stores gun ammo in the Value field
                             if (storedItem.itemType == "IntegerItemInstance")
                             {
-#if !MONO
-                                var integerInstance = itemInstance as Il2CppScheduleOne.ItemFramework.IntegerItemInstance;
-#else
-                                var integerInstance = itemInstance as ScheduleOne.ItemFramework.IntegerItemInstance;
-#endif
-                                if (integerInstance != null)
+                                var setValueMethod = itemInstance.GetType().GetMethod("SetValue");
+                                if (setValueMethod != null)
                                 {
-                                    integerInstance.SetValue(0); // Empty the gun
+                                    setValueMethod.Invoke(itemInstance, new object[] { 0 });
                                     ModLogger.Info($"✓ Set weapon Value to 0 (empty gun)");
                                 }
                             }
@@ -349,14 +349,14 @@ namespace Behind_Bars.Systems.Jail
 
                 // Fallback: Search all items in Registry by matching name
                 ModLogger.Info($"Attempting name-based Registry search for '{storedItem.itemName}'");
-                if (TryFindItemInRegistryByName(storedItem.itemName, storedItem.stackCount, out ItemInstance registryItem))
+                if (TryFindItemInRegistryByName(storedItem.itemName, storedItem.stackCount, out object registryItem))
                 {
                     ModLogger.Info($"Successfully created {storedItem.itemName} via Registry name search");
                     return registryItem;
                 }
 
                 // Last resort: Try old name pattern matching
-                if (TryCreateItemByName(storedItem, out ItemInstance fallbackItem))
+                if (TryCreateItemByName(storedItem, out object fallbackItem))
                 {
                     ModLogger.Info($"Successfully created {storedItem.itemName} using legacy name-based fallback");
                     return fallbackItem;
@@ -382,21 +382,25 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
-        private bool TryFindItemInRegistryByName(string itemName, int quantity, out ItemInstance itemInstance)
+        private bool TryFindItemInRegistryByName(string itemName, int quantity, out object itemInstance)
         {
             itemInstance = null;
 
             try
             {
-                // Try direct static call with lowercase name (common pattern)
+                // Try direct registry lookup with lowercase name (common pattern)
 #if !MONO
-                var itemDef = Il2CppScheduleOne.Registry.GetItem(itemName.ToLower().Replace(" ", ""));
+                var registry = Il2CppScheduleOne.Registry.Instance;
 #else
-                var itemDef = ScheduleOne.Registry.GetItem(itemName.ToLower().Replace(" ", ""));
+                var registry = ScheduleOne.Registry.Instance;
 #endif
+                var itemDef = PrisonItemRegistry.GetRegistryItemDefinition(registry, itemName.ToLower().Replace(" ", ""));
                 if (itemDef != null)
                 {
-                    itemInstance = itemDef.GetDefaultInstance(quantity);
+                    var getDefaultInstanceMethod = itemDef.GetType().GetMethod("GetDefaultInstance", new System.Type[] { typeof(int) });
+                    itemInstance = getDefaultInstanceMethod != null
+                        ? getDefaultInstanceMethod.Invoke(itemDef, new object[] { quantity })
+                        : null;
                     if (itemInstance != null)
                     {
                         ModLogger.Info($"Created ItemInstance for '{itemName}' using direct Registry call");
@@ -406,21 +410,21 @@ namespace Behind_Bars.Systems.Jail
 
                 // Manual search of ItemRegistry as fallback
 #if !MONO
-                var registry = Il2CppScheduleOne.Registry.Instance;
+                var registry2 = Il2CppScheduleOne.Registry.Instance;
 #else
-                var registry = ScheduleOne.Registry.Instance;
+                var registry2 = ScheduleOne.Registry.Instance;
 #endif
-                if (registry == null)
+                if (registry2 == null)
                 {
                     ModLogger.Error("Registry instance is null");
                     return false;
                 }
 
                 // If that didn't work, try searching ItemRegistry field manually
-                var itemRegistryField = registry.GetType().GetField("ItemRegistry", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                var itemRegistryField = registry2.GetType().GetField("ItemRegistry", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
                 if (itemRegistryField != null)
                 {
-                    var itemRegistry = itemRegistryField.GetValue(registry) as System.Collections.IList;
+                    var itemRegistry = itemRegistryField.GetValue(registry2) as System.Collections.IList;
                     if (itemRegistry != null)
                     {
                         ModLogger.Info($"Searching {itemRegistry.Count} items in Registry for '{itemName}'");
@@ -449,7 +453,7 @@ namespace Behind_Bars.Systems.Jail
                                 var getDefaultInstanceMethod = definition.GetType().GetMethod("GetDefaultInstance", new System.Type[] { typeof(int) });
                                 if (getDefaultInstanceMethod != null)
                                 {
-                                    itemInstance = getDefaultInstanceMethod.Invoke(definition, new object[] { quantity }) as ItemInstance;
+                                    itemInstance = getDefaultInstanceMethod.Invoke(definition, new object[] { quantity });
                                     if (itemInstance != null)
                                     {
                                         ModLogger.Info($"Created ItemInstance for '{itemName}' via manual Registry search");
@@ -477,7 +481,7 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
-        private bool TryCreateItemByName(PersistentPlayerData.StoredItem storedItem, out ItemInstance itemInstance)
+        private bool TryCreateItemByName(PersistentPlayerData.StoredItem storedItem, out object itemInstance)
         {
             itemInstance = null;
 
@@ -509,32 +513,28 @@ namespace Behind_Bars.Systems.Jail
 #endif
                 if (registry != null)
                 {
-                    var getItemMethod = registry.GetType().GetMethod("GetItem");
-                    if (getItemMethod != null)
+                    var itemDef = PrisonItemRegistry.GetRegistryItemDefinition(registry, itemId);
+                    if (itemDef != null)
                     {
-                        var itemDef = getItemMethod.Invoke(registry, new object[] { itemId });
-                        if (itemDef != null)
+                        var getDefaultInstanceMethod = itemDef.GetType().GetMethod("GetDefaultInstance");
+                        if (getDefaultInstanceMethod != null)
                         {
-                            var getDefaultInstanceMethod = itemDef.GetType().GetMethod("GetDefaultInstance");
-                            if (getDefaultInstanceMethod != null)
+                            itemInstance = getDefaultInstanceMethod.Invoke(itemDef, null);
+                            if (itemInstance != null)
                             {
-                                itemInstance = getDefaultInstanceMethod.Invoke(itemDef, null) as ItemInstance;
-                                if (itemInstance != null)
+                                // Set quantity
+                                if (storedItem.stackCount > 1)
                                 {
-                                    // Set quantity
-                                    if (storedItem.stackCount > 1)
+                                    try
                                     {
-                                        try
-                                        {
-                                            var quantityProperty = itemInstance.GetType().GetProperty("Quantity");
-                                            quantityProperty?.SetValue(itemInstance, storedItem.stackCount);
-                                        }
-                                        catch { }
+                                        var quantityProperty = itemInstance.GetType().GetProperty("Quantity");
+                                        quantityProperty?.SetValue(itemInstance, storedItem.stackCount);
                                     }
-
-                                    ModLogger.Info($"Created {storedItem.itemName} using fallback ID: {itemId}");
-                                    return true;
+                                    catch { }
                                 }
+
+                                ModLogger.Info($"Created {storedItem.itemName} using fallback ID: {itemId}");
+                                return true;
                             }
                         }
                     }
@@ -607,8 +607,11 @@ namespace Behind_Bars.Systems.Jail
             int count = 0;
             foreach (var slot in ItemSlots)
             {
-                if (slot.ItemInstance != null)
+                var itemInstanceProperty = slot.GetType().GetProperty("ItemInstance");
+                if (itemInstanceProperty != null && itemInstanceProperty.GetValue(slot) != null)
+                {
                     count += slot.Quantity;
+                }
             }
             return count;
         }

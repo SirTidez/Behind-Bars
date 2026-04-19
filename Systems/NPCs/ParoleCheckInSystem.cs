@@ -1,10 +1,13 @@
 using System;
 using System.Collections;
+using System.Collections.Generic;
 using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.CrimeTracking;
 using Behind_Bars.Systems.Dialogue;
+using Behind_Bars.Systems.Parole;
+using Behind_Bars.Systems.Parole.Conditions;
 using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
@@ -19,8 +22,8 @@ using ScheduleOne.PlayerScripts;
 namespace Behind_Bars.Systems.NPCs
 {
     /// <summary>
-    /// Handles check-in interactions between parolees and supervising officer
-    /// Manages check-in process, compliance review, and feedback
+    /// Owns supervising-officer check-in interaction flow, dialogue, and session state.
+    /// ParoleManager provides scheduling/validation; ParoleOfficerBehavior only ensures this controller exists.
     /// </summary>
     public class ParoleCheckInSystem : MonoBehaviour
     {
@@ -72,7 +75,13 @@ namespace Behind_Bars.Systems.NPCs
             MelonCoroutines.Start(WaitForInteractionTrigger());
         }
 
-        private void OnDestroy() { }
+        private void OnDestroy()
+        {
+            if (currentCheckInParolee != null)
+            {
+                ReleaseCheckInOwnership(currentCheckInParolee);
+            }
+        }
 
         #endregion
 
@@ -274,7 +283,7 @@ namespace Behind_Bars.Systems.NPCs
                     continue;
                 }
 
-                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
                 if (rapSheet == null || rapSheet.CurrentParoleRecord == null || !rapSheet.CurrentParoleRecord.IsOnParole())
                 {
                     continue;
@@ -328,11 +337,20 @@ namespace Behind_Bars.Systems.NPCs
                 return;
             }
 
-            var paroleSystem = Core.Instance?.ParoleSystem;
-            if (paroleSystem != null)
+            var interactionCoordinator = Core.ResolveDynamicParoleOfficerManager();
+            if (interactionCoordinator != null &&
+                !interactionCoordinator.TryReserveCheckIn(parolee, paroleOfficer))
             {
-                if (!paroleSystem.TryBeginCheckInSession(parolee, out var status, out string windowText))
+                ModLogger.Debug($"ParoleCheckInSystem: Check-in already active or blocked for {parolee.name}");
+                return;
+            }
+
+            var paroleManager = Core.ResolveParoleManager();
+            if (paroleManager != null)
+            {
+                if (!paroleManager.TryBeginCheckInSession(parolee, out var status, out string windowText))
                 {
+                    interactionCoordinator?.CancelCheckIn(parolee, paroleOfficer);
                     ShowCheckInRejectedDialogue(status, windowText);
                     lastCheckInTimes[parolee] = Time.time;
                     EnsureContainerOnInteract();
@@ -342,12 +360,13 @@ namespace Behind_Bars.Systems.NPCs
 
             currentCheckInParolee = parolee;
             isProcessingCheckIn = true;
+            interactionCoordinator?.StartCheckIn(parolee, paroleOfficer);
 
             ModLogger.Info($"ParoleCheckInSystem: Initiating check-in for {parolee.name}");
             MelonCoroutines.Start(ProcessCheckIn(parolee));
         }
 
-        private void ShowCheckInRejectedDialogue(ParoleSystem.DailyCheckInStatus status, string windowText)
+        private void ShowCheckInRejectedDialogue(ParoleManager.CheckInStatus status, string windowText)
         {
             if (dialogueController == null)
             {
@@ -364,16 +383,16 @@ namespace Behind_Bars.Systems.NPCs
 
             string state = status switch
             {
-                ParoleSystem.DailyCheckInStatus.TooEarly => "CheckInTooEarly",
-                ParoleSystem.DailyCheckInStatus.MissedWindow => "CheckInMissedWindow",
-                ParoleSystem.DailyCheckInStatus.NoScheduledWindow => "CheckInNoSchedule",
+                ParoleManager.CheckInStatus.TooEarly => "CheckInTooEarly",
+                ParoleManager.CheckInStatus.MissedWindow => "CheckInMissedWindow",
+                ParoleManager.CheckInStatus.NoScheduledWindow => "CheckInNoSchedule",
                 _ => "CheckInWarning"
             };
 
             dialogueController.UpdateGreetingForState(state);
             dialogueController.SendContextualMessage("interaction");
 
-            if (status == ParoleSystem.DailyCheckInStatus.TooEarly && !string.IsNullOrWhiteSpace(windowText))
+            if (status == ParoleManager.CheckInStatus.TooEarly && !string.IsNullOrWhiteSpace(windowText))
             {
                 var baseNpc = GetComponent<BaseJailNPC>();
                 baseNpc?.TrySendNPCMessage($"Your check-in window is between {windowText}.", 4f);
@@ -392,10 +411,33 @@ namespace Behind_Bars.Systems.NPCs
                 dialogueController = BBHelpers.GetComponentSafe<JailNPCDialogueController>(gameObject);
             }
 
-            // Update dialogue to check-in greeting
+            // Get rapport tier for dialogue variant selection
+            string greetingState = "CheckInGreeting";
+            var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(parolee);
+            if (rapSheet?.CurrentParoleRecord != null)
+            {
+                var rapportTier = rapSheet.CurrentParoleRecord.GetRapportTier();
+                switch (rapportTier)
+                {
+                    case RapportTier.Hostile:
+                        greetingState = "CheckInGreetingHostile";
+                        break;
+                    case RapportTier.Friendly:
+                        greetingState = "CheckInGreetingFriendly";
+                        break;
+                    case RapportTier.Trusted:
+                        greetingState = "CheckInGreetingTrusted";
+                        break;
+                    default:
+                        greetingState = "CheckInGreeting";
+                        break;
+                }
+            }
+
+            // Update dialogue to rapport-appropriate greeting
             if (dialogueController != null)
             {
-                dialogueController.UpdateGreetingForState("CheckInGreeting");
+                dialogueController.UpdateGreetingForState(greetingState);
                 dialogueController.SendContextualMessage("greeting");
             }
 
@@ -420,7 +462,6 @@ namespace Behind_Bars.Systems.NPCs
             yield return new WaitForSeconds(CHECK_IN_PROCESSING_TIME);
 
             // Get parole record
-            var rapSheet = RapSheetManager.Instance.GetRapSheet(parolee);
             if (rapSheet?.CurrentParoleRecord != null)
             {
                 var paroleRecord = rapSheet.CurrentParoleRecord;
@@ -449,6 +490,17 @@ namespace Behind_Bars.Systems.NPCs
                     dialogueController.SendContextualMessage("interaction");
                 }
 
+                yield return new WaitForSeconds(CHECK_IN_PROCESSING_TIME);
+
+                // Drug test phase (if condition is active)
+                yield return ProcessDrugTest(parolee, rapSheet, paroleRecord);
+
+                // Employment verification phase (if condition is active)
+                yield return ProcessEmploymentCheck(parolee, rapSheet, paroleRecord);
+
+                // Fee payment phase (if fees are owed)
+                yield return ProcessFeePayment(parolee, rapSheet, paroleRecord);
+
                 // Record check-in
                 RecordCheckIn(parolee);
 
@@ -471,7 +523,7 @@ namespace Behind_Bars.Systems.NPCs
 
             if (completedParolee != null)
             {
-                Core.Instance?.ParoleSystem?.EndCheckInSession(completedParolee);
+                EndCheckInSession(completedParolee);
             }
 
             // Return to idle dialogue
@@ -489,27 +541,48 @@ namespace Behind_Bars.Systems.NPCs
             EnsureContainerOnInteract();
         }
 
+        private void EndCheckInSession(Player parolee)
+        {
+            if (parolee == null)
+            {
+                return;
+            }
+
+            Core.ResolveParoleManager()?.EndCheckInSession(parolee);
+            Core.ResolveDynamicParoleOfficerManager()?.CompleteSupervisingOfficerCheckIn(parolee, paroleOfficer);
+        }
+
+        private void ReleaseCheckInOwnership(Player parolee)
+        {
+            if (parolee == null)
+            {
+                return;
+            }
+
+            EndCheckInSession(parolee);
+        }
+
         /// <summary>
         /// Record check-in in parole record
         /// </summary>
         private void RecordCheckIn(Player parolee)
         {
-            var paroleSystem = Core.Instance?.ParoleSystem;
-            if (paroleSystem != null && !paroleSystem.NotifyDailyCheckInCompleted(parolee))
+            var paroleManager = Core.ResolveParoleManager();
+            if (paroleManager != null && !paroleManager.NotifyDailyCheckInCompleted(parolee))
             {
                 ModLogger.Info($"ParoleCheckInSystem: Check-in denied for {parolee.name} due to timing/scheduling rules");
-                var status = paroleSystem.GetDailyCheckInStatus(parolee, out string windowText, applyConsequences: false);
+                var status = paroleManager.GetDailyCheckInStatus(parolee, out string windowText, applyConsequences: false);
                 ShowCheckInRejectedDialogue(status, windowText);
                 lastCheckInTimes[parolee] = Time.time;
                 return;
             }
 
-            var rapSheet = RapSheetManager.Instance.GetRapSheet(parolee);
+            var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(parolee);
             if (rapSheet?.CurrentParoleRecord != null)
             {
                 rapSheet.CurrentParoleRecord.RecordCheckIn();
                 rapSheet.CurrentParoleRecord.RecordInteraction();
-                RapSheetManager.Instance.MarkRapSheetChanged(parolee);
+                Core.ResolveRapSheetManager().MarkRapSheetChanged(parolee);
                 ModLogger.Info($"ParoleCheckInSystem: Recorded check-in for {parolee.name}");
             }
 
@@ -531,6 +604,281 @@ namespace Behind_Bars.Systems.NPCs
         public Player GetCurrentCheckInParolee()
         {
             return currentCheckInParolee;
+        }
+
+        /// <summary>
+        /// Process drug test during check-in if the drug test condition is active
+        /// </summary>
+        private IEnumerator ProcessDrugTest(Player parolee, RapSheet rapSheet, ParoleRecord paroleRecord)
+        {
+            if (!Core.ResolveParoleConditionManager().IsConditionActive("drug_test"))
+                yield break;
+
+            // Random chance of test based on LSI level
+            float testChance = DrugTestCondition.GetTestProbability(rapSheet.LSILevel);
+            float roll = UnityEngine.Random.Range(0f, 1f);
+
+            if (roll > testChance)
+            {
+                ModLogger.Debug($"[DRUG TEST] Skipped for {parolee.name} (roll {roll:F2} > chance {testChance:F2})");
+                yield break;
+            }
+
+            // Announce drug test
+            if (dialogueController != null)
+            {
+                dialogueController.UpdateGreetingForState("DrugTestAnnounce");
+            }
+            yield return new WaitForSeconds(CHECK_IN_PROCESSING_TIME);
+
+            // Check player inventory for drug items
+            bool hasDrugs = Core.ResolveParoleManager() != null && CheckPlayerForDrugs(parolee);
+
+            if (hasDrugs)
+            {
+                // Failed test
+                if (dialogueController != null)
+                {
+                    dialogueController.UpdateGreetingForState("DrugTestFail");
+                }
+
+                paroleRecord.AdjustComplianceScore(-15f);
+                paroleRecord.AdjustRapport(-15f);
+
+                var violation = new ViolationRecord(ViolationType.ContrabandPossession,
+                    "Failed drug test during check-in - drug items found in inventory", 2.5f);
+                rapSheet.AddParoleViolation(violation);
+                Core.ResolveRapSheetManager().MarkRapSheetChanged(parolee);
+
+                ModLogger.Info($"[DRUG TEST] {parolee.name} FAILED drug test");
+            }
+            else
+            {
+                // Passed test
+                if (dialogueController != null)
+                {
+                    dialogueController.UpdateGreetingForState("DrugTestPass");
+                }
+
+                paroleRecord.AdjustRapport(1f); // Small rapport boost for clean test
+                Core.ResolveRapSheetManager().MarkRapSheetChanged(parolee);
+
+                ModLogger.Info($"[DRUG TEST] {parolee.name} passed drug test");
+            }
+
+            yield return new WaitForSeconds(CHECK_IN_PROCESSING_TIME);
+        }
+
+        /// <summary>
+        /// Check if player has drug items in inventory (reuses ParoleSystem.IsDrugItem logic)
+        /// </summary>
+        private bool CheckPlayerForDrugs(Player parolee)
+        {
+            try
+            {
+                // Access player inventory and check for drug items
+                // This reuses the same detection logic as ParoleSystem.CheckForSearchViolations
+#if !MONO
+                var inventory = Il2CppScheduleOne.DevUtilities.PlayerSingleton<Il2CppScheduleOne.PlayerScripts.PlayerInventory>.Instance;
+#else
+                var inventory = ScheduleOne.DevUtilities.PlayerSingleton<ScheduleOne.PlayerScripts.PlayerInventory>.Instance;
+#endif
+                if (inventory == null) return false;
+
+                // Check hotbar slots
+                for (int i = 0; i < inventory.hotbarSlots.Count; i++)
+                {
+                    object slot = inventory.hotbarSlots[i];
+                    var itemInstance = GetSlotItemInstance(slot);
+                    if (itemInstance == null) continue;
+
+                    string itemName = GetItemName(itemInstance).ToLowerInvariant();
+                    if (itemName.Contains("weed") || itemName.Contains("meth") ||
+                        itemName.Contains("coke") || itemName.Contains("cocaine") ||
+                        itemName.Contains("heroin") || itemName.Contains("joint") ||
+                        itemName.Contains("baggie") || itemName.Contains("brick"))
+                    {
+                        return true;
+                    }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"[DRUG TEST] Error checking inventory: {ex.Message}");
+            }
+
+            return false;
+        }
+
+        private static string GetItemName(object itemInstance)
+        {
+            if (itemInstance == null)
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                var itemType = itemInstance.GetType();
+
+                var nameProperty = itemType.GetProperty("Name");
+                if (nameProperty != null)
+                {
+                    var nameValue = nameProperty.GetValue(itemInstance) as string;
+                    if (!string.IsNullOrWhiteSpace(nameValue))
+                    {
+                        return nameValue;
+                    }
+                }
+
+                var definitionProperty = itemType.GetProperty("Definition");
+                if (definitionProperty != null)
+                {
+                    var definition = definitionProperty.GetValue(itemInstance);
+                    if (definition != null)
+                    {
+                        var definitionType = definition.GetType();
+                        var definitionNameProperty = definitionType.GetProperty("name") ?? definitionType.GetProperty("Name");
+                        if (definitionNameProperty != null)
+                        {
+                            var definitionName = definitionNameProperty.GetValue(definition) as string;
+                            if (!string.IsNullOrWhiteSpace(definitionName))
+                            {
+                                return definitionName;
+                            }
+                        }
+
+                        var definitionNameField = definitionType.GetField("name") ?? definitionType.GetField("Name");
+                        if (definitionNameField != null)
+                        {
+                            var definitionName = definitionNameField.GetValue(definition) as string;
+                            if (!string.IsNullOrWhiteSpace(definitionName))
+                            {
+                                return definitionName;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"[DRUG TEST] Failed to resolve item name: {ex.Message}");
+            }
+
+            return itemInstance.GetType().Name;
+        }
+
+        private static object GetSlotItemInstance(object slot)
+        {
+            if (slot == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                var property = slot.GetType().GetProperty("ItemInstance");
+                return property?.GetValue(slot);
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"[DRUG TEST] Failed to read ItemInstance from {slot.GetType().Name}: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Process employment verification during check-in
+        /// </summary>
+        private IEnumerator ProcessEmploymentCheck(Player parolee, RapSheet rapSheet, ParoleRecord paroleRecord)
+        {
+            if (!Core.ResolveParoleConditionManager().IsConditionActive("employment"))
+                yield break;
+
+            bool isEmployed = EmploymentCondition.IsPlayerEmployed();
+
+            if (isEmployed)
+            {
+                // Employed - minor positive feedback
+                ModLogger.Debug($"[EMPLOYMENT] {parolee.name} is employed (owns property/business)");
+                yield break; // No special dialogue needed for positive result
+            }
+
+            // Not employed - graduated consequences
+            // Track unemployment warnings using a simple counter approach via missed check-ins
+            // We'll use the violation count for employment-type violations as the counter
+            int employmentWarnings = 0;
+            foreach (var v in paroleRecord.GetViolations())
+            {
+                if (v.Details != null && v.Details.Contains("employment"))
+                    employmentWarnings++;
+            }
+
+            if (employmentWarnings < EmploymentCondition.WARNINGS_BEFORE_VIOLATION)
+            {
+                // Warning only
+                paroleRecord.AdjustRapport(-3f);
+                paroleRecord.AdjustComplianceScore(-2f);
+
+                if (dialogueController != null)
+                {
+                    dialogueController.UpdateGreetingForState("CheckInWarning");
+                }
+
+                Core.ResolveParoleManager()?.SendSupervisingOfficerText(parolee,
+                    $"Employment reminder: You need to maintain employment or income. Warning {employmentWarnings + 1}/{EmploymentCondition.WARNINGS_BEFORE_VIOLATION}.");
+
+                ModLogger.Info($"[EMPLOYMENT] Warning {employmentWarnings + 1} for {parolee.name}");
+            }
+            else
+            {
+                // Formal violation after enough warnings
+                paroleRecord.AdjustComplianceScore(-5f);
+                paroleRecord.AdjustRapport(-5f);
+
+                var violation = new ViolationRecord(ViolationType.Other,
+                    $"Failed to maintain employment ({employmentWarnings + 1} consecutive failures)", 1.5f);
+                rapSheet.AddParoleViolation(violation);
+
+                Core.ResolveParoleManager()?.SendSupervisingOfficerText(parolee,
+                    "Employment condition violated. Formal violation recorded.");
+
+                ModLogger.Info($"[EMPLOYMENT] Formal violation for {parolee.name} after {employmentWarnings + 1} failures");
+            }
+
+            Core.ResolveRapSheetManager().MarkRapSheetChanged(parolee);
+            yield return new WaitForSeconds(CHECK_IN_PROCESSING_TIME);
+        }
+
+        /// <summary>
+        /// Process fee payment during check-in
+        /// </summary>
+        private IEnumerator ProcessFeePayment(Player parolee, RapSheet rapSheet, ParoleRecord paroleRecord)
+        {
+            float feesOwed = paroleRecord.GetTotalFeesOwed();
+            if (feesOwed <= 0f) yield break;
+
+            // Attempt automatic payment
+            bool paid = Core.ResolveParoleFeeSystem().AttemptPayment(parolee, rapSheet);
+
+            if (paid)
+            {
+                if (dialogueController != null)
+                {
+                    dialogueController.UpdateGreetingForState("CheckInCompliant");
+                }
+                ModLogger.Info($"[FEES] {parolee.name} paid supervision fees at check-in");
+            }
+            else
+            {
+                if (dialogueController != null)
+                {
+                    dialogueController.UpdateGreetingForState("CheckInWarning");
+                }
+                ModLogger.Info($"[FEES] {parolee.name} could not pay supervision fees (${feesOwed:F0} owed)");
+            }
+
+            yield return new WaitForSeconds(1f);
         }
 
         #endregion

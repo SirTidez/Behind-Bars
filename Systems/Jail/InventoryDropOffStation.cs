@@ -117,9 +117,9 @@ namespace Behind_Bars.Systems.Jail
             // Check if player has booking process active
             if (bookingProcess == null || !bookingProcess.bookingInProgress)
             {
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         "No active booking process", 
                         NotificationType.Warning
                     );
@@ -130,9 +130,9 @@ namespace Behind_Bars.Systems.Jail
             // Check if inventory drop-off already completed
             if (bookingProcess.inventoryDropOffComplete)
             {
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         "Inventory already dropped off", 
                         NotificationType.Progress
                     );
@@ -159,9 +159,9 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info($"Starting inventory drop-off for {player.name}");
             
             // Show initial notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Placing items in storage...", 
                     NotificationType.Instruction
                 );
@@ -188,9 +188,9 @@ namespace Behind_Bars.Systems.Jail
             if (inventoryItems.Count == 0)
             {
                 // Player has no items
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         "No items to confiscate",
                         NotificationType.Progress
                     );
@@ -203,9 +203,9 @@ namespace Behind_Bars.Systems.Jail
                 confiscatedItems = inventoryItems; // Keep the list for records
 
                 // Show confiscation notification
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         $"Confiscating {inventoryItems.Count} items...",
                         NotificationType.Progress
                     );
@@ -235,12 +235,12 @@ namespace Behind_Bars.Systems.Jail
             }
 
             // Show completion notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
                 string message = confiscatedItems.Count > 0
                     ? $"{confiscatedItems.Count} items secured in storage"
                     : "Inventory processing complete";
-                BehindBarsUIManager.Instance.ShowNotification(message, NotificationType.Progress);
+                Core.ResolveUIManager().ShowNotification(message, NotificationType.Progress);
             }
 
             // Final UI refresh to ensure inventory display is updated

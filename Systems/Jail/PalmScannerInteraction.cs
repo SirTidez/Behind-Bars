@@ -396,9 +396,9 @@ namespace Behind_Bars.Systems.Jail
             SetupDragPlane();
             
             // Show instructions
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Click and drag to move your palm to the scanner", 
                     NotificationType.Instruction
                 );
@@ -597,9 +597,9 @@ namespace Behind_Bars.Systems.Jail
             scanCoroutine = MelonCoroutines.Start(ScanProgressCoroutine()) as Coroutine;
             
             // Show progress notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Scanning palm... Hold still!", 
                     NotificationType.Progress
                 );
@@ -626,9 +626,9 @@ namespace Behind_Bars.Systems.Jail
                 scanProgressUI.gameObject.SetActive(false);
                 
             // Show instruction to reposition
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Position palm on scanner to scan", 
                     NotificationType.Instruction
                 );
@@ -688,9 +688,9 @@ namespace Behind_Bars.Systems.Jail
             }
             
             // Success notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Palm scan complete!", 
                     NotificationType.Progress
                 );

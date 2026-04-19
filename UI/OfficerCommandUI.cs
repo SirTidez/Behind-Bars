@@ -121,6 +121,12 @@ namespace Behind_Bars.UI
                     return;
                 }
 
+                if (!TMPFontFix.EnsureFontCached(mainCanvas))
+                {
+                    ModLogger.Error("OfficerCommandUI: Could not resolve a valid TMP font/material pair; skipping UI creation");
+                    return;
+                }
+
                 // Create the command panel
                 _commandPanel = new GameObject("OfficerCommandPanel");
                 _commandPanel.transform.SetParent(mainCanvas.transform, false);
@@ -216,7 +222,7 @@ namespace Behind_Bars.UI
                 // Start hidden
                 _commandPanel.SetActive(false);
 
-                // Apply font fixes (including emoji fallbacks) to all text components
+                // Apply font fixes to all text components before the first canvas rebuild.
                 TMPFontFix.FixAllTMPFonts(_commandPanel, "base");
 
                 _isInitialized = true;

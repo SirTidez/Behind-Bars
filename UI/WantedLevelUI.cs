@@ -2,6 +2,7 @@ using UnityEngine;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.CrimeDetection;
 using Behind_Bars.Harmony;
+using Behind_Bars.Utils;
 
 
 #if !MONO
@@ -123,6 +124,12 @@ namespace Behind_Bars.UI
                     ModLogger.Error("Failed to find or create canvas for WantedLevelUI");
                     return;
                 }
+
+                if (!TMPFontFix.EnsureFontCached(mainCanvas))
+                {
+                    ModLogger.Error("WantedLevelUI: Could not resolve a valid TMP font/material pair; skipping UI creation");
+                    return;
+                }
                 
                 // Create the wanted level panel
                 _wantedPanel = new GameObject("WantedLevelPanel");
@@ -172,6 +179,8 @@ namespace Behind_Bars.UI
                 _crimeCountText.fontSize = 10f;
                 _crimeCountText.color = Color.white;
                 _crimeCountText.alignment = TextAlignmentOptions.Center;
+
+                TMPFontFix.FixAllTMPFonts(_wantedPanel, "base");
                 
                 _isInitialized = true;
                 ModLogger.Debug($"✓ WantedLevelUI created successfully on canvas '{mainCanvas.name}'");

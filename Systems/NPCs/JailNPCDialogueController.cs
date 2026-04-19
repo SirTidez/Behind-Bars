@@ -44,13 +44,11 @@ namespace Behind_Bars.Systems.NPCs
         private JailNPCAudioController audioController;
         private float lastGreetingTime;
         private string currentState = "";
+        private bool greetingOverridesInitialized;
 
         protected virtual void Start()
         {
-            jailNPC = GetComponent<BaseJailNPC>();
-            baseController = GetComponent<DialogueController>();
-            dialogueHandler = GetComponent<DialogueHandler>();
-            audioController = BBHelpers.GetComponentSafe<JailNPCAudioController>(gameObject);
+            RefreshComponentReferences();
 
             if (jailNPC == null)
             {
@@ -66,9 +64,59 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             // Set up greeting overrides
-            SetupGreetingOverrides();
+            TryInitializeGreetingOverrides(force: true);
 
             ModLogger.Debug($"JailNPCDialogueController initialized for {gameObject.name}");
+        }
+
+        private void RefreshComponentReferences()
+        {
+            jailNPC ??= BBHelpers.GetComponentSafe<BaseJailNPC>(gameObject);
+            baseController ??= GetComponent<DialogueController>() ?? GetComponentInChildren<DialogueController>(true);
+            dialogueHandler ??= GetComponent<DialogueHandler>() ?? GetComponentInChildren<DialogueHandler>(true);
+            audioController ??= BBHelpers.GetComponentSafe<JailNPCAudioController>(gameObject);
+        }
+
+        private void TryInitializeGreetingOverrides(bool force = false)
+        {
+            RefreshComponentReferences();
+
+            if (baseController == null)
+            {
+                if (force)
+                {
+                    ModLogger.Debug($"JailNPCDialogueController on {gameObject.name} is waiting for DialogueController before applying greeting overrides");
+                }
+
+                greetingOverridesInitialized = false;
+                return;
+            }
+
+            if (!force && greetingOverridesInitialized && baseController.GreetingOverrides != null && baseController.GreetingOverrides.Count == stateDialogues.Count)
+            {
+                return;
+            }
+
+            SetupGreetingOverrides();
+            greetingOverridesInitialized = baseController.GreetingOverrides != null && baseController.GreetingOverrides.Count == stateDialogues.Count;
+        }
+
+        private int FindStateDialogueIndex(string stateName)
+        {
+            if (string.IsNullOrWhiteSpace(stateName))
+            {
+                return -1;
+            }
+
+            for (int i = 0; i < stateDialogues.Count; i++)
+            {
+                if (string.Equals(stateDialogues[i].stateName, stateName, System.StringComparison.OrdinalIgnoreCase))
+                {
+                    return i;
+                }
+            }
+
+            return -1;
         }
 
         protected virtual void InitializeDefaultStateDialogues()
@@ -196,6 +244,7 @@ namespace Behind_Bars.Systems.NPCs
 
         protected virtual void SetupGreetingOverrides()
         {
+            RefreshComponentReferences();
             if (baseController == null) return;
 
             try
@@ -233,6 +282,8 @@ namespace Behind_Bars.Systems.NPCs
         {
             ModLogger.Debug($"UpdateGreetingForState called with state: '{state}' on {gameObject.name}");
 
+            RefreshComponentReferences();
+
             if (baseController == null)
             {
                 ModLogger.Debug($"UpdateGreetingForState: baseController is null on {gameObject.name}");
@@ -251,6 +302,11 @@ namespace Behind_Bars.Systems.NPCs
                     return;
                 }
 
+                if (baseController.GreetingOverrides.Count != stateDialogues.Count)
+                {
+                    TryInitializeGreetingOverrides(force: true);
+                }
+
                 ModLogger.Debug($"UpdateGreetingForState: Resetting {baseController.GreetingOverrides.Count} greeting overrides on {gameObject.name}");
                 foreach (var greetingOverride in baseController.GreetingOverrides)
                 {
@@ -258,10 +314,10 @@ namespace Behind_Bars.Systems.NPCs
                 }
 
                 // Find and activate the appropriate greeting for the current state
-                var stateDialogue = stateDialogues.Find(sd => sd.stateName.Equals(state, System.StringComparison.OrdinalIgnoreCase));
-                if (stateDialogue != null)
+                int index = FindStateDialogueIndex(state);
+                if (index >= 0)
                 {
-                    var index = stateDialogues.IndexOf(stateDialogue);
+                    var stateDialogue = stateDialogues[index];
                     ModLogger.Debug($"UpdateGreetingForState: Found state dialogue '{stateDialogue.stateName}' at index {index} for state '{state}' on {gameObject.name}");
 
                     if (index >= 0 && index < baseController.GreetingOverrides.Count)
@@ -296,11 +352,14 @@ namespace Behind_Bars.Systems.NPCs
                 return;
             }
 
+            RefreshComponentReferences();
+
             ModLogger.Debug($"SendContextualMessage: currentState='{currentState}', available states: {string.Join(",", stateDialogues.ConvertAll(sd => sd.stateName))}");
 
-            var stateDialogue = stateDialogues.Find(sd => sd.stateName.Equals(currentState, System.StringComparison.OrdinalIgnoreCase));
-            if (stateDialogue != null && stateDialogue.interactions.Length > 0)
+            int stateDialogueIndex = FindStateDialogueIndex(currentState);
+            if (stateDialogueIndex >= 0 && stateDialogues[stateDialogueIndex].interactions.Length > 0)
             {
+                var stateDialogue = stateDialogues[stateDialogueIndex];
                 var randomInteraction = stateDialogue.interactions[UnityEngine.Random.Range(0, stateDialogue.interactions.Length)];
 
                 ModLogger.Debug($"Using state dialogue for '{currentState}': {randomInteraction}");
@@ -467,23 +526,19 @@ namespace Behind_Bars.Systems.NPCs
                 voType = voType
             };
 
-            stateDialogues.Add(stateDialogue);
-
-            // Update greeting overrides if base controller is available
-            if (baseController != null)
+            int existingIndex = FindStateDialogueIndex(stateName);
+            if (existingIndex >= 0)
             {
-                var greetingOverride = new DialogueController.GreetingOverride
-                {
-                    Greeting = greeting,
-                    ShouldShow = false,
-                    PlayVO = playVO,
-                    VOType = voType
-                };
-
-                baseController.AddGreetingOverride(greetingOverride);
+                stateDialogues[existingIndex] = stateDialogue;
+                ModLogger.Debug($"Updated state dialogue for {stateName} on {gameObject.name}");
+            }
+            else
+            {
+                stateDialogues.Add(stateDialogue);
+                ModLogger.Debug($"Added state dialogue for {stateName} on {gameObject.name}");
             }
 
-            ModLogger.Debug($"Added state dialogue for {stateName} on {gameObject.name}");
+            TryInitializeGreetingOverrides(force: true);
         }
 
         /// <summary>

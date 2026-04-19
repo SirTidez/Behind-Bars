@@ -222,7 +222,7 @@ namespace Behind_Bars.Systems.Testing
                     return;
                 }
 
-                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                var rapSheet = Core.GetRapSheet(player);
                 if (rapSheet == null)
                 {
                     ModLogger.Warn("No RapSheet found for player - creating test one");
@@ -287,7 +287,7 @@ namespace Behind_Bars.Systems.Testing
                     return;
                 }
 
-                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                var rapSheet = Core.GetRapSheet(player);
                 if (rapSheet == null)
                 {
                     ModLogger.Warn("No RapSheet found - creating one first");
@@ -391,7 +391,7 @@ namespace Behind_Bars.Systems.Testing
                     ModLogger.Info($"✓ Deleted Behind Bars save data directory: {basePath}");
                     
                     // Also clear RapSheetManager cache
-                    RapSheetManager.Instance.ClearCache();
+                    Core.ClearRapSheetCache();
                     ModLogger.Info("✓ Cleared RapSheetManager cache");
                 }
                 else

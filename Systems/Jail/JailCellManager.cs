@@ -33,6 +33,7 @@ namespace Behind_Bars.Systems.Jail
             public int spawnIndex;
             public Transform spawnTransform;
             public bool isOccupied = false;
+            public string occupantKey = "";
             public string occupantName = "";
 
             public string GetSpawnPointName()
@@ -414,6 +415,7 @@ namespace Behind_Bars.Systems.Jail
                             spawnIndex = i,
                             spawnPoint = spawnPoint,
                             isOccupied = false,
+                            occupantKey = "",
                             occupantName = ""
                         };
 
@@ -425,7 +427,22 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
-        public Transform AssignPlayerToHoldingCell(string playerName)
+        public Transform AssignPlayerToHoldingCell(Player player)
+        {
+            if (player == null)
+            {
+                return null;
+            }
+
+            return AssignPlayerToHoldingCellInternal(GetPlayerRuntimeKey(player), player.name);
+        }
+
+        private Transform AssignPlayerToHoldingCellByNameForDiagnostics(string playerName)
+        {
+            return AssignPlayerToHoldingCellInternal(playerName, playerName);
+        }
+
+        private Transform AssignPlayerToHoldingCellInternal(string occupantKey, string occupantDisplayName)
         {
             foreach (var holdingCell in holdingCells)
             {
@@ -433,33 +450,51 @@ namespace Behind_Bars.Systems.Jail
                 if (availableSpawn != null)
                 {
                     availableSpawn.isOccupied = true;
-                    availableSpawn.occupantName = playerName;
+                    availableSpawn.occupantKey = occupantKey;
+                    availableSpawn.occupantName = occupantDisplayName;
 
-                    ModLogger.Info($"✓ Assigned {playerName} to {holdingCell.cellName} spawn point {availableSpawn.spawnIndex}");
+                    ModLogger.Info($"✓ Assigned {occupantDisplayName} to {holdingCell.cellName} spawn point {availableSpawn.spawnIndex}");
                     return availableSpawn.spawnPoint;
                 }
             }
 
-            ModLogger.Warn($"⚠️ No available spawn points in holding cells for {playerName}");
+            ModLogger.Warn($"⚠️ No available spawn points in holding cells for {occupantDisplayName}");
             return null;
         }
 
-        public void ReleasePlayerFromHoldingCell(string playerName)
+        public void ReleasePlayerFromHoldingCell(Player player)
+        {
+            if (player == null)
+            {
+                return;
+            }
+
+            ReleasePlayerFromHoldingCellInternal(GetPlayerRuntimeKey(player), player.name);
+        }
+
+        private void ReleasePlayerFromHoldingCellByNameForDiagnostics(string playerName)
+        {
+            ReleasePlayerFromHoldingCellInternal(playerName, playerName);
+        }
+
+        private void ReleasePlayerFromHoldingCellInternal(string occupantKey, string occupantDisplayName)
         {
             foreach (var holdingCell in holdingCells)
             {
-                var occupiedSpawn = holdingCell.spawnPointOccupancy.FirstOrDefault(sp => sp.occupantName == playerName);
+                var occupiedSpawn = holdingCell.spawnPointOccupancy.FirstOrDefault(sp =>
+                    sp.occupantKey == occupantKey || sp.occupantName == occupantDisplayName);
                 if (occupiedSpawn != null)
                 {
                     occupiedSpawn.isOccupied = false;
+                    occupiedSpawn.occupantKey = "";
                     occupiedSpawn.occupantName = "";
 
-                    ModLogger.Info($"✓ Released {playerName} from {holdingCell.cellName} spawn point {occupiedSpawn.spawnIndex}");
+                    ModLogger.Info($"✓ Released {occupantDisplayName} from {holdingCell.cellName} spawn point {occupiedSpawn.spawnIndex}");
                     return;
                 }
             }
 
-            ModLogger.Warn($"⚠️ Player {playerName} not found in any holding cell");
+            ModLogger.Warn($"⚠️ Player {occupantDisplayName} not found in any holding cell");
         }
 
         public CellDetail GetAvailableJailCell()
@@ -657,17 +692,17 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info($"Holding Cell Status: {totalCells} cells, {totalSpawns} total spawn points, {available} available, {occupied} occupied");
 
             ModLogger.Info("Testing player assignments:");
-            var spawn1 = AssignPlayerToHoldingCell("TestPlayer1");
-            var spawn2 = AssignPlayerToHoldingCell("TestPlayer2");
-            var spawn3 = AssignPlayerToHoldingCell("TestPlayer3");
-            var spawn4 = AssignPlayerToHoldingCell("TestPlayer4");
+            var spawn1 = AssignPlayerToHoldingCellByNameForDiagnostics("TestPlayer1");
+            var spawn2 = AssignPlayerToHoldingCellByNameForDiagnostics("TestPlayer2");
+            var spawn3 = AssignPlayerToHoldingCellByNameForDiagnostics("TestPlayer3");
+            var spawn4 = AssignPlayerToHoldingCellByNameForDiagnostics("TestPlayer4");
 
             var (totalAfter, availableAfter, occupiedAfter, totalCellsAfter) = GetHoldingCellStatus();
             ModLogger.Info($"Status after assignments: {totalCellsAfter} cells, {totalAfter} total spawn points, {availableAfter} available, {occupiedAfter} occupied");
 
             ModLogger.Info("Testing player releases:");
-            ReleasePlayerFromHoldingCell("TestPlayer2");
-            ReleasePlayerFromHoldingCell("TestPlayer4");
+            ReleasePlayerFromHoldingCellByNameForDiagnostics("TestPlayer2");
+            ReleasePlayerFromHoldingCellByNameForDiagnostics("TestPlayer4");
 
             var (totalFinal, availableFinal, occupiedFinal, totalCellsFinal) = GetHoldingCellStatus();
             ModLogger.Info($"Final status: {totalCellsFinal} cells, {totalFinal} total spawn points, {availableFinal} available, {occupiedFinal} occupied");
@@ -683,6 +718,16 @@ namespace Behind_Bars.Systems.Jail
                     ModLogger.Info($"    Spawn {spawn.spawnIndex}: {status}");
                 }
             }
+        }
+
+        private static string GetPlayerRuntimeKey(Player player)
+        {
+            if (player == null)
+            {
+                return string.Empty;
+            }
+
+            return Core.ResolvePlayerKey(player);
         }
     }
 }

@@ -55,6 +55,7 @@ namespace Behind_Bars.Systems.NPCs
 
         private ReleaseState currentReleaseState = ReleaseState.Idle;
         private Player currentReleasee;
+        private string currentReleaseeKey = string.Empty;
         private Transform guardPost;
         private string badgeNumber;
         private bool isAvailable = true;
@@ -137,12 +138,11 @@ namespace Behind_Bars.Systems.NPCs
             EnsureSecurityDoorComponent(); // RE-ENABLED - using correct door triggers now
             SetupGuardInteraction(); // NEW: Add ready confirmation interaction
 
-            // Register with ReleaseManager
-            if (ReleaseManager.Instance != null)
+            // Register with the canonical NPC registry; ReleaseManager consumes this registry.
+            var npcManager = Core.Instance?.NpcManager;
+            if (npcManager != null)
             {
-#if MONO
-                ReleaseManager.Instance.RegisterOfficer(this);
-#endif
+                npcManager.RegisterReleaseOfficer(this);
             }
 
             // Subscribe to SecurityDoor events (like IntakeOfficer)
@@ -610,9 +610,10 @@ namespace Behind_Bars.Systems.NPCs
                 // Persistent storage is cleared in ExitScannerStation.TeleportPlayerToRelease() after successful exit
 
                 // Notify ReleaseManager that inventory processing is complete
-                if (ReleaseManager.Instance != null && currentReleasee != null)
+                var releaseManager = Core.ResolveReleaseManager();
+                if (currentReleasee != null && releaseManager != null)
                 {
-                    ReleaseManager.Instance.OnInventoryProcessingComplete(currentReleasee);
+                    releaseManager.OnInventoryProcessingComplete(currentReleasee);
                     ModLogger.Info("Notified ReleaseManager that inventory processing is complete");
                 }
             }
@@ -959,7 +960,7 @@ namespace Behind_Bars.Systems.NPCs
                 var commandData = GetCommandDataForState(state);
                 if (commandData != null)
                 {
-                    BehindBarsUIManager.Instance?.UpdateOfficerCommand(commandData);
+                    Core.ResolveUIManager().UpdateOfficerCommand(commandData);
                 }
             }
             catch (Exception ex)
@@ -1021,7 +1022,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                BehindBarsUIManager.Instance?.HideOfficerCommand();
+                Core.ResolveUIManager().HideOfficerCommand();
             }
             catch (Exception ex)
             {
@@ -1062,6 +1063,9 @@ namespace Behind_Bars.Systems.NPCs
                     break;
 
                 case ReleaseState.EscortingToStorage:
+                    // Bring the release pickup online before the escort reaches the room so the
+                    // player never arrives to an empty storage area.
+                    EnableInventoryPickupStation();
                     NavigateToStorage();
                     break;
 
@@ -1439,6 +1443,7 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             currentReleasee = player;
+            currentReleaseeKey = GetPlayerRuntimeKey(player);
             isAvailable = false;
             lastKnownPlayerPosition = player.transform.position;
 
@@ -1467,7 +1472,7 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             // Try again unless another releasee was already assigned.
-            if (currentReleasee == null || currentReleasee == player)
+            if (currentReleasee == null || IsCurrentReleasee(player))
             {
                 ModLogger.Info($"ReleaseOfficer {badgeNumber}: Retrying escort for {player?.name} after delay ({delay:F1}s)");
                 StartReleaseEscort(player);
@@ -1748,13 +1753,10 @@ namespace Behind_Bars.Systems.NPCs
 
                 ModLogger.Info($"ReleaseOfficer {badgeNumber}: ✅ Interactive storage enabled with improved item ID capture");
 
-                if (BehindBarsUIManager.Instance != null)
-                {
-                    BehindBarsUIManager.Instance.ShowNotification(
-                        "Interact with storage to retrieve your belongings",
-                        NotificationType.Instruction
-                    );
-                }
+                Core.ResolveUIManager().ShowNotification(
+                    "Interact with storage to retrieve your belongings",
+                    NotificationType.Instruction
+                );
             }
             catch (System.Exception ex)
             {
@@ -2027,13 +2029,10 @@ namespace Behind_Bars.Systems.NPCs
                     exitScannerStation.EnableForRelease();
                     ModLogger.Info($"ReleaseOfficer {badgeNumber}: Enabled exit scanner for release");
 
-                    if (BehindBarsUIManager.Instance != null)
-                    {
-                        BehindBarsUIManager.Instance.ShowNotification(
-                            "Scan your fingerprint to complete release",
-                            NotificationType.Instruction
-                        );
-                    }
+                    Core.ResolveUIManager().ShowNotification(
+                        "Scan your fingerprint to complete release",
+                        NotificationType.Instruction
+                    );
                 }
                 else
                 {
@@ -2070,12 +2069,13 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         public void OnInventoryPickupComplete(Player player)
         {
-            if (currentReleasee != player)
+            if (!IsCurrentReleasee(player))
             {
                 ModLogger.Warn($"ReleaseOfficer {badgeNumber}: OnInventoryPickupComplete called for wrong player - expected {currentReleasee?.name}, got {player?.name}");
                 return;
             }
 
+            currentReleasee = player;
             ModLogger.Info($"ReleaseOfficer {badgeNumber}: OnInventoryPickupComplete called - waiting for player to select 'Let's go' in dialogue");
 
             // CRITICAL: Don't auto-proceed - wait for player to interact with guard and select "Let's go"
@@ -2226,7 +2226,7 @@ namespace Behind_Bars.Systems.NPCs
             try
             {
                 // Use the proper cell assignment system
-                var cellAssignmentManager = CellAssignmentManager.Instance;
+                var cellAssignmentManager = Core.ResolveCellAssignmentManager();
                 if (cellAssignmentManager != null)
                 {
                     int assignedCell = cellAssignmentManager.GetPlayerCellNumber(player);
@@ -2247,15 +2247,41 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        private bool IsCurrentReleasee(Player player)
+        {
+            if (player == null || string.IsNullOrEmpty(currentReleaseeKey))
+            {
+                return false;
+            }
+
+            return currentReleaseeKey == GetPlayerRuntimeKey(player);
+        }
+
+        private static string GetPlayerRuntimeKey(Player player)
+        {
+            if (player == null)
+            {
+                return string.Empty;
+            }
+
+            return Core.ResolvePlayerKey(player);
+        }
+
         private Vector3 GetStorageLocation()
         {
             try
             {
-                // Use the proper storage area from jail controller - repurpose inventoryDropOff for returns
+                // Release belongings are returned from the dedicated inventory pickup station.
                 var jailController = Core.JailController;
+                if (jailController?.storage?.inventoryPickup != null)
+                {
+                    ModLogger.Info($"ReleaseOfficer {badgeNumber}: Using inventoryPickup for item returns at {jailController.storage.inventoryPickup.position}");
+                    return jailController.storage.inventoryPickup.position;
+                }
+
                 if (jailController?.storage?.inventoryDropOff != null)
                 {
-                    ModLogger.Info($"ReleaseOfficer {badgeNumber}: Using inventoryDropOff for item returns at {jailController.storage.inventoryDropOff.position}");
+                    ModLogger.Warn($"ReleaseOfficer {badgeNumber}: InventoryPickup missing, falling back to inventoryDropOff at {jailController.storage.inventoryDropOff.position}");
                     return jailController.storage.inventoryDropOff.position;
                 }
 
@@ -2716,6 +2742,7 @@ namespace Behind_Bars.Systems.NPCs
 
             // Reset state
             currentReleasee = null;
+            currentReleaseeKey = string.Empty;
             isAvailable = true;
             destinationPosition = Vector3.zero;
             lastKnownPlayerPosition = Vector3.zero;
@@ -2838,12 +2865,14 @@ namespace Behind_Bars.Systems.NPCs
             // Stop any active continuous looking
             StopContinuousPlayerLooking();
 
-            // Unregister from ReleaseManager
-            if (ReleaseManager.Instance != null)
+            // Ensure any pending ready-to-leave choice listener is detached before teardown.
+            DialogueChoiceListener.Unregister(dialogueHandler);
+
+            // Unregister from the canonical NPC registry.
+            var npcManager = Core.Instance?.NpcManager;
+            if (npcManager != null)
             {
-#if MONO
-                ReleaseManager.Instance.UnregisterOfficer(this);
-#endif
+                npcManager.UnregisterReleaseOfficer(this);
             }
 
             // Unsubscribe from SecurityDoor events
@@ -2858,6 +2887,7 @@ namespace Behind_Bars.Systems.NPCs
 
             // Clean up state
             currentReleasee = null;
+            currentReleaseeKey = string.Empty;
             isAvailable = true;
 
             base.OnDestroy();

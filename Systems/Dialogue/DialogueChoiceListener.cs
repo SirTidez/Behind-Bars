@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine.Events;
 using Behind_Bars.Helpers;
 
@@ -16,16 +17,61 @@ namespace Behind_Bars.Systems.Dialogue
     /// </summary>
     public static class DialogueChoiceListener
     {
-        /// <summary>
-        /// Stores the label of the expected dialogue choice that, when selected,
-        /// triggers the associated callback action in the dialogue system.
-        /// </summary>
-        private static string _expectedChoiceLabel;
+        private sealed class Registration
+        {
+            public readonly DialogueHandler Handler;
+#if !MONO
+            public readonly System.Action<string> ChoiceListener;
+#else
+            public readonly UnityAction<string> ChoiceListener;
+#endif
+            public string ExpectedChoiceLabel;
+            public Action Callback;
 
-        /// <summary>
-        /// Represents a delegate invoked when a specific dialogue choice is selected during interaction.
-        /// </summary>
-        private static Action _callback;
+            public Registration(DialogueHandler handler, string expectedChoiceLabel, Action callback)
+            {
+                Handler = handler;
+                ExpectedChoiceLabel = expectedChoiceLabel;
+                Callback = callback;
+#if !MONO
+                ChoiceListener = HandleChoiceSelected;
+#else
+                ChoiceListener = new UnityAction<string>(HandleChoiceSelected);
+#endif
+            }
+
+            public void Attach()
+            {
+                Handler?.onDialogueChoiceChosen?.AddListener(ChoiceListener);
+            }
+
+            public void Detach()
+            {
+                Handler?.onDialogueChoiceChosen?.RemoveListener(ChoiceListener);
+            }
+
+            private void HandleChoiceSelected(string choice)
+            {
+                if (choice != ExpectedChoiceLabel)
+                {
+                    return;
+                }
+
+                var callback = Callback;
+                DialogueChoiceListener.Unregister(Handler);
+
+                try
+                {
+                    callback?.Invoke();
+                }
+                catch (Exception e)
+                {
+                    ModLogger.Error($"DialogueChoiceListener.OnChoice failed: {e.Message}\n{e.StackTrace}");
+                }
+            }
+        }
+
+        private static readonly Dictionary<DialogueHandler, Registration> _registrations = new Dictionary<DialogueHandler, Registration>();
 
         /// <summary>
         /// Registers a specific dialogue choice with a callback to be invoked when the choice is selected.
@@ -41,28 +87,13 @@ namespace Behind_Bars.Systems.Dialogue
                 return;
             }
 
-            _expectedChoiceLabel = label;
-            _callback = action;
-
             try
             {
-                void ForwardCall() => OnChoice();
+                Unregister(handlerRef);
 
-#if !MONO
-                // IL2CPP-safe: explicit method binding via wrapper
-                handlerRef.onDialogueChoiceChosen.AddListener((UnityAction<string>)delegate (string choice)
-                {
-                    if (choice == _expectedChoiceLabel)
-                        ((UnityAction)ForwardCall).Invoke();
-                });
-#else
-                // Mono event subscription
-                handlerRef.onDialogueChoiceChosen.AddListener((UnityAction<string>)delegate (string choice)
-                {
-                    if (choice == _expectedChoiceLabel)
-                        ForwardCall();
-                });
-#endif
+                var registration = new Registration(handlerRef, label, action);
+                _registrations[handlerRef] = registration;
+                registration.Attach();
             }
             catch (Exception e)
             {
@@ -71,20 +102,26 @@ namespace Behind_Bars.Systems.Dialogue
         }
 
         /// <summary>
-        /// Executes the registered callback when the expected dialogue choice is selected.
+        /// Removes the registered callback for a dialogue handler, if one exists.
         /// </summary>
-        private static void OnChoice()
+        public static void Unregister(DialogueHandler handlerRef)
         {
+            if (handlerRef == null)
+            {
+                return;
+            }
+
             try
             {
-                _callback?.Invoke();
-                // Clear callback after use (one-time use)
-                _callback = null;
-                _expectedChoiceLabel = null;
+                if (_registrations.TryGetValue(handlerRef, out var registration))
+                {
+                    registration.Detach();
+                    _registrations.Remove(handlerRef);
+                }
             }
             catch (Exception e)
             {
-                ModLogger.Error($"DialogueChoiceListener.OnChoice failed: {e.Message}\n{e.StackTrace}");
+                ModLogger.Error($"DialogueChoiceListener.Unregister failed: {e.Message}\n{e.StackTrace}");
             }
         }
     }

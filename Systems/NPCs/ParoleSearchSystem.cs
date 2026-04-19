@@ -58,7 +58,7 @@ namespace Behind_Bars.Systems.NPCs
         /// Get detection range based on LSI level
         /// Higher risk levels = larger detection radius (more intensive supervision)
         /// </summary>
-        private float GetDetectionRange(LSILevel lsiLevel)
+        public float GetDetectionRange(LSILevel lsiLevel)
         {
             switch (lsiLevel)
             {
@@ -90,7 +90,7 @@ namespace Behind_Bars.Systems.NPCs
             if (officer.GetCurrentActivity() == ParoleOfficerBehavior.ParoleOfficerActivity.SearchingParolee) return false;
 
             // Get cached rap sheet early (needed for LSI-based detection range)
-            var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+            var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
             if (rapSheet == null)
             {
                 return false; // No rap sheet found
@@ -103,7 +103,7 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             // CRITICAL: Don't search if release summary UI is still visible
-            if (BehindBarsUIManager.Instance != null && BehindBarsUIManager.Instance.IsParoleConditionsUIVisible())
+            if (Core.ResolveUIManager().IsParoleConditionsUIVisible())
             {
                 ModLogger.Debug($"Player {player.name} has release summary UI visible - skipping search");
                 return false;
@@ -152,11 +152,19 @@ namespace Behind_Bars.Systems.NPCs
             // Get search probability based on LSI level
             float searchChance = rapSheet.GetSearchProbability();
 
+            // Apply rapport-based search frequency modifier
+            float rapportModifier = 1.0f;
+            if (rapSheet.CurrentParoleRecord != null)
+            {
+                rapportModifier = rapSheet.CurrentParoleRecord.GetOfficerRapport().GetSearchFrequencyModifier();
+                searchChance *= rapportModifier;
+            }
+
             // Roll for random search
             float roll = UnityEngine.Random.Range(0f, 1f);
             bool shouldSearch = roll < searchChance;
 
-            ModLogger.Debug($"Search check for {player.name}: distance={distance:F1}m (range={detectionRange:F1}m), cooldown OK, LSI={rapSheet.LSILevel}, chance={searchChance:P0}, roll={roll:F2} => {shouldSearch}");
+            ModLogger.Debug($"Search check for {player.name}: distance={distance:F1}m (range={detectionRange:F1}m), cooldown OK, LSI={rapSheet.LSILevel}, chance={searchChance:P0} (rapport mod: {rapportModifier:F1}x), roll={roll:F2} => {shouldSearch}");
 
             return shouldSearch;
         }
@@ -349,7 +357,7 @@ namespace Behind_Bars.Systems.NPCs
             
             // Check if release summary UI is visible - if so, player should remain frozen
             bool shouldBeMovable = true;
-            if (BehindBarsUIManager.Instance != null && BehindBarsUIManager.Instance.IsParoleConditionsUIVisible())
+            if (Core.ResolveUIManager().IsParoleConditionsUIVisible())
             {
                 shouldBeMovable = false;
                 ModLogger.Debug($"Release summary UI is visible - keeping player {player.name} frozen after search");
@@ -378,7 +386,7 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Info($"Officer {officer.GetBadgeNumber()}: Found {crimes.Count} contraband items on {player.name}");
 
             // Get cached rap sheet
-            var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+            var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
             if (rapSheet != null)
             {
                 foreach (var crime in crimes)
@@ -400,7 +408,7 @@ namespace Behind_Bars.Systems.NPCs
                     // Re-assess LSI level after violation
                     rapSheet.UpdateLSILevel();
                 }
-                RapSheetManager.Instance.MarkRapSheetChanged(player);
+                Core.ResolveRapSheetManager().MarkRapSheetChanged(player);
             }
 
             // Use the game's built-in arrest methods instead of HandleImmediateArrest
@@ -454,17 +462,17 @@ namespace Behind_Bars.Systems.NPCs
                 ModLogger.Error($"Error calling built-in arrest methods for {player.name}: {ex.Message}");
                 ModLogger.Error($"Stack trace: {ex.StackTrace}");
                 
-                // Fallback to HandleImmediateArrest if built-in methods fail
-                var jailSystem = Core.Instance?.JailSystem;
-                if (jailSystem != null)
+                // Fallback to the jail manager if the game's built-in arrest methods fail
+                var jailManager = Core.Instance?.JailManager;
+                if (jailManager != null)
                 {
-                    ModLogger.Info($"Falling back to HandleImmediateArrest for {player.name}");
-                    MelonCoroutines.Start(jailSystem.HandleImmediateArrest(player));
+                    ModLogger.Info($"Falling back to JailManager.HandleImmediateArrest for {player.name}");
+                    MelonCoroutines.Start(jailManager.HandleImmediateArrest(player));
                     return true;
                 }
                 else
                 {
-                    ModLogger.Error("JailSystem not available - cannot initiate arrest for parole violation");
+                    ModLogger.Error("JailManager not available - cannot initiate arrest for parole violation");
                     return false;
                 }
             }

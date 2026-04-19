@@ -271,6 +271,7 @@ namespace Behind_Bars.Systems.Data
             {
                 string arrestId = Guid.NewGuid().ToString();
                 string playerId = GetPlayerUniqueId(player);
+                var legacySnapshotLookupKeys = GetLegacySnapshotLookupKeys(player, playerId);
 
                 var snapshot = new PlayerInventorySnapshot(playerId, player.name, arrestId)
                 {
@@ -288,7 +289,8 @@ namespace Behind_Bars.Systems.Data
                 ModLogger.Info($"Captured {clothing.Count} clothing layers for {player.name}");
 
                 // Remove any existing active snapshots for this player
-                gameData.playerSnapshots.RemoveAll(s => s.playerId == playerId && s.isActive);
+                gameData.playerSnapshots.RemoveAll(s => s.isActive &&
+                    (s.playerId == playerId || legacySnapshotLookupKeys.Contains(s.playerId)));
 
                 // Add new snapshot
                 gameData.playerSnapshots.Add(snapshot);
@@ -316,8 +318,7 @@ namespace Behind_Bars.Systems.Data
 
             try
             {
-                string playerId = GetPlayerUniqueId(player);
-                var snapshot = GetActiveSnapshotForPlayer(playerId);
+                var snapshot = GetActiveSnapshotForPlayer(player);
 
                 if (snapshot != null)
                 {
@@ -343,8 +344,7 @@ namespace Behind_Bars.Systems.Data
 
             try
             {
-                string playerId = GetPlayerUniqueId(player);
-                var snapshot = GetActiveSnapshotForPlayer(playerId);
+                var snapshot = GetActiveSnapshotForPlayer(player);
 
                 if (snapshot != null)
                 {
@@ -370,8 +370,7 @@ namespace Behind_Bars.Systems.Data
 
             try
             {
-                string playerId = GetPlayerUniqueId(player);
-                var snapshot = GetActiveSnapshotForPlayer(playerId);
+                var snapshot = GetActiveSnapshotForPlayer(player);
 
                 if (snapshot != null)
                 {
@@ -393,12 +392,29 @@ namespace Behind_Bars.Systems.Data
         /// <summary>
         /// Store a player's exit position
         /// </summary>
-        public void StorePlayerExitPosition(string playerName, Vector3 position)
+        public void StorePlayerExitPosition(Player player, Vector3 position)
         {
+            if (player == null)
+            {
+                return;
+            }
+
             try
             {
-                gameData.storedExitPositions[playerName] = position;
-                ModLogger.Info($"Stored exit position for {playerName}: {position}");
+                string playerKey = GetPlayerUniqueId(player);
+                if (string.IsNullOrEmpty(playerKey))
+                {
+                    return;
+                }
+
+                gameData.storedExitPositions[playerKey] = position;
+
+                foreach (string legacyKey in GetLegacySnapshotLookupKeys(player, playerKey))
+                {
+                    gameData.storedExitPositions.Remove(legacyKey);
+                }
+
+                ModLogger.Info($"Stored exit position for {playerKey}: {position}");
                 SaveData();
             }
             catch (System.Exception ex)
@@ -410,21 +426,26 @@ namespace Behind_Bars.Systems.Data
         /// <summary>
         /// Get a player's stored exit position
         /// </summary>
-        public Vector3? GetPlayerExitPosition(string playerName)
+        public Vector3? GetPlayerExitPosition(Player player)
         {
-            try
+            if (player == null)
             {
-                if (gameData.storedExitPositions.ContainsKey(playerName))
-                {
-                    return gameData.storedExitPositions[playerName];
-                }
-            }
-            catch (System.Exception ex)
-            {
-                ModLogger.Error($"Error getting exit position: {ex.Message}");
+                return null;
             }
 
-            return null;
+            string playerKey = GetPlayerUniqueId(player);
+            if (string.IsNullOrEmpty(playerKey))
+            {
+                return null;
+            }
+
+            var exitPosition = GetPlayerExitPositionByKey(playerKey);
+            if (exitPosition.HasValue)
+            {
+                return exitPosition;
+            }
+
+            return TryMigrateLegacyExitPosition(player, playerKey);
         }
 
         #endregion
@@ -852,30 +873,114 @@ namespace Behind_Bars.Systems.Data
 
         private string GetPlayerUniqueId(Player player)
         {
-            // Try to get a unique identifier for the player
-            // This could be Steam ID, network ID, or fallback to name
-            try
-            {
-                // Try to get network ID or similar unique identifier
-                var networkIdProperty = player.GetType().GetProperty("NetworkId");
-                if (networkIdProperty != null)
-                {
-                    var networkId = networkIdProperty.GetValue(player);
-                    if (networkId != null) return networkId.ToString();
-                }
-
-                // Fallback to player name (not ideal for multiplayer)
-                return player.name;
-            }
-            catch
-            {
-                return player.name;
-            }
+            return Behind_Bars.Core.ResolvePlayerKey(player);
         }
 
-        private PlayerInventorySnapshot GetActiveSnapshotForPlayer(string playerId)
+        private List<string> GetLegacySnapshotLookupKeys(Player player, string primaryKey = null)
+        {
+            var lookupKeys = new List<string>();
+
+            if (player != null && !string.IsNullOrEmpty(player.name) && !lookupKeys.Contains(player.name))
+            {
+                if (string.IsNullOrEmpty(primaryKey) || !string.Equals(primaryKey, player.name, StringComparison.Ordinal))
+                {
+                    lookupKeys.Add(player.name);
+                }
+            }
+
+            return lookupKeys;
+        }
+
+        private PlayerInventorySnapshot GetActiveSnapshotForPlayer(Player player)
+        {
+            if (player == null)
+            {
+                return null;
+            }
+
+            string primaryKey = GetPlayerUniqueId(player);
+            if (!string.IsNullOrEmpty(primaryKey))
+            {
+                var snapshot = GetActiveSnapshotByPlayerId(primaryKey);
+                if (snapshot != null)
+                {
+                    return snapshot;
+                }
+            }
+
+            return TryMigrateLegacySnapshot(player, primaryKey);
+        }
+
+        private PlayerInventorySnapshot GetActiveSnapshotByPlayerId(string playerId)
         {
             return gameData.playerSnapshots.Find(s => s.playerId == playerId && s.isActive);
+        }
+
+        private Vector3? GetPlayerExitPositionByKey(string playerKey)
+        {
+            try
+            {
+                if (!string.IsNullOrEmpty(playerKey) && gameData.storedExitPositions.ContainsKey(playerKey))
+                {
+                    return gameData.storedExitPositions[playerKey];
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error getting exit position: {ex.Message}");
+            }
+
+            return null;
+        }
+
+        private Vector3? TryMigrateLegacyExitPosition(Player player, string primaryKey)
+        {
+            if (player == null || string.IsNullOrEmpty(primaryKey))
+            {
+                return null;
+            }
+
+            foreach (string legacyKey in GetLegacySnapshotLookupKeys(player, primaryKey))
+            {
+                var exitPosition = GetPlayerExitPositionByKey(legacyKey);
+                if (!exitPosition.HasValue)
+                {
+                    continue;
+                }
+
+                gameData.storedExitPositions[primaryKey] = exitPosition.Value;
+                gameData.storedExitPositions.Remove(legacyKey);
+                SaveData();
+                ModLogger.Info($"Migrated legacy exit position for {player.name} from {legacyKey} to {primaryKey}");
+                return exitPosition;
+            }
+
+            return null;
+        }
+
+        private PlayerInventorySnapshot TryMigrateLegacySnapshot(Player player, string primaryKey)
+        {
+            if (player == null || string.IsNullOrEmpty(primaryKey))
+            {
+                return null;
+            }
+
+            foreach (string legacyKey in GetLegacySnapshotLookupKeys(player, primaryKey))
+            {
+                var snapshot = GetActiveSnapshotByPlayerId(legacyKey);
+                if (snapshot == null)
+                {
+                    continue;
+                }
+
+                snapshot.playerId = primaryKey;
+                snapshot.playerName = player.name;
+                SaveData();
+                ModLogger.Info($"Migrated legacy inventory snapshot for {player.name} from {legacyKey} to {primaryKey}");
+                return snapshot;
+            }
+
+            return null;
         }
 
         private object SerializeCrimeData(object crimeData)
@@ -1401,9 +1506,8 @@ namespace Behind_Bars.Systems.Data
         {
             try
             {
-                // Find the player's active snapshot using player ID
-                string playerId = GetPlayerUniqueId(player);
-                var snapshot = GetActiveSnapshotForPlayer(playerId);
+                // Find the player's active snapshot using stable key with legacy-name fallback
+                var snapshot = GetActiveSnapshotForPlayer(player);
                 if (snapshot == null || snapshot.originalClothing == null || snapshot.originalClothing.Count == 0)
                 {
                     ModLogger.Warn("No clothing data saved for player");

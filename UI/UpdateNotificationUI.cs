@@ -32,6 +32,11 @@ namespace Behind_Bars.UI
         private Button _dismissButton;
         private Button _closeButton;
         private ScrollRect _scrollRect;
+#if !MONO
+        private System.Action? _closeButtonClickHandler;
+        private System.Action? _viewDetailsButtonClickHandler;
+        private System.Action? _dismissButtonClickHandler;
+#endif
 
         private bool _isInitialized = false;
         private bool _isVisible = false;
@@ -44,41 +49,8 @@ namespace Behind_Bars.UI
         /// </summary>
         public void Show(VersionInfo versionInfo)
         {
-            
             //TODO: Temporarily disable showing the update notification until its been reworked
             return;
-            
-            if (versionInfo == null || string.IsNullOrEmpty(versionInfo.version))
-            {
-                ModLogger.Error("Cannot show update notification - invalid version info");
-                return;
-            }
-
-            try
-            {
-                if (!_isInitialized)
-                {
-                    CreateUI();
-                }
-
-                if (_isInitialized)
-                {
-                    _currentVersionInfo = versionInfo; // Store for button click
-                    UpdateContent(versionInfo);
-                    SetVisible(true);
-                    
-                    // Start auto-dismiss timer (45 seconds)
-                    if (_autoDismissCoroutine != null)
-                    {
-                        MelonLoader.MelonCoroutines.Stop(_autoDismissCoroutine);
-                    }
-                    _autoDismissCoroutine = MelonLoader.MelonCoroutines.Start(AutoDismissAfterDelay(45f));
-                }
-            }
-            catch (System.Exception e)
-            {
-                ModLogger.Error($"Error showing update notification: {e.Message}");
-            }
         }
 
         /// <summary>
@@ -128,6 +100,12 @@ namespace Behind_Bars.UI
                 // Don't destroy on load so it persists across scenes
                 Object.DontDestroyOnLoad(_canvasObject);
 
+                if (!TMPFontFix.EnsureFontCached(_canvas, "base"))
+                {
+                    ModLogger.Error("UpdateNotificationUI: Could not resolve a valid TMP font/material pair; skipping UI creation");
+                    return;
+                }
+
                 // Create main panel
                 _notificationPanel = new GameObject("NotificationPanel");
                 _notificationPanel.transform.SetParent(_canvas.transform, false);
@@ -162,6 +140,8 @@ namespace Behind_Bars.UI
 
                 // Create button bar
                 CreateButtonBar();
+
+                TMPFontFix.FixAllTMPFonts(_notificationPanel, "base");
 
                 _isInitialized = true;
                 ModLogger.Debug("✓ UpdateNotificationUI created successfully");
@@ -210,11 +190,7 @@ namespace Behind_Bars.UI
             closeBtnBg.color = new Color(0.2f, 0.2f, 0.2f, 0.8f);
 
             _closeButton = closeBtnObj.AddComponent<Button>();
-#if !MONO
-            _closeButton.onClick.AddListener(new System.Action(() => OnDismissClicked()));
-#else
-            _closeButton.onClick.AddListener(() => OnDismissClicked());
-#endif
+            RegisterCloseButtonListener();
 
             // X text
             GameObject closeTextObj = new GameObject("CloseText");
@@ -317,19 +293,101 @@ namespace Behind_Bars.UI
 
             // View on GitHub button
             _viewDetailsButton = CreateButton(buttonBarObj.transform, "View on GitHub", new Vector2(180f, 35f));
-#if !MONO
-            _viewDetailsButton.onClick.AddListener(new System.Action(() => OnViewDetailsClicked()));
-#else
-            _viewDetailsButton.onClick.AddListener(() => OnViewDetailsClicked());
-#endif
+            RegisterViewDetailsButtonListener();
 
             // Dismiss button
             _dismissButton = CreateButton(buttonBarObj.transform, "Dismiss", new Vector2(120f, 35f));
+            RegisterDismissButtonListener();
+        }
+
+        private void RegisterCloseButtonListener()
+        {
+            if (_closeButton == null)
+            {
+                return;
+            }
+
 #if !MONO
-            _dismissButton.onClick.AddListener(new System.Action(() => OnDismissClicked()));
+            _closeButtonClickHandler ??= new System.Action(OnDismissClicked);
+            _closeButton.onClick.RemoveListener(_closeButtonClickHandler);
+            _closeButton.onClick.AddListener(_closeButtonClickHandler);
 #else
-            _dismissButton.onClick.AddListener(() => OnDismissClicked());
+            _closeButton.onClick.RemoveListener(OnDismissClicked);
+            _closeButton.onClick.AddListener(OnDismissClicked);
 #endif
+        }
+
+        private void RegisterViewDetailsButtonListener()
+        {
+            if (_viewDetailsButton == null)
+            {
+                return;
+            }
+
+#if !MONO
+            _viewDetailsButtonClickHandler ??= new System.Action(OnViewDetailsClicked);
+            _viewDetailsButton.onClick.RemoveListener(_viewDetailsButtonClickHandler);
+            _viewDetailsButton.onClick.AddListener(_viewDetailsButtonClickHandler);
+#else
+            _viewDetailsButton.onClick.RemoveListener(OnViewDetailsClicked);
+            _viewDetailsButton.onClick.AddListener(OnViewDetailsClicked);
+#endif
+        }
+
+        private void RegisterDismissButtonListener()
+        {
+            if (_dismissButton == null)
+            {
+                return;
+            }
+
+#if !MONO
+            _dismissButtonClickHandler ??= new System.Action(OnDismissClicked);
+            _dismissButton.onClick.RemoveListener(_dismissButtonClickHandler);
+            _dismissButton.onClick.AddListener(_dismissButtonClickHandler);
+#else
+            _dismissButton.onClick.RemoveListener(OnDismissClicked);
+            _dismissButton.onClick.AddListener(OnDismissClicked);
+#endif
+        }
+
+        private void UnregisterButtonListeners()
+        {
+            if (_closeButton != null)
+            {
+#if !MONO
+                if (_closeButtonClickHandler != null)
+                {
+                    _closeButton.onClick.RemoveListener(_closeButtonClickHandler);
+                }
+#else
+                _closeButton.onClick.RemoveListener(OnDismissClicked);
+#endif
+            }
+
+            if (_viewDetailsButton != null)
+            {
+#if !MONO
+                if (_viewDetailsButtonClickHandler != null)
+                {
+                    _viewDetailsButton.onClick.RemoveListener(_viewDetailsButtonClickHandler);
+                }
+#else
+                _viewDetailsButton.onClick.RemoveListener(OnViewDetailsClicked);
+#endif
+            }
+
+            if (_dismissButton != null)
+            {
+#if !MONO
+                if (_dismissButtonClickHandler != null)
+                {
+                    _dismissButton.onClick.RemoveListener(_dismissButtonClickHandler);
+                }
+#else
+                _dismissButton.onClick.RemoveListener(OnDismissClicked);
+#endif
+            }
         }
 
         /// <summary>
@@ -493,6 +551,8 @@ namespace Behind_Bars.UI
         /// </summary>
         private void OnDestroy()
         {
+            UnregisterButtonListeners();
+
             if (_fadeCoroutine != null)
             {
                 MelonLoader.MelonCoroutines.Stop(_fadeCoroutine);

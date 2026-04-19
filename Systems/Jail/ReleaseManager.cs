@@ -12,6 +12,7 @@ using Behind_Bars.Systems.CrimeTracking;
 using Behind_Bars.Systems.Crimes;
 using Behind_Bars.Systems.Dialogue;
 using Behind_Bars.Systems;
+using Behind_Bars.Systems.Parole;
 using BBHelpers = Behind_Bars.Helpers.Helpers;
 #if !MONO
 using ActiveReleaseOfficerBehavior = Behind_Bars.Systems.NPCs.ReleaseOfficerBehavior;
@@ -45,20 +46,119 @@ namespace Behind_Bars.Systems.Jail
         #region Singleton Pattern
 
         private static ReleaseManager _instance;
+        private static bool _isManagedBySystemManager;
+
+        /// <summary>
+        /// Returns true when a release manager has already been registered.
+        /// </summary>
+        public static bool HasRegisteredInstance => _instance != null;
+
+        /// <summary>
+        /// Registers an existing release manager instance as the active singleton.
+        /// This does not create a new instance.
+        /// </summary>
+        public static ReleaseManager RegisterInstance(ReleaseManager instance, bool managedBySystemManager = false)
+        {
+            if (instance == null)
+            {
+                return null;
+            }
+
+            if (_instance != null && _instance != instance)
+            {
+                ModLogger.Debug("[ReleaseManager] Destroying duplicate instance during registration");
+                Destroy(instance.gameObject);
+                return _instance;
+            }
+
+            _instance = instance;
+            _isManagedBySystemManager = managedBySystemManager;
+            return _instance;
+        }
+
+        /// <summary>
+        /// Ensures a release manager exists for the current runtime.
+        /// Prefers an already registered instance, otherwise creates a managed one.
+        /// </summary>
+        public static ReleaseManager BootstrapManagedInstance()
+        {
+            if (TryGetRegisteredInstance(out var existing))
+            {
+                return existing;
+            }
+
+            ModLogger.Debug("[ReleaseManager] Bootstrapping managed instance");
+            var go = new GameObject("ReleaseManager");
+            go.SetActive(true);
+
+            var manager = BBHelpers.AddComponentSafe<ReleaseManager>(go);
+            if (manager == null)
+            {
+                Destroy(go);
+                ModLogger.Error("[ReleaseManager] Failed to bootstrap managed instance");
+                return null;
+            }
+
+            DontDestroyOnLoad(go);
+            return RegisterInstance(manager, true);
+        }
+
+        /// <summary>
+        /// Returns the registered instance if present, or tries to adopt an existing scene instance.
+        /// </summary>
+        public static bool TryGetRegisteredInstance(out ReleaseManager instance)
+        {
+            if (_instance != null)
+            {
+                instance = _instance;
+                return true;
+            }
+
+            var existing = BBHelpers.FindObjectOfTypeSafe<ReleaseManager>();
+            if (existing != null)
+            {
+                instance = RegisterInstance(existing, false);
+                return instance != null;
+            }
+
+            instance = null;
+            return false;
+        }
+
+        /// <summary>
+        /// Destroys the system-managed instance if one exists.
+        /// </summary>
+        public static bool ShutdownManagedInstance()
+        {
+            if (_instance == null || !_isManagedBySystemManager)
+            {
+                return false;
+            }
+
+            var instance = _instance;
+            instance?.CleanupAllActiveReleaseCallbacks();
+            _instance = null;
+            _isManagedBySystemManager = false;
+
+            if (instance != null)
+            {
+                Destroy(instance.gameObject);
+            }
+
+            return true;
+        }
+
         public static ReleaseManager Instance
         {
             get
             {
-                if (_instance == null)
+                if (TryGetRegisteredInstance(out var registered))
                 {
-                    ModLogger.Debug("[ReleaseManager] Creating singleton instance");
-                    var go = new GameObject("ReleaseManager");
-                    go.SetActive(true); // Ensure GameObject is active
-                    _instance = go.AddComponent<ReleaseManager>();
-                    DontDestroyOnLoad(go);
-                    ModLogger.Debug("[ReleaseManager] Singleton instance created successfully");
+                    return registered;
                 }
-                return _instance;
+
+                ModLogger.Warn("[ReleaseManager] Instance requested before bootstrap; creating compatibility fallback");
+                return BootstrapManagedInstance();
             }
         }
 
@@ -92,6 +192,7 @@ namespace Behind_Bars.Systems.Jail
         [System.Serializable]
         public class ReleaseRequest
         {
+            public string playerKey;
             public Player player;
             public ReleaseType releaseType;
             public ReleaseStatus status;
@@ -102,10 +203,16 @@ namespace Behind_Bars.Systems.Jail
             public bool inventoryProcessed;
             public List<string> itemsToReturn = new List<string>();
             public ActiveReleaseOfficerBehavior assignedOfficer;
+#if MONO
+            [System.NonSerialized] public System.Action<Player> escortCompletedCallback;
+            [System.NonSerialized] public System.Action<Player, string> escortFailedCallback;
+            [System.NonSerialized] public System.Action<Player, ActiveReleaseOfficerBehavior.ReleaseState> statusUpdateCallback;
+#endif
 
             public ReleaseRequest(Player player, ReleaseType type, string reason = "")
             {
                 this.player = player;
+                this.playerKey = GetPlayerRuntimeKey(player);
                 this.releaseType = type;
                 this.releaseReason = reason;
                 this.releaseTime = DateTime.Now;
@@ -123,7 +230,7 @@ namespace Behind_Bars.Systems.Jail
         private float _nextQueueProcessTime;
 
         // Active releases being processed
-        private Dictionary<Player, ReleaseRequest> activeReleases = new Dictionary<Player, ReleaseRequest>();
+        private Dictionary<string, ReleaseRequest> activeReleases = new Dictionary<string, ReleaseRequest>();
 
         // Queue for releases when guards are busy
         private Queue<ReleaseRequest> releaseQueue = new Queue<ReleaseRequest>();
@@ -133,7 +240,7 @@ namespace Behind_Bars.Systems.Jail
 
 
         private const float PostReleaseOfficerTeleportDistance = 2f;
-        private const float PostReleaseImmediateArrestDistance = 2.25f;
+        private const float PostReleaseImmediateArrestDistance = 8f;
         private const float PostReleaseWarningDurationSeconds = 10f;
         private const float PostReleaseOfficerSideDistance = 1.25f;
         private const float PostReleaseOfficerForwardOffset = 0.4f;
@@ -157,7 +264,7 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Debug("[ReleaseManager] Awake() called");
             if (_instance == null)
             {
-                _instance = this;
+                RegisterInstance(this, false);
                 DontDestroyOnLoad(gameObject);
                 ModLogger.Debug("[ReleaseManager] Instance set in Awake()");
             }
@@ -166,6 +273,18 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Debug("[ReleaseManager] Destroying duplicate instance");
                 Destroy(gameObject);
                 return;
+            }
+        }
+
+        private void OnDestroy()
+        {
+            CleanupAllActiveReleaseCallbacks();
+
+            if (_instance == this)
+            {
+                _instance = null;
+                _isManagedBySystemManager = false;
+                ModLogger.Debug("[ReleaseManager] Instance cleared in OnDestroy()");
             }
         }
 
@@ -207,20 +326,33 @@ namespace Behind_Bars.Systems.Jail
 
         private void InitializeOfficers()
         {
-            // Find existing release officers
-            var existingOfficers = BBHelpers.FindObjectsOfTypeSafe<ActiveReleaseOfficerBehavior>();
-            foreach (var officer in existingOfficers)
-            {
-                if (officer.IsAvailable())
-                {
-                    availableOfficers.Add(officer);
-                }
-            }
+            RefreshAvailableOfficersFromRegistry();
 
             // DON'T create release officers during initialization to avoid interfering with intake guards
             // Release officers will be created on-demand when actually needed
 
             ModLogger.Debug($"ReleaseManager found {availableOfficers.Count} existing release officers");
+        }
+
+        private void RefreshAvailableOfficersFromRegistry()
+        {
+            availableOfficers.Clear();
+
+            var npcManager = Core.Instance?.NpcManager;
+            if (npcManager == null)
+            {
+                ModLogger.Warn("ReleaseManager: NpcManager not available - cannot refresh release officer registry");
+                return;
+            }
+
+            var registeredOfficers = npcManager.GetRegisteredReleaseOfficers();
+            foreach (var officer in registeredOfficers)
+            {
+                if (officer != null && officer.IsAvailable())
+                {
+                    availableOfficers.Add(officer);
+                }
+            }
         }
 
         private void CreateReleaseOfficerFromGuardSpawn()
@@ -245,12 +377,6 @@ namespace Behind_Bars.Systems.Jail
                         ModLogger.Info($"Found existing Booking1 guard: {guard.name}");
                         break;
                     }
-                }
-
-                if (booking1Guard == null && allGuards != null && allGuards.Length > 0)
-                {
-                    booking1Guard = allGuards[0];
-                    ModLogger.Warn($"Booking1 guard not found - using fallback guard {booking1Guard.name} for release escort");
                 }
 
                 if (booking1Guard != null)
@@ -278,8 +404,6 @@ namespace Behind_Bars.Systems.Jail
                             break;
                         }
 
-                        if (bookingNpc == null)
-                            bookingNpc = npc;
                     }
 
                     if (bookingNpc != null)
@@ -339,9 +463,11 @@ namespace Behind_Bars.Systems.Jail
                 return false;
             }
 
-            if (activeReleases.ContainsKey(player))
+            string playerKey = GetPlayerRuntimeKey(player);
+
+            if (activeReleases.ContainsKey(playerKey))
             {
-                var existingRequest = activeReleases[player];
+                var existingRequest = activeReleases[playerKey];
                 ModLogger.Warn($"Release already in progress for {player.name} with status {existingRequest.status}");
 
                 double releaseAgeSeconds = (DateTime.Now - existingRequest.releaseTime).TotalSeconds;
@@ -384,7 +510,7 @@ namespace Behind_Bars.Systems.Jail
             // Try to assign an officer immediately
             if (TryAssignOfficer(releaseRequest))
             {
-                activeReleases[player] = releaseRequest;
+                activeReleases[playerKey] = releaseRequest;
                 StartReleaseProcess(releaseRequest);
                 OnReleaseStarted?.Invoke(player, releaseType);
                 return true;
@@ -395,13 +521,10 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Debug($"Release for {player.name} queued - no officers available");
 
             // Notify player they're being processed
-            if (BehindBarsUIManager.Instance != null)
-            {
-                BehindBarsUIManager.Instance.ShowNotification(
+            Core.ResolveUIManager().ShowNotification(
                     "Release processing - please wait",
                     NotificationType.Instruction
                 );
-            }
 
             return true;
         }
@@ -422,13 +545,10 @@ namespace Behind_Bars.Systems.Jail
             // Restore inventory and clear jail status
             CompletePlayerRelease(player, ReleaseType.Emergency);
 
-            if (BehindBarsUIManager.Instance != null)
-            {
-                BehindBarsUIManager.Instance.ShowNotification(
+            Core.ResolveUIManager().ShowNotification(
                     "Emergency release completed",
                     NotificationType.Progress
                 );
-            }
         }
 
         #endregion
@@ -437,6 +557,7 @@ namespace Behind_Bars.Systems.Jail
 
         private bool TryAssignOfficer(ReleaseRequest request)
         {
+            RefreshAvailableOfficersFromRegistry();
             ModLogger.Debug($"TryAssignOfficer: Looking for available officers - total officers: {availableOfficers.Count}");
 
             foreach (var officer in availableOfficers)
@@ -445,15 +566,8 @@ namespace Behind_Bars.Systems.Jail
 
                 if (officer != null && officer.IsAvailable())
                 {
-                    request.assignedOfficer = officer;
+                    AttachOfficerCallbacks(request, officer);
                     officer.SetAvailable(false);
-
-                    // Subscribe to officer events
-#if MONO
-                    officer.OnEscortCompleted += (player) => HandleEscortCompleted(request, player);
-                    officer.OnEscortFailed += (player, reason) => HandleEscortFailed(request, player, reason);
-                    officer.OnStatusUpdate += (player, state) => HandleStatusUpdate(request, player, state);
-#endif
 
                     ModLogger.Debug($"SUCCESS: Assigned officer {officer.GetBadgeNumber()} to release {request.player.name}");
                     return true;
@@ -467,21 +581,15 @@ namespace Behind_Bars.Systems.Jail
             {
                 ModLogger.Debug("No release officers available - creating one on-demand");
                 CreateReleaseOfficerFromGuardSpawn();
+                RefreshAvailableOfficersFromRegistry();
 
                 // Try again with newly created officer
                 foreach (var officer in availableOfficers)
                 {
                     if (officer != null && officer.IsAvailable())
                     {
-                        request.assignedOfficer = officer;
+                        AttachOfficerCallbacks(request, officer);
                         officer.SetAvailable(false);
-
-                        // Subscribe to officer events
-#if MONO
-                        officer.OnEscortCompleted += (player) => HandleEscortCompleted(request, player);
-                        officer.OnEscortFailed += (player, reason) => HandleEscortFailed(request, player, reason);
-                        officer.OnStatusUpdate += (player, state) => HandleStatusUpdate(request, player, state);
-#endif
 
                         ModLogger.Debug($"Assigned newly created officer {officer.GetBadgeNumber()} to release {request.player.name}");
                         return true;
@@ -659,11 +767,8 @@ namespace Behind_Bars.Systems.Jail
             request.status = ReleaseStatus.Completed;
 
             // CRITICAL: Hide officer command notification before teleporting player
-            if (BehindBarsUIManager.Instance != null)
-            {
-                BehindBarsUIManager.Instance.HideOfficerCommand();
-                ModLogger.Debug($"Hidden officer command notification for {request.player.name}");
-            }
+            Core.ResolveUIManager().HideOfficerCommand();
+            ModLogger.Debug($"Hidden officer command notification for {request.player.name}");
 
             // CRITICAL: Clear ALL escort registrations for this player to prevent conflicts
             OfficerCoordinator.Instance.UnregisterAllEscortsForPlayer(request.player);
@@ -673,20 +778,30 @@ namespace Behind_Bars.Systems.Jail
             request.player.transform.position = request.exitPosition;
             request.player.transform.rotation = Quaternion.Euler(exitRotation);
 
+            ReleaseAssignedOfficer(request, true);
+
             // Complete player release (restore systems, clear flags, START PAROLE TIMER)
             // Parole term timer starts immediately here
             CompletePlayerRelease(request.player, request.releaseType);
 
             // Show parole conditions UI and wait for acknowledgment (if player will be on parole)
-            var rapSheet = RapSheetManager.Instance.GetRapSheet(request.player);
+            var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(request.player);
             bool willBeOnParole = rapSheet != null && (rapSheet.CurrentParoleRecord != null && rapSheet.CurrentParoleRecord.IsOnParole());
 
             // CRITICAL: Stop tracking jail time BEFORE calculating release summary
             // This ensures time served is captured correctly at the moment of release
             // Do this for ALL releases, not just parole releases
-            if (JailTimeTracker.Instance != null && JailTimeTracker.Instance.IsTracking(request.player))
+            var jailManager = Core.Instance?.JailManager;
+            if (jailManager != null ? jailManager.IsTrackingSentence(request.player) : Core.ResolveJailTimeTracker().IsTracking(request.player))
             {
-                JailTimeTracker.Instance.StopTracking(request.player);
+                if (jailManager != null)
+                {
+                    jailManager.StopSentenceTracking(request.player);
+                }
+                else
+                {
+                    Core.ResolveJailTimeTracker().StopTracking(request.player);
+                }
                 ModLogger.Debug($"Stopped jail time tracking for {request.player.name} before release summary calculation");
             }
 
@@ -710,15 +825,8 @@ namespace Behind_Bars.Systems.Jail
                 MelonCoroutines.Start(WaitForParoleConditionsAcknowledgment(request.player, bailAmountPaid, fineAmount, termLength, lsiLevel, lsiBreakdown, jailTimeInfo, recentCrimes, generalConditions, specialConditions));
             }
 
-            // Release the officer
-            if (request.assignedOfficer != null)
-            {
-                request.assignedOfficer.SetAvailable(true);
-                request.assignedOfficer.ReturnToPost();
-            }
-
             // Clean up
-            activeReleases.Remove(request.player);
+            activeReleases.Remove(request.playerKey);
 
             // Process queued releases
             ProcessQueuedReleases();
@@ -738,15 +846,10 @@ namespace Behind_Bars.Systems.Jail
             // CRITICAL: Clear ALL escort registrations for this player to prevent conflicts
             OfficerCoordinator.Instance.UnregisterAllEscortsForPlayer(request.player);
 
-            // Release the officer
-            if (request.assignedOfficer != null)
-            {
-                request.assignedOfficer.SetAvailable(true);
-                request.assignedOfficer.ReturnToPost();
-            }
+            ReleaseAssignedOfficer(request, true);
 
             // Clean up
-            activeReleases.Remove(request.player);
+            activeReleases.Remove(request.playerKey);
 
             // Process queued releases
             ProcessQueuedReleases();
@@ -754,9 +857,9 @@ namespace Behind_Bars.Systems.Jail
             // Fire event
             OnReleaseFailed?.Invoke(request.player, reason);
             // Notify player
-            if (BehindBarsUIManager.Instance != null && !officerIdle)
+            if (!officerIdle)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     $"Release failed: {reason}",
                     NotificationType.Warning
                 );
@@ -764,9 +867,9 @@ namespace Behind_Bars.Systems.Jail
             
             if (!officerIdle)
                 ModLogger.Debug($"Release failed for {request.player.name} - all escorts cleared");
-            else if (BehindBarsUIManager.Instance != null)
+            else
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Processing release... Please wait!",
                     NotificationType.Instruction);
             }
@@ -779,7 +882,7 @@ namespace Behind_Bars.Systems.Jail
                 var nextRelease = releaseQueue.Dequeue();
                 if (TryAssignOfficer(nextRelease))
                 {
-                    activeReleases[nextRelease.player] = nextRelease;
+                    activeReleases[nextRelease.playerKey] = nextRelease;
                     StartReleaseProcess(nextRelease);
                     OnReleaseStarted?.Invoke(nextRelease.player, nextRelease.releaseType);
                 }
@@ -799,6 +902,16 @@ namespace Behind_Bars.Systems.Jail
         {
             // Use specific prison exit coordinates
             return new Vector3(13.7402f, 1.4857f, 38.1558f);
+        }
+
+        private static string GetPlayerRuntimeKey(Player player)
+        {
+            if (player == null)
+            {
+                return string.Empty;
+            }
+
+            return Core.ResolvePlayerKey(player);
         }
 
         private Vector3 GetPlayerExitRotation()
@@ -919,10 +1032,10 @@ namespace Behind_Bars.Systems.Jail
 #endif
 
                 // Clear jail status
-                var jailSystem = Core.Instance?.JailSystem;
-                if (jailSystem != null)
+                var jailManager = Core.Instance?.JailManager;
+                if (jailManager != null)
                 {
-                    jailSystem.ClearPlayerJailStatus(player);
+                    jailManager.ClearPlayerJailStatus(player);
                 }
 
                 // Update player handler
@@ -931,7 +1044,8 @@ namespace Behind_Bars.Systems.Jail
                 {
                     if (releaseType == ReleaseType.BailPayment)
                     {
-                        var releaseRequest = activeReleases.ContainsKey(player) ? activeReleases[player] : null;
+                        string playerKey = GetPlayerRuntimeKey(player);
+                        var releaseRequest = activeReleases.ContainsKey(playerKey) ? activeReleases[playerKey] : null;
                         playerHandler.OnReleasedOnBail(releaseRequest?.bailAmount ?? 0f);
                     }
                     else
@@ -941,7 +1055,7 @@ namespace Behind_Bars.Systems.Jail
                 }
 
                 // CRITICAL: Clear persistent storage snapshot AFTER successful release (not during storage phase)
-                var persistentData = Behind_Bars.Systems.Data.PersistentPlayerData.Instance;
+                var persistentData = Core.ResolvePersistentPlayerData();
                 if (persistentData != null)
                 {
                     persistentData.ClearPlayerSnapshot(player);
@@ -972,7 +1086,7 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Debug($"[PAROLE] === Processing Parole for Released Player: {player.name} ===");
 
                 // Get cached rap sheet (loads from file only once)
-                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
                 bool rapSheetLoaded = rapSheet != null;
 
                 if (!rapSheetLoaded)
@@ -1027,15 +1141,15 @@ namespace Behind_Bars.Systems.Jail
 
                     // Start parole through ParoleSystem (expects game minutes)
                     // Don't show UI immediately - it will be shown after release summary UI is dismissed
-                    var paroleSystem = Core.Instance?.ParoleSystem;
-                    if (paroleSystem != null)
+                    var paroleManager = Core.ResolveParoleManager();
+                    if (paroleManager != null)
                     {
-                        paroleSystem.StartParole(player, paroleDuration, showUI: false);
+                        paroleManager.StartParole(player, paroleDuration, showUI: false);
                         ModLogger.Debug($"[PAROLE] ✓ New parole started successfully for {player.name}");
                     }
                     else
                     {
-                        ModLogger.Error($"[PAROLE] ✗ ParoleSystem not available - cannot start parole");
+                        ModLogger.Error($"[PAROLE] ✗ ParoleManager not available - cannot start parole");
                     }
                 }
 
@@ -1158,19 +1272,23 @@ namespace Behind_Bars.Systems.Jail
                 if (releaseType == ReleaseType.BailPayment)
                 {
                     // Bail was paid - get the stored amount
-                    var bailSystem = new BailSystem();
-                    bailAmountPaid = bailSystem.GetBailAmount(player);
+                    var bailSystem = Core.ResolveBailSystem();
+                    if (bailSystem != null)
+                    {
+                        bailAmountPaid = bailSystem.GetBailAmount(player);
+                    }
                     
                     // If stored amount is 0 but release type is BailPayment, try to get from active release request
-                    if (bailAmountPaid == 0f && activeReleases.ContainsKey(player))
+                    string playerKey = GetPlayerRuntimeKey(player);
+                    if (bailAmountPaid == 0f && activeReleases.ContainsKey(playerKey))
                     {
-                        bailAmountPaid = activeReleases[player].bailAmount;
+                        bailAmountPaid = activeReleases[playerKey].bailAmount;
                     }
                 }
                 // If releaseType is not BailPayment, bailAmountPaid remains 0 (timed out)
                 
                 // Get fine amount and rap sheet
-                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
                 float fineAmount = FineCalculator.Instance.CalculateTotalFine(player, rapSheet);
                 
                 // Get LSI level and breakdown
@@ -1183,8 +1301,13 @@ namespace Behind_Bars.Systems.Jail
                 }
                 
                 // Get jail time info (original sentence vs time served)
-                float originalSentenceTime = JailTimeTracker.Instance.GetOriginalSentenceTime(player);
-                float timeServed = JailTimeTracker.Instance.GetTimeServed(player);
+                var jailManager = Core.Instance?.JailManager;
+                float originalSentenceTime = jailManager != null
+                    ? jailManager.GetOriginalSentenceTime(player)
+                    : Core.ResolveJailTimeTracker().GetOriginalSentenceTime(player);
+                float timeServed = jailManager != null
+                    ? jailManager.GetTimeServed(player)
+                    : Core.ResolveJailTimeTracker().GetTimeServed(player);
                 
                 var jailTimeInfo = (originalSentenceTime, timeServed);
                 
@@ -1299,6 +1422,28 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         private (List<string> generalConditions, List<string> specialConditions) SplitConditionsIntoGeneralAndSpecial(Player player, RapSheet rapSheet, List<string> allConditions)
         {
+            // Try to use the ParoleConditionManager for dynamic conditions based on active parole conditions
+            if (rapSheet != null)
+            {
+                        try
+                        {
+                            var conditionManager = Core.ResolveParoleConditionManager();
+
+                            // If conditions are already initialized (from StartParole), use them
+                            var activeConditions = conditionManager.GetActiveConditions();
+                    if (activeConditions != null && activeConditions.Count > 0)
+                    {
+                        var (dynamicGeneral, dynamicSpecial) = conditionManager.GetConditionDescriptions();
+                        return (dynamicGeneral, dynamicSpecial);
+                    }
+                }
+                catch (Exception e)
+                {
+                    ModLogger.Warn($"ReleaseManager: Failed to get conditions from ParoleConditionManager: {e.Message}");
+                }
+            }
+
+            // Fallback: hardcoded conditions (used when ParoleConditionManager hasn't initialized yet)
             var generalConditions = new List<string>
             {
                 "Report to parole officer as required",
@@ -1309,7 +1454,6 @@ namespace Behind_Bars.Systems.Jail
             
             var specialConditions = new List<string>();
             
-            // If we have a rap sheet, check for specific crimes that warrant special conditions
             if (rapSheet != null)
             {
                 var crimes = rapSheet.GetAllCrimes();
@@ -1325,53 +1469,34 @@ namespace Behind_Bars.Systems.Jail
                         string crimeName = crime.GetCrimeName();
                         string lowerName = crimeName.ToLower();
                         
-                        // Check for drug-related crimes
                         if (lowerName.Contains("drug") || lowerName.Contains("possession") || lowerName.Contains("trafficking"))
-                        {
                             hasDrugCrimes = true;
-                        }
-                        
-                        // Check for violent crimes
                         if (lowerName.Contains("assault") || lowerName.Contains("murder") || lowerName.Contains("manslaughter") || 
                             lowerName.Contains("violence") || lowerName.Contains("battery"))
-                        {
                             hasViolentCrimes = true;
-                        }
-                        
-                        // Check for theft crimes
                         if (lowerName.Contains("theft") || lowerName.Contains("burglary") || lowerName.Contains("robbery") || 
                             lowerName.Contains("steal") || lowerName.Contains("larceny"))
-                        {
                             hasTheftCrimes = true;
-                        }
-                        
-                        // Check for weapon crimes
                         if (lowerName.Contains("weapon") || lowerName.Contains("firearm") || lowerName.Contains("gun") || 
                             lowerName.Contains("brandish") || lowerName.Contains("discharge"))
-                        {
                             hasWeaponCrimes = true;
-                        }
                     }
                     
-                    // Add special conditions based on crime types
                     if (hasDrugCrimes)
                     {
                         specialConditions.Add("Submit to random drug testing");
                         specialConditions.Add("No association with known drug dealers");
                     }
-                    
                     if (hasViolentCrimes)
                     {
                         specialConditions.Add("Attend anger management counseling");
                         specialConditions.Add("No contact with victims");
                     }
-                    
                     if (hasTheftCrimes)
                     {
                         specialConditions.Add("No entry into retail establishments without supervision");
                         specialConditions.Add("Maintain employment or educational program");
                     }
-                    
                     if (hasWeaponCrimes)
                     {
                         specialConditions.Add("No possession of firearms or weapons");
@@ -1393,7 +1518,7 @@ namespace Behind_Bars.Systems.Jail
             try
             {
                 // Get cached rap sheet
-                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
                 bool rapSheetLoaded = rapSheet != null;
 
                 if (!rapSheetLoaded)
@@ -1622,15 +1747,15 @@ namespace Behind_Bars.Systems.Jail
                         if (officer != null)
                         {
                             float distanceToOfficer = Vector3.Distance(player.transform.position, officer.transform.position);
-                            if (distanceToOfficer <= PostReleaseImmediateArrestDistance)
+                            if (distanceToOfficer >= PostReleaseImmediateArrestDistance)
                             {
                                 if (!violationRecorded)
                                 {
-                                    RecordPostReleaseDialogueViolation(player, "Failed to complete initial parole compliance dialogue while in close proximity to supervising officer.");
+                                    RecordPostReleaseDialogueViolation(player, "Ran from the supervising officer instead of completing the initial parole compliance dialogue.");
                                     violationRecorded = true;
                                 }
 
-                                BehindBarsUIManager.Instance?.HideOfficerCommand();
+                                Core.ResolveUIManager().HideOfficerCommand();
                                 TriggerImmediateParoleComplianceArrest(player);
                                 onImmediateArrestTriggered?.Invoke();
                                 yield break;
@@ -1657,7 +1782,7 @@ namespace Behind_Bars.Systems.Jail
                                 violationRecorded = true;
                             }
 
-                            BehindBarsUIManager.Instance?.HideOfficerCommand();
+                            Core.ResolveUIManager().HideOfficerCommand();
                             TriggerPoliceCallForParoleNonCompliance(player);
                             yield break;
                         }
@@ -1667,7 +1792,7 @@ namespace Behind_Bars.Systems.Jail
                     yield return null;
                 }
 
-                BehindBarsUIManager.Instance?.HideOfficerCommand();
+                Core.ResolveUIManager().HideOfficerCommand();
                 dialogue.End();
                 if (completedDialogue && officer != null)
                 {
@@ -1677,7 +1802,7 @@ namespace Behind_Bars.Systems.Jail
             }
             finally
             {
-                BehindBarsUIManager.Instance?.HideOfficerCommand();
+                Core.ResolveUIManager().HideOfficerCommand();
                 if (!playerUnfrozen)
                 {
                     UnfreezePlayer(player);
@@ -1687,14 +1812,14 @@ namespace Behind_Bars.Systems.Jail
 
         private ParoleOfficerBehavior ResolvePostReleaseOfficer(Player player)
         {
-            var npcManager = PrisonNPCManager.Instance;
+            var npcManager = Core.Instance?.NpcManager;
             if (npcManager == null)
             {
                 return null;
             }
 
             var supervisingOfficer = npcManager.GetSupervisingOfficer();
-            if (IsOfficerAvailableForPostRelease(supervisingOfficer))
+            if (IsOfficerAvailableForPostRelease(supervisingOfficer, player))
             {
                 return supervisingOfficer;
             }
@@ -1706,14 +1831,35 @@ namespace Behind_Bars.Systems.Jail
             }
 
             return officers
-                .Where(IsOfficerAvailableForPostRelease)
+                .Where(officer => IsOfficerAvailableForPostRelease(officer, player))
                 .OrderBy(o => Vector3.Distance(o.transform.position, player.transform.position))
                 .FirstOrDefault();
         }
 
-        private bool IsOfficerAvailableForPostRelease(ParoleOfficerBehavior officer)
+        private bool IsOfficerAvailableForPostRelease(ParoleOfficerBehavior officer, Player player)
         {
-            return officer != null && officer.isActiveAndEnabled && officer.gameObject != null && officer.gameObject.activeInHierarchy;
+            if (officer == null || !officer.isActiveAndEnabled || officer.gameObject == null || !officer.gameObject.activeInHierarchy)
+            {
+                return false;
+            }
+
+            if (!officer.IsOnDuty() || officer.IsProcessingIntake())
+            {
+                return false;
+            }
+
+            var currentParolee = officer.GetCurrentParolee();
+            if (currentParolee != null && currentParolee != player)
+            {
+                return false;
+            }
+
+            return officer.GetCurrentActivity() switch
+            {
+                ParoleOfficerBehavior.ParoleOfficerActivity.Idle => true,
+                ParoleOfficerBehavior.ParoleOfficerActivity.MonitoringArea => true,
+                _ => false
+            };
         }
 
         private void TeleportOfficerInFrontOfPlayer(ParoleOfficerBehavior officer, Player player, float distanceFromPlayer)
@@ -1900,22 +2046,16 @@ namespace Behind_Bars.Systems.Jail
 
         private void ShowPostReleaseComplianceWarningCommand(int secondsRemaining)
         {
-            var uiManager = BehindBarsUIManager.Instance;
-            if (uiManager == null)
-            {
-                return;
-            }
-
             string message = $"Interact with the supervising officer now. {secondsRemaining}s remaining - stay close or risk arrest/police pursuit.";
             var commandData = new OfficerCommandData("SUPERVISING OFFICER", message, 1, 1, false);
-            uiManager.UpdateOfficerCommand(commandData);
+            Core.ResolveUIManager().UpdateOfficerCommand(commandData);
         }
 
         private void RecordPostReleaseDialogueViolation(Player player, string details)
         {
             try
             {
-                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
                 if (rapSheet?.CurrentParoleRecord == null || !rapSheet.CurrentParoleRecord.IsOnParole())
                 {
                     return;
@@ -1938,15 +2078,15 @@ namespace Behind_Bars.Systems.Jail
         {
             try
             {
-                var jailSystem = Core.Instance?.JailSystem;
-                if (jailSystem == null)
+                var jailManager = Core.Instance?.JailManager;
+                if (jailManager == null)
                 {
-                    ModLogger.Error("Post-release compliance arrest failed: JailSystem unavailable");
+                    ModLogger.Error("Post-release compliance arrest failed: JailManager unavailable");
                     return;
                 }
 
                 ModLogger.Info($"Post-release compliance: immediate arrest triggered for {player.name}");
-                MelonCoroutines.Start(jailSystem.HandleImmediateArrest(player));
+                MelonCoroutines.Start(jailManager.HandleImmediateArrest(player));
             }
             catch (System.Exception ex)
             {
@@ -1993,7 +2133,7 @@ namespace Behind_Bars.Systems.Jail
                 FreezePlayer(player);
 
                 // Show UI with all release summary data
-                BehindBarsUIManager.Instance.ShowParoleConditionsUI(player, bailAmountPaid, fineAmount, termLengthGameMinutes, lsiLevel, lsiBreakdown, jailTimeInfo, recentCrimes, generalConditions, specialConditions);
+                Core.ResolveUIManager().ShowParoleConditionsUI(player, bailAmountPaid, fineAmount, termLengthGameMinutes, lsiLevel, lsiBreakdown, jailTimeInfo, recentCrimes, generalConditions, specialConditions);
             }
             catch (System.Exception ex)
             {
@@ -2032,7 +2172,7 @@ namespace Behind_Bars.Systems.Jail
             // Hide UI first, then run post-release compliance flow
             try
             {
-                BehindBarsUIManager.Instance.HideParoleConditionsUI();
+                Core.ResolveUIManager().HideParoleConditionsUI();
             }
             catch (System.Exception ex)
             {
@@ -2050,9 +2190,9 @@ namespace Behind_Bars.Systems.Jail
                 // and grace period for searches started immediately upon release
 
                 // Show parole status UI now that release summary UI is dismissed
-                if (!immediateArrestTriggered && BehindBarsUIManager.Instance != null)
+                if (!immediateArrestTriggered)
                 {
-                    BehindBarsUIManager.Instance.ShowParoleStatus();
+                    Core.ResolveUIManager().ShowParoleStatus();
                     ModLogger.Debug($"Showing parole status UI for {player.name} after release summary dismissal");
                 }
 
@@ -2070,30 +2210,52 @@ namespace Behind_Bars.Systems.Jail
 
         public bool IsReleaseInProgress(Player player)
         {
-            return activeReleases.ContainsKey(player);
+            return player != null && activeReleases.ContainsKey(GetPlayerRuntimeKey(player));
         }
 
         public ReleaseStatus GetReleaseStatus(Player player)
         {
-            return activeReleases.ContainsKey(player) ? activeReleases[player].status : ReleaseStatus.NotStarted;
+            if (player == null)
+            {
+                return ReleaseStatus.NotStarted;
+            }
+
+            string playerKey = GetPlayerRuntimeKey(player);
+            return activeReleases.ContainsKey(playerKey) ? activeReleases[playerKey].status : ReleaseStatus.NotStarted;
         }
 
         public void RegisterOfficer(ActiveReleaseOfficerBehavior officer)
         {
-            if (!availableOfficers.Contains(officer))
+            if (officer == null)
             {
-                availableOfficers.Add(officer);
-                ModLogger.Debug($"Registered release officer: {officer.GetBadgeNumber()}");
+                return;
             }
+
+            var npcManager = Core.Instance?.NpcManager;
+            if (npcManager != null)
+            {
+                npcManager.RegisterReleaseOfficer(officer);
+            }
+
+            RefreshAvailableOfficersFromRegistry();
+            ModLogger.Debug($"Registered release officer: {officer.GetBadgeNumber()}");
         }
 
         public void UnregisterOfficer(ActiveReleaseOfficerBehavior officer)
         {
-            if (availableOfficers.Contains(officer))
+            if (officer == null)
             {
-                availableOfficers.Remove(officer);
-                ModLogger.Debug($"Unregistered release officer: {officer.GetBadgeNumber()}");
+                return;
             }
+
+            var npcManager = Core.Instance?.NpcManager;
+            if (npcManager != null)
+            {
+                npcManager.UnregisterReleaseOfficer(officer);
+            }
+
+            RefreshAvailableOfficersFromRegistry();
+            ModLogger.Debug($"Unregistered release officer: {officer.GetBadgeNumber()}");
         }
 
         /// <summary>
@@ -2103,21 +2265,20 @@ namespace Behind_Bars.Systems.Jail
         {
             try
             {
-                if (activeReleases.ContainsKey(player))
+                string playerKey = GetPlayerRuntimeKey(player);
+
+                if (activeReleases.ContainsKey(playerKey))
                 {
-                    var request = activeReleases[player];
+                    var request = activeReleases[playerKey];
                     ModLogger.Debug($"Cancelling active release for {player.name} (Status: {request.status})");
 
-                    // Free up the assigned officer
-                    if (request.assignedOfficer != null)
-                    {
-                        request.assignedOfficer.SetAvailable(true);
-                        ModLogger.Debug($"Freed officer {request.assignedOfficer.GetBadgeNumber()} from cancelled release");
-                    }
+                    ReleaseAssignedOfficer(request, true);
 
                     // Remove from active releases
-                    activeReleases.Remove(player);
+                    activeReleases.Remove(playerKey);
                     ModLogger.Debug($"Removed {player.name} from active releases");
+
+                    ProcessQueuedReleases();
                 }
                 else
                 {
@@ -2135,9 +2296,11 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         public void OnInventoryProcessingComplete(Player player)
         {
-            if (activeReleases.ContainsKey(player))
+            string playerKey = GetPlayerRuntimeKey(player);
+
+            if (activeReleases.ContainsKey(playerKey))
             {
-                var request = activeReleases[player];
+                var request = activeReleases[playerKey];
                 request.inventoryProcessed = true;
                 ModLogger.Info($"Inventory processing marked complete for {player.name}");
 
@@ -2163,9 +2326,11 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         public void OnPlayerConfirmationReceived(Player player)
         {
-            if (activeReleases.ContainsKey(player))
+            string playerKey = GetPlayerRuntimeKey(player);
+
+            if (activeReleases.ContainsKey(playerKey))
             {
-                var request = activeReleases[player];
+                var request = activeReleases[playerKey];
                 ModLogger.Info($"Player confirmation received for {player.name}");
 
                 // Notify the assigned Release Officer
@@ -2190,9 +2355,11 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         public void OnExitScanCompleted(Player player)
         {
-            if (activeReleases.ContainsKey(player))
+            string playerKey = GetPlayerRuntimeKey(player);
+
+            if (activeReleases.ContainsKey(playerKey))
             {
-                var request = activeReleases[player];
+                var request = activeReleases[playerKey];
                 ModLogger.Debug($"Exit scan completed for {player.name} - completing entire release process");
 
                 // Complete the release immediately (player has been teleported by ExitScannerStation)
@@ -2209,11 +2376,13 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         private void HandleEscortCompleted(ReleaseRequest request, Player player)
         {
-            if (request.player != player)
+            if (request.playerKey != GetPlayerRuntimeKey(player))
             {
                 ModLogger.Warn($"HandleEscortCompleted: Player mismatch - expected {request.player.name}, got {player?.name}");
                 return;
             }
+
+            request.player = player;
 
             ModLogger.Debug($"Release Officer completed escort for {player.name}");
             CompleteRelease(request);
@@ -2224,11 +2393,13 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         private void HandleEscortFailed(ReleaseRequest request, Player player, string reason)
         {
-            if (request.player != player)
+            if (request.playerKey != GetPlayerRuntimeKey(player))
             {
                 ModLogger.Warn($"HandleEscortFailed: Player mismatch - expected {request.player.name}, got {player?.name}");
                 return;
             }
+
+            request.player = player;
 
             ModLogger.Error($"Release Officer failed escort for {player.name}: {reason}");
             FailRelease(request, reason);
@@ -2239,11 +2410,13 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         private void HandleStatusUpdate(ReleaseRequest request, Player player, ActiveReleaseOfficerBehavior.ReleaseState officerState)
         {
-            if (request.player != player)
+            if (request.playerKey != GetPlayerRuntimeKey(player))
             {
                 ModLogger.Warn($"HandleStatusUpdate: Player mismatch - expected {request.player.name}, got {player?.name}");
                 return;
             }
+
+            request.player = player;
 
             // Map Release Officer states to ReleaseManager statuses
             ReleaseStatus newStatus = officerState switch
@@ -2259,6 +2432,99 @@ namespace Behind_Bars.Systems.Jail
             {
                 request.status = newStatus;
                 ModLogger.Debug($"Release status updated for {player.name}: {newStatus}");
+            }
+        }
+
+        private void AttachOfficerCallbacks(ReleaseRequest request, ActiveReleaseOfficerBehavior officer)
+        {
+            if (request == null || officer == null)
+            {
+                return;
+            }
+
+            DetachOfficerCallbacks(request);
+            request.assignedOfficer = officer;
+
+#if MONO
+            request.escortCompletedCallback = player => HandleEscortCompleted(request, player);
+            request.escortFailedCallback = (player, reason) => HandleEscortFailed(request, player, reason);
+            request.statusUpdateCallback = (player, state) => HandleStatusUpdate(request, player, state);
+
+            officer.OnEscortCompleted += request.escortCompletedCallback;
+            officer.OnEscortFailed += request.escortFailedCallback;
+            officer.OnStatusUpdate += request.statusUpdateCallback;
+#endif
+        }
+
+        private void DetachOfficerCallbacks(ReleaseRequest request)
+        {
+            if (request == null)
+            {
+                return;
+            }
+
+            var officer = request.assignedOfficer;
+
+#if MONO
+            if (officer != null)
+            {
+                if (request.escortCompletedCallback != null)
+                {
+                    officer.OnEscortCompleted -= request.escortCompletedCallback;
+                }
+
+                if (request.escortFailedCallback != null)
+                {
+                    officer.OnEscortFailed -= request.escortFailedCallback;
+                }
+
+                if (request.statusUpdateCallback != null)
+                {
+                    officer.OnStatusUpdate -= request.statusUpdateCallback;
+                }
+            }
+
+            request.escortCompletedCallback = null;
+            request.escortFailedCallback = null;
+            request.statusUpdateCallback = null;
+#endif
+        }
+
+        private void ReleaseAssignedOfficer(ReleaseRequest request, bool returnToPost)
+        {
+            if (request == null)
+            {
+                return;
+            }
+
+            var officer = request.assignedOfficer;
+            DetachOfficerCallbacks(request);
+
+            if (officer != null)
+            {
+                officer.SetAvailable(true);
+
+                if (returnToPost)
+                {
+                    officer.ReturnToPost();
+                }
+
+                ModLogger.Debug($"Released officer {officer.GetBadgeNumber()} from release request for {request.player?.name ?? request.playerKey}");
+            }
+
+            request.assignedOfficer = null;
+        }
+
+        private void CleanupAllActiveReleaseCallbacks()
+        {
+            if (activeReleases.Count == 0)
+            {
+                return;
+            }
+
+            foreach (var request in activeReleases.Values)
+            {
+                ReleaseAssignedOfficer(request, false);
             }
         }
 
@@ -2279,7 +2545,7 @@ namespace Behind_Bars.Systems.Jail
             {
                 foreach (var kvp in activeReleases)
                 {
-                    ModLogger.Debug($"Active release: {kvp.Key.name} - Status: {kvp.Value.status}");
+                    ModLogger.Debug($"Active release: {kvp.Value.player?.name ?? kvp.Key} - Status: {kvp.Value.status}");
                 }
             }
         }

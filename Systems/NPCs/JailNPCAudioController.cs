@@ -4,13 +4,10 @@ using UnityEngine;
 using Behind_Bars.Helpers;
 using MelonLoader;
 
-
 #if !MONO
-using Il2CppScheduleOne.Audio;
 using Il2CppScheduleOne.VoiceOver;
 using Il2CppScheduleOne.NPCs;
 #else
-using ScheduleOne.Audio;
 using ScheduleOne.VoiceOver;
 using ScheduleOne.NPCs;
 #endif
@@ -29,9 +26,9 @@ namespace Behind_Bars.Systems.NPCs
 
         [Header("Audio Components")]
 #endif
-        public AudioSourceController mainVoiceSource;
-        public AudioSourceController radioBeepSource;
-        public AudioSourceController radioStaticSource;
+        public AudioSource mainVoiceSource;
+        public AudioSource radioBeepSource;
+        public AudioSource radioStaticSource;
 
 #if MONO
         [Header("Voice Settings")]
@@ -99,48 +96,20 @@ namespace Behind_Bars.Systems.NPCs
                 // Find or create main voice source
                 if (mainVoiceSource == null)
                 {
-                    mainVoiceSource = GetComponent<AudioSourceController>();
+                    mainVoiceSource = GetComponent<AudioSource>();
                     if (mainVoiceSource == null)
                     {
-                        ModLogger.Debug($"Creating new AudioSourceController for {gameObject.name}");
-
-                        // Create AudioSource and AudioSourceController
-                        var audioSource = gameObject.AddComponent<AudioSource>();
-                        mainVoiceSource = gameObject.AddComponent<AudioSourceController>();
-
-                        // Ensure the audio source is properly linked
-                        if (mainVoiceSource != null && audioSource != null)
-                        {
-                            mainVoiceSource.AudioSource = audioSource;
-
-                            // Configure basic audio settings
-                            audioSource.volume = 0.8f;
-                            audioSource.pitch = 1.0f;
-                            audioSource.spatialBlend = 0.5f; // 3D audio
-                            audioSource.playOnAwake = false;
-
-                            ModLogger.Debug($"✓ Created and configured AudioSource for {gameObject.name}");
-                        }
-                    }
-                    else
-                    {
-                        ModLogger.Debug($"✓ Found existing AudioSourceController for {gameObject.name}");
+                        ModLogger.Debug($"Creating new AudioSource for {gameObject.name}");
+                        mainVoiceSource = gameObject.AddComponent<AudioSource>();
                     }
                 }
 
-                // Verify audio source is properly set up
                 if (mainVoiceSource != null)
                 {
-                    if (mainVoiceSource.AudioSource == null)
-                    {
-                        var audioSource = GetComponent<AudioSource>();
-                        if (audioSource == null)
-                        {
-                            audioSource = gameObject.AddComponent<AudioSource>();
-                        }
-                        mainVoiceSource.AudioSource = audioSource;
-                        ModLogger.Debug($"✓ Linked AudioSource to AudioSourceController for {gameObject.name}");
-                    }
+                    mainVoiceSource.volume = 0.8f;
+                    mainVoiceSource.pitch = 1.0f;
+                    mainVoiceSource.spatialBlend = 0.5f;
+                    mainVoiceSource.playOnAwake = false;
                 }
 
                 // Create radio effect sources
@@ -170,15 +139,13 @@ namespace Behind_Bars.Systems.NPCs
                     GameObject beepObject = new GameObject("RadioBeep");
                     beepObject.transform.SetParent(transform);
 
-                    var beepAudioSource = beepObject.AddComponent<AudioSource>();
-                    radioBeepSource = beepObject.AddComponent<AudioSourceController>();
-                    radioBeepSource.AudioSource = beepAudioSource;
-#if !MONO
-                    radioBeepSource.AudioType = Il2CppScheduleOne.Audio.EAudioType.FX;
-#else
-                    radioBeepSource.AudioType = ScheduleOne.Audio.EAudioType.FX;
-#endif
-                    radioBeepSource.DefaultVolume = 0.7f;
+                    radioBeepSource = beepObject.AddComponent<AudioSource>();
+                    if (radioBeepSource != null)
+                    {
+                        radioBeepSource.playOnAwake = false;
+                        radioBeepSource.volume = 0.7f;
+                        radioBeepSource.spatialBlend = 0.5f;
+                    }
                 }
 
                 // Create radio static source
@@ -187,16 +154,14 @@ namespace Behind_Bars.Systems.NPCs
                     GameObject staticObject = new GameObject("RadioStatic");
                     staticObject.transform.SetParent(transform);
 
-                    var staticAudioSource = staticObject.AddComponent<AudioSource>();
-                    radioStaticSource = staticObject.AddComponent<AudioSourceController>();
-                    radioStaticSource.AudioSource = staticAudioSource;
-#if !MONO
-                    radioStaticSource.AudioType = Il2CppScheduleOne.Audio.EAudioType.FX;
-#else
-                    radioStaticSource.AudioType = ScheduleOne.Audio.EAudioType.FX;
-#endif
-                    radioStaticSource.DefaultVolume = staticVolume;
-                    radioStaticSource.AudioSource.loop = true;
+                    radioStaticSource = staticObject.AddComponent<AudioSource>();
+                    if (radioStaticSource != null)
+                    {
+                        radioStaticSource.playOnAwake = false;
+                        radioStaticSource.volume = staticVolume;
+                        radioStaticSource.spatialBlend = 0.5f;
+                        radioStaticSource.loop = true;
+                    }
                 }
 
                 ModLogger.Debug($"Radio effect sources created for {gameObject.name}");
@@ -403,7 +368,7 @@ namespace Behind_Bars.Systems.NPCs
                         var staticClip = voiceDatabase.GetRadioStaticSound();
                         if (staticClip != null)
                         {
-                            radioStaticSource.AudioSource.clip = staticClip;
+                            radioStaticSource.clip = staticClip;
                         }
                         radioStaticSource.Play();
                     }
@@ -486,9 +451,9 @@ namespace Behind_Bars.Systems.NPCs
                     if (audioClip != null && voiceEntry != null)
                     {
                         // Use custom audio clip from database
-                        mainVoiceSource.AudioSource.clip = audioClip;
-                        mainVoiceSource.VolumeMultiplier = volumeMultiplier * voiceEntry.GetVolumeMultiplier() * voiceDatabase.globalVolumeMultiplier;
-                        mainVoiceSource.PitchMultiplier = 1.0f + UnityEngine.Random.Range(-voiceEntry.GetPitchVariation(), voiceEntry.GetPitchVariation());
+                        mainVoiceSource.clip = audioClip;
+                        mainVoiceSource.volume = volumeMultiplier * voiceEntry.GetVolumeMultiplier() * voiceDatabase.globalVolumeMultiplier;
+                        mainVoiceSource.pitch = 1.0f + UnityEngine.Random.Range(-voiceEntry.GetPitchVariation(), voiceEntry.GetPitchVariation());
                         mainVoiceSource.Play();
 
                         ModLogger.Debug($"Playing custom guard command audio: {commandType}");
@@ -573,7 +538,7 @@ namespace Behind_Bars.Systems.NPCs
                 // Always log the command even if audio fails
                 ModLogger.Info($"Guard {gameObject.name} issued command: {commandType} (audio fallback)");
 
-                if (mainVoiceSource == null || mainVoiceSource.AudioSource == null)
+                if (mainVoiceSource == null)
                 {
                     ModLogger.Debug($"No audio source available for simple command sound on {gameObject.name}");
                     return;
@@ -601,11 +566,8 @@ namespace Behind_Bars.Systems.NPCs
                 }
 
                 // Set audio properties safely
-                if (mainVoiceSource.AudioSource != null)
-                {
-                    mainVoiceSource.AudioSource.pitch = pitch;
-                    mainVoiceSource.VolumeMultiplier = volumeMultiplier * 0.5f; // Quieter fallback
-                }
+                mainVoiceSource.pitch = pitch;
+                mainVoiceSource.volume = volumeMultiplier * 0.5f;
 
                 ModLogger.Debug($"Simple command sound configured for {commandType} with pitch {pitch}");
             }
@@ -630,15 +592,17 @@ namespace Behind_Bars.Systems.NPCs
                         var beepClip = voiceDatabase.GetRadioBeepSound();
                         if (beepClip != null)
                         {
-                            radioBeepSource.AudioSource.clip = beepClip;
+                            radioBeepSource.clip = beepClip;
                             radioBeepSource.Play();
                             return;
                         }
                     }
 
-                    // Fallback to simple synthesized beep
-                    radioBeepSource.AudioSource.pitch = 2.0f;
-                    radioBeepSource.PlayOneShot();
+                    radioBeepSource.pitch = 2.0f;
+                    if (radioBeepSource.clip != null)
+                    {
+                        radioBeepSource.Play();
+                    }
                 }
             }
             catch (System.Exception e)

@@ -197,34 +197,31 @@ namespace Behind_Bars.Systems
             // Store the bail amount for release processing
             StoreBailAmount(player, bailAmount);
 
-            // Release player from custody
+            // Mark the bail payment as authorized; JailSystem will complete custody cleanup
+            // and trigger the final release path after the sentence wait ends.
             yield return ReleasePlayerOnBail(player);
         }
 
         private IEnumerator ReleasePlayerOnBail(Player player)
         {
-            ModLogger.Info($"Releasing {player.name} on bail");
+            ModLogger.Info($"Recording bail authorization for {player.name}");
 
             try
             {
-                // Get the core jail system
-                var jailSystem = Core.Instance?.JailSystem;
-                if (jailSystem != null)
+                var jailManager = Core.Instance?.JailManager;
+                if (jailManager != null)
                 {
-                    // Use the enhanced release system for bail
-                    float bailAmount = GetLastBailAmount(player); // We'll need to track this
-                    jailSystem.InitiateEnhancedRelease(player, ReleaseManager.ReleaseType.BailPayment, bailAmount);
-
-                    ModLogger.Info($"{player.name} has been released on bail through enhanced system");
+                    jailManager.MarkPendingReleaseType(player, ReleaseManager.ReleaseType.BailPayment);
+                    ModLogger.Info($"{player.name} bail payment recorded; awaiting custody cleanup before release");
                 }
                 else
                 {
-                    ModLogger.Error("JailSystem not found - cannot process bail release");
+                    ModLogger.Error("JailManager not found - cannot record bail authorization");
                 }
             }
             catch (System.Exception ex)
             {
-                ModLogger.Error($"Error processing bail release: {ex.Message}");
+                ModLogger.Error($"Error recording bail authorization: {ex.Message}");
             }
 
             yield return new WaitForSeconds(1f);
@@ -281,8 +278,7 @@ namespace Behind_Bars.Systems
         /// </summary>
         private string GetPlayerKey(Player player)
         {
-            // Use player name for now, could be enhanced with unique ID
-            return player.name;
+            return Core.ResolvePlayerKey(player);
         }
 
         public float NegotiateBailAmount(float originalAmount, float negotiationRange, float playerSkill)

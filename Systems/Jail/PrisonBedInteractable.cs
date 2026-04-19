@@ -233,9 +233,9 @@ namespace Behind_Bars.Systems.Jail
             if (!string.IsNullOrEmpty(requiredItem) && !CheckPlayerHasRequiredItem(requiredItem))
             {
                 string itemName = GetItemDisplayName(requiredItem);
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         $"You need a {itemName} to continue setting up the bed.", 
                         NotificationType.Warning
                     );
@@ -259,9 +259,9 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info($"Processing bed setup stage {setupStage + 1}");
             
             // Show progress notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     stageMessages[setupStage], 
                     NotificationType.Progress
                 );
@@ -301,9 +301,9 @@ namespace Behind_Bars.Systems.Jail
                 UpdateInteractionState();
                 
                 // Show completion notification for this stage
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         $"Bed setup: {setupStage}/4 complete", 
                         NotificationType.Progress
                     );
@@ -336,9 +336,9 @@ namespace Behind_Bars.Systems.Jail
             UpdateInteractionState();
             
             // Show completion notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Bed setup complete! You can now sleep here.", 
                     NotificationType.Progress
                 );
@@ -474,9 +474,9 @@ namespace Behind_Bars.Systems.Jail
                     string itemName = GetItemDisplayName(itemId);
                     ModLogger.Info($"Consumed 1 {itemName} from player inventory (had {itemCount})");
                     
-                    if (BehindBarsUIManager.Instance != null)
+                    if (Core.ResolveUIManager() != null)
                     {
-                        BehindBarsUIManager.Instance.ShowNotification(
+                        Core.ResolveUIManager().ShowNotification(
                             $"Used {itemName}", 
                             NotificationType.Progress
                         );

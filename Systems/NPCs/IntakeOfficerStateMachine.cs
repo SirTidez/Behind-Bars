@@ -224,9 +224,10 @@ namespace Behind_Bars.Systems.NPCs
         private void SubscribeToEvents()
         {
             // Subscribe to booking process events
-            if (BookingProcess.Instance != null)
+            var resolvedBookingProcess = Core.ResolveBookingProcess();
+            if (resolvedBookingProcess != null)
             {
-                bookingProcess = BookingProcess.Instance;
+                bookingProcess = resolvedBookingProcess;
                 bookingProcess.OnBookingStarted += HandleBookingStarted;
                 bookingProcess.OnMugshotCompleted += HandleMugshotCompleted;
                 bookingProcess.OnFingerprintCompleted += HandleFingerprintCompleted;
@@ -537,7 +538,7 @@ namespace Behind_Bars.Systems.NPCs
                 var commandData = GetCommandDataForState(state);
                 if (commandData != null)
                 {
-                    BehindBarsUIManager.Instance?.UpdateOfficerCommand(commandData);
+                    Core.ResolveUIManager().UpdateOfficerCommand(commandData);
                 }
             }
             catch (Exception ex)
@@ -634,7 +635,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                BehindBarsUIManager.Instance?.HideOfficerCommand();
+                Core.ResolveUIManager().HideOfficerCommand();
             }
             catch (Exception ex)
             {
@@ -1647,7 +1648,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             if (currentPrisoner == null) return;
 
-            var cellManager = CellAssignmentManager.Instance;
+            var cellManager = Core.ResolveCellAssignmentManager();
             if (cellManager != null)
             {
                 assignedCellNumber = cellManager.AssignPlayerToCell(currentPrisoner);

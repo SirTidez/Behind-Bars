@@ -1922,40 +1922,19 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                // Add AudioSourceController for managing audio playback
-#if !MONO
-                var audioSourceController = npc.AddComponent<Il2CppScheduleOne.Audio.AudioSourceController>();
-#else
-                var audioSourceController = npc.AddComponent<ScheduleOne.Audio.AudioSourceController>();
-#endif
-
-                if (audioSourceController != null)
+                var audioSource = npc.GetComponent<AudioSource>();
+                if (audioSource == null)
                 {
-                    // Configure audio settings
-                    audioSourceController.DefaultVolume = 0.8f;
-                    audioSourceController.RandomizePitch = true;
-                    audioSourceController.MinPitch = 0.9f;
-                    audioSourceController.MaxPitch = 1.1f;
+                    audioSource = npc.AddComponent<AudioSource>();
+                }
 
-                    // Set audio type based on NPC type
-                    if (npcType == NPCType.JailGuard)
-                    {
-#if !MONO
-                        audioSourceController.AudioType = Il2CppScheduleOne.Audio.EAudioType.FX;
-#else
-                        audioSourceController.AudioType = ScheduleOne.Audio.EAudioType.FX;
-#endif
-                    }
-                    else
-                    {
-#if !MONO
-                        audioSourceController.AudioType = Il2CppScheduleOne.Audio.EAudioType.FX;
-#else
-                        audioSourceController.AudioType = ScheduleOne.Audio.EAudioType.FX;
-#endif
-                    }
-
-                    ModLogger.Debug($"✓ AudioSourceController added to {npc.name}");
+                if (audioSource != null)
+                {
+                    audioSource.volume = 0.8f;
+                    audioSource.pitch = 1.0f;
+                    audioSource.playOnAwake = false;
+                    audioSource.spatialBlend = 0.5f;
+                    ModLogger.Debug($"✓ AudioSource configured for {npc.name}");
                 }
 
                 // Add VOEmitter for voice over playback on the head bone (like police do)

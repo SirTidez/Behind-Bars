@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.UI;
 using Behind_Bars.Helpers;
+using Behind_Bars.Utils;
 using System.Collections;
 
 #if !MONO
@@ -116,6 +117,12 @@ namespace Behind_Bars.UI
                     return;
                 }
 
+                if (!TMPFontFix.EnsureFontCached(mainCanvas))
+                {
+                    ModLogger.Error("BailUI: Could not resolve a valid TMP font/material pair; skipping UI creation");
+                    return;
+                }
+
                 // Create the bail panel
                 _bailPanel = new GameObject("BailPanel");
                 _bailPanel.transform.SetParent(mainCanvas.transform, false);
@@ -157,6 +164,8 @@ namespace Behind_Bars.UI
                 _bailText.color = new Color(0.5f, 1f, 0.5f); // Light green/cyan
                 _bailText.fontStyle = FontStyles.Bold;
                 _bailText.alignment = TextAlignmentOptions.Center;
+
+                TMPFontFix.FixAllTMPFonts(_bailPanel, "base");
 
                 // Start hidden
                 _bailPanel.SetActive(false);

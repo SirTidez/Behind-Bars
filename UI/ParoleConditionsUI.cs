@@ -163,6 +163,7 @@ namespace Behind_Bars.UI
                 // Create overlay panel (full screen, semi-transparent)
                 _overlayPanel = new GameObject("ParoleConditionsOverlay");
                 _overlayPanel.transform.SetParent(mainCanvas.transform, false);
+                _overlayPanel.SetActive(false);
 
                 RectTransform overlayRect = _overlayPanel.AddComponent<RectTransform>();
                 overlayRect.anchorMin = Vector2.zero;
@@ -208,6 +209,7 @@ namespace Behind_Bars.UI
                 titleRect.offsetMax = new Vector2(-20f, -10f);
 
                 _titleText = titleObj.AddComponent<TextMeshProUGUI>();
+                TMPFontFix.ApplySafeFont(_titleText, "base");
                 _titleText.text = "RELEASE SUMMARY & PAROLE CONDITIONS";
                 _titleText.fontSize = 28f;
                 _titleText.color = Color.white;
@@ -251,6 +253,7 @@ namespace Behind_Bars.UI
                 finePaymentTimeRect.offsetMin = new Vector2(0f, -5f);
                 finePaymentTimeRect.offsetMax = new Vector2(0f, 0f);
                 _finePaymentTimeText = finePaymentTimeObj.AddComponent<TextMeshProUGUI>();
+                TMPFontFix.ApplySafeFont(_finePaymentTimeText, "base");
                 _finePaymentTimeText.text = "";
                 _finePaymentTimeText.fontSize = 14f;
                 _finePaymentTimeText.color = new Color(0.9f, 0.9f, 0.5f);
@@ -284,6 +287,7 @@ namespace Behind_Bars.UI
                 lsiLevelLabelRect.offsetMin = Vector2.zero;
                 lsiLevelLabelRect.offsetMax = Vector2.zero;
                 _lsiLevelLabelText = lsiLevelLabelObj.AddComponent<TextMeshProUGUI>();
+                TMPFontFix.ApplySafeFont(_lsiLevelLabelText, "base");
                 _lsiLevelLabelText.text = "Supervision Level:";
                 _lsiLevelLabelText.fontSize = 16f;
                 _lsiLevelLabelText.color = new Color(0.8f, 0.8f, 0.8f);
@@ -300,6 +304,7 @@ namespace Behind_Bars.UI
                 lsiLevelValueRect.offsetMin = Vector2.zero;
                 lsiLevelValueRect.offsetMax = Vector2.zero;
                 _lsiLevelValueText = lsiLevelValueObj.AddComponent<TextMeshProUGUI>();
+                TMPFontFix.ApplySafeFont(_lsiLevelValueText, "base");
                 _lsiLevelValueText.text = "";
                 _lsiLevelValueText.fontSize = 18f;
                 _lsiLevelValueText.alignment = TextAlignmentOptions.Left;
@@ -314,6 +319,7 @@ namespace Behind_Bars.UI
                 lsiBreakdownLabelRect.offsetMin = Vector2.zero;
                 lsiBreakdownLabelRect.offsetMax = Vector2.zero;
                 _lsiBreakdownLabelText = lsiBreakdownLabelObj.AddComponent<TextMeshProUGUI>();
+                TMPFontFix.ApplySafeFont(_lsiBreakdownLabelText, "base");
                 _lsiBreakdownLabelText.text = "LSI Calculation:";
                 _lsiBreakdownLabelText.fontSize = 14f;
                 _lsiBreakdownLabelText.color = new Color(0.8f, 0.8f, 0.8f);
@@ -330,6 +336,7 @@ namespace Behind_Bars.UI
                 lsiBreakdownTextRect.offsetMin = new Vector2(5f, 0f);
                 lsiBreakdownTextRect.offsetMax = Vector2.zero;
                 _lsiBreakdownText = lsiBreakdownTextObj.AddComponent<TextMeshProUGUI>();
+                TMPFontFix.ApplySafeFont(_lsiBreakdownText, "base");
                 _lsiBreakdownText.text = "";
                 _lsiBreakdownText.fontSize = 12f;
                 _lsiBreakdownText.color = new Color(0.9f, 0.9f, 0.7f); // Light yellow
@@ -365,6 +372,7 @@ namespace Behind_Bars.UI
                 recentCrimesLabelRect.offsetMin = Vector2.zero;
                 recentCrimesLabelRect.offsetMax = Vector2.zero;
                 _recentCrimesLabelText = recentCrimesLabelObj.AddComponent<TextMeshProUGUI>();
+                TMPFontFix.ApplySafeFont(_recentCrimesLabelText, "base");
                 _recentCrimesLabelText.text = "Charges:";
                 _recentCrimesLabelText.fontSize = 18f;
                 _recentCrimesLabelText.color = new Color(0.8f, 0.8f, 0.8f);
@@ -381,6 +389,7 @@ namespace Behind_Bars.UI
                 recentCrimesListRect.offsetMin = new Vector2(5f, 0f);
                 recentCrimesListRect.offsetMax = Vector2.zero;
                 _recentCrimesListText = recentCrimesListObj.AddComponent<TextMeshProUGUI>();
+                TMPFontFix.ApplySafeFont(_recentCrimesListText, "base");
                 _recentCrimesListText.text = "";
                 _recentCrimesListText.fontSize = 14f; // Reduced from 15f
                 _recentCrimesListText.color = new Color(1f, 0.7f, 0.7f); // Light red/pink
@@ -407,6 +416,7 @@ namespace Behind_Bars.UI
                 generalConditionsLabelRect.offsetMin = Vector2.zero;
                 generalConditionsLabelRect.offsetMax = Vector2.zero;
                 _generalConditionsLabelText = generalConditionsLabelObj.AddComponent<TextMeshProUGUI>();
+                TMPFontFix.ApplySafeFont(_generalConditionsLabelText, "base");
                 _generalConditionsLabelText.text = "General Conditions:";
                 _generalConditionsLabelText.fontSize = 18f;
                 _generalConditionsLabelText.color = new Color(0.8f, 0.8f, 0.8f);
@@ -423,6 +433,7 @@ namespace Behind_Bars.UI
                 generalConditionsListRect.offsetMin = new Vector2(5f, 0f);
                 generalConditionsListRect.offsetMax = Vector2.zero;
                 _generalConditionsListText = generalConditionsListObj.AddComponent<TextMeshProUGUI>();
+                TMPFontFix.ApplySafeFont(_generalConditionsListText, "base");
                 _generalConditionsListText.text = "";
                 _generalConditionsListText.fontSize = 14f; // Reduced from 15f
                 _generalConditionsListText.color = Color.white;
@@ -451,6 +462,7 @@ namespace Behind_Bars.UI
                 specialConditionsLabelRect.offsetMin = Vector2.zero;
                 specialConditionsLabelRect.offsetMax = Vector2.zero;
                 _specialConditionsLabelText = specialConditionsLabelObj.AddComponent<TextMeshProUGUI>();
+                TMPFontFix.ApplySafeFont(_specialConditionsLabelText, "base");
                 _specialConditionsLabelText.text = "Special Conditions:";
                 _specialConditionsLabelText.fontSize = 18f;
                 _specialConditionsLabelText.color = new Color(0.8f, 0.8f, 0.8f);
@@ -467,6 +479,7 @@ namespace Behind_Bars.UI
                 specialConditionsListRect.offsetMin = new Vector2(5f, 0f);
                 specialConditionsListRect.offsetMax = Vector2.zero;
                 _specialConditionsListText = specialConditionsListObj.AddComponent<TextMeshProUGUI>();
+                TMPFontFix.ApplySafeFont(_specialConditionsListText, "base");
                 _specialConditionsListText.text = "";
                 _specialConditionsListText.fontSize = 14f; // Reduced from 15f
                 _specialConditionsListText.color = new Color(1f, 0.8f, 0.5f); // Slightly orange/yellow
@@ -483,6 +496,7 @@ namespace Behind_Bars.UI
                 dismissalRect.offsetMax = new Vector2(-20f, 0f);
 
                 _dismissalInstructionText = dismissalObj.AddComponent<TextMeshProUGUI>();
+                TMPFontFix.ApplySafeFont(_dismissalInstructionText, "base");
                 _dismissalInstructionText.text = "";
                 _dismissalInstructionText.fontSize = 18f;
                 _dismissalInstructionText.color = new Color(1f, 0.8f, 0f); // Yellow/orange
@@ -532,6 +546,7 @@ namespace Behind_Bars.UI
             labelRect.offsetMax = Vector2.zero;
 
             labelText = labelObj.AddComponent<TextMeshProUGUI>();
+            TMPFontFix.ApplySafeFont(labelText, "base");
             labelText.fontSize = 18f;
             labelText.color = new Color(0.8f, 0.8f, 0.8f);
             labelText.fontStyle = FontStyles.Bold;
@@ -548,6 +563,7 @@ namespace Behind_Bars.UI
             valueRect.offsetMax = Vector2.zero;
 
             valueText = valueObj.AddComponent<TextMeshProUGUI>();
+            TMPFontFix.ApplySafeFont(valueText, "base");
             valueText.fontSize = 18f;
             valueText.color = Color.white;
             valueText.alignment = TextAlignmentOptions.Left;
@@ -580,6 +596,7 @@ namespace Behind_Bars.UI
             labelRect.offsetMin = Vector2.zero;
             labelRect.offsetMax = Vector2.zero;
             labelText = labelObj.AddComponent<TextMeshProUGUI>();
+            TMPFontFix.ApplySafeFont(labelText, "base");
             labelText.fontSize = 18f;
             labelText.color = new Color(0.8f, 0.8f, 0.8f);
             labelText.fontStyle = FontStyles.Bold;
@@ -595,6 +612,7 @@ namespace Behind_Bars.UI
             valueRect.offsetMin = new Vector2(10f, 0f);
             valueRect.offsetMax = Vector2.zero;
             valueText = valueObj.AddComponent<TextMeshProUGUI>();
+            TMPFontFix.ApplySafeFont(valueText, "base");
             valueText.fontSize = 18f;
             valueText.color = Color.white;
             valueText.fontStyle = FontStyles.Bold;

@@ -226,7 +226,11 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         // Get direct references to guard points based on JAIL_STRUCTURE_DOCUMENTATION.md
         mugshotStationGuardPoint = transform.Find("Booking/MugshotStation/GuardPoint");
         scannerStationGuardPoint = transform.Find("Booking/ScannerStation/GuardPoint");
-        exitScannerStationGuardPoint = transform.Find("ExitScannerStation/GuardPoint");
+        exitScannerStationGuardPoint = transform.Find("Hallway/ExitScannerStation/GuardPoint");
+        if (exitScannerStationGuardPoint == null)
+        {
+            exitScannerStationGuardPoint = transform.Find("ExitScannerStation/GuardPoint");
+        }
         storageGuardPoint = transform.Find("Storage/GuardPoint");
         holdingCell00GuardPoint = transform.Find("Cells/HoldingCells/HoldingCell_00/HoldingDoorHolder[0]/DoorPoint");
         holdingCell01GuardPoint = transform.Find("Cells/HoldingCells/HoldingCell_01/HoldingDoorHolder[1]/DoorPoint");
@@ -420,8 +424,8 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     public void SetAreaLighting(string areaName, bool enabled) => lightingController?.SetAreaLighting(areaName, enabled);
     public void RotateAllMonitors() => monitorController?.RotateAllMonitors();
     public void SetMonitorCamera(MonitorController monitor, SecurityCamera camera) => monitorController?.SetMonitorCamera(monitor, camera);
-    public Transform AssignPlayerToHoldingCell(string playerName) => cellManager?.AssignPlayerToHoldingCell(playerName);
-    public void ReleasePlayerFromHoldingCell(string playerName) => cellManager?.ReleasePlayerFromHoldingCell(playerName);
+    public Transform AssignPlayerToHoldingCell(Player player) => cellManager?.AssignPlayerToHoldingCell(player);
+    public void ReleasePlayerFromHoldingCell(Player player) => cellManager?.ReleasePlayerFromHoldingCell(player);
     public CellDetail GetAvailableJailCell() => cellManager?.GetAvailableJailCell();
     public CellDetail GetAvailableHoldingCell() => cellManager?.GetAvailableHoldingCell();
     public CellDetail GetCellByIndex(int cellIndex) => cellManager?.GetCellByIndex(cellIndex);

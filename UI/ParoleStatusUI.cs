@@ -1,8 +1,10 @@
 using UnityEngine;
 using UnityEngine.UI;
 using Behind_Bars.Helpers;
+using Behind_Bars.Utils;
 using Behind_Bars.Systems.CrimeTracking;
 using System.Collections;
+using System.Linq;
 
 #if !MONO
 using Il2CppTMPro;
@@ -32,7 +34,12 @@ namespace Behind_Bars.UI
         private TextMeshProUGUI _timeRemainingText;
         private TextMeshProUGUI _supervisionLevelText;
         private TextMeshProUGUI _violationsText;
+        private TextMeshProUGUI _curfewText;
+        private TextMeshProUGUI _complianceStreakText;
+        private TextMeshProUGUI _feesText;
         private CanvasGroup _canvasGroup;
+        private TMP_FontAsset _defaultFontAsset;
+        private UnityEngine.Material _defaultFontMaterial;
 
         private bool _isInitialized = false;
         private Coroutine _fadeCoroutine;
@@ -121,9 +128,17 @@ namespace Behind_Bars.UI
                     return;
                 }
 
+                CacheTextDefaults(mainCanvas);
+                if (_defaultFontAsset == null || _defaultFontMaterial == null)
+                {
+                    ModLogger.Error("ParoleStatusUI: Could not resolve a valid TMP font/material pair from HUD canvas; skipping UI creation to avoid TMP null errors");
+                    return;
+                }
+
                 // Create the status panel
                 _statusPanel = new GameObject("ParoleStatusPanel");
                 _statusPanel.transform.SetParent(mainCanvas.transform, false);
+                _statusPanel.SetActive(false);
 
                 // Add RectTransform component - RIGHT SIDE, VERTICALLY CENTERED
                 RectTransform panelRect = _statusPanel.AddComponent<RectTransform>();
@@ -131,7 +146,7 @@ namespace Behind_Bars.UI
                 panelRect.anchorMax = new Vector2(1f, 0.5f);
                 panelRect.pivot = new Vector2(1f, 0.5f); // Right edge, vertical center
                 panelRect.anchoredPosition = new Vector2(-10f, 0f); // 10 pixels from right edge, centered vertically
-                panelRect.sizeDelta = new Vector2(250f, 140f); // Width 250px, Height 140px
+                panelRect.sizeDelta = new Vector2(250f, 200f); // Width 250px, Height 200px (expanded for new fields)
 
                 // Add CanvasGroup for fade animations
                 _canvasGroup = _statusPanel.AddComponent<CanvasGroup>();
@@ -151,68 +166,54 @@ namespace Behind_Bars.UI
                 headerObj.transform.SetParent(_statusPanel.transform, false);
 
                 RectTransform headerRect = headerObj.AddComponent<RectTransform>();
-                headerRect.anchorMin = new Vector2(0f, 0.75f);
+                headerRect.anchorMin = new Vector2(0f, 0.86f);
                 headerRect.anchorMax = new Vector2(1f, 1f);
                 headerRect.offsetMin = new Vector2(10f, 0f);
-                headerRect.offsetMax = new Vector2(-10f, -5f);
+                headerRect.offsetMax = new Vector2(-10f, -3f);
 
                 _headerText = headerObj.AddComponent<TextMeshProUGUI>();
+                InitializeTextComponent(_headerText);
                 _headerText.text = "PAROLE STATUS";
                 _headerText.fontSize = 14f;
-                _headerText.color = new Color(1f, 0.9f, 0.3f); // Yellow-gold color
+                _headerText.color = new Color(1f, 0.9f, 0.3f);
                 _headerText.fontStyle = FontStyles.Bold;
                 _headerText.alignment = TextAlignmentOptions.Center;
 
+                // Row height = ~14% each for 6 data rows below the 14% header
+                // Rows from top to bottom: Time (0.72-0.86), Supervision (0.58-0.72), Violations (0.44-0.58),
+                //   Curfew (0.30-0.44), Compliance (0.16-0.30), Fees (0.02-0.16)
+
                 // Create time remaining text
-                GameObject timeObj = new GameObject("TimeRemainingText");
-                timeObj.transform.SetParent(_statusPanel.transform, false);
-
-                RectTransform timeRect = timeObj.AddComponent<RectTransform>();
-                timeRect.anchorMin = new Vector2(0f, 0.5f);
-                timeRect.anchorMax = new Vector2(1f, 0.75f);
-                timeRect.offsetMin = new Vector2(10f, 0f);
-                timeRect.offsetMax = new Vector2(-10f, 0f);
-
-                _timeRemainingText = timeObj.AddComponent<TextMeshProUGUI>();
-                _timeRemainingText.text = "";
-                _timeRemainingText.fontSize = 13f;
+                _timeRemainingText = CreateStatusRow(_statusPanel.transform, "TimeRemainingText", 0.72f, 0.86f);
+                _timeRemainingText.fontSize = 12f;
                 _timeRemainingText.color = Color.white;
-                _timeRemainingText.alignment = TextAlignmentOptions.Left;
 
                 // Create supervision level text
-                GameObject supervisionObj = new GameObject("SupervisionLevelText");
-                supervisionObj.transform.SetParent(_statusPanel.transform, false);
-
-                RectTransform supervisionRect = supervisionObj.AddComponent<RectTransform>();
-                supervisionRect.anchorMin = new Vector2(0f, 0.25f);
-                supervisionRect.anchorMax = new Vector2(1f, 0.5f);
-                supervisionRect.offsetMin = new Vector2(10f, 0f);
-                supervisionRect.offsetMax = new Vector2(-10f, 0f);
-
-                _supervisionLevelText = supervisionObj.AddComponent<TextMeshProUGUI>();
-                _supervisionLevelText.text = "";
-                _supervisionLevelText.fontSize = 12f;
-                _supervisionLevelText.color = new Color(0.5f, 1f, 1f); // Cyan color
-                _supervisionLevelText.alignment = TextAlignmentOptions.Left;
+                _supervisionLevelText = CreateStatusRow(_statusPanel.transform, "SupervisionLevelText", 0.58f, 0.72f);
+                _supervisionLevelText.fontSize = 11f;
+                _supervisionLevelText.color = new Color(0.5f, 1f, 1f);
 
                 // Create violations text
-                GameObject violationsObj = new GameObject("ViolationsText");
-                violationsObj.transform.SetParent(_statusPanel.transform, false);
-
-                RectTransform violationsRect = violationsObj.AddComponent<RectTransform>();
-                violationsRect.anchorMin = new Vector2(0f, 0f);
-                violationsRect.anchorMax = new Vector2(1f, 0.25f);
-                violationsRect.offsetMin = new Vector2(10f, 5f);
-                violationsRect.offsetMax = new Vector2(-10f, 0f);
-
-                _violationsText = violationsObj.AddComponent<TextMeshProUGUI>();
-                _violationsText.text = "";
-                _violationsText.fontSize = 12f;
+                _violationsText = CreateStatusRow(_statusPanel.transform, "ViolationsText", 0.44f, 0.58f);
+                _violationsText.fontSize = 11f;
                 _violationsText.color = Color.white;
-                _violationsText.alignment = TextAlignmentOptions.Left;
 
-                // Start hidden
-                _statusPanel.SetActive(false);
+                // Create curfew text
+                _curfewText = CreateStatusRow(_statusPanel.transform, "CurfewText", 0.30f, 0.44f);
+                _curfewText.fontSize = 11f;
+                _curfewText.color = new Color(1f, 0.85f, 0.5f);
+
+                // Create compliance streak text
+                _complianceStreakText = CreateStatusRow(_statusPanel.transform, "ComplianceStreakText", 0.16f, 0.30f);
+                _complianceStreakText.fontSize = 11f;
+                _complianceStreakText.color = new Color(0.5f, 1f, 0.5f);
+
+                // Create fees text
+                _feesText = CreateStatusRow(_statusPanel.transform, "FeesText", 0.02f, 0.16f);
+                _feesText.fontSize = 11f;
+                _feesText.color = new Color(1f, 0.6f, 0.6f);
+
+                ApplyFontFixes();
 
                 _isInitialized = true;
                 ModLogger.Debug("ParoleStatusUI created successfully at right side, vertically centered");
@@ -280,6 +281,7 @@ namespace Behind_Bars.UI
                 // Check if panel is already visible - if so, just update without fading
                 bool wasVisible = _statusPanel.activeSelf && _canvasGroup.alpha > 0.9f;
 
+                ApplyFontFixes();
                 UpdateStatus(data);
 
                 // Activate panel
@@ -330,13 +332,9 @@ namespace Behind_Bars.UI
                     return;
                 }
 
-                // Null check all text components
                 if (_timeRemainingText == null || _supervisionLevelText == null || _violationsText == null)
                 {
                     ModLogger.Error("ParoleStatusUI: One or more text components are null!");
-                    ModLogger.Error($"  _timeRemainingText: {_timeRemainingText != null}");
-                    ModLogger.Error($"  _supervisionLevelText: {_supervisionLevelText != null}");
-                    ModLogger.Error($"  _violationsText: {_violationsText != null}");
                     return;
                 }
 
@@ -347,8 +345,53 @@ namespace Behind_Bars.UI
 
                 // Color violations text red if violations > 0
                 _violationsText.color = data.ViolationCount > 0
-                    ? new Color(1f, 0.5f, 0.5f) // Red
+                    ? new Color(1f, 0.5f, 0.5f)
                     : Color.white;
+
+                // Curfew display
+                if (_curfewText != null)
+                {
+                    if (!string.IsNullOrEmpty(data.CurfewTime))
+                    {
+                        _curfewText.text = $"Curfew: {data.CurfewTime}";
+                        _curfewText.gameObject.SetActive(true);
+                    }
+                    else
+                    {
+                        _curfewText.text = "";
+                        _curfewText.gameObject.SetActive(false);
+                    }
+                }
+
+                // Compliance streak display
+                if (_complianceStreakText != null)
+                {
+                    if (data.ComplianceStreakDays > 0 || data.ComplianceStreakRequired > 0)
+                    {
+                        _complianceStreakText.text = $"Good behavior: {data.ComplianceStreakDays}/{data.ComplianceStreakRequired} days";
+                        _complianceStreakText.gameObject.SetActive(true);
+                    }
+                    else
+                    {
+                        _complianceStreakText.text = "";
+                        _complianceStreakText.gameObject.SetActive(false);
+                    }
+                }
+
+                // Outstanding fees display
+                if (_feesText != null)
+                {
+                    if (data.OutstandingFees > 0f)
+                    {
+                        _feesText.text = $"Fees owed: ${data.OutstandingFees:F0}";
+                        _feesText.gameObject.SetActive(true);
+                    }
+                    else
+                    {
+                        _feesText.text = "";
+                        _feesText.gameObject.SetActive(false);
+                    }
+                }
 
                 ModLogger.Debug($"ParoleStatusUI: Updated status - {data.TimeRemainingFormatted}, {data.SupervisionLevel} - {data.SearchProbabilityPercent}%, Violations: {data.ViolationCount}");
             }
@@ -397,6 +440,164 @@ namespace Behind_Bars.UI
         /// <summary>
         /// Format LSI level with search probability
         /// </summary>
+        /// <summary>
+        /// Helper to create a text row in the status panel
+        /// </summary>
+        private TextMeshProUGUI CreateStatusRow(Transform parent, string name, float anchorMinY, float anchorMaxY)
+        {
+            GameObject obj = new GameObject(name);
+            obj.transform.SetParent(parent, false);
+
+            RectTransform rect = obj.AddComponent<RectTransform>();
+            rect.anchorMin = new Vector2(0f, anchorMinY);
+            rect.anchorMax = new Vector2(1f, anchorMaxY);
+            rect.offsetMin = new Vector2(10f, 0f);
+            rect.offsetMax = new Vector2(-10f, 0f);
+
+            TextMeshProUGUI text = obj.AddComponent<TextMeshProUGUI>();
+            InitializeTextComponent(text);
+            text.text = "";
+            text.alignment = TextAlignmentOptions.Left;
+            return text;
+        }
+
+        private void CacheTextDefaults(Canvas canvas)
+        {
+            if (canvas == null)
+            {
+                return;
+            }
+
+            TextMeshProUGUI sampleText = canvas.GetComponentInChildren<TextMeshProUGUI>(true);
+            if (sampleText != null && sampleText.font != null)
+            {
+                _defaultFontAsset = sampleText.font;
+                _defaultFontMaterial = sampleText.fontSharedMaterial ??
+                                       sampleText.fontMaterial ??
+                                       _defaultFontAsset.material;
+
+                if (_defaultFontAsset != null && _defaultFontMaterial != null)
+                {
+                    TMPFontFix.CacheFont("base", _defaultFontAsset, _defaultFontMaterial);
+                }
+
+                return;
+            }
+
+            if (TMP_Settings.defaultFontAsset != null)
+            {
+                _defaultFontAsset = TMP_Settings.defaultFontAsset;
+                _defaultFontMaterial = TMP_Settings.defaultFontAsset.material;
+                if (_defaultFontAsset != null && _defaultFontMaterial != null)
+                {
+                    TMPFontFix.CacheFont("base", _defaultFontAsset, _defaultFontMaterial);
+                    return;
+                }
+            }
+
+            var fallbackText = Resources.FindObjectsOfTypeAll<TextMeshProUGUI>()
+                .FirstOrDefault(t => t != null &&
+                                     t.font != null &&
+                                     (t.fontSharedMaterial != null || t.fontMaterial != null || t.font.material != null));
+            if (fallbackText != null)
+            {
+                _defaultFontAsset = fallbackText.font;
+                _defaultFontMaterial = fallbackText.fontSharedMaterial ??
+                                       fallbackText.fontMaterial ??
+                                       fallbackText.font.material;
+
+                if (_defaultFontAsset != null && _defaultFontMaterial != null)
+                {
+                    TMPFontFix.CacheFont("base", _defaultFontAsset, _defaultFontMaterial);
+                }
+            }
+        }
+
+        private void InitializeTextComponent(TextMeshProUGUI text)
+        {
+            if (text == null)
+            {
+                return;
+            }
+
+            if (_defaultFontAsset != null)
+            {
+                text.font = _defaultFontAsset;
+            }
+
+            if (_defaultFontMaterial != null)
+            {
+                text.fontSharedMaterial = _defaultFontMaterial;
+                text.fontMaterial = _defaultFontMaterial;
+            }
+            else if (text.font != null && text.font.material != null)
+            {
+                text.fontSharedMaterial = text.font.material;
+                text.fontMaterial = text.font.material;
+            }
+
+            if (_defaultFontAsset != null && _defaultFontMaterial != null)
+            {
+                TMPFontFix.ApplySafeFont(text, "base");
+            }
+
+            text.raycastTarget = false;
+            text.havePropertiesChanged = true;
+            text.SetAllDirty();
+        }
+
+        private void ApplyFontFixes()
+        {
+            if (_statusPanel == null)
+            {
+                return;
+            }
+
+            if (_defaultFontAsset == null || _defaultFontMaterial == null)
+            {
+                CacheTextDefaults(GetPlayerHUDCanvas());
+            }
+
+            if (_defaultFontAsset == null || _defaultFontMaterial == null)
+            {
+                return;
+            }
+
+            TMPFontFix.FixAllTMPFonts(_statusPanel, "base");
+
+            var texts = _statusPanel.GetComponentsInChildren<TextMeshProUGUI>(true);
+            foreach (var text in texts)
+            {
+                if (text == null)
+                {
+                    continue;
+                }
+
+                if (text.font == null && _defaultFontAsset != null)
+                {
+                    text.font = _defaultFontAsset;
+                }
+
+                if (text.fontMaterial == null)
+                {
+                    if (_defaultFontMaterial != null)
+                    {
+                        text.fontSharedMaterial = _defaultFontMaterial;
+                        text.fontMaterial = _defaultFontMaterial;
+                    }
+                    else if (text.font != null && text.font.material != null)
+                    {
+                        text.fontSharedMaterial = text.font.material;
+                        text.fontMaterial = text.font.material;
+                    }
+                }
+
+                TMPFontFix.ApplySafeFont(text, "base");
+                text.havePropertiesChanged = true;
+                text.SetAllDirty();
+            }
+        }
+
         private string FormatLSILevel(LSILevel level, int searchPercent)
         {
             string levelName = level switch

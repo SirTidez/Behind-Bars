@@ -77,7 +77,7 @@ namespace Behind_Bars.Systems.CrimeDetection
             if (inventory != null && inventory.Length > 0)
             {
                 ModLogger.Debug($"Using Player.Inventory array with {inventory.Length} slots");
-                var inventorySlotsFromArray = new List<ItemSlot>();
+                var inventorySlotsFromArray = new List<object>();
                 foreach (var slot in inventory)
                 {
                     if (slot != null) inventorySlotsFromArray.Add(slot);
@@ -91,7 +91,7 @@ namespace Behind_Bars.Systems.CrimeDetection
             }
         }
         
-        private List<CrimeInstance> ProcessInventorySlots(List<ItemSlot> inventorySlots, Vector3 playerPosition, List<CrimeInstance> detectedCrimes)
+        private List<CrimeInstance> ProcessInventorySlots(List<object> inventorySlots, Vector3 playerPosition, List<CrimeInstance> detectedCrimes)
         {
             // Track drug quantities for trafficking detection
             int totalDrugQuantity = 0;
@@ -99,31 +99,32 @@ namespace Behind_Bars.Systems.CrimeDetection
             
             foreach (var slot in inventorySlots)
             {
-                if (slot?.ItemInstance == null)
+                var itemInstance = GetSlotItemInstance(slot);
+                if (itemInstance == null)
                 {
                     ModLogger.Debug("Empty slot or null item instance");
                     continue;
                 }
-                    
-                var itemInstance = slot.ItemInstance;
+
                 ModLogger.Debug($"Checking item: {itemInstance?.GetType().Name}");
                 
                 // Check if it's a product (drug)
-                if (itemInstance is ProductItemInstance productInstance)
+                if (IsProductLikeItem(itemInstance))
                 {
-                    var crimeInstance = ProcessProductItem(productInstance, playerPosition);
+                    var crimeInstance = ProcessProductItem(itemInstance, playerPosition);
                     if (crimeInstance != null)
                     {
                         detectedCrimes.Add(crimeInstance);
                         
                         // Track for trafficking detection
-                        var legalStatus = GetProductLegalStatus(productInstance);
+                        var legalStatus = GetProductLegalStatus(itemInstance);
                         if (legalStatus != ELegalStatus.Legal)
                         {
                             if (!drugsByType.ContainsKey(legalStatus))
                                 drugsByType[legalStatus] = 0;
-                            drugsByType[legalStatus] += productInstance.Amount;
-                            totalDrugQuantity += productInstance.Amount;
+                            var amount = GetItemAmount(itemInstance);
+                            drugsByType[legalStatus] += amount;
+                            totalDrugQuantity += amount;
                         }
                     }
                 }
@@ -204,7 +205,7 @@ namespace Behind_Bars.Systems.CrimeDetection
         /// <summary>
         /// Process a product item and determine if it's contraband
         /// </summary>
-        private CrimeInstance ProcessProductItem(ProductItemInstance productInstance, Vector3 location)
+        private CrimeInstance ProcessProductItem(object productInstance, Vector3 location)
         {
             var legalStatus = GetProductLegalStatus(productInstance);
             
@@ -233,7 +234,7 @@ namespace Behind_Bars.Systems.CrimeDetection
             
             if (crime != null)
             {
-                ModLogger.Info($"Detected {crime.CrimeName}: {productInstance.Definition.name} x{productInstance.Amount}");
+                ModLogger.Info($"Detected {crime.CrimeName}: {GetItemDefinitionName(productInstance)} x{GetItemAmount(productInstance)}");
                 return new CrimeInstance(crime, location, severity);
             }
             
@@ -243,55 +244,54 @@ namespace Behind_Bars.Systems.CrimeDetection
         /// <summary>
         /// Process a weapon item and determine if it's illegal
         /// </summary>
-        private CrimeInstance ProcessWeaponItem(ItemInstance itemInstance, Vector3 location)
+        private CrimeInstance ProcessWeaponItem(object itemInstance, Vector3 location)
         {
             // In Schedule I, most weapons are likely illegal for civilians to carry
             // This is a simplified check - could be enhanced with weapon licensing system
             var crime = new WeaponPossession();
             float severity = 1.2f;
             
-            ModLogger.Info($"Detected illegal weapon: {itemInstance.Definition.name}");
+            ModLogger.Info($"Detected illegal weapon: {GetItemDefinitionName(itemInstance)}");
             return new CrimeInstance(crime, location, severity);
         }
         
         /// <summary>
         /// Get the legal status of a product
         /// </summary>
-        private ELegalStatus GetProductLegalStatus(ProductItemInstance productInstance)
+        private ELegalStatus GetProductLegalStatus(object productInstance)
         {
             if (productInstance == null)
                 return ELegalStatus.Legal;
 
             // First check the actual instance type - most reliable method
-            ModLogger.Debug($"Checking ProductItemInstance type: {productInstance.GetType().Name}");
-            
-            if (productInstance is WeedInstance weedInstance)
+            string instanceType = productInstance.GetType().Name;
+            ModLogger.Debug($"Checking ProductItemInstance type: {instanceType}");
+
+            int drugAmount = GetItemAmount(productInstance);
+
+            if (IsWeedLikeItem(productInstance))
             {
-                int amount = weedInstance.Amount;
-                ModLogger.Debug($"✓ DETECTED WeedInstance as contraband! Amount: {amount}");
+                ModLogger.Debug($"✓ DETECTED WeedInstance as contraband! Amount: {drugAmount}");
                 
                 // Determine severity based on amount
-                if (amount >= 50)
+                if (drugAmount >= 50)
                 {
-                    ModLogger.Debug($"Large weed amount ({amount}) = HIGH SEVERITY (trafficking level)");
+                    ModLogger.Debug($"Large weed amount ({drugAmount}) = HIGH SEVERITY (trafficking level)");
                     return ELegalStatus.HighSeverityDrug;
                 }
-                else if (amount >= 20)
+                else if (drugAmount >= 20)
                 {
-                    ModLogger.Debug($"Moderate weed amount ({amount}) = MODERATE SEVERITY (dealing level)");
+                    ModLogger.Debug($"Moderate weed amount ({drugAmount}) = MODERATE SEVERITY (dealing level)");
                     return ELegalStatus.ModerateSeverityDrug;
                 }
                 else
                 {
-                    ModLogger.Debug($"Small weed amount ({amount}) = LOW SEVERITY (personal use)");
+                    ModLogger.Debug($"Small weed amount ({drugAmount}) = LOW SEVERITY (personal use)");
                     return ELegalStatus.LowSeverityDrug;
                 }
             }
-            
+
             // Check for other specific drug instance types with quantity consideration
-            string instanceType = productInstance.GetType().Name;
-            int drugAmount = productInstance.Amount;
-            
             if (instanceType.Contains("Cocaine"))
             {
                 ModLogger.Debug($"✓ DETECTED {instanceType} Amount: {drugAmount}");
@@ -312,9 +312,10 @@ namespace Behind_Bars.Systems.CrimeDetection
             }
                 
             // Fallback: Check product definition name if instance type check fails
-            if (productInstance.Definition is ProductDefinition productDef)
+            var productDefinition = GetItemDefinitionObject(productInstance);
+            if (productDefinition != null)
             {
-                var productName = productDef.name.ToLower();
+                var productName = GetDefinitionName(productDefinition).ToLower();
                 ModLogger.Debug($"Checking product definition name: '{productName}'");
                 
                 // Check for common drug names in definition
@@ -348,12 +349,13 @@ namespace Behind_Bars.Systems.CrimeDetection
         /// <summary>
         /// Check if an item is a weapon
         /// </summary>
-        private bool IsWeapon(ItemInstance itemInstance)
+        private bool IsWeapon(object itemInstance)
         {
-            if (itemInstance?.Definition == null)
+            var itemDefinition = GetItemDefinitionObject(itemInstance);
+            if (itemDefinition == null)
                 return false;
                 
-            var itemName = itemInstance.Definition.name.ToLower();
+            var itemName = GetDefinitionName(itemDefinition).ToLower();
             
             // Check for weapon keywords
             return itemName.Contains("gun") || 
@@ -403,5 +405,161 @@ namespace Behind_Bars.Systems.CrimeDetection
             
             ModLogger.Info($"Processed {contrabandCrimes.Count} contraband crimes for {player.name}");
         }
+
+        private static object GetItemDefinitionObject(object itemInstance)
+        {
+            if (itemInstance == null)
+            {
+                return null;
+            }
+
+            var definitionProperty = itemInstance.GetType().GetProperty("Definition");
+            if (definitionProperty != null)
+            {
+                try
+                {
+                    return definitionProperty.GetValue(itemInstance);
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Debug($"Failed to read item definition from {itemInstance.GetType().Name}: {ex.Message}");
+                }
+            }
+
+            return null;
+        }
+
+        private static string GetItemDefinitionName(object itemInstance)
+        {
+            return GetDefinitionName(GetItemDefinitionObject(itemInstance));
+        }
+
+        private static int GetItemAmount(object itemInstance)
+        {
+            if (itemInstance == null)
+            {
+                return 0;
+            }
+
+            try
+            {
+                var amountProperty = itemInstance.GetType().GetProperty("Amount");
+                if (amountProperty != null)
+                {
+                    var value = amountProperty.GetValue(itemInstance);
+                    if (value is int amount)
+                    {
+                        return amount;
+                    }
+                }
+
+                var amountField = itemInstance.GetType().GetField("Amount");
+                if (amountField != null)
+                {
+                    var value = amountField.GetValue(itemInstance);
+                    if (value is int amount)
+                    {
+                        return amount;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"Failed to read item amount from {itemInstance.GetType().Name}: {ex.Message}");
+            }
+
+            return 1;
+        }
+
+        private static string GetDefinitionName(object definition)
+        {
+            if (definition == null)
+            {
+                return "Unknown";
+            }
+
+            var definitionType = definition.GetType();
+
+            try
+            {
+                var nameProperty = definitionType.GetProperty("name") ?? definitionType.GetProperty("Name");
+                if (nameProperty != null)
+                {
+                    var value = nameProperty.GetValue(definition) as string;
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        return value;
+                    }
+                }
+
+                var nameField = definitionType.GetField("name") ?? definitionType.GetField("Name");
+                if (nameField != null)
+                {
+                    var value = nameField.GetValue(definition) as string;
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        return value;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"Failed to read definition name from {definitionType.Name}: {ex.Message}");
+            }
+
+            return definitionType.Name;
+        }
+
+        private static object GetSlotItemInstance(object slot)
+        {
+            if (slot == null)
+            {
+                return null;
+            }
+
+            try
+            {
+                var property = slot.GetType().GetProperty("ItemInstance");
+                return property?.GetValue(slot);
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"Failed to read ItemInstance from {slot.GetType().Name}: {ex.Message}");
+                return null;
+            }
+        }
+
+        private static bool IsProductLikeItem(object itemInstance)
+        {
+            if (itemInstance == null)
+            {
+                return false;
+            }
+
+            var typeName = itemInstance.GetType().Name;
+            return typeName.Contains("Product", StringComparison.OrdinalIgnoreCase) || HasProperty(itemInstance, "Amount");
+        }
+
+        private static bool IsWeedLikeItem(object itemInstance)
+        {
+            if (itemInstance == null)
+            {
+                return false;
+            }
+
+            var typeName = itemInstance.GetType().Name;
+            return typeName.Contains("Weed", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool HasProperty(object instance, string propertyName)
+        {
+            if (instance == null)
+            {
+                return false;
+            }
+
+            return instance.GetType().GetProperty(propertyName) != null;
+        }
+
     }
 }

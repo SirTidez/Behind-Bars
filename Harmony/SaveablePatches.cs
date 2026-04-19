@@ -73,10 +73,9 @@ namespace Behind_Bars.Harmony
                 int perPlayerCount = 0;
                 try
                 {
-                    var rapSheetManager = RapSheetManager.Instance;
-                    if (rapSheetManager != null)
+                    var allRapSheets = Core.GetAllRapSheets().ToList();
+                    if (allRapSheets != null)
                     {
-                        var allRapSheets = rapSheetManager.GetAllRapSheets().ToList();
                         ModLogger.Debug($"[SAVEABLE] Found {allRapSheets.Count} RapSheet(s) to save");
                         
                         foreach (var rapSheet in allRapSheets)

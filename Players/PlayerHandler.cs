@@ -172,7 +172,7 @@ namespace Behind_Bars.Players
             IsOnParole = true;
 
             // Get parole system and start parole
-            var paroleSystem = Core.Instance?.GetParoleSystem();
+        var paroleSystem = Core.ResolveParoleManager()?.ParoleSystem;
             if (paroleSystem != null)
             {
                 // Calculate parole duration based on criminal history

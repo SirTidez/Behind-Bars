@@ -132,7 +132,7 @@ namespace Behind_Bars.Systems.Jail
                 return;
             }
 
-            var releaseManager = ReleaseManager.Instance;
+            var releaseManager = Core.ResolveReleaseManager();
             bool isDuringRelease = false;
 
             // Check if this is during a release process
@@ -157,9 +157,9 @@ namespace Behind_Bars.Systems.Jail
             var playerHandler = Behind_Bars.Core.GetPlayerHandler(currentPlayer);
             if (playerHandler == null)
             {
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         "No player record found",
                         NotificationType.Warning
                     );
@@ -170,9 +170,9 @@ namespace Behind_Bars.Systems.Jail
             // Check if player already received prison items (SKIP if force-enabled for new inmate)
             if (!forceEnabledForNewInmate && HasReceivedPrisonItems(playerHandler))
             {
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         "Prison items already received",
                         NotificationType.Progress
                     );
@@ -206,9 +206,9 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info($"Starting release item exchange for {player.name}");
 
             // Show initial notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Returning prison items and retrieving personal belongings...",
                     NotificationType.Instruction
                 );
@@ -246,9 +246,9 @@ namespace Behind_Bars.Systems.Jail
                     ModLogger.Debug($"Could not remove {itemName}: {ex.Message}");
                 }
 
-                if (itemRemoved && BehindBarsUIManager.Instance != null)
+                if (itemRemoved && Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         $"Returned: {itemName}",
                         NotificationType.Progress
                     );
@@ -259,7 +259,7 @@ namespace Behind_Bars.Systems.Jail
             yield return new WaitForSeconds(1f);
 
             // Phase 2: Give back personal items using PersistentPlayerData
-            var persistentData = Behind_Bars.Systems.Data.PersistentPlayerData.Instance;
+            var persistentData = Core.ResolvePersistentPlayerData();
             if (persistentData != null)
             {
                 var legalItems = persistentData.GetLegalItemsForPlayer(player);
@@ -359,9 +359,9 @@ namespace Behind_Bars.Systems.Jail
                         ModLogger.Error($"Error returning item {item.itemName}: {ex.Message}");
                     }
 
-                    if (itemGiven && BehindBarsUIManager.Instance != null)
+                    if (itemGiven && Core.ResolveUIManager() != null)
                     {
-                        BehindBarsUIManager.Instance.ShowNotification(
+                        Core.ResolveUIManager().ShowNotification(
                             $"Returned: {item.itemName}",
                             NotificationType.Progress
                         );
@@ -398,9 +398,9 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info($"Starting prison item pickup for {player.name}");
             
             // Show initial notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Collecting your prison essentials...", 
                     NotificationType.Instruction
                 );
@@ -420,36 +420,72 @@ namespace Behind_Bars.Systems.Jail
 
             yield return new WaitForSeconds(1f);
 
+            // Re-enable inventory and slot access before jail gear is inserted.
+            InventoryProcessor.UnlockPlayerInventory(player);
+            ModLogger.Info("JailInventoryPickupStation: Re-enabled inventory access before granting prison items");
+
+            // Let the inventory system rebuild before inserting the starter kit.
+            yield return new WaitForSeconds(0.5f);
+
+            PrisonItemRegistry.EnsureRegistered();
+            ModLogger.Info("JailInventoryPickupStation: Prison item registry ensured before starter kit grant");
+
             // Give all prison items at once
             List<string> itemNames = new List<string>();
+            int itemsGranted = 0;
             
             foreach (string item in prisonStarterItems)
             {
-                // Get the item definition to show proper name
-                string displayName = item;
-#if !MONO
-                var itemDef = Il2CppScheduleOne.Registry.GetItem(item);
-#else
-                var itemDef = ScheduleOne.Registry.GetItem(item);
-#endif
-                if (itemDef != null)
+                ModLogger.Info($"JailInventoryPickupStation: Processing starter item '{item}'");
+
+                try
                 {
-                    displayName = itemDef.Name;
+                    string displayName = PrisonItemRegistry.GetPrisonItemDisplayName(item);
+
+                    // Add item to player inventory
+                    if (GivePrisonItem(inventory, item))
+                    {
+                        itemNames.Add(displayName);
+                        itemsGranted++;
+                        ModLogger.Info($"Gave prison item: {item}");
+                    }
+                    else
+                    {
+                        ModLogger.Warn($"Failed to give prison item: {item}");
+                    }
                 }
-                
-                itemNames.Add(displayName);
-                
-                // Add item to player inventory
-                GivePrisonItem(inventory, item);
-                
-                ModLogger.Info($"Gave prison item: {item}");
+                catch (System.Exception ex)
+                {
+                    ModLogger.Error($"JailInventoryPickupStation: Exception while processing prison item '{item}': {ex.Message}");
+                }
+            }
+
+            if (itemsGranted == 0)
+            {
+                ModLogger.Error("JailInventoryPickupStation: No prison items were granted; booking cannot advance");
+                isProcessing = false;
+                if (interactableObject != null)
+                {
+                    interactableObject.SetMessage("Prison items unavailable");
+                    interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                }
+
+                if (Core.ResolveUIManager() != null)
+                {
+                    Core.ResolveUIManager().ShowNotification(
+                        "Prison gear could not be issued",
+                        NotificationType.Warning
+                    );
+                }
+
+                yield break;
             }
             
             // Show single notification for all items
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
                 string itemList = string.Join(", ", itemNames);
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     $"Received: {itemList}", 
                     NotificationType.Progress
                 );
@@ -461,13 +497,13 @@ namespace Behind_Bars.Systems.Jail
             MarkPrisonItemsReceived(currentPlayer);
             
             // Show completion notification
-            if (BehindBarsUIManager.Instance != null)
-            {
-                BehindBarsUIManager.Instance.ShowNotification(
-                    $"{prisonStarterItems.Count} prison items received", 
-                    NotificationType.Progress
-                );
-            }
+                if (Core.ResolveUIManager() != null)
+                {
+                    Core.ResolveUIManager().ShowNotification(
+                    $"{itemsGranted} prison items received",
+                        NotificationType.Progress
+                    );
+                }
             
             CompletePickup();
 
@@ -489,43 +525,87 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info("Prison item pickup completed successfully");
         }
         
-        private void GivePrisonItem(PlayerInventory inventory, string itemId)
+        private bool GivePrisonItem(PlayerInventory inventory, string itemId)
         {
             try
             {
                 ModLogger.Info($"Attempting to add prison item: {itemId}");
-                
+                PrisonItemRegistry.EnsureRegistered();
+
 #if !MONO
                 // Get item definition from registry
-                var itemDef = Il2CppScheduleOne.Registry.GetItem(itemId);
-#else
-                // Get item definition from registry
-                var itemDef = ScheduleOne.Registry.GetItem(itemId);
-#endif
-                
+                var registry = Il2CppScheduleOne.Registry.Instance;
+                var itemDef = PrisonItemRegistry.GetRegistryItemDefinition(registry, itemId);
                 if (itemDef == null)
                 {
                     ModLogger.Error($"Item definition not found in registry for: {itemId}");
-                    return;
+                    return false;
                 }
-                
-                // Create item instance
-                var itemInstance = itemDef.GetDefaultInstance(1);
+
+                // Create item instance via reflection for IL2CPP-safe item-framework access
+                var getDefaultInstanceMethod = itemDef.GetType().GetMethod("GetDefaultInstance", new[] { typeof(int) });
+                var itemInstance = getDefaultInstanceMethod != null
+                    ? getDefaultInstanceMethod.Invoke(itemDef, new object[] { 1 })
+                    : null;
                 if (itemInstance == null)
                 {
                     ModLogger.Error($"Failed to create item instance for: {itemId}");
-                    return;
+                    return false;
                 }
-                
+
                 // Add to player inventory using the proper method
-                inventory.AddItemToInventory(itemInstance);
-                ModLogger.Info($"✓ Successfully added prison item to inventory: {itemDef.Name} ({itemId})");
-                
+                var addItemToInventoryMethod = inventory.GetType().GetMethod("AddItemToInventory");
+                if (addItemToInventoryMethod != null)
+                {
+                    addItemToInventoryMethod.Invoke(inventory, new[] { itemInstance });
+                }
+                else
+                {
+                    ModLogger.Error($"AddItemToInventory method not found for prison item: {itemId}");
+                    return false;
+                }
+                ModLogger.Info($"✓ Successfully added prison item to inventory: {GetItemDefinitionDisplayName(itemDef)} ({itemId})");
+                return true;
+#else
+                // Get item definition from the active registry instance so Mono follows the same path
+                // as the release pickup station and picks up dynamically registered prison items.
+                var registry = ScheduleOne.Registry.Instance;
+                var itemDef = PrisonItemRegistry.GetRegistryItemDefinition(registry, itemId);
+                if (itemDef == null)
+                {
+                    ModLogger.Error($"Item definition not found in registry for: {itemId}");
+                    return false;
+                }
+
+                // Create item instance
+                var getDefaultInstanceMethod = itemDef.GetType().GetMethod("GetDefaultInstance", new[] { typeof(int) });
+                var itemInstance = getDefaultInstanceMethod != null
+                    ? getDefaultInstanceMethod.Invoke(itemDef, new object[] { 1 })
+                    : null;
+                if (itemInstance == null)
+                {
+                    ModLogger.Error($"Failed to create item instance for: {itemId}");
+                    return false;
+                }
+
+                // Add to player inventory using the same reflection path as release-item restoration.
+                var addItemToInventoryMethod = inventory.GetType().GetMethod("AddItemToInventory");
+                if (addItemToInventoryMethod == null)
+                {
+                    ModLogger.Error($"AddItemToInventory method not found for prison item: {itemId}");
+                    return false;
+                }
+
+                addItemToInventoryMethod.Invoke(inventory, new[] { itemInstance });
+                ModLogger.Info($"✓ Successfully added prison item to inventory: {GetItemDefinitionDisplayName(itemDef)} ({itemId})");
+                return true;
+#endif
             }
             catch (System.Exception ex)
             {
                 ModLogger.Error($"Error adding prison item {itemId}: {ex.Message}");
                 ModLogger.Error($"Stack trace: {ex.StackTrace}");
+                return false;
             }
         }
         
@@ -806,9 +886,9 @@ namespace Behind_Bars.Systems.Jail
             }
 
             // Show notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Changed into prison uniform",
                     NotificationType.Progress
                 );
@@ -997,9 +1077,10 @@ namespace Behind_Bars.Systems.Jail
             isProcessing = false;
 
             // Notify the ReleaseManager that inventory processing is complete
-            if (currentPlayer != null && ReleaseManager.Instance != null)
+            var releaseManager = Core.ResolveReleaseManager();
+            if (currentPlayer != null && releaseManager != null)
             {
-                ReleaseManager.Instance.OnInventoryProcessingComplete(currentPlayer);
+                releaseManager.OnInventoryProcessingComplete(currentPlayer);
                 ModLogger.Info($"JailInventoryPickupStation: Notified ReleaseManager that inventory pickup is complete for {currentPlayer.name}");
             }
             itemsCurrentlyTaken = true;
@@ -1162,7 +1243,7 @@ namespace Behind_Bars.Systems.Jail
             if (!isProcessing && interactableObject != null)
             {
                 var localPlayer = Player.Local;
-                var releaseManager = ReleaseManager.Instance;
+                var releaseManager = Core.ResolveReleaseManager();
 
                 // Check if this is during a release process
                 bool isDuringRelease = false;
@@ -1216,6 +1297,19 @@ namespace Behind_Bars.Systems.Jail
                     }
                 }
             }
+        }
+
+        private static string GetItemDefinitionDisplayName(object itemDef)
+        {
+            if (itemDef == null)
+            {
+                return "unknown";
+            }
+
+            var type = itemDef.GetType();
+            var nameProperty = type.GetProperty("Name") ?? type.GetProperty("name");
+            var nameValue = nameProperty?.GetValue(itemDef)?.ToString();
+            return string.IsNullOrWhiteSpace(nameValue) ? type.Name : nameValue;
         }
     }
 }

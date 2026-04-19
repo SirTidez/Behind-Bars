@@ -1,4 +1,5 @@
 ﻿using Behind_Bars.Helpers;
+using Behind_Bars.Systems.Parole;
 using Behind_Bars.Utils;
 using Behind_Bars.Utils.Saveable;
 using System;
@@ -56,6 +57,39 @@ namespace Behind_Bars.Systems.CrimeTracking
         [SaveableField("lastInteractionGameTime")]
         private float lastInteractionGameTime; // Last interaction with officer (game minutes)
 
+        [SaveableField("officerRapport")]
+        private OfficerRapportRecord officerRapport;
+
+        [SaveableField("activeConditionIds")]
+        private List<string> activeConditionIds;
+
+        [SaveableField("consecutiveHighComplianceDays")]
+        private int consecutiveHighComplianceDays;
+
+        [SaveableField("lastStepDownEvalGameTime")]
+        private float lastStepDownEvalGameTime;
+
+        [SaveableField("lsiStepDownCount")]
+        private int lsiStepDownCount;
+
+        [SaveableField("homeVisitsMissed")]
+        private int homeVisitsMissed;
+
+        [SaveableField("nextHomeVisitGameTime")]
+        private float nextHomeVisitGameTime;
+
+        [SaveableField("totalFeesOwed")]
+        private float totalFeesOwed;
+
+        [SaveableField("totalFeesPaid")]
+        private float totalFeesPaid;
+
+        [SaveableField("missedPayments")]
+        private int missedPayments;
+
+        [SaveableField("nextFeeGameTime")]
+        private float nextFeeGameTime;
+
         // Non-Serialized fields
         [NonSerialized]
         private Player player;
@@ -71,6 +105,14 @@ namespace Behind_Bars.Systems.CrimeTracking
             this.complianceScore = 100f; // Start with perfect compliance
             this.lastCheckInGameTime = 0f;
             this.lastInteractionGameTime = 0f;
+            this.officerRapport = new OfficerRapportRecord();
+            this.activeConditionIds = new List<string>();
+            this.consecutiveHighComplianceDays = 0;
+            this.lsiStepDownCount = 0;
+            this.homeVisitsMissed = 0;
+            this.totalFeesOwed = 0f;
+            this.totalFeesPaid = 0f;
+            this.missedPayments = 0;
         }
 
         /// <summary>
@@ -86,6 +128,14 @@ namespace Behind_Bars.Systems.CrimeTracking
             this.complianceScore = 100f; // Start with perfect compliance
             this.lastCheckInGameTime = 0f;
             this.lastInteractionGameTime = 0f;
+            this.officerRapport = new OfficerRapportRecord();
+            this.activeConditionIds = new List<string>();
+            this.consecutiveHighComplianceDays = 0;
+            this.lsiStepDownCount = 0;
+            this.homeVisitsMissed = 0;
+            this.totalFeesOwed = 0f;
+            this.totalFeesPaid = 0f;
+            this.missedPayments = 0;
             // Game's save system handles loading automatically - no manual file loading needed
         }
 
@@ -601,6 +651,232 @@ namespace Behind_Bars.Systems.CrimeTracking
             summary += $"Compliance Score: {complianceScore:F1}/100";
 
             return summary;
+        }
+
+        #endregion
+
+        #region Rapport Methods
+
+        /// <summary>
+        /// Get the officer rapport record
+        /// </summary>
+        public OfficerRapportRecord GetOfficerRapport()
+        {
+            if (officerRapport == null)
+                officerRapport = new OfficerRapportRecord();
+            return officerRapport;
+        }
+
+        /// <summary>
+        /// Adjust officer rapport score
+        /// </summary>
+        public void AdjustRapport(float delta)
+        {
+            GetOfficerRapport().AdjustRapport(delta);
+        }
+
+        /// <summary>
+        /// Get the current rapport score
+        /// </summary>
+        public float GetRapportScore() => GetOfficerRapport().GetRapportScore();
+
+        /// <summary>
+        /// Get the current rapport tier
+        /// </summary>
+        public RapportTier GetRapportTier() => GetOfficerRapport().GetRapportTier();
+
+        /// <summary>
+        /// Initialize rapport from carry-over value (from previous parole term)
+        /// </summary>
+        public void InitializeRapportFromCarryOver(float carryOverScore)
+        {
+            GetOfficerRapport().SetRapportScore(carryOverScore);
+        }
+
+        #endregion
+
+        #region Active Conditions Methods
+
+        /// <summary>
+        /// Get the list of active condition IDs
+        /// </summary>
+        public List<string> GetActiveConditionIds()
+        {
+            return activeConditionIds ?? (activeConditionIds = new List<string>());
+        }
+
+        /// <summary>
+        /// Set the active condition IDs
+        /// </summary>
+        public void SetActiveConditionIds(List<string> conditionIds)
+        {
+            activeConditionIds = conditionIds ?? new List<string>();
+        }
+
+        /// <summary>
+        /// Add a condition ID to active conditions
+        /// </summary>
+        public void AddActiveCondition(string conditionId)
+        {
+            if (activeConditionIds == null)
+                activeConditionIds = new List<string>();
+            if (!activeConditionIds.Contains(conditionId))
+                activeConditionIds.Add(conditionId);
+        }
+
+        /// <summary>
+        /// Check if a condition is active
+        /// </summary>
+        public bool IsConditionActive(string conditionId)
+        {
+            return activeConditionIds != null && activeConditionIds.Contains(conditionId);
+        }
+
+        #endregion
+
+        #region LSI Step-Down Methods
+
+        /// <summary>
+        /// Get consecutive high compliance days
+        /// </summary>
+        public int GetConsecutiveHighComplianceDays() => consecutiveHighComplianceDays;
+
+        /// <summary>
+        /// Increment consecutive high compliance days
+        /// </summary>
+        public void IncrementHighComplianceDays()
+        {
+            consecutiveHighComplianceDays++;
+        }
+
+        /// <summary>
+        /// Reset consecutive high compliance days
+        /// </summary>
+        public void ResetHighComplianceDays()
+        {
+            consecutiveHighComplianceDays = 0;
+        }
+
+        /// <summary>
+        /// Get the LSI step-down count
+        /// </summary>
+        public int GetLSIStepDownCount() => lsiStepDownCount;
+
+        /// <summary>
+        /// Increment the LSI step-down count
+        /// </summary>
+        public void IncrementLSIStepDownCount()
+        {
+            lsiStepDownCount++;
+        }
+
+        /// <summary>
+        /// Get the last step-down evaluation game time
+        /// </summary>
+        public float GetLastStepDownEvalGameTime() => lastStepDownEvalGameTime;
+
+        /// <summary>
+        /// Set the last step-down evaluation game time
+        /// </summary>
+        public void SetLastStepDownEvalGameTime(float gameTime)
+        {
+            lastStepDownEvalGameTime = gameTime;
+        }
+
+        #endregion
+
+        #region Home Visit Methods
+
+        /// <summary>
+        /// Get the number of missed home visits
+        /// </summary>
+        public int GetHomeVisitsMissed() => homeVisitsMissed;
+
+        /// <summary>
+        /// Increment missed home visits
+        /// </summary>
+        public void IncrementHomeVisitsMissed()
+        {
+            homeVisitsMissed++;
+        }
+
+        /// <summary>
+        /// Reset missed home visits (e.g. after successful visit)
+        /// </summary>
+        public void ResetHomeVisitsMissed()
+        {
+            homeVisitsMissed = 0;
+        }
+
+        /// <summary>
+        /// Get next scheduled home visit time
+        /// </summary>
+        public float GetNextHomeVisitGameTime() => nextHomeVisitGameTime;
+
+        /// <summary>
+        /// Set next scheduled home visit time
+        /// </summary>
+        public void SetNextHomeVisitGameTime(float gameTime)
+        {
+            nextHomeVisitGameTime = gameTime;
+        }
+
+        #endregion
+
+        #region Fee Methods
+
+        /// <summary>
+        /// Get total fees owed
+        /// </summary>
+        public float GetTotalFeesOwed() => totalFeesOwed;
+
+        /// <summary>
+        /// Add to total fees owed
+        /// </summary>
+        public void AddFeesOwed(float amount)
+        {
+            totalFeesOwed += amount;
+        }
+
+        /// <summary>
+        /// Record a fee payment
+        /// </summary>
+        public void RecordFeePayment(float amount)
+        {
+            totalFeesPaid += amount;
+            totalFeesOwed = Mathf.Max(0f, totalFeesOwed - amount);
+            missedPayments = 0; // Reset missed payments on successful payment
+        }
+
+        /// <summary>
+        /// Get total fees paid
+        /// </summary>
+        public float GetTotalFeesPaid() => totalFeesPaid;
+
+        /// <summary>
+        /// Get number of missed payments
+        /// </summary>
+        public int GetMissedPayments() => missedPayments;
+
+        /// <summary>
+        /// Increment missed payments count
+        /// </summary>
+        public void IncrementMissedPayments()
+        {
+            missedPayments++;
+        }
+
+        /// <summary>
+        /// Get next fee due game time
+        /// </summary>
+        public float GetNextFeeGameTime() => nextFeeGameTime;
+
+        /// <summary>
+        /// Set next fee due game time
+        /// </summary>
+        public void SetNextFeeGameTime(float gameTime)
+        {
+            nextFeeGameTime = gameTime;
         }
 
         #endregion

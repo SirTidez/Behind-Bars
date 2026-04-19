@@ -599,9 +599,9 @@ namespace Behind_Bars.Systems.Jail
             }
 
             // Show instructions
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Click and drag to move your palm to the scanner",
                     NotificationType.Instruction
                 );
@@ -689,9 +689,9 @@ namespace Behind_Bars.Systems.Jail
             ShowIkTargetVisualizer(true);
 
             // Show instruction
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification("Click and drag to move your hand to the scanner", NotificationType.Instruction);
+                Core.ResolveUIManager().ShowNotification("Click and drag to move your hand to the scanner", NotificationType.Instruction);
             }
 
             // Start the scan timer
@@ -1014,9 +1014,9 @@ namespace Behind_Bars.Systems.Jail
                             }
 
                             // Show progress notification
-                            if (BehindBarsUIManager.Instance != null)
+                            if (Core.ResolveUIManager() != null)
                             {
-                                BehindBarsUIManager.Instance.ShowNotification("Scanning... Hold still!", NotificationType.Progress);
+                                Core.ResolveUIManager().ShowNotification("Scanning... Hold still!", NotificationType.Progress);
                             }
                         }
 
@@ -1045,9 +1045,9 @@ namespace Behind_Bars.Systems.Jail
                             }
 
                             // Show instruction
-                            if (BehindBarsUIManager.Instance != null)
+                            if (Core.ResolveUIManager() != null)
                             {
-                                BehindBarsUIManager.Instance.ShowNotification("Move hand back to scanner!", NotificationType.Warning);
+                                Core.ResolveUIManager().ShowNotification("Move hand back to scanner!", NotificationType.Warning);
                             }
                         }
 
@@ -1103,9 +1103,9 @@ namespace Behind_Bars.Systems.Jail
             }
 
             // Show success notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification("Fingerprint scan complete!", NotificationType.Progress);
+                Core.ResolveUIManager().ShowNotification("Fingerprint scan complete!", NotificationType.Progress);
             }
 
             // Mark as complete in booking process
@@ -1135,9 +1135,9 @@ namespace Behind_Bars.Systems.Jail
             }
 
             // Show failure notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification("Scan failed - try again!", NotificationType.Warning);
+                Core.ResolveUIManager().ShowNotification("Scan failed - try again!", NotificationType.Warning);
             }
 
             isScanning = false;
@@ -1374,9 +1374,9 @@ namespace Behind_Bars.Systems.Jail
             }
 
             // Show success notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Scan complete!",
                     NotificationType.Progress
                 );
@@ -1399,9 +1399,9 @@ namespace Behind_Bars.Systems.Jail
             }
 
             // Show failure notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Scan failed - try again!",
                     NotificationType.Warning
                 );

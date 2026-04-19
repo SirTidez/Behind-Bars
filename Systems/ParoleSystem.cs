@@ -1,9 +1,12 @@
 using System.Collections;
 using System;
+using System.ComponentModel;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.CrimeTracking;
 using Behind_Bars.Systems.Crimes;
 using Behind_Bars.Systems.Jail;
+using Behind_Bars.Systems.Parole;
+using Behind_Bars.Systems.Parole.Conditions;
 using Behind_Bars.UI;
 using UnityEngine;
 using MelonLoader;
@@ -27,7 +30,7 @@ namespace Behind_Bars.Systems
 {
     /// <summary>
     /// Manages active parole supervision for released players
-    /// Handles parole monitoring, random searches, violations, and completion
+    /// Handles parole monitoring, officer reminders, violations, and completion
     /// Integrates with RapSheet/LSI system for risk assessment
     /// </summary>
     public class ParoleSystem
@@ -35,20 +38,37 @@ namespace Behind_Bars.Systems
         #region Events
 
         /// <summary>
-        /// Event fired when parole starts for a player
+        /// Manager-owned event fired when parole starts for a player.
         /// </summary>
-        public static event System.Action<Player> OnParoleStarted;
+        public event System.Action<Player>? ParoleStarted;
 
         /// <summary>
-        /// Event fired when parole ends for a player (completed, revoked, or expired)
+        /// Manager-owned event fired when parole ends for a player (completed, revoked, or expired).
         /// </summary>
-        public static event System.Action<Player> OnParoleEnded;
+        public event System.Action<Player>? ParoleEnded;
+
+        /// <summary>
+        /// Compatibility shim for legacy static consumers while the parole lifecycle bridge
+        /// is being migrated onto the manager-owned <see cref="ParoleStarted"/> event.
+        /// No current in-repo runtime path subscribes to this event; it remains only as a
+        /// temporary legacy surface for callers that have not yet moved onto the manager graph.
+        /// </summary>
+        [EditorBrowsable(EditorBrowsableState.Never)]
+        [Obsolete("Compatibility-only legacy surface. Subscribe to the managed ParoleSystem.ParoleStarted event through BehindBarsSystemManager instead.", false)]
+        public static event System.Action<Player>? OnParoleStarted;
+
+        /// <summary>
+        /// Compatibility shim for legacy static consumers while the parole lifecycle bridge
+        /// is being migrated onto the manager-owned <see cref="ParoleEnded"/> event.
+        /// No current in-repo runtime path subscribes to this event; it remains only as a
+        /// temporary legacy surface for callers that have not yet moved onto the manager graph.
+        /// </summary>
+        [EditorBrowsable(EditorBrowsableState.Never)]
+        [Obsolete("Compatibility-only legacy surface. Subscribe to the managed ParoleSystem.ParoleEnded event through BehindBarsSystemManager instead.", false)]
+        public static event System.Action<Player>? OnParoleEnded;
 
         #endregion
         private const float PAROLE_DURATION = 600f; // 10 minutes default
-        private const float SEARCH_INTERVAL_MIN = 30f; // Minimum time between searches
-        private const float SEARCH_INTERVAL_MAX = 120f; // Maximum time between searches
-        private const float SEARCH_RADIUS = 50f; // How close PO needs to be to search
         private const float LOW_LSI_CHECKIN_WINDOW_MINUTES = 180f; // 3 in-game hours
         private const float HIGH_LSI_CHECKIN_WINDOW_MINUTES = 60f; // 1 in-game hour
         private const float ACTIVE_WARRANT_ENFORCEMENT_INTERVAL_SECONDS = 2f;
@@ -85,24 +105,14 @@ namespace Behind_Bars.Systems
         /// </summary>
         public class ParoleRuntimeRecord
         {
+            public string PlayerKey { get; set; }
             public Player Player { get; set; }
             public ParoleStatus Status { get; set; }
             public float StartGameTimeMinutes { get; set; } // Game time when parole started (game minutes)
             public float DurationGameMinutes { get; set; } // Total parole duration (game minutes)
             public float TimeRemainingGameMinutes { get; set; } // Remaining time (game minutes)
             public int ViolationCount { get; set; }
-            public float LastSearchGameTimeMinutes { get; set; } // Last search time (game minutes)
-            public float NextSearchGameTimeMinutes { get; set; } // Next search time (game minutes)
             public List<string> Violations { get; set; } = new();
-        }
-
-        private class DailyCheckInRequirement
-        {
-            public int DayIndex { get; set; }
-            public int WindowStartMinuteOfDay { get; set; }
-            public int WindowEndMinuteOfDay { get; set; }
-            public bool ReminderSent { get; set; }
-            public bool Completed { get; set; }
         }
 
         private class PendingOfficerText
@@ -112,15 +122,11 @@ namespace Behind_Bars.Systems
             public float NextAttemptTime { get; set; }
         }
 
-        private Dictionary<Player, ParoleRuntimeRecord> _paroleRecords = new();
-        private Dictionary<Player, DailyCheckInRequirement> _dailyCheckInRequirements = new();
-        private Dictionary<Player, int> _dailyCheckInScheduledDay = new();
-        private Dictionary<Player, PendingOfficerText> _pendingOfficerTexts = new();
-        private HashSet<Player> _activeCheckInSessions = new();
-        private HashSet<Player> _playersWithActiveWarrants = new();
-        private Dictionary<Player, float> _lastWarrantEnforcementTime = new();
+        private Dictionary<string, ParoleRuntimeRecord> _paroleRecords = new();
+        private Dictionary<string, PendingOfficerText> _pendingOfficerTexts = new();
+        private HashSet<string> _playersWithActiveWarrants = new();
+        private Dictionary<string, float> _lastWarrantEnforcementTime = new();
         private GameObject? _paroleOfficerPrefab;
-        private Transform? _paroleOfficerInstance;
         private bool _isSubscribedToDayPass;
         private readonly Action _onDayPassHandler;
         private object _timeManagerSubscriptionCoroutine;
@@ -134,6 +140,41 @@ namespace Behind_Bars.Systems
         public void Shutdown()
         {
             UnsubscribeFromDayPass();
+        }
+
+        private ParoleConditionManager GetParoleConditionManager()
+        {
+            return Core.ResolveParoleConditionManager();
+        }
+
+        private ParoleFeeSystem GetParoleFeeSystem()
+        {
+            return Core.ResolveParoleFeeSystem();
+        }
+
+        private HomeVisitSystem GetHomeVisitSystem()
+        {
+            return Core.ResolveHomeVisitSystem();
+        }
+
+        /// <summary>
+        /// Raise the authoritative manager-owned parole-start lifecycle event and then mirror it
+        /// to the temporary static compatibility shim.
+        /// </summary>
+        private void RaiseParoleStarted(Player player)
+        {
+            ParoleStarted?.Invoke(player);
+            OnParoleStarted?.Invoke(player);
+        }
+
+        /// <summary>
+        /// Raise the authoritative manager-owned parole-end lifecycle event and then mirror it
+        /// to the temporary static compatibility shim.
+        /// </summary>
+        private void RaiseParoleEnded(Player player)
+        {
+            ParoleEnded?.Invoke(player);
+            OnParoleEnded?.Invoke(player);
         }
 
         private void EnsureDayPassSubscription()
@@ -208,6 +249,20 @@ namespace Behind_Bars.Systems
             }
         }
 
+        internal string GetPlayerRuntimeKeyInternal(Player player)
+        {
+            if (player == null)
+            {
+                return string.Empty;
+            }
+
+            return Core.ResolvePlayerKey(player);
+        }
+
+        private string GetPlayerRuntimeKey(Player player) => GetPlayerRuntimeKeyInternal(player);
+
+        internal Dictionary<string, ParoleRuntimeRecord> ActiveParoleRecords => _paroleRecords;
+
         /// <summary>
         /// Start parole supervision for a player
         /// Creates runtime tracking and initializes RapSheet/LSI integration
@@ -216,32 +271,54 @@ namespace Behind_Bars.Systems
         {
             ModLogger.Info($"Starting parole for {player.name} for {durationGameMinutes} game minutes ({GameTimeManager.FormatGameTime(durationGameMinutes)})");
             EnsureDayPassSubscription();
+            string playerKey = GetPlayerRuntimeKey(player);
 
             float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
-            float searchIntervalMin = GameTimeManager.RealSecondsToGameMinutes(SEARCH_INTERVAL_MIN);
-            float searchIntervalMax = GameTimeManager.RealSecondsToGameMinutes(SEARCH_INTERVAL_MAX);
 
             ClearParoleRuntimeFlags(player);
 
             var record = new ParoleRuntimeRecord
             {
+                PlayerKey = playerKey,
                 Player = player,
                 Status = ParoleStatus.Active,
                 StartGameTimeMinutes = currentGameTime,
                 DurationGameMinutes = durationGameMinutes,
                 TimeRemainingGameMinutes = durationGameMinutes,
-                ViolationCount = 0,
-                LastSearchGameTimeMinutes = 0f,
-                NextSearchGameTimeMinutes = currentGameTime + UnityEngine.Random.Range(searchIntervalMin, searchIntervalMax)
+                ViolationCount = 0
             };
 
-            _paroleRecords[player] = record;
+            _paroleRecords[playerKey] = record;
 
             // Initialize RapSheet ParoleRecord and perform LSI assessment (convert to game minutes)
             InitializeParoleTracking(player, durationGameMinutes);
 
+            // Initialize parole conditions based on crimes and LSI
+            try
+            {
+                var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
+                if (rapSheet != null)
+                {
+                    var paroleConditionManager = GetParoleConditionManager();
+                    var paroleFeeSystem = GetParoleFeeSystem();
+                    var homeVisitSystem = GetHomeVisitSystem();
+
+                    paroleConditionManager.InitializeConditions(rapSheet);
+
+                    // Initialize fee schedule
+                    paroleFeeSystem.InitializeFees(player, rapSheet);
+
+                    // Schedule first home visit
+                    homeVisitSystem.ScheduleNextVisit(player, rapSheet);
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error initializing parole conditions: {ex.Message}");
+            }
+
             // Start tracking with ParoleTimeTracker
-            ParoleTimeTracker.Instance.StartTracking(player, durationGameMinutes, OnParoleComplete);
+            Core.ResolveParoleManager().StartTracking(player, durationGameMinutes, OnParoleComplete);
 
             // Start parole monitoring
             MelonCoroutines.Start(MonitorParole(record));
@@ -249,24 +326,19 @@ namespace Behind_Bars.Systems
             // NOTE: Parole officer spawning is now handled by DynamicParoleOfficerManager
             // The old SpawnParoleOfficer() call has been removed
 
+            // Ensure the scene-bound parole NPC manager exists before emitting the parole-start event.
+            // This keeps the manager-graph forwarding path authoritative without changing the runtime flow.
+            Core.Instance?.NpcManager?.EnsureDynamicParoleOfficerManager();
+
             // Emit parole started event
-            OnParoleStarted?.Invoke(player);
-            ModLogger.Debug($"ParoleSystem: Emitted OnParoleStarted event for {player.name}");
+            RaiseParoleStarted(player);
+            ModLogger.Debug($"ParoleSystem: Emitted parole-start lifecycle event for {player.name}");
 
-            // Ensure dynamic parole manager exists and process immediate spawn update.
-            EnsureDynamicParoleOfficerManager();
-            if (DynamicParoleOfficerManager.Instance != null)
+            // Process an immediate spawn update after the lifecycle handoff.
+            if (Core.Instance?.NpcManager == null)
             {
-                ModLogger.Info($"ParoleSystem: Triggering immediate parole officer spawn update for {player.name}");
-                DynamicParoleOfficerManager.Instance.ForceUpdate();
+                ModLogger.Warn("ParoleSystem: NpcManager still unavailable after parole-start handoff");
             }
-            else
-            {
-                ModLogger.Warn("ParoleSystem: DynamicParoleOfficerManager still unavailable after ensure call");
-            }
-
-            // Notify supervising officer to start intake process
-            NotifySupervisingOfficerOfParoleStart(player);
 
             // NOTE: RecordReleaseTime is now called in ReleaseManager.WaitForParoleConditionsAcknowledgment()
             // after the player dismisses the parole conditions UI. This ensures the grace period
@@ -287,7 +359,7 @@ namespace Behind_Bars.Systems
 
             EnsureDayPassSubscription();
 
-            var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+            var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
             var paroleRecord = rapSheet?.CurrentParoleRecord;
             if (paroleRecord == null || !paroleRecord.IsOnParole() || paroleRecord.IsPaused())
             {
@@ -295,22 +367,23 @@ namespace Behind_Bars.Systems
             }
 
             float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
-            int currentDayIndex = GetCurrentDayIndex();
-            int currentMinuteOfDay = GetCurrentMinuteOfDay();
+            int currentDayIndex = GetCurrentDayIndexInternal();
+            int currentMinuteOfDay = GetCurrentMinuteOfDayInternal();
+            string playerKey = GetPlayerRuntimeKey(player);
 
-            if (_paroleRecords.TryGetValue(player, out var existingRecord) && existingRecord != null)
+            if (_paroleRecords.TryGetValue(playerKey, out var existingRecord) && existingRecord != null)
             {
                 if (existingRecord.Status == ParoleStatus.Active)
                 {
-                    if (!JailTimeTracker.Instance.IsInJail(player))
+                    if (!Core.ResolveJailTimeTracker().IsInJail(player))
                     {
-                        ScheduleDailyCheckIn(player, currentDayIndex, currentMinuteOfDay);
+                        Core.ResolveParoleManager().ScheduleDailyCheckIn(player, currentDayIndex, currentMinuteOfDay);
                     }
 
                     return;
                 }
 
-                _paroleRecords.Remove(player);
+                _paroleRecords.Remove(playerKey);
             }
 
             var paroleStatus = paroleRecord.GetParoleStatus();
@@ -318,107 +391,36 @@ namespace Behind_Bars.Systems
             if (remainingGameMinutes <= 0f)
             {
                 paroleRecord.CheckAndEndExpiredParole();
-                RapSheetManager.Instance.MarkRapSheetChanged(player);
+                Core.ResolveRapSheetManager().MarkRapSheetChanged(player);
                 return;
             }
 
-            float searchIntervalMin = GameTimeManager.RealSecondsToGameMinutes(SEARCH_INTERVAL_MIN);
-            float searchIntervalMax = GameTimeManager.RealSecondsToGameMinutes(SEARCH_INTERVAL_MAX);
-
             var runtimeRecord = new ParoleRuntimeRecord
             {
+                PlayerKey = playerKey,
                 Player = player,
                 Status = ParoleStatus.Active,
                 StartGameTimeMinutes = currentGameTime,
                 DurationGameMinutes = remainingGameMinutes,
                 TimeRemainingGameMinutes = remainingGameMinutes,
-                ViolationCount = paroleRecord.GetViolationCount(),
-                LastSearchGameTimeMinutes = 0f,
-                NextSearchGameTimeMinutes = currentGameTime + UnityEngine.Random.Range(searchIntervalMin, searchIntervalMax)
+                ViolationCount = paroleRecord.GetViolationCount()
             };
 
-            _paroleRecords[player] = runtimeRecord;
+            _paroleRecords[playerKey] = runtimeRecord;
 
-            ParoleTimeTracker.Instance.StopTracking(player);
-            ParoleTimeTracker.Instance.StartTracking(player, remainingGameMinutes, OnParoleComplete);
+            Core.ResolveParoleManager().StopTracking(player);
+            Core.ResolveParoleManager().StartTracking(player, remainingGameMinutes, OnParoleComplete);
             MelonCoroutines.Start(MonitorParole(runtimeRecord));
 
             ModLogger.Info($"ParoleSystem: Restored runtime parole tracking for loaded player {player.name} ({remainingGameMinutes:F1} game minutes remaining)");
 
-            if (!JailTimeTracker.Instance.IsInJail(player))
+            if (!Core.ResolveJailTimeTracker().IsInJail(player))
             {
-                ScheduleDailyCheckIn(player, currentDayIndex, currentMinuteOfDay);
+                Core.ResolveParoleManager().ScheduleDailyCheckIn(player, currentDayIndex, currentMinuteOfDay);
             }
         }
 
-        /// <summary>
-        /// Notify supervising officer that a player has started parole
-        /// </summary>
-        private void NotifySupervisingOfficerOfParoleStart(Player player)
-        {
-            try
-            {
-                EnsureDynamicParoleOfficerManager();
-
-                if (player == null) {
-                    ModLogger.Error("NotifySupervisingOfficerOfParoleStart: Player is null");
-                    return;
-                }
-
-                var npcManager = PrisonNPCManager.Instance;
-                if (npcManager != null)
-                {
-                    var supervisingOfficer = npcManager.GetSupervisingOfficer();
-                    if (supervisingOfficer != null)
-                    {
-                        supervisingOfficer.HandleParoleIntake(player);
-                        ModLogger.Debug($"Notified supervising officer of parole start for {player.name}");
-                    }
-                    else
-                    {
-                        ModLogger.Debug($"Supervising officer not available yet for {player.name} - will be handled when spawned");
-                    }
-                }
-            }
-            catch (System.Exception ex)
-            {
-                ModLogger.Error($"Error notifying supervising officer of parole start: {ex.Message}");
-            }
-        }
-
-        private void EnsureDynamicParoleOfficerManager()
-        {
-            try
-            {
-                if (DynamicParoleOfficerManager.Instance != null)
-                    return;
-
-                var existing = BBHelpers.FindObjectOfTypeSafe<DynamicParoleOfficerManager>();
-                if (existing != null)
-                {
-                    existing.Initialize();
-                    return;
-                }
-
-                var managerObj = new GameObject("DynamicParoleOfficerManager");
-                var manager = BBHelpers.AddComponentSafe<DynamicParoleOfficerManager>(managerObj);
-                if (manager != null)
-                {
-                    manager.Initialize();
-                    ModLogger.Info("ParoleSystem: Created DynamicParoleOfficerManager on demand");
-                }
-                else
-                {
-                    ModLogger.Error("ParoleSystem: Failed to create DynamicParoleOfficerManager on demand");
-                }
-            }
-            catch (Exception ex)
-            {
-                ModLogger.Error($"ParoleSystem: Error ensuring DynamicParoleOfficerManager: {ex.Message}");
-            }
-        }
-
-        private bool IsAuthorityForParoleActions()
+        internal bool IsAuthorityForParoleActionsInternal()
         {
             try
             {
@@ -442,122 +444,10 @@ namespace Behind_Bars.Systems
 
         private void HandleDayPassForParoleCheckIns()
         {
-            if (!IsAuthorityForParoleActions())
-            {
-                return;
-            }
-
-            if (_paroleRecords.Count == 0)
-            {
-                return;
-            }
-
-            int currentDayIndex = GetCurrentDayIndex();
-            int currentMinuteOfDay = GetCurrentMinuteOfDay();
-
-            foreach (var record in _paroleRecords.Values)
-            {
-                if (record == null || record.Player == null)
-                {
-                    continue;
-                }
-
-                if (record.Status != ParoleStatus.Active)
-                {
-                    continue;
-                }
-
-                if (JailTimeTracker.Instance.IsInJail(record.Player))
-                {
-                    continue;
-                }
-
-                ProcessExpiredDailyCheckIn(record.Player, currentDayIndex, currentMinuteOfDay);
-                ScheduleDailyCheckIn(record.Player, currentDayIndex, currentMinuteOfDay);
-            }
+            Core.ResolveParoleManager().HandleDayPassForParoleCheckIns();
         }
 
-        private void ScheduleDailyCheckIn(Player player, int currentDayIndex, int currentMinuteOfDay)
-        {
-            if (_dailyCheckInScheduledDay.TryGetValue(player, out int lastScheduledDay) && lastScheduledDay == currentDayIndex)
-            {
-                return;
-            }
-
-            if (_dailyCheckInRequirements.TryGetValue(player, out var existingRequirement))
-            {
-                if (existingRequirement.DayIndex == currentDayIndex)
-                {
-                    _dailyCheckInScheduledDay[player] = currentDayIndex;
-                    return;
-                }
-
-                if (existingRequirement.Completed)
-                {
-                    _dailyCheckInRequirements.Remove(player);
-                }
-            }
-
-            float windowMinutes = GetDailyCheckInWindowMinutes(player);
-            if (!TryBuildDailyCheckInWindow(currentMinuteOfDay, windowMinutes, out int windowStartMinuteOfDay, out int windowEndMinuteOfDay))
-            {
-                _dailyCheckInScheduledDay[player] = currentDayIndex;
-                ModLogger.Warn($"ParoleSystem: Could not schedule check-in window for {player.name} on day index {currentDayIndex} within 10:00-20:00");
-                return;
-            }
-
-            _dailyCheckInRequirements[player] = new DailyCheckInRequirement
-            {
-                DayIndex = currentDayIndex,
-                WindowStartMinuteOfDay = windowStartMinuteOfDay,
-                WindowEndMinuteOfDay = windowEndMinuteOfDay,
-                ReminderSent = false,
-                Completed = false
-            };
-            _dailyCheckInScheduledDay[player] = currentDayIndex;
-
-            SendDailyCheckInInstructionText(player, windowStartMinuteOfDay, windowEndMinuteOfDay);
-            ModLogger.Info($"ParoleSystem: Scheduled daily check-in for {player.name} (day index {currentDayIndex}, {FormatMinuteOfDay(windowStartMinuteOfDay)} - {FormatMinuteOfDay(windowEndMinuteOfDay)})");
-        }
-
-        private float GetDailyCheckInWindowMinutes(Player player)
-        {
-            var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
-            if (rapSheet == null)
-            {
-                return LOW_LSI_CHECKIN_WINDOW_MINUTES;
-            }
-
-            return rapSheet.LSILevel switch
-            {
-                LSILevel.High => HIGH_LSI_CHECKIN_WINDOW_MINUTES,
-                LSILevel.Severe => HIGH_LSI_CHECKIN_WINDOW_MINUTES,
-                _ => LOW_LSI_CHECKIN_WINDOW_MINUTES
-            };
-        }
-
-        private bool TryBuildDailyCheckInWindow(int currentMinuteOfDay, float windowMinutes, out int windowStartMinuteOfDay, out int windowEndMinuteOfDay)
-        {
-            windowStartMinuteOfDay = 0;
-            windowEndMinuteOfDay = 0;
-
-            int windowLengthMinutes = Mathf.RoundToInt(windowMinutes);
-            int earliestStart = CHECKIN_START_HOUR_24 * 60;
-            int latestEnd = CHECKIN_END_HOUR_24 * 60;
-            int latestStart = latestEnd - windowLengthMinutes;
-
-            int minStart = Mathf.Max(currentMinuteOfDay, earliestStart);
-            if (minStart > latestStart)
-            {
-                return false;
-            }
-
-            windowStartMinuteOfDay = UnityEngine.Random.Range(minStart, latestStart + 1);
-            windowEndMinuteOfDay = windowStartMinuteOfDay + windowLengthMinutes;
-            return true;
-        }
-
-        private string GetPlayerDisplayName(Player player)
+        internal string GetPlayerDisplayNameInternal(Player player)
         {
             string rawName = player?.name ?? "Parolee";
             if (string.IsNullOrWhiteSpace(rawName))
@@ -579,19 +469,7 @@ namespace Behind_Bars.Systems
             return trimmedName;
         }
 
-        private void SendDailyCheckInInstructionText(Player player, int windowStartMinuteOfDay, int windowEndMinuteOfDay)
-        {
-            string playerName = GetPlayerDisplayName(player);
-            string windowStartText = FormatMinuteOfDay(windowStartMinuteOfDay);
-            string windowEndText = FormatMinuteOfDay(windowEndMinuteOfDay);
-            string message =
-                $"{playerName}, this is your supervising officer. Your check-in appointment today is scheduled between " +
-                $"{windowStartText} and {windowEndText}. Report during this window.";
-
-            SendSupervisingOfficerText(player, message);
-        }
-
-        private string FormatMinuteOfDay(int minuteOfDay)
+        internal string FormatMinuteOfDayInternal(int minuteOfDay)
         {
             int normalized = minuteOfDay % GAME_MINUTES_PER_DAY;
             if (normalized < 0)
@@ -611,7 +489,7 @@ namespace Behind_Bars.Systems
             return $"{hour12}:{minute:00} {designator}";
         }
 
-        private int GetCurrentDayIndex()
+        internal int GetCurrentDayIndexInternal()
         {
             try
             {
@@ -628,7 +506,7 @@ namespace Behind_Bars.Systems
             return Mathf.Max(0, GameTimeManager.Instance.GetCurrentGameDay() - 1);
         }
 
-        private int GetCurrentMinuteOfDay()
+        internal int GetCurrentMinuteOfDayInternal()
         {
             try
             {
@@ -650,229 +528,37 @@ namespace Behind_Bars.Systems
             return Mathf.Clamp(fallbackHour, 0, 23) * 60 + Mathf.Clamp(fallbackMinute, 0, 59);
         }
 
-        private string FormatWindowText(DailyCheckInRequirement requirement)
-        {
-            return $"{FormatMinuteOfDay(requirement.WindowStartMinuteOfDay)} and {FormatMinuteOfDay(requirement.WindowEndMinuteOfDay)}";
-        }
-
         public DailyCheckInStatus GetDailyCheckInStatus(Player player, out string windowText, bool applyConsequences = true)
         {
-            windowText = string.Empty;
-
-            if (player == null)
-            {
-                return DailyCheckInStatus.NoScheduledWindow;
-            }
-
-            if (!_dailyCheckInRequirements.TryGetValue(player, out var requirement) || requirement == null)
-            {
-                return DailyCheckInStatus.NoScheduledWindow;
-            }
-
-            windowText = FormatWindowText(requirement);
-
-            int currentDayIndex = GetCurrentDayIndex();
-            int currentMinuteOfDay = GetCurrentMinuteOfDay();
-
-            if (currentDayIndex > requirement.DayIndex ||
-                (currentDayIndex == requirement.DayIndex && currentMinuteOfDay > requirement.WindowEndMinuteOfDay))
-            {
-                if (applyConsequences)
-                {
-                    HandleMissedDailyCheckIn(player, requirement);
-                    _dailyCheckInRequirements.Remove(player);
-                }
-
-                return DailyCheckInStatus.MissedWindow;
-            }
-
-            if (currentDayIndex < requirement.DayIndex)
-            {
-                return DailyCheckInStatus.NoScheduledWindow;
-            }
-
-            if (currentMinuteOfDay < requirement.WindowStartMinuteOfDay)
-            {
-                return DailyCheckInStatus.TooEarly;
-            }
-
-            return DailyCheckInStatus.Allowed;
+            var status = Core.ResolveParoleManager().GetDailyCheckInStatus(player, out windowText, applyConsequences);
+            return (DailyCheckInStatus)(int)status;
         }
 
         public bool TryBeginCheckInSession(Player player, out DailyCheckInStatus status, out string windowText)
         {
-            status = GetDailyCheckInStatus(player, out windowText, applyConsequences: true);
-            if (status != DailyCheckInStatus.Allowed)
-            {
-                return false;
-            }
-
-            _activeCheckInSessions.Add(player);
-            return true;
+            bool allowed = Core.ResolveParoleManager().TryBeginCheckInSession(player, out var managerStatus, out windowText);
+            status = (DailyCheckInStatus)(int)managerStatus;
+            return allowed;
         }
 
         public void EndCheckInSession(Player player)
         {
-            if (player == null)
-            {
-                return;
-            }
-
-            _activeCheckInSessions.Remove(player);
+            Core.ResolveParoleManager().EndCheckInSession(player);
         }
 
         public bool NotifyDailyCheckInCompleted(Player player)
         {
-            if (player == null)
-            {
-                return false;
-            }
-
-            _activeCheckInSessions.Remove(player);
-
-            if (_dailyCheckInRequirements.TryGetValue(player, out var requirement) && requirement != null)
-            {
-                requirement.Completed = true;
-                _dailyCheckInRequirements.Remove(player);
-                ModLogger.Info($"ParoleSystem: Daily check-in completed for {player.name}");
-                return true;
-            }
-
-            return false;
+            return Core.ResolveParoleManager().NotifyDailyCheckInCompleted(player);
         }
 
-        private void ProcessExpiredDailyCheckIn(Player player, int currentDayIndex, int currentMinuteOfDay)
-        {
-            if (player == null || _activeCheckInSessions.Contains(player))
-            {
-                return;
-            }
-
-            if (!_dailyCheckInRequirements.TryGetValue(player, out var requirement) || requirement == null)
-            {
-                return;
-            }
-
-            if (requirement.Completed)
-            {
-                _dailyCheckInRequirements.Remove(player);
-                return;
-            }
-
-            bool missed = currentDayIndex > requirement.DayIndex ||
-                          (currentDayIndex == requirement.DayIndex && currentMinuteOfDay > requirement.WindowEndMinuteOfDay);
-            if (!missed)
-            {
-                return;
-            }
-
-            HandleMissedDailyCheckIn(player, requirement);
-            _dailyCheckInRequirements.Remove(player);
-        }
-
-        private void ProcessUpcomingCheckInReminder(Player player, int currentDayIndex, int currentMinuteOfDay)
+        internal void IssueAgentWarrantInternal(Player player)
         {
             if (player == null)
             {
                 return;
             }
 
-            if (!_dailyCheckInRequirements.TryGetValue(player, out var requirement) || requirement == null)
-            {
-                return;
-            }
-
-            if (requirement.Completed || requirement.ReminderSent)
-            {
-                return;
-            }
-
-            if (requirement.DayIndex != currentDayIndex)
-            {
-                return;
-            }
-
-            int reminderMinute = requirement.WindowStartMinuteOfDay - 60;
-            if (currentMinuteOfDay < reminderMinute || currentMinuteOfDay >= requirement.WindowStartMinuteOfDay)
-            {
-                return;
-            }
-
-            requirement.ReminderSent = true;
-
-            string message =
-                $"{GetPlayerDisplayName(player)}, reminder: your parole check-in window starts in one hour. " +
-                $"Report between {FormatMinuteOfDay(requirement.WindowStartMinuteOfDay)} and {FormatMinuteOfDay(requirement.WindowEndMinuteOfDay)}.";
-            SendSupervisingOfficerText(player, message);
-        }
-
-        private void HandleMissedDailyCheckIn(Player player, DailyCheckInRequirement requirement)
-        {
-            var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
-            if (rapSheet?.CurrentParoleRecord == null)
-            {
-                return;
-            }
-
-            var paroleRecord = rapSheet.CurrentParoleRecord;
-            paroleRecord.RecordMissedCheckIn();
-
-            int missedCheckIns = paroleRecord.GetMissedCheckIns();
-
-            if (missedCheckIns <= 1)
-            {
-                LSILevel previousLsi = rapSheet.LSILevel;
-                LSILevel escalatedLsi = EscalateLSILevel(previousLsi);
-                rapSheet.LSILevel = escalatedLsi;
-                RapSheetManager.Instance.MarkRapSheetChanged(player);
-
-                string message =
-                    $"{GetPlayerDisplayName(player)}, you missed your required check-in window ({FormatMinuteOfDay(requirement.WindowStartMinuteOfDay)} to {FormatMinuteOfDay(requirement.WindowEndMinuteOfDay)}). " +
-                    $"First offense recorded: compliance score decreased and supervision level increased to {escalatedLsi}.";
-                SendSupervisingOfficerText(player, message);
-
-                ModLogger.Warn($"ParoleSystem: First missed daily check-in recorded for {player.name}");
-                return;
-            }
-
-            var violation = new ViolationRecord(
-                ViolationType.MissedCheckIn,
-                $"Missed scheduled daily check-in window {FormatMinuteOfDay(requirement.WindowStartMinuteOfDay)} - {FormatMinuteOfDay(requirement.WindowEndMinuteOfDay)}",
-                2.5f);
-
-            rapSheet.AddParoleViolation(violation);
-            RapSheetManager.Instance.MarkRapSheetChanged(player);
-
-            IssueAgentWarrant(player);
-
-            string violationMessage =
-                $"{GetPlayerDisplayName(player)}, this is your second missed check-in. You are now in parole violation. " +
-                "Agent warrant issued. You will remain wanted until your next arrest.";
-            SendSupervisingOfficerText(player, violationMessage);
-
-            ModLogger.Warn($"ParoleSystem: Escalated missed check-in violation for {player.name}");
-        }
-
-        private LSILevel EscalateLSILevel(LSILevel currentLevel)
-        {
-            return currentLevel switch
-            {
-                LSILevel.None => LSILevel.Minimum,
-                LSILevel.Minimum => LSILevel.Medium,
-                LSILevel.Medium => LSILevel.High,
-                LSILevel.High => LSILevel.Severe,
-                _ => LSILevel.Severe
-            };
-        }
-
-        private void IssueAgentWarrant(Player player)
-        {
-            if (player == null)
-            {
-                return;
-            }
-
-            bool isNewWarrant = _playersWithActiveWarrants.Add(player);
+            bool isNewWarrant = _playersWithActiveWarrants.Add(GetPlayerRuntimeKey(player));
             TriggerPolicePursuitForWarrant(player);
 
             if (isNewWarrant)
@@ -880,6 +566,8 @@ namespace Behind_Bars.Systems
                 ModLogger.Warn($"ParoleSystem: Active warrant issued for {player.name}");
             }
         }
+
+        private bool IsAuthorityForParoleActions() => IsAuthorityForParoleActionsInternal();
 
         private void TriggerPolicePursuitForWarrant(Player player)
         {
@@ -904,27 +592,29 @@ namespace Behind_Bars.Systems
 
         private void EnforceActiveWarrant(Player player)
         {
-            if (player == null || !_playersWithActiveWarrants.Contains(player))
+            string playerKey = GetPlayerRuntimeKey(player);
+
+            if (player == null || !_playersWithActiveWarrants.Contains(playerKey))
             {
                 return;
             }
 
-            if (JailTimeTracker.Instance.IsInJail(player))
+            if (Core.ResolveJailTimeTracker().IsInJail(player))
             {
-                _playersWithActiveWarrants.Remove(player);
-                _lastWarrantEnforcementTime.Remove(player);
+                _playersWithActiveWarrants.Remove(playerKey);
+                _lastWarrantEnforcementTime.Remove(playerKey);
                 ModLogger.Info($"ParoleSystem: Cleared active warrant for {player.name} after arrest");
                 return;
             }
 
             float now = Time.time;
-            if (_lastWarrantEnforcementTime.TryGetValue(player, out float lastEnforcementTime) &&
+            if (_lastWarrantEnforcementTime.TryGetValue(playerKey, out float lastEnforcementTime) &&
                 now - lastEnforcementTime < ACTIVE_WARRANT_ENFORCEMENT_INTERVAL_SECONDS)
             {
                 return;
             }
 
-            _lastWarrantEnforcementTime[player] = now;
+            _lastWarrantEnforcementTime[playerKey] = now;
 
             if (player.CrimeData != null && player.CrimeData.CurrentPursuitLevel != PlayerCrimeData.EPursuitLevel.Arresting)
             {
@@ -939,12 +629,14 @@ namespace Behind_Bars.Systems
                 return;
             }
 
-            if (_pendingOfficerTexts.TryGetValue(player, out var existing) && existing != null && existing.Message == message)
+            string playerKey = GetPlayerRuntimeKey(player);
+
+            if (_pendingOfficerTexts.TryGetValue(playerKey, out var existing) && existing != null && existing.Message == message)
             {
                 return;
             }
 
-            _pendingOfficerTexts[player] = new PendingOfficerText
+            _pendingOfficerTexts[playerKey] = new PendingOfficerText
             {
                 Message = message,
                 Attempts = 0,
@@ -959,7 +651,9 @@ namespace Behind_Bars.Systems
                 return;
             }
 
-            if (!_pendingOfficerTexts.TryGetValue(player, out var pending) || pending == null)
+            string playerKey = GetPlayerRuntimeKey(player);
+
+            if (!_pendingOfficerTexts.TryGetValue(playerKey, out var pending) || pending == null)
             {
                 return;
             }
@@ -974,21 +668,25 @@ namespace Behind_Bars.Systems
 
             if (SendSupervisingOfficerText(player, pending.Message, allowRetryQueue: false))
             {
-                _pendingOfficerTexts.Remove(player);
+                _pendingOfficerTexts.Remove(playerKey);
                 return;
             }
 
             if (pending.Attempts >= TEXT_MESSAGE_RETRY_MAX_ATTEMPTS)
             {
-                _pendingOfficerTexts.Remove(player);
+                _pendingOfficerTexts.Remove(playerKey);
                 ModLogger.Warn($"ParoleSystem: Failed to deliver supervising officer text after retries for {player.name}");
                 return;
             }
 
-            _pendingOfficerTexts[player] = pending;
+            _pendingOfficerTexts[playerKey] = pending;
         }
 
-        private bool SendSupervisingOfficerText(Player player, string message, bool allowRetryQueue = true)
+        /// <summary>
+        /// Route a supervising-officer text message through the parole domain.
+        /// NPC-side parole behaviors should use this instead of resolving text ownership themselves.
+        /// </summary>
+        public bool SendSupervisingOfficerText(Player player, string message, bool allowRetryQueue = true)
         {
             if (string.IsNullOrWhiteSpace(message))
             {
@@ -997,9 +695,10 @@ namespace Behind_Bars.Systems
 
             try
             {
-                EnsureDynamicParoleOfficerManager();
+                var npcManager = Core.Instance?.NpcManager;
+                npcManager?.EnsureDynamicParoleOfficerManager();
 
-                var supervisingOfficer = PrisonNPCManager.Instance?.GetSupervisingOfficer();
+                var supervisingOfficer = npcManager?.GetSupervisingOfficer();
                 if (supervisingOfficer == null)
                 {
                     if (allowRetryQueue)
@@ -1015,7 +714,7 @@ namespace Behind_Bars.Systems
                 {
                     if (player != null)
                     {
-                        _pendingOfficerTexts.Remove(player);
+                        _pendingOfficerTexts.Remove(GetPlayerRuntimeKey(player));
                     }
 
                     return true;
@@ -1048,12 +747,11 @@ namespace Behind_Bars.Systems
                 return;
             }
 
-            _dailyCheckInRequirements.Remove(player);
-            _dailyCheckInScheduledDay.Remove(player);
-            _pendingOfficerTexts.Remove(player);
-            _activeCheckInSessions.Remove(player);
-            _playersWithActiveWarrants.Remove(player);
-            _lastWarrantEnforcementTime.Remove(player);
+            string playerKey = GetPlayerRuntimeKey(player);
+            Core.ResolveParoleManager().ClearCheckInState(player);
+            _pendingOfficerTexts.Remove(playerKey);
+            _playersWithActiveWarrants.Remove(playerKey);
+            _lastWarrantEnforcementTime.Remove(playerKey);
         }
 
         /// <summary>
@@ -1061,7 +759,7 @@ namespace Behind_Bars.Systems
         /// </summary>
         private void OnParoleComplete(Player player)
         {
-            if (_paroleRecords.TryGetValue(player, out var record))
+            if (_paroleRecords.TryGetValue(GetPlayerRuntimeKey(player), out var record))
             {
                 if (record.Status == ParoleStatus.Active)
                 {
@@ -1079,7 +777,7 @@ namespace Behind_Bars.Systems
             try
             {
                 // Get cached rap sheet (loads from file only once)
-                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
                 if (rapSheet == null)
                 {
                     ModLogger.Warn($"[LSI] Failed to get rap sheet for {player.name}");
@@ -1094,7 +792,7 @@ namespace Behind_Bars.Systems
                     ModLogger.Info($"[LSI] Parole tracking initialized for {player.name} - LSI Level: {rapSheet.LSILevel}");
 
                     // Mark rap sheet as changed - game's save system handles saving automatically
-                    RapSheetManager.Instance.MarkRapSheetChanged(player);
+                    Core.ResolveRapSheetManager().MarkRapSheetChanged(player);
                 }
                 else
                 {
@@ -1108,7 +806,7 @@ namespace Behind_Bars.Systems
         }
 
         /// <summary>
-        /// Monitor active parole and conduct periodic searches
+        /// Monitor active parole, officer reminders, and condition enforcement
         /// </summary>
         private IEnumerator MonitorParole(ParoleRuntimeRecord record)
         {
@@ -1117,7 +815,7 @@ namespace Behind_Bars.Systems
             while (record.Status == ParoleStatus.Active)
             {
                 // Update time remaining from ParoleTimeTracker
-                record.TimeRemainingGameMinutes = ParoleTimeTracker.Instance.GetRemainingTime(record.Player);
+                record.TimeRemainingGameMinutes = Core.ResolveParoleManager().GetRemainingTime(record.Player);
 
                 // Check if parole is complete
                 if (record.TimeRemainingGameMinutes <= 0)
@@ -1125,22 +823,46 @@ namespace Behind_Bars.Systems
                     break;
                 }
 
-                // Check if it's time for a random search (using game time)
                 float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
 
                 if (IsAuthorityForParoleActions())
                 {
-                    int currentDayIndex = GetCurrentDayIndex();
-                    int currentMinuteOfDay = GetCurrentMinuteOfDay();
-                    ProcessUpcomingCheckInReminder(record.Player, currentDayIndex, currentMinuteOfDay);
-                    ProcessExpiredDailyCheckIn(record.Player, currentDayIndex, currentMinuteOfDay);
+                    int currentDayIndex = GetCurrentDayIndexInternal();
+                    int currentMinuteOfDay = GetCurrentMinuteOfDayInternal();
+                    var paroleManager = Core.ResolveParoleManager();
+                    paroleManager.ProcessUpcomingCheckInReminder(record.Player, currentDayIndex, currentMinuteOfDay);
+                    paroleManager.ProcessExpiredDailyCheckIn(record.Player, currentDayIndex, currentMinuteOfDay);
                     EnforceActiveWarrant(record.Player);
                     ProcessPendingOfficerText(record.Player);
-                }
 
-                if (currentGameTime >= record.NextSearchGameTimeMinutes)
-                {
-                    yield return ConductRandomSearch(record);
+                    // Process parole condition enforcement
+                    try
+                    {
+                        var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(record.Player);
+                        if (rapSheet != null)
+                        {
+                            var paroleConditionManager = GetParoleConditionManager();
+                            var homeVisitSystem = GetHomeVisitSystem();
+                            var paroleFeeSystem = GetParoleFeeSystem();
+
+                            // Electronic monitoring curfew check (Severe LSI only - always-on)
+                            if (rapSheet.LSILevel == LSILevel.Severe &&
+                                paroleConditionManager.IsConditionActive("curfew"))
+                            {
+                                CheckElectronicCurfew(record.Player, rapSheet, currentMinuteOfDay);
+                            }
+
+                            // Check and process home visits
+                            homeVisitSystem.CheckAndProcessHomeVisit(record.Player, rapSheet);
+
+                            // Check and assess fees
+                            paroleFeeSystem.CheckAndAssessFees(record.Player, rapSheet);
+                        }
+                    }
+                    catch (System.Exception ex)
+                    {
+                        ModLogger.Error($"Error in parole condition monitoring: {ex.Message}");
+                    }
                 }
 
                 // Check for parole violations
@@ -1157,160 +879,27 @@ namespace Behind_Bars.Systems
         }
 
         /// <summary>
-        /// Conduct a random search if parole officer is in range
-        /// </summary>
-        private IEnumerator ConductRandomSearch(ParoleRuntimeRecord record)
-        {
-            ModLogger.Debug($"Conducting random search on {record.Player.name}");
-
-            // Check if parole officer is close enough
-            if (_paroleOfficerInstance != null && record.Player != null)
-            {
-                float distance = Vector3.Distance(_paroleOfficerInstance.position, record.Player.transform.position);
-
-                if (distance <= SEARCH_RADIUS)
-                {
-                    // Conduct the search
-                    yield return PerformBodySearch(record);
-                }
-                else
-                {
-                    ModLogger.Info($"Parole Officer too far from {record.Player.name} for search");
-                }
-            }
-
-            // Schedule next search (using game time)
-            float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
-            float searchIntervalMin = GameTimeManager.RealSecondsToGameMinutes(SEARCH_INTERVAL_MIN);
-            float searchIntervalMax = GameTimeManager.RealSecondsToGameMinutes(SEARCH_INTERVAL_MAX);
-            record.LastSearchGameTimeMinutes = currentGameTime;
-            record.NextSearchGameTimeMinutes = currentGameTime + UnityEngine.Random.Range(searchIntervalMin, searchIntervalMax);
-        }
-
-        /// <summary>
-        /// Perform body search on parolee
-        /// </summary>
-        private IEnumerator PerformBodySearch(ParoleRuntimeRecord record)
-        {
-            ModLogger.Info($"Performing body search on {record.Player.name}");
-
-            // TODO: Implement actual search mechanics
-            // This could involve:
-            // 1. Showing search UI
-            // 2. Checking player inventory for contraband
-            // 3. Applying consequences for violations
-            // 4. Recording search results
-
-            // Simulate search time
-            yield return new WaitForSeconds(2f);
-
-            // Check for violations during search
-            bool hasViolations = CheckForSearchViolations(record);
-
-            if (hasViolations)
-            {
-                record.ViolationCount++;
-                record.Violations.Add($"Contraband found during search at {Time.time}");
-                ModLogger.Info($"Search violation found for {record.Player.name}. Total violations: {record.ViolationCount}");
-
-                // Apply violation consequences
-                yield return HandleParoleViolation(record);
-            }
-            else
-            {
-                ModLogger.Info($"Search completed for {record.Player.name} - no violations found");
-            }
-        }
-
-        /// <summary>
-        /// Check player inventory for contraband during search
-        /// </summary>
-        private bool CheckForSearchViolations(ParoleRuntimeRecord record)
-        {
-            bool foundViolations = false;
-            var violationDetails = new System.Text.StringBuilder();
-
-            if (record.Player?.Inventory == null)
-                return false;
-
-            ModLogger.Info($"Checking inventory for contraband items for {record.Player.name}");
-
-            try
-            {
-                // Get all inventory slots from PlayerInventory instance
-                var playerInventory = record.Player.Inventory;
-                if (playerInventory == null)
-                {
-                    ModLogger.Info($"Player {record.Player.name} has no inventory instance");
-                    return false;
-                }
-
-                // Inventory checking disabled - use fallback random detection for now
-                return UnityEngine.Random.Range(0f, 1f) < 0.2f; // 20% chance
-            }
-            catch (System.Exception ex)
-            {
-                ModLogger.Error($"Error during contraband search: {ex.Message}");
-                // Fall back to random chance if inventory check fails
-                return UnityEngine.Random.Range(0f, 1f) < 0.2f;
-            }
-        }
-
-        /// <summary>
-        /// Check if an item name indicates it's a drug-related item
-        /// </summary>
-        private bool IsDrugItem(string itemName)
-        {
-            if (string.IsNullOrEmpty(itemName))
-                return false;
-
-            var name = itemName.ToLower();
-
-            return name.Contains("weed") ||
-                   name.Contains("cannabis") ||
-                   name.Contains("marijuana") ||
-                   name.Contains("cocaine") ||
-                   name.Contains("coke") ||
-                   name.Contains("meth") ||
-                   name.Contains("crystal") ||
-                   name.Contains("heroin") ||
-                   name.Contains("opium") ||
-                   name.Contains("pill") ||
-                   name.Contains("drug") ||
-                   name.Contains("narcotic") ||
-                   name.Contains("substance");
-        }
-
-        /// <summary>
-        /// Check if an item name indicates it's a weapon
-        /// </summary>
-        private bool IsWeaponItem(string itemName)
-        {
-            if (string.IsNullOrEmpty(itemName))
-                return false;
-
-            var name = itemName.ToLower();
-
-            return name.Contains("gun") ||
-                   name.Contains("pistol") ||
-                   name.Contains("rifle") ||
-                   name.Contains("shotgun") ||
-                   name.Contains("knife") ||
-                   name.Contains("blade") ||
-                   name.Contains("weapon") ||
-                   name.Contains("taser") ||
-                   name.Contains("baton") ||
-                   name.Contains("sword") ||
-                   name.Contains("axe") ||
-                   name.Contains("hammer") && name.Contains("war"); // war hammer, etc.
-        }
-
-        /// <summary>
         /// Handle parole violation consequences
         /// </summary>
         private IEnumerator HandleParoleViolation(ParoleRuntimeRecord record)
         {
             ModLogger.Info($"Handling parole violation for {record.Player.name}");
+
+            // Adjust rapport for violation
+            try
+            {
+                var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(record.Player);
+                if (rapSheet?.CurrentParoleRecord != null)
+                {
+                    rapSheet.CurrentParoleRecord.AdjustRapport(-15f);
+                    rapSheet.CurrentParoleRecord.ResetHighComplianceDays();
+                    Core.ResolveRapSheetManager().MarkRapSheetChanged(record.Player);
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error adjusting rapport for violation: {ex.Message}");
+            }
 
             // Notify supervising officer if available
             NotifySupervisingOfficerOfViolation(record.Player, "Contraband found during search");
@@ -1339,8 +928,8 @@ namespace Behind_Bars.Systems
                 record.TimeRemainingGameMinutes += extension;
 
                 // Update ParoleTimeTracker with new duration
-                ParoleTimeTracker.Instance.StopTracking(record.Player);
-                ParoleTimeTracker.Instance.StartTracking(record.Player, record.DurationGameMinutes, OnParoleComplete);
+                Core.ResolveParoleManager().StopTracking(record.Player);
+                Core.ResolveParoleManager().StartTracking(record.Player, record.DurationGameMinutes, OnParoleComplete);
 
                 ModLogger.Info($"Parole extended for {record.Player.name} by {extension} game minutes ({GameTimeManager.FormatGameTime(extension)}) due to violation");
 
@@ -1361,7 +950,7 @@ namespace Behind_Bars.Systems
 
             try
             {
-                var npcManager = PrisonNPCManager.Instance;
+                var npcManager = Core.Instance?.NpcManager;
                 if (npcManager != null)
                 {
                     var supervisingOfficer = npcManager.GetSupervisingOfficer();
@@ -1386,18 +975,18 @@ namespace Behind_Bars.Systems
             ModLogger.Info($"Handling parole revocation for {record.Player.name}");
 
             // Stop tracking with ParoleTimeTracker
-            ParoleTimeTracker.Instance.StopTracking(record.Player);
+            Core.ResolveParoleManager().StopTracking(record.Player);
 
             // End parole in RapSheet and archive it
             try
             {
-                var rapSheet = RapSheetManager.Instance.GetRapSheet(record.Player);
+                var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(record.Player);
                 if (rapSheet?.CurrentParoleRecord != null)
                 {
                     rapSheet.CurrentParoleRecord.EndParole();
                     // Move current parole record to past records
                     rapSheet.ArchiveCurrentParoleRecord();
-                    RapSheetManager.Instance.MarkRapSheetChanged(record.Player);
+                    Core.ResolveRapSheetManager().MarkRapSheetChanged(record.Player);
                 }
             }
             catch (System.Exception ex)
@@ -1408,12 +997,9 @@ namespace Behind_Bars.Systems
             // Hide parole status UI
             try
             {
-                var uiManager = BehindBarsUIManager.Instance;
-                if (uiManager != null)
-                {
-                    uiManager.HideParoleStatus();
-                    ModLogger.Info($"Parole status UI hidden for {record.Player.name} (revoked)");
-                }
+                var uiManager = Core.ResolveUIManager();
+                uiManager.HideParoleStatus();
+                ModLogger.Info($"Parole status UI hidden for {record.Player.name} (revoked)");
             }
             catch (System.Exception ex)
             {
@@ -1421,12 +1007,12 @@ namespace Behind_Bars.Systems
             }
 
             // Remove from active parole
-            _paroleRecords.Remove(record.Player);
+            _paroleRecords.Remove(record.PlayerKey);
             ClearParoleRuntimeFlags(record.Player);
 
             // Emit parole ended event
-            OnParoleEnded?.Invoke(record.Player);
-            ModLogger.Debug($"ParoleSystem: Emitted OnParoleEnded event for {record.Player.name} (revoked)");
+            RaiseParoleEnded(record.Player);
+            ModLogger.Debug($"ParoleSystem: Emitted parole-end lifecycle event for {record.Player.name} (revoked)");
 
             // TODO: Implement revocation consequences
             // This could involve:
@@ -1436,11 +1022,11 @@ namespace Behind_Bars.Systems
 
             yield return new WaitForSeconds(1f);
 
-            // Hand off to jail system
-            var jailSystem = Core.Instance?.GetJailSystem();
-            if (jailSystem != null && record.Player != null)
+            // Hand off to the jail manager seam
+            var jailManager = Core.Instance?.JailManager;
+            if (jailManager != null && record.Player != null)
             {
-                yield return jailSystem.HandlePlayerArrest(record.Player);
+                yield return jailManager.HandleImmediateArrest(record.Player);
             }
         }
 
@@ -1455,7 +1041,7 @@ namespace Behind_Bars.Systems
                 return;
             }
 
-            if (_paroleRecords.TryGetValue(player, out var record))
+            if (_paroleRecords.TryGetValue(GetPlayerRuntimeKey(player), out var record))
             {
                 CompleteParole(record);
             }
@@ -1465,17 +1051,17 @@ namespace Behind_Bars.Systems
                 // Still try to end parole in RapSheet if it exists
                 try
                 {
-                    var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                    var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
                     if (rapSheet?.CurrentParoleRecord != null && rapSheet.CurrentParoleRecord.IsOnParole())
                     {
                         rapSheet.CurrentParoleRecord.EndParole();
                         rapSheet.ArchiveCurrentParoleRecord();
-                        RapSheetManager.Instance.MarkRapSheetChanged(player);
+                        Core.ResolveRapSheetManager().MarkRapSheetChanged(player);
                         ModLogger.Info($"Completed parole in RapSheet for {player.name}");
 
                         // Emit parole ended event
-                        OnParoleEnded?.Invoke(player);
-                        ModLogger.Debug($"ParoleSystem: Emitted OnParoleEnded event for {player.name} (completed via CompleteParoleForPlayer)");
+                        RaiseParoleEnded(player);
+                        ModLogger.Debug($"ParoleSystem: Emitted parole-end lifecycle event for {player.name} (completed via CompleteParoleForPlayer)");
                     }
                 }
                 catch (System.Exception ex)
@@ -1485,6 +1071,141 @@ namespace Behind_Bars.Systems
             }
 
             ClearParoleRuntimeFlags(player);
+        }
+
+        /// <summary>
+        /// Electronic monitoring curfew check (Severe LSI only).
+        /// Called every tick from MonitorParole for always-on curfew detection.
+        /// </summary>
+        private void CheckElectronicCurfew(Player player, RapSheet rapSheet, int currentMinuteOfDay)
+        {
+            if (rapSheet?.CurrentParoleRecord == null) return;
+
+            if (!CurfewCondition.IsPastCurfew(rapSheet.LSILevel, currentMinuteOfDay))
+                return;
+
+            // Check if player is at home (at home = not a violation)
+            if (PlayerHomeDetector.IsPlayerAtHome(player))
+                return;
+
+            var paroleRecord = rapSheet.CurrentParoleRecord;
+
+            // Throttle: only check once per 5 game minutes to avoid spam
+            float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
+            float lastCurfewCheck = paroleRecord.GetLastInteractionGameTime();
+            if (currentGameTime - lastCurfewCheck < 5f)
+                return;
+
+            // Curfew violation detected via electronic monitoring
+            int violationCount = 0;
+            foreach (var v in paroleRecord.GetViolations())
+            {
+                if (v.ViolationType == ViolationType.CurfewViolation)
+                    violationCount++;
+            }
+
+            if (violationCount == 0)
+            {
+                // First violation: compliance penalty + rapport hit
+                paroleRecord.AdjustComplianceScore(-5f);
+                paroleRecord.AdjustRapport(-5f);
+                SendSupervisingOfficerText(player,
+                    $"Electronic monitoring alert: You are outside your residence past curfew ({CurfewCondition.GetCurfewDisplayTime(rapSheet.LSILevel)}). Return home immediately.");
+                ModLogger.Info($"[CURFEW] First curfew violation for {player.name} via electronic monitoring");
+            }
+            else if (violationCount == 1)
+            {
+                // Second violation: formal ViolationRecord
+                var violation = new ViolationRecord(ViolationType.CurfewViolation,
+                    $"Curfew violation detected via electronic monitoring at {FormatMinuteOfDayInternal(currentMinuteOfDay)}", 1.5f);
+                rapSheet.AddParoleViolation(violation);
+                paroleRecord.AdjustRapport(-10f);
+                SendSupervisingOfficerText(player,
+                    "Second curfew violation. A formal violation has been recorded on your parole record.");
+                ModLogger.Info($"[CURFEW] Second curfew violation for {player.name} - formal violation recorded");
+            }
+            else
+            {
+                // Third+ violation: warrant escalation
+                var violation = new ViolationRecord(ViolationType.CurfewViolation,
+                    $"Repeated curfew violation ({violationCount + 1} total) detected via electronic monitoring", 2.5f);
+                rapSheet.AddParoleViolation(violation);
+                IssueAgentWarrantInternal(player);
+                ModLogger.Info($"[CURFEW] Multiple curfew violations for {player.name} - warrant escalation");
+            }
+
+            paroleRecord.RecordInteraction(); // Use interaction time as throttle
+            Core.ResolveRapSheetManager().MarkRapSheetChanged(player);
+        }
+
+        /// <summary>
+        /// Evaluate LSI step-down eligibility.
+        /// Called after successful daily check-ins.
+        /// Criteria: compliance >= 80 for 3 consecutive game days + no violations + no missed check-ins in window.
+        /// </summary>
+        public void EvaluateLSIStepDown(Player player)
+        {
+            var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
+            if (rapSheet?.CurrentParoleRecord == null) return;
+
+            var paroleRecord = rapSheet.CurrentParoleRecord;
+            float compliance = paroleRecord.GetComplianceScore();
+
+            // Check compliance threshold
+            if (compliance < 80f)
+            {
+                paroleRecord.ResetHighComplianceDays();
+                return;
+            }
+
+            // Check for recent violations (none in last 3 game days)
+            float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
+            float threeDaysAgo = currentGameTime - (GAME_MINUTES_PER_DAY * 3);
+            foreach (var violation in paroleRecord.GetViolations())
+            {
+                // Skip if we can't determine timing (accept all violations)
+                // ViolationRecord uses DateTime, not game time
+                break; // If any violations exist in the window, don't step down
+            }
+
+            // Increment streak
+            paroleRecord.IncrementHighComplianceDays();
+            int streak = paroleRecord.GetConsecutiveHighComplianceDays();
+
+            ModLogger.Debug($"[STEP-DOWN] {player.name} compliance streak: {streak}/3 days (compliance: {compliance:F1})");
+
+            if (streak >= 3)
+            {
+                // Check if we've already stepped down the maximum amount
+                if (rapSheet.ComplianceLSIReduction >= 40)
+                {
+                    ModLogger.Debug($"[STEP-DOWN] {player.name} already at maximum step-down (reduction: {rapSheet.ComplianceLSIReduction})");
+                    return;
+                }
+
+                // Apply step-down
+                LSILevel oldLevel = rapSheet.LSILevel;
+                rapSheet.ApplyLSIStepDown();
+                rapSheet.UpdateLSILevel();
+                LSILevel newLevel = rapSheet.LSILevel;
+                paroleRecord.IncrementLSIStepDownCount();
+                paroleRecord.ResetHighComplianceDays();
+
+                Core.ResolveRapSheetManager().MarkRapSheetChanged(player);
+
+                if (oldLevel != newLevel)
+                {
+                    SendSupervisingOfficerText(player,
+                        $"Good news - your supervision level has been reduced from {oldLevel} to {newLevel} due to sustained compliance. Keep it up.");
+                    ModLogger.Info($"[STEP-DOWN] LSI stepped down for {player.name}: {oldLevel} → {newLevel}");
+                }
+                else
+                {
+                    SendSupervisingOfficerText(player,
+                        "Your good behavior has been noted. Supervision intensity reduced.");
+                    ModLogger.Info($"[STEP-DOWN] LSI reduction applied for {player.name} but level unchanged ({newLevel}). Reduction: {rapSheet.ComplianceLSIReduction}");
+                }
+            }
         }
 
         /// <summary>
@@ -1498,7 +1219,7 @@ namespace Behind_Bars.Systems
             record.TimeRemainingGameMinutes = 0f;
 
             // Stop tracking with ParoleTimeTracker
-            ParoleTimeTracker.Instance.StopTracking(record.Player);
+            Core.ResolveParoleManager().StopTracking(record.Player);
 
             // Clear release time grace period (parole is complete)
             ParoleSearchSystem.Instance.ClearReleaseTime(record.Player);
@@ -1506,13 +1227,13 @@ namespace Behind_Bars.Systems
             // End parole in RapSheet and archive it
             try
             {
-                var rapSheet = RapSheetManager.Instance.GetRapSheet(record.Player);
+                var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(record.Player);
                 if (rapSheet?.CurrentParoleRecord != null)
                 {
                     rapSheet.CurrentParoleRecord.EndParole();
                     // Move current parole record to past records
                     rapSheet.ArchiveCurrentParoleRecord();
-                    RapSheetManager.Instance.MarkRapSheetChanged(record.Player);
+                    Core.ResolveRapSheetManager().MarkRapSheetChanged(record.Player);
                 }
             }
             catch (System.Exception ex)
@@ -1523,12 +1244,9 @@ namespace Behind_Bars.Systems
             // Hide parole status UI
             try
             {
-                var uiManager = BehindBarsUIManager.Instance;
-                if (uiManager != null)
-                {
-                    uiManager.HideParoleStatus();
-                    ModLogger.Info($"Parole status UI hidden for {record.Player.name}");
-                }
+                var uiManager = Core.ResolveUIManager();
+                uiManager.HideParoleStatus();
+                ModLogger.Info($"Parole status UI hidden for {record.Player.name}");
             }
             catch (System.Exception ex)
             {
@@ -1536,18 +1254,25 @@ namespace Behind_Bars.Systems
             }
 
             // Emit parole ended event
-            OnParoleEnded?.Invoke(record.Player);
-            ModLogger.Debug($"ParoleSystem: Emitted OnParoleEnded event for {record.Player.name} (completed)");
+            RaiseParoleEnded(record.Player);
+            ModLogger.Debug($"ParoleSystem: Emitted parole-end lifecycle event for {record.Player.name} (completed)");
 
-            // TODO: Implement parole completion rewards
-            // This could involve:
-            // 1. Clearing criminal record
-            // 2. Restoring full rights
-            // 3. Positive reputation boost
-            // 4. Achievement unlock
+            // Grant parole completion rewards
+            try
+            {
+                var rewardRapSheet = Core.ResolveRapSheetManager().GetRapSheet(record.Player);
+                if (rewardRapSheet != null)
+                {
+                    ParoleCompletionRewards.GrantCompletionRewards(record.Player, rewardRapSheet);
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error granting parole completion rewards: {ex.Message}");
+            }
 
             // Remove from active parole
-            _paroleRecords.Remove(record.Player);
+            _paroleRecords.Remove(record.PlayerKey);
             ClearParoleRuntimeFlags(record.Player);
 
             // Check if we can despawn parole officer
@@ -1555,18 +1280,6 @@ namespace Behind_Bars.Systems
             {
                 DespawnParoleOfficer();
             }
-        }
-
-        /// <summary>
-        /// Spawn parole officer NPC (placeholder)
-        /// </summary>
-        private void SpawnParoleOfficer()
-        {
-            ModLogger.Info("Parole Officer NPC spawning removed - feature not implemented");
-
-            // NOTE: NPC spawning functionality has been removed from this mod
-            // The parole system will continue to work without the physical NPC
-            // Players will still be subject to parole rules and violations
         }
 
         /// <summary>
@@ -1585,7 +1298,7 @@ namespace Behind_Bars.Systems
         /// </summary>
         public ParoleRuntimeRecord? GetParoleRecord(Player player)
         {
-            _paroleRecords.TryGetValue(player, out var record);
+            _paroleRecords.TryGetValue(GetPlayerRuntimeKey(player), out var record);
             return record;
         }
 
@@ -1594,8 +1307,9 @@ namespace Behind_Bars.Systems
         /// </summary>
         public bool IsPlayerOnParole(Player player)
         {
-            return _paroleRecords.ContainsKey(player) &&
-                   _paroleRecords[player].Status == ParoleStatus.Active;
+            string playerKey = GetPlayerRuntimeKey(player);
+            return _paroleRecords.ContainsKey(playerKey) &&
+                   _paroleRecords[playerKey].Status == ParoleStatus.Active;
         }
 
         /// <summary>
@@ -1603,17 +1317,21 @@ namespace Behind_Bars.Systems
         /// </summary>
         public void ExtendParole(Player player, float additionalGameMinutes)
         {
-            if (_paroleRecords.TryGetValue(player, out var record))
+            if (_paroleRecords.TryGetValue(GetPlayerRuntimeKey(player), out var record))
             {
                 record.DurationGameMinutes += additionalGameMinutes;
                 record.TimeRemainingGameMinutes += additionalGameMinutes;
 
                 // Update ParoleTimeTracker with new duration
-                ParoleTimeTracker.Instance.StopTracking(player);
-                ParoleTimeTracker.Instance.StartTracking(player, record.DurationGameMinutes, OnParoleComplete);
+                Core.ResolveParoleManager().StopTracking(player);
+                Core.ResolveParoleManager().StartTracking(player, record.DurationGameMinutes, OnParoleComplete);
 
                 ModLogger.Info($"Extended parole for {player.name} by {additionalGameMinutes} game minutes ({GameTimeManager.FormatGameTime(additionalGameMinutes)})");
             }
         }
     }
+}
+
+namespace Behind_Bars.Systems.NPCs
+{
 }

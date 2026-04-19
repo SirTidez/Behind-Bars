@@ -524,9 +524,9 @@ namespace Behind_Bars.Systems.Jail
             bool scanCompleted = false;
 
             // Show notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Drag your palm to the scanner",
                     NotificationType.Instruction
                 );
@@ -617,9 +617,9 @@ namespace Behind_Bars.Systems.Jail
             }
 
             // Show success notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Exit scan complete - you are now free!",
                     NotificationType.Progress
                 );
@@ -659,9 +659,9 @@ namespace Behind_Bars.Systems.Jail
             }
 
             // Show failure notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Scan failed - try again",
                     NotificationType.Warning
                 );
@@ -692,9 +692,9 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Info($"ExitScannerStation: Player {currentPlayer.name} ready for exit trigger");
 
                 // Show notification to walk through exit
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         "Scan complete - walk through the exit to be released!",
                         NotificationType.Instruction
                     );
@@ -828,9 +828,10 @@ namespace Behind_Bars.Systems.Jail
             CloseExitDoor();
 
             // Notify ReleaseManager of exit scan completion (ReleaseManager will handle teleportation)
-            if (ReleaseManager.Instance != null)
+            var releaseManager = Core.ResolveReleaseManager();
+            if (releaseManager != null)
             {
-                ReleaseManager.Instance.OnExitScanCompleted(currentPlayer);
+                releaseManager.OnExitScanCompleted(currentPlayer);
                 ModLogger.Info("ExitScannerStation: Notified ReleaseManager of scan completion");
             }
             else
@@ -841,16 +842,16 @@ namespace Behind_Bars.Systems.Jail
                 currentPlayer.transform.rotation = Quaternion.Euler(releaseRotation);
 
                 // CRITICAL: Hide officer command notification in fallback path
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.HideOfficerCommand();
+                    Core.ResolveUIManager().HideOfficerCommand();
                     ModLogger.Info("ExitScannerStation: Hidden officer command notification (fallback path)");
                 }
 
                 // Final notification
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         "Release complete - you are free to go!",
                         NotificationType.Progress
                     );

@@ -213,7 +213,7 @@ namespace Behind_Bars.Harmony
             try
             {
                 ModLogger.Info($"[ARREST SERVER] Capturing {__instance.name}'s inventory after ammo removal");
-                var persistentData = Behind_Bars.Systems.Data.PersistentPlayerData.Instance;
+                var persistentData = Core.ResolvePersistentPlayerData();
                 if (persistentData != null)
                 {
                     string snapshotId = persistentData.CreateInventorySnapshot(__instance);
@@ -386,7 +386,7 @@ namespace Behind_Bars.Harmony
                 try
                 {
                     ModLogger.Info($"[ARREST SERVER] Capturing {__instance.name}'s inventory after ammo removal");
-                    var persistentData = Behind_Bars.Systems.Data.PersistentPlayerData.Instance;
+                    var persistentData = Core.ResolvePersistentPlayerData();
                     if (persistentData != null)
                     {
                         string snapshotId = persistentData.CreateInventorySnapshot(__instance);
@@ -530,7 +530,7 @@ namespace Behind_Bars.Harmony
                 }
                 
                 // Get cached rap sheet (loads from file only once)
-                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                var rapSheet = Core.GetRapSheet(player);
                 if (rapSheet == null)
                 {
                     ModLogger.Warn($"[RAP SHEET] Failed to get rap sheet for {player.name}");
@@ -624,7 +624,7 @@ namespace Behind_Bars.Harmony
 
                 // Mark rap sheet as changed - game's save system handles saving automatically
                 // The game will save RapSheet data through the ISaveable system
-                RapSheetManager.Instance.MarkRapSheetChanged(player);
+                Core.MarkRapSheetChanged(player);
                 ModLogger.Info($"[RAP SHEET] ✓ Rap sheet marked as changed - game will save automatically");
                 
                 // CRITICAL: DO NOT clear crimes here - they need to remain until player is released
@@ -960,7 +960,8 @@ namespace Behind_Bars.Harmony
                 return;
             }
 
-            if (JailTimeTracker.Instance != null && JailTimeTracker.Instance.IsInJail(player))
+            var jailTimeTracker = Core.ResolveJailTimeTracker();
+            if (jailTimeTracker != null && jailTimeTracker.IsInJail(player))
             {
                 ModLogger.Debug($"Skipping immediate re-arrest for {player.name}; already in jail status");
                 return;

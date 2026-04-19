@@ -66,7 +66,7 @@ namespace Behind_Bars.Tests
                 }
 
                 // Ensure player is not on parole
-                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                var rapSheet = Core.GetRapSheet(player);
                 if (rapSheet?.CurrentParoleRecord != null && rapSheet.CurrentParoleRecord.IsOnParole())
                 {
                     ModLogger.Warn("TEST SKIPPED: Player is already on parole. Complete parole first.");
@@ -74,7 +74,7 @@ namespace Behind_Bars.Tests
                 }
 
                 // Check officer count
-                var manager = DynamicParoleOfficerManager.Instance;
+                var manager = Core.ResolveDynamicParoleOfficerManager();
                 if (manager == null)
                 {
                     ModLogger.Error("TEST FAILED: DynamicParoleOfficerManager not initialized");
@@ -117,7 +117,7 @@ namespace Behind_Bars.Tests
                 }
 
                 // Start parole
-                var paroleSystem = Core.Instance?.GetParoleSystem();
+                var paroleSystem = Core.ResolveParoleManager()?.ParoleSystem;
                 if (paroleSystem == null)
                 {
                     ModLogger.Error("TEST FAILED: ParoleSystem not available");
@@ -125,7 +125,7 @@ namespace Behind_Bars.Tests
                 }
 
                 // Check if already on parole
-                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                var rapSheet = Core.GetRapSheet(player);
                 if (rapSheet?.CurrentParoleRecord != null && rapSheet.CurrentParoleRecord.IsOnParole())
                 {
                     ModLogger.Warn("TEST INFO: Player already on parole, checking supervising officer...");
@@ -150,7 +150,7 @@ namespace Behind_Bars.Tests
         {
             yield return new WaitForSeconds(2f);
 
-            var manager = DynamicParoleOfficerManager.Instance;
+            var manager = Core.ResolveDynamicParoleOfficerManager();
             if (manager == null)
             {
                 ModLogger.Error("TEST FAILED: DynamicParoleOfficerManager not initialized");
@@ -188,14 +188,14 @@ namespace Behind_Bars.Tests
                 }
 
                 // Ensure player is on parole
-                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                var rapSheet = Core.GetRapSheet(player);
                 if (rapSheet?.CurrentParoleRecord == null || !rapSheet.CurrentParoleRecord.IsOnParole())
                 {
                     ModLogger.Warn("TEST SKIPPED: Player not on parole. Start parole first.");
                     return;
                 }
 
-                var manager = DynamicParoleOfficerManager.Instance;
+                var manager = Core.ResolveDynamicParoleOfficerManager();
                 if (manager == null)
                 {
                     ModLogger.Error("TEST FAILED: DynamicParoleOfficerManager not initialized");
@@ -218,7 +218,7 @@ namespace Behind_Bars.Tests
         {
             yield return new WaitForSeconds(3f);
 
-            var manager = DynamicParoleOfficerManager.Instance;
+            var manager = Core.ResolveDynamicParoleOfficerManager();
             Vector3 playerPos = player.transform.position;
 
             // Check each patrol assignment
@@ -267,14 +267,14 @@ namespace Behind_Bars.Tests
                 }
 
                 // Check if on parole
-                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                var rapSheet = Core.GetRapSheet(player);
                 if (rapSheet?.CurrentParoleRecord == null || !rapSheet.CurrentParoleRecord.IsOnParole())
                 {
                     ModLogger.Warn("TEST SKIPPED: Player not on parole. Start parole first.");
                     return;
                 }
 
-                var manager = DynamicParoleOfficerManager.Instance;
+                var manager = Core.ResolveDynamicParoleOfficerManager();
                 if (manager == null)
                 {
                     ModLogger.Error("TEST FAILED: DynamicParoleOfficerManager not initialized");
@@ -285,7 +285,7 @@ namespace Behind_Bars.Tests
                 ModLogger.Info($"Officers before parole end: {beforeCount}");
 
                 // End parole
-                var paroleSystem = Core.Instance?.GetParoleSystem();
+                var paroleSystem = Core.ResolveParoleManager()?.ParoleSystem;
                 if (paroleSystem != null)
                 {
                     paroleSystem.CompleteParoleForPlayer(player);
@@ -304,7 +304,7 @@ namespace Behind_Bars.Tests
         {
             yield return new WaitForSeconds(2f);
 
-            var manager = DynamicParoleOfficerManager.Instance;
+            var manager = Core.ResolveDynamicParoleOfficerManager();
             int afterCount = manager.GetActiveOfficerCount();
 
             if (afterCount == 0)
@@ -336,7 +336,7 @@ namespace Behind_Bars.Tests
                 }
 
                 // Ensure player is on parole
-                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                var rapSheet = Core.GetRapSheet(player);
                 if (rapSheet?.CurrentParoleRecord == null || !rapSheet.CurrentParoleRecord.IsOnParole())
                 {
                     ModLogger.Warn("TEST SKIPPED: Player not on parole. Start parole first.");

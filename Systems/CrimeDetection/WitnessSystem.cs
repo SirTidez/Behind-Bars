@@ -201,7 +201,7 @@ namespace Behind_Bars.Systems.CrimeDetection
 #else
             witness.PlayVO(Il2CppScheduleOne.VoiceOver.EVOLineType.Scared);
 #endif
-            witness.SetPanicked();
+            TrySetPanicked(witness);
         }
 
         /// <summary>
@@ -224,6 +224,24 @@ namespace Behind_Bars.Systems.CrimeDetection
 #else
             witness.PlayVO(Il2CppScheduleOne.VoiceOver.EVOLineType.Concerned);
 #endif
+        }
+
+        private static void TrySetPanicked(NPC witness)
+        {
+            if (witness == null)
+            {
+                return;
+            }
+
+            try
+            {
+                var setPanickedMethod = witness.GetType().GetMethod("SetPanicked", System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+                setPanickedMethod?.Invoke(witness, null);
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Debug($"Witness panic state unavailable for {witness.name}: {ex.Message}");
+            }
         }
 
         /// <summary>
@@ -309,7 +327,8 @@ namespace Behind_Bars.Systems.CrimeDetection
 
             try
             {
-                return JailTimeTracker.Instance != null && JailTimeTracker.Instance.IsInJail(perpetrator);
+                var jailTimeTracker = Core.ResolveJailTimeTracker();
+                return jailTimeTracker != null && jailTimeTracker.IsInJail(perpetrator);
             }
             catch
             {

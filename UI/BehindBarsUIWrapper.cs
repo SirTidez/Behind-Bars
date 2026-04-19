@@ -406,15 +406,15 @@ namespace Behind_Bars.UI
                     ModLogger.Info($"Starting optimistic release with {_remainingJailTime / GAME_SECONDS_PER_GAME_MINUTE:F1} game minutes remaining - timer continues running");
 
                     // Trigger the enhanced release system early for optimistic processing
-                    var jailSystem = Core.Instance?.JailSystem;
-                    if (jailSystem != null)
+                    var jailManager = Core.Instance?.JailManager;
+                    if (jailManager != null)
                     {
-                        jailSystem.InitiateEnhancedRelease(Player.Local, ReleaseManager.ReleaseType.TimeServed);
+                        jailManager.InitiateEnhancedRelease(Player.Local, ReleaseManager.ReleaseType.TimeServed);
                         ModLogger.Info("Optimistic enhanced release triggered - guard dispatched early, timer continues");
                     }
                     else
                     {
-                        ModLogger.Error("JailSystem not available - cannot trigger enhanced release");
+                        ModLogger.Error("JailManager not available - cannot trigger enhanced release");
                     }
 
                     _earlyReleaseTriggered = true; // Prevent multiple early releases
@@ -435,10 +435,10 @@ namespace Behind_Bars.UI
 
                     ModLogger.Info("Jail time completed - fallback release trigger");
 
-                    var jailSystem = Core.Instance?.JailSystem;
-                    if (jailSystem != null)
+                    var jailManager = Core.Instance?.JailManager;
+                    if (jailManager != null)
                     {
-                        jailSystem.InitiateEnhancedRelease(Player.Local, ReleaseManager.ReleaseType.TimeServed);
+                        jailManager.InitiateEnhancedRelease(Player.Local, ReleaseManager.ReleaseType.TimeServed);
                         ModLogger.Info("Fallback enhanced release triggered");
                     }
 

@@ -171,10 +171,17 @@ namespace Behind_Bars.Systems
             ModLogger.Info($"Court session complete. Final bail: ${session.NegotiatedAmount:F0}");
             
             // Hand off to bail system for payment processing
-            var bailSystem = Core.Instance?.GetBailSystem();
+            var bailSystem = Core.ResolveBailSystem();
             if (bailSystem != null)
             {
                 yield return bailSystem.ProcessBailPayment(session.Defendant, session.NegotiatedAmount);
+            }
+            else
+            {
+                session.JudgeNotes = "Bail infrastructure was unavailable. Defendant remains in custody until the jail flow can complete.";
+                ModLogger.Error($"CourtSystem: BailSystem unavailable for {session.Defendant.name} - leaving defendant in custody and skipping payment handoff");
+                yield return new WaitForSeconds(1f);
+                yield break;
             }
             
             yield return new WaitForSeconds(1f);

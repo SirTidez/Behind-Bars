@@ -165,9 +165,10 @@ namespace Behind_Bars.Systems.NPCs
             SetupGuardRole();
 
             // Register with PrisonNPCManager
-            if (PrisonNPCManager.Instance != null)
+            var npcManager = Core.Instance?.NpcManager;
+            if (npcManager != null)
             {
-                PrisonNPCManager.Instance.RegisterGuard(this);
+                npcManager.RegisterGuard(this);
             }
 
             shiftStartTime = Time.time;
@@ -767,21 +768,21 @@ namespace Behind_Bars.Systems.NPCs
             // Initiate arrest procedure
             try
             {
-                // Use the jail system to arrest the player
-                var jailSystem = Behind_Bars.Core.Instance?.JailSystem;
-                if (jailSystem != null)
+                // Route the arrest through the jail manager seam.
+                var jailManager = Core.Instance?.JailManager;
+                if (jailManager != null)
                 {
                     // Trigger immediate arrest for assault
                     ModLogger.Info($"Guard {badgeNumber}: Initiating immediate arrest for assault by {attacker.name}");
 
                     // Use the immediate arrest system
-                    MelonCoroutines.Start(jailSystem.HandleImmediateArrest(attacker));
+                    MelonCoroutines.Start(jailManager.HandleImmediateArrest(attacker));
 
                     ModLogger.Info($"Guard {badgeNumber}: Player {attacker.name} arrested for assault on officer");
                 }
                 else
                 {
-                    ModLogger.Error($"Guard {badgeNumber}: Could not access jail system for arrest");
+                    ModLogger.Error($"Guard {badgeNumber}: Could not access jail manager for arrest");
                 }
 
                 // If intake officer, interrupt intake process

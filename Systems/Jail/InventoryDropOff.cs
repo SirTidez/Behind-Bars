@@ -84,9 +84,9 @@ namespace Behind_Bars.Systems.Jail
                 SetMessage("Complete mugshot and fingerprint scan first");
                 SetInteractableState(InteractableObject.EInteractableState.Invalid);
 
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         "Complete booking stations first!",
                         NotificationType.Warning
                     );
@@ -120,9 +120,9 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info($"Processing inventory for {player.name}");
 
             // Show notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Storing personal items...",
                     NotificationType.Instruction
                 );
@@ -154,9 +154,9 @@ namespace Behind_Bars.Systems.Jail
                 }
 
                 // Show completion notification
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         "Inventory processed - booking complete!",
                         NotificationType.Progress
                     );
@@ -173,9 +173,9 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Error($"Error processing inventory: {ex.Message}");
 
                 // Show error notification
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         "Error processing inventory",
                         NotificationType.Warning
                     );
@@ -241,9 +241,9 @@ namespace Behind_Bars.Systems.Jail
             try
             {
                 // Show gear issued notification
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         "Jail uniform issued",
                         NotificationType.Progress
                     );

@@ -241,6 +241,7 @@ public class SpawnPointOccupancy
     public Transform spawnPoint;
     public int spawnIndex;
     public bool isOccupied;
+    public string occupantKey;
     public string occupantName;
 }
 
@@ -266,6 +267,7 @@ public class CellDetail
     public int cellIndex;
     public string cellName;
     public bool isOccupied = false;
+    public string occupantKey = "";
     public string occupantName = "";
     
     // Maximum occupants for this cell (3 for holding cells, 1 for regular cells)
@@ -290,6 +292,7 @@ public class CellDetail
                 spawnPoint = spawnPoints[i],
                 spawnIndex = i,
                 isOccupied = false,
+                occupantKey = null,
                 occupantName = null
             });
         }
@@ -322,9 +325,19 @@ public class CellDetail
     /// <summary>
     /// Assigns a player to the first available spawn point
     /// </summary>
-    /// <param name="playerName">Player to assign</param>
+    /// <param name="player">Player to assign</param>
     /// <returns>The spawn point assigned, or null if cell is full</returns>
-    public Transform AssignPlayerToSpawnPoint(string playerName)
+    public Transform AssignPlayerToSpawnPoint(Player player)
+    {
+        if (player == null)
+        {
+            return null;
+        }
+
+        return AssignPlayerToSpawnPoint(GetPlayerRuntimeKey(player), player.name);
+    }
+
+    private Transform AssignPlayerToSpawnPoint(string playerKey, string playerDisplayName)
     {
         if (spawnPointOccupancy.Count > 0)
         {
@@ -333,12 +346,13 @@ public class CellDetail
             if (availableSpawn != null)
             {
                 availableSpawn.isOccupied = true;
-                availableSpawn.occupantName = playerName;
+                availableSpawn.occupantKey = playerKey;
+                availableSpawn.occupantName = playerDisplayName;
                 
                 // Update cell-level occupancy
                 UpdateCellOccupancy();
                 
-                Debug.Log($"Assigned {playerName} to {cellName} spawn point {availableSpawn.spawnIndex}");
+                Debug.Log($"Assigned {playerDisplayName} to {cellName} spawn point {availableSpawn.spawnIndex}");
                 return availableSpawn.spawnPoint;
             }
         }
@@ -348,7 +362,8 @@ public class CellDetail
             if (!isOccupied)
             {
                 isOccupied = true;
-                occupantName = playerName;
+                occupantKey = playerKey;
+                occupantName = playerDisplayName;
                 return GetAvailableSpawnPoint();
             }
         }
@@ -359,29 +374,41 @@ public class CellDetail
     /// <summary>
     /// Releases a player from their spawn point
     /// </summary>
-    /// <param name="playerName">Player to release</param>
-    public void ReleasePlayerFromSpawnPoint(string playerName)
+    /// <param name="player">Player to release</param>
+    public void ReleasePlayerFromSpawnPoint(Player player)
+    {
+        if (player == null)
+        {
+            return;
+        }
+
+        ReleasePlayerFromSpawnPoint(GetPlayerRuntimeKey(player), player.name);
+    }
+
+    private void ReleasePlayerFromSpawnPoint(string playerKey, string playerDisplayName)
     {
         if (spawnPointOccupancy.Count > 0)
         {
-            var occupiedSpawn = spawnPointOccupancy.Find(sp => sp.occupantName == playerName);
+            var occupiedSpawn = spawnPointOccupancy.Find(sp => sp.occupantKey == playerKey || sp.occupantName == playerDisplayName);
             if (occupiedSpawn != null)
             {
                 occupiedSpawn.isOccupied = false;
+                occupiedSpawn.occupantKey = null;
                 occupiedSpawn.occupantName = null;
                 
                 // Update cell-level occupancy
                 UpdateCellOccupancy();
                 
-                Debug.Log($"Released {playerName} from {cellName} spawn point {occupiedSpawn.spawnIndex}");
+                Debug.Log($"Released {playerDisplayName} from {cellName} spawn point {occupiedSpawn.spawnIndex}");
             }
         }
         else
         {
             // Regular cell behavior
-            if (occupantName == playerName)
+            if (occupantKey == playerKey || occupantName == playerDisplayName)
             {
                 isOccupied = false;
+                occupantKey = "";
                 occupantName = "";
             }
         }
@@ -400,13 +427,25 @@ public class CellDetail
             // Set occupant name to first occupant (for compatibility)
             if (occupiedSpawns.Count > 0)
             {
+                occupantKey = occupiedSpawns[0].occupantKey;
                 occupantName = occupiedSpawns[0].occupantName;
             }
             else
             {
+                occupantKey = "";
                 occupantName = "";
             }
         }
+    }
+
+    private static string GetPlayerRuntimeKey(Player player)
+    {
+        if (player == null)
+        {
+            return string.Empty;
+        }
+
+        return Behind_Bars.Core.ResolvePlayerKey(player);
     }
     
     /// <summary>

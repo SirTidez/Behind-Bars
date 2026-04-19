@@ -309,8 +309,8 @@ namespace Behind_Bars.Systems.NPCs
 
         private void HandleIdleState()
         {
-            // Check for new parolees nearby
-            CheckForNewParolees();
+            // Intake entry is manager-driven so spawn state and officer availability
+            // remain the single source of truth.
         }
 
         private void HandleDetectingParoleeState()
@@ -393,45 +393,6 @@ namespace Behind_Bars.Systems.NPCs
 
         #endregion
 
-        #region Parolee Detection
-
-        private void CheckForNewParolees()
-        {
-            // Check for players on parole nearby
-            var players = GameObject.FindObjectsOfType<Player>();
-            if (players == null || players.Length == 0) return;
-
-            float detectionRange = 10f; // Detection range for new parolees
-
-            foreach (var player in players)
-            {
-                if (player == null) continue;
-
-                // Check if player is on parole
-                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
-                if (rapSheet == null || rapSheet.CurrentParoleRecord == null) continue;
-                if (!rapSheet.CurrentParoleRecord.IsOnParole()) continue;
-
-                // Check if player just started parole (within last minute of game time)
-                float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
-                float paroleStartTime = rapSheet.CurrentParoleRecord.GetParoleStartTime();
-                float timeSinceStart = currentGameTime - paroleStartTime;
-
-                // Only process if parole started recently (within 1 game minute) and player is nearby
-                if (timeSinceStart > 1f) continue; // Already processed or too old
-
-                float distance = Vector3.Distance(transform.position, player.transform.position);
-                if (distance <= detectionRange)
-                {
-                    // Found a new parolee - start intake
-                    StartParoleIntake(player);
-                    break;
-                }
-            }
-        }
-
-        #endregion
-
         #region Public Methods
 
         /// <summary>
@@ -442,6 +403,12 @@ namespace Behind_Bars.Systems.NPCs
             if (parolee == null)
             {
                 ModLogger.Warn("ParoleIntakeStateMachine: Cannot start intake, parolee is null");
+                return;
+            }
+
+            if (currentParolee == parolee && IsProcessingIntake())
+            {
+                ModLogger.Debug($"ParoleIntakeStateMachine: Intake already active for {parolee.name}");
                 return;
             }
 
@@ -484,7 +451,7 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Info($"ParoleIntakeStateMachine: Completed intake for {currentParolee.name}");
 
             // Record interaction
-            var rapSheet = RapSheetManager.Instance.GetRapSheet(currentParolee);
+            var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(currentParolee);
             if (rapSheet?.CurrentParoleRecord != null)
             {
                 rapSheet.CurrentParoleRecord.RecordInteraction();

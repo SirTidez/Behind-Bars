@@ -384,8 +384,8 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         private string GetPlayerId(Player player)
         {
-            // Use a combination of name and instance ID for uniqueness
-            return $"{player.name}_{player.GetInstanceID()}";
+            string playerKey = Core.ResolvePlayerKey(player);
+            return !string.IsNullOrEmpty(playerKey) ? playerKey : $"{player.name}_{player.GetInstanceID()}";
         }
 
         /// <summary>

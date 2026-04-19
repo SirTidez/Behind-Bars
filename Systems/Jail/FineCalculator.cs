@@ -87,7 +87,7 @@ namespace Behind_Bars.Systems.Jail
             // Get rap sheet if not provided
             if (rapSheet == null)
             {
-                rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
             }
 
             float totalFine = 0f;

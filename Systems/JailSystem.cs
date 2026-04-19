@@ -64,7 +64,7 @@ namespace Behind_Bars.Systems
             ModLogger.Info($"Processing IMMEDIATE arrest for player: {player.name}");
 
             // Mark jail status immediately so delayed witness calls can be suppressed reliably.
-            JailTimeTracker.Instance.SetInJail(player);
+            Core.Instance?.JailManager?.MarkPlayerInJail(player);
 
             // CRITICAL: Check if player is on parole and record violation BEFORE any other processing
             RecordParoleViolationIfNeeded(player);
@@ -160,11 +160,8 @@ namespace Behind_Bars.Systems
             player.CrimeData.SetPursuitLevel(PlayerCrimeData.EPursuitLevel.None);
             
             // Hide parole status UI - player is going to jail, not staying on parole
-            if (BehindBarsUIManager.Instance != null)
-            {
-                BehindBarsUIManager.Instance.HideParoleStatus();
-                ModLogger.Info($"Hid parole status UI for {player.name} - entering jail");
-            }
+            Core.ResolveUIManager().HideParoleStatus();
+            ModLogger.Info($"Hid parole status UI for {player.name} - entering jail");
 
             // Inventory capture now handled in Harmony patch before any clearing happens
             // CreateInventorySnapshotIfNeeded(player); // MOVED TO HARMONY PATCH
@@ -186,23 +183,7 @@ namespace Behind_Bars.Systems
             // Inventory capture already done at start of arrest process
             // CreateInventorySnapshotIfNeeded(player); // REMOVED - now done at start of HandleImmediateArrest
 
-            // Determine jail time threshold for holding vs main cell
-            // sentence.JailTime is in game minutes
-            // 1 game day = 1440 game minutes (24 hours * 60 minutes)
-            const float ONE_GAME_DAY_MINUTES = 1440f;
             yield return ProcessPlayerToJail(player, sentence);
-            /*if (sentence.JailTime < ONE_GAME_DAY_MINUTES)
-            {
-                // Short sentence - send directly to holding cell
-                ModLogger.Info($"Short sentence ({sentence.JailTime} game minutes < {ONE_GAME_DAY_MINUTES} game minutes / {GameTimeManager.FormatGameTime(sentence.JailTime)}) - sending to holding cell");
-                yield return SendPlayerToHoldingCell(player, sentence);
-            }
-            else
-            {
-                // Long sentence - start in holding cell, then process to main cell
-                ModLogger.Info($"Long sentence ({sentence.JailTime} game minutes >= {ONE_GAME_DAY_MINUTES} game minutes / {GameTimeManager.FormatGameTime(sentence.JailTime)}) - processing to main jail cell");
-                yield return ProcessPlayerToJail(player, sentence);
-            }*/
         }
 
         /// <summary>
@@ -388,7 +369,7 @@ namespace Behind_Bars.Systems
         private float CalculateTotalCrimeFines(Player player)
         {
             // Get RapSheet for repeat offender multiplier
-            var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+            var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
             
             // Use FineCalculator to calculate fines (rapSheet is optional)
             float totalFine = FineCalculator.Instance.CalculateTotalFine(player, rapSheet);
@@ -397,11 +378,20 @@ namespace Behind_Bars.Systems
             return totalFine;
         }
 
+        /// <summary>
+        /// Manager-facing compatibility seam for calculating total crime fines while the jail
+        /// sentence calculation logic still lives in <see cref="JailSystem"/>.
+        /// </summary>
+        internal float CalculateTotalCrimeFinesForManager(Player player)
+        {
+            return CalculateTotalCrimeFines(player);
+        }
+
 
         private void CalculateSentence(JailSentence sentence, Player player)
         {
             // Get RapSheet for sentence calculation
-            var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+            var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
             
             // Check if player was on parole when arrested (for sentence multiplier)
             bool wasOnParole = false;
@@ -526,15 +516,36 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Get the stored exit position for a player
         /// </summary>
-        public Vector3? GetPlayerExitPosition(string playerName)
+        public Vector3? GetPlayerExitPosition(Player player)
         {
-            if (_lastKnownPlayerPosition.ContainsKey(playerName))
+            if (player == null)
             {
-                var position = _lastKnownPlayerPosition[playerName];
-                _lastKnownPlayerPosition.Remove(playerName); // Remove after use
+                return null;
+            }
+
+            return GetStoredExitPositionByKey(GetPlayerStateKey(player));
+        }
+
+        private Vector3? GetStoredExitPositionByKey(string playerKey)
+        {
+            if (string.IsNullOrEmpty(playerKey))
+            {
+                return null;
+            }
+
+            if (_lastKnownPlayerPosition.ContainsKey(playerKey))
+            {
+                var position = _lastKnownPlayerPosition[playerKey];
+                _lastKnownPlayerPosition.Remove(playerKey); // Remove after use
                 return position;
             }
+
             return null;
+        }
+
+        private string GetPlayerStateKey(Player player)
+        {
+            return Core.ResolvePlayerKey(player);
         }
 
         /// <summary>
@@ -544,29 +555,34 @@ namespace Behind_Bars.Systems
         {
             try
             {
-                // Position pickup station at inventoryDropOff location (repurposing for returns)
                 var jailController = Core.JailController;
+                GameObject stationObject = null;
                 Vector3 stationPosition = new Vector3(0, 1, 0); // Default position
 
-                if (jailController?.storage?.inventoryDropOff != null)
+                if (jailController?.storage?.inventoryPickup != null)
                 {
-                    // Use the inventoryDropOff location for both intake drops and release pickups
+                    stationObject = jailController.storage.inventoryPickup.gameObject;
+                    stationPosition = jailController.storage.inventoryPickup.position;
+                    ModLogger.Debug($"Attaching InventoryPickupStation to storage.inventoryPickup at {stationPosition}");
+                }
+                else if (jailController?.storage?.inventoryDropOff != null)
+                {
                     stationPosition = jailController.storage.inventoryDropOff.position;
-                    ModLogger.Debug($"Positioning InventoryPickupStation at inventoryDropOff: {stationPosition}");
+                    ModLogger.Warn($"storage.inventoryPickup not found - falling back to inventoryDropOff position {stationPosition}");
                 }
                 else if (jailController?.booking?.guardSpawns != null && jailController.booking.guardSpawns.Count > 0)
                 {
-                    // Fallback to booking area if storage not available
                     var bookingArea = jailController.booking.guardSpawns[0];
                     stationPosition = bookingArea.position + new Vector3(2, 0, 0);
                     ModLogger.Warn("Storage inventoryDropOff not found - using booking area fallback");
                 }
 
-                // Create GameObject for the pickup station
-                var stationObject = new GameObject("InventoryPickupStation");
-                stationObject.transform.position = stationPosition;
+                if (stationObject == null)
+                {
+                    stationObject = new GameObject("InventoryPickupStation");
+                    stationObject.transform.position = stationPosition;
+                }
 
-                // Add the InventoryPickupStation component
                 _inventoryPickupStation = BBHelpers.AddComponentSafe<InventoryPickupStation>(stationObject);
 
                 ModLogger.Debug($"Created InventoryPickupStation at position {stationPosition}");
@@ -582,62 +598,14 @@ namespace Behind_Bars.Systems
         /// </summary>
         private void SetPlayerJailState(Player player, bool inJail)
         {
-            if (inJail)
+            var jailManager = Core.Instance?.JailManager;
+            if (jailManager != null)
             {
-                // Player is going to jail - ensure they maintain all controls
-                ModLogger.Info("Setting player state for jail - keeping all controls enabled");
-
-                try
-                {
-                    // Enable all controls - player should be able to move around in the cell
-                    PlayerSingleton<PlayerInventory>.Instance.enabled = true;
-                    PlayerSingleton<PlayerInventory>.Instance.enabled = true;
-                    PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
-                    PlayerSingleton<PlayerCamera>.Instance.SetCanLook(true);
-                    PlayerSingleton<PlayerCamera>.Instance.LockMouse();
-#if MONO
-                    PlayerSingleton<PlayerMovement>.Instance.CanMove = true; // Allow movement
-#else
-                    PlayerSingleton<PlayerMovement>.Instance.CanMove = true; // Allow movement
-#endif
-
-                    // Keep HUD enabled
-                    Singleton<HUD>.Instance.canvas.enabled = true;
-                    Singleton<HUD>.Instance.SetCrosshairVisible(true);
-
-                    ModLogger.Info("Jail state set - player can move, use inventory, and look around");
-                }
-                catch (Exception ex)
-                {
-                    ModLogger.Error($"Error setting jail state: {ex.Message}");
-                }
+                jailManager.ApplyCustodyState(player, inJail);
+                return;
             }
-            else
-            {
-                // Player is being released - ensure all controls are enabled
-                ModLogger.Info("Setting player state for release - enabling all controls");
 
-                try
-                {
-#if MONO
-                    PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
-#else
-                    PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
-#endif
-                    PlayerSingleton<PlayerInventory>.Instance.enabled = true;
-                    PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
-                    PlayerSingleton<PlayerCamera>.Instance.SetCanLook(true);
-                    PlayerSingleton<PlayerCamera>.Instance.LockMouse();
-                    Singleton<HUD>.Instance.canvas.enabled = true;
-                    Singleton<HUD>.Instance.SetCrosshairVisible(true);
-
-                    ModLogger.Info("Release state set - all controls enabled");
-                }
-                catch (Exception ex)
-                {
-                    ModLogger.Error($"Error setting release state: {ex.Message}");
-                }
-            }
+            ModLogger.Warn("JailManager unavailable while applying custody state");
         }
 
         /// <summary>
@@ -660,17 +628,7 @@ namespace Behind_Bars.Systems
                 // Ensure controls are still enabled
                 try
                 {
-                    PlayerSingleton<PlayerInventory>.Instance.enabled = true;
-                    PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
-                    PlayerSingleton<PlayerCamera>.Instance.SetCanLook(true);
-                    PlayerSingleton<PlayerCamera>.Instance.LockMouse();
-#if MONO
-                    PlayerSingleton<PlayerMovement>.Instance.CanMove = true; // Enable movement in jail
-#else
-                    PlayerSingleton<PlayerMovement>.Instance.CanMove = true; // Enable movement in jail
-#endif
-                    Singleton<HUD>.Instance.canvas.enabled = true;
-                    Singleton<HUD>.Instance.SetCrosshairVisible(true);
+                    Core.Instance?.JailManager?.MaintainCustodyControls();
                 }
                 catch (Exception ex)
                 {
@@ -684,7 +642,7 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Wait for jail sentence using game time tracking
         /// </summary>
-        private IEnumerator WaitForJailSentence(float sentenceGameMinutes, Player player)
+        internal IEnumerator WaitForJailSentence(float sentenceGameMinutes, Player player)
         {
             ModLogger.Info($"[JAIL TRACKING] Starting jail sentence tracking for {player.name}: {sentenceGameMinutes} game minutes ({GameTimeManager.FormatGameTime(sentenceGameMinutes)})");
 
@@ -696,9 +654,14 @@ namespace Behind_Bars.Systems
 
             // Get bail amount from Core BailSystem (where it was stored during booking)
             float bailAmount = 0f;
-            var bailSystem = Core.Instance?.BailSystem;
-            
-            if (bailSystem != null)
+            var jailManager = Core.Instance?.JailManager;
+            var bailSystem = Core.ResolveBailSystem();
+
+            if (jailManager != null)
+            {
+                bailAmount = jailManager.ResolveBailAmount(player);
+            }
+            else if (bailSystem != null)
             {
                 // First try to get the stored bail amount (set during booking)
                 bailAmount = bailSystem.GetBailAmount(player);
@@ -734,10 +697,17 @@ namespace Behind_Bars.Systems
             };
 
             // Start tracking with JailTimeTracker
-            JailTimeTracker.Instance.StartTracking(player, sentenceGameMinutes, onComplete);
+            if (jailManager != null)
+            {
+                jailManager.StartSentenceTracking(player, sentenceGameMinutes, onComplete);
+            }
+            else
+            {
+                Core.ResolveJailTimeTracker().StartTracking(player, sentenceGameMinutes, onComplete);
+            }
 
             // Update jail status UI with the correct bail amount (ensure consistency)
-            var jailStatusUIWrapper = BehindBarsUIManager.Instance.GetUIWrapper();
+            var jailStatusUIWrapper = Core.ResolveUIManager().GetUIWrapper();
             if (jailStatusUIWrapper != null && bailAmount > 0)
             {
                 // Update the bail amount in the jail status UI to match the payment amount
@@ -748,7 +718,7 @@ namespace Behind_Bars.Systems
             // Show bail UI if player can afford it
             if (bailAmount > 0 && bailSystem != null && bailSystem.CanPlayerAffordBail(player, bailAmount))
             {
-                BehindBarsUIManager.Instance.ShowBailUI(bailAmount);
+                Core.ResolveUIManager().ShowBailUI(bailAmount);
                 ModLogger.Info($"[BAIL] Showing bail UI for {player.name}: ${bailAmount:F0}");
             }
             else if (bailAmount > 0)
@@ -769,20 +739,16 @@ namespace Behind_Bars.Systems
             {
                 yield return new WaitForSeconds(checkInterval);
 
+                if (jailManager != null ? jailManager.HasPendingReleaseType(player) : HasPendingReleaseType(player))
+                {
+                    ModLogger.Info($"[BAIL] Pending release detected for {player.name}; ending sentence wait for custody cleanup");
+                    break;
+                }
+
                 // Ensure controls are still enabled
                 try
                 {
-                    PlayerSingleton<PlayerInventory>.Instance.enabled = true;
-                    PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
-                    PlayerSingleton<PlayerCamera>.Instance.SetCanLook(true);
-                    PlayerSingleton<PlayerCamera>.Instance.LockMouse();
-#if MONO
-                    PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
-#else
-                    PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
-#endif
-                    Singleton<HUD>.Instance.canvas.enabled = true;
-                    Singleton<HUD>.Instance.SetCrosshairVisible(true);
+                    Core.Instance?.JailManager?.MaintainCustodyControls();
                 }
                 catch (Exception ex)
                 {
@@ -806,31 +772,43 @@ namespace Behind_Bars.Systems
                     if (bailSystem.CanPlayerAffordBail(player, bailAmount))
                     {
                         ModLogger.Info($"[BAIL] Player {player.name} pressed bail payment key");
-                        bailPaid = true;
                         
                         // Hide bail UI immediately
-                        BehindBarsUIManager.Instance.HideBailUI();
+                        Core.ResolveUIManager().HideBailUI();
                         
                         // Update jail status UI to show "Bailed Out"
-                        var uiWrapper = BehindBarsUIManager.Instance.GetUIWrapper();
+                        var uiWrapper = Core.ResolveUIManager().GetUIWrapper();
                         if (uiWrapper != null)
                         {
                             uiWrapper.SetBailedOutStatus();
                         }
                         
                         // Stop sentence tracking (cancel time-based release)
-                        JailTimeTracker.Instance.StopTracking(player);
+                        if (jailManager != null)
+                        {
+                            jailManager.StopSentenceTracking(player);
+                        }
+                        else
+                        {
+                            Core.ResolveJailTimeTracker().StopTracking(player);
+                        }
                         
-                        // Process bail payment and release
-                        MelonLoader.MelonCoroutines.Start(bailSystem.ProcessBailPayment(player, bailAmount, false));
-                        
+                        // Process bail payment and wait for it to mark the pending bail release state.
+                        yield return bailSystem.ProcessBailPayment(player, bailAmount, false);
+
+                        if (jailManager != null ? jailManager.HasPendingReleaseType(player) : HasPendingReleaseType(player))
+                        {
+                            bailPaid = true;
+                            ModLogger.Info($"[BAIL] Bail payment completed for {player.name}; release will proceed after custody cleanup");
+                            break;
+                        }
+
                         ModLogger.Info($"[BAIL] Bail payment initiated for {player.name}");
-                        yield break; // Exit the wait loop
                     }
                     else
                     {
                         // Show notification that they can't afford bail
-                        BehindBarsUIManager.Instance.ShowNotification(
+                        Core.ResolveUIManager().ShowNotification(
                             $"Insufficient cash for bail. Required: ${bailAmount:F0}",
                             NotificationType.Warning
                         );
@@ -846,41 +824,99 @@ namespace Behind_Bars.Systems
                     if (bailAmount > 0 && bailSystem != null)
                     {
                         bool canAfford = bailSystem.CanPlayerAffordBail(player, bailAmount);
-                        bool uiVisible = BehindBarsUIManager.Instance.IsBailUIVisible();
+                        bool uiVisible = Core.ResolveUIManager().IsBailUIVisible();
                         
                         if (canAfford && !uiVisible)
                         {
                             // Player gained enough cash - show UI
-                            BehindBarsUIManager.Instance.ShowBailUI(bailAmount);
+                            Core.ResolveUIManager().ShowBailUI(bailAmount);
                         }
                         else if (!canAfford && uiVisible)
                         {
                             // Player lost cash - hide UI
-                            BehindBarsUIManager.Instance.HideBailUI();
+                            Core.ResolveUIManager().HideBailUI();
                         }
                     }
                 }
 
                 // Check remaining time for logging (log once per game hour, prevent duplicates)
-                float remaining = JailTimeTracker.Instance.GetRemainingTime(player);
+                float remaining = jailManager != null
+                    ? jailManager.GetRemainingSentenceTime(player)
+                    : Core.ResolveJailTimeTracker().GetRemainingTime(player);
                 if (remaining > 0)
                 {
                     int currentHour = Mathf.FloorToInt(remaining / 60f); // Convert to game hours
                     if (currentHour != lastLoggedHour && remaining % 60f < 1f) // Log when crossing to a new hour
                     {
                         lastLoggedHour = currentHour;
-                        ModLogger.Debug($"[JAIL TRACKING] Remaining: {JailTimeTracker.Instance.GetFormattedRemainingTime(player)}");
+                        string formattedRemaining = jailManager != null
+                            ? jailManager.GetFormattedRemainingSentenceTime(player)
+                            : Core.ResolveJailTimeTracker().GetFormattedRemainingTime(player);
+                        ModLogger.Debug($"[JAIL TRACKING] Remaining: {formattedRemaining}");
                     }
                 }
+            }
+
+            if (!bailPaid && (jailManager != null ? jailManager.HasPendingReleaseType(player) : HasPendingReleaseType(player)))
+            {
+                bailPaid = true;
             }
 
             // Hide bail UI if sentence completed normally
             if (sentenceComplete && !bailPaid)
             {
-                BehindBarsUIManager.Instance.HideBailUI();
+                Core.ResolveUIManager().HideBailUI();
             }
 
             ModLogger.Info($"[JAIL TRACKING] Jail sentence completed for {player.name} (bail paid: {bailPaid})");
+        }
+
+        /// <summary>
+        /// Mark a pending release type for the player so custody cleanup can complete before the final release.
+        /// </summary>
+        public void MarkPendingReleaseType(Player player, ReleaseManager.ReleaseType releaseType)
+        {
+            var jailManager = Core.Instance?.JailManager;
+            if (jailManager != null)
+            {
+                jailManager.MarkPendingReleaseType(player, releaseType);
+                return;
+            }
+
+            if (player == null)
+            {
+                return;
+            }
+
+            ModLogger.Warn($"JailManager unavailable while marking pending release type {releaseType} for {player.name}");
+        }
+
+        /// <summary>
+        /// Check whether the player has a pending release type waiting for custody cleanup.
+        /// </summary>
+        public bool HasPendingReleaseType(Player player)
+        {
+            var jailManager = Core.Instance?.JailManager;
+            if (jailManager != null)
+            {
+                return jailManager.HasPendingReleaseType(player);
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Consume the pending release type for the player, defaulting to time served when no pending bail exists.
+        /// </summary>
+        public ReleaseManager.ReleaseType ConsumePendingReleaseType(Player player)
+        {
+            var jailManager = Core.Instance?.JailManager;
+            if (jailManager != null)
+            {
+                return jailManager.ConsumePendingReleaseType(player);
+            }
+
+            return ReleaseManager.ReleaseType.TimeServed;
         }
 
         /// <summary>
@@ -900,10 +936,11 @@ namespace Behind_Bars.Systems
             }
 
             // Store current position before jailing
-            if (_lastKnownPlayerPosition.ContainsKey(player.name))
-                _lastKnownPlayerPosition[player.name] = new Vector3(14.2921f, 1.9777f, 37.8714f); // Police station exit
+            string playerStateKey = GetPlayerStateKey(player);
+            if (_lastKnownPlayerPosition.ContainsKey(playerStateKey))
+                _lastKnownPlayerPosition[playerStateKey] = new Vector3(14.2921f, 1.9777f, 37.8714f); // Police station exit
             else
-                _lastKnownPlayerPosition.Add(player.name, player.transform.position);
+                _lastKnownPlayerPosition.Add(playerStateKey, player.transform.position);
 
             // Find an available holding cell
             var holdingCell = GetAvailableHoldingCell(jailController);
@@ -915,7 +952,7 @@ namespace Behind_Bars.Systems
             }
 
             // Get spawn point in the holding cell
-            Transform spawnPoint = holdingCell.AssignPlayerToSpawnPoint(player.name);
+            Transform spawnPoint = holdingCell.AssignPlayerToSpawnPoint(player);
             if (spawnPoint == null)
             {
                 ModLogger.Error($"No spawn points available in holding cell {holdingCell.cellName}");
@@ -950,11 +987,23 @@ namespace Behind_Bars.Systems
             yield return WaitForJailSentence(sentence.JailTime, player);
 
             // Release from holding cell
-            holdingCell.ReleasePlayerFromSpawnPoint(player.name);
+            holdingCell.ReleasePlayerFromSpawnPoint(player);
             holdingCell.cellDoor.UnlockDoor();
 
-            // Use enhanced release system for time served
-            SafeInitiateEnhancedRelease(player, ReleaseManager.ReleaseType.TimeServed);
+            // Use the manager-owned post-sentence release seam when available.
+            var jailManager = Core.Instance?.JailManager;
+            if (jailManager != null)
+            {
+                jailManager.CompletePostSentenceRelease(player);
+            }
+            else
+            {
+                var releaseType = ConsumePendingReleaseType(player);
+                float bailAmount = releaseType == ReleaseManager.ReleaseType.BailPayment
+                    ? Core.ResolveBailSystem()?.GetBailAmount(player) ?? 0f
+                    : 0f;
+                SafeInitiateEnhancedRelease(player, releaseType, bailAmount);
+            }
         }
         
         /// <summary>
@@ -964,28 +1013,17 @@ namespace Behind_Bars.Systems
         private IEnumerator StartBookingProcess(Player player, JailSentence sentence, CellDetail holdingCell)
         {
             ModLogger.Info($"Starting booking/processing for {player.name}");
-            
-            // CRITICAL: Start the actual booking process immediately
-            var bookingProcess = BookingProcess.Instance;
-            if (bookingProcess != null)
+
+            var jailManager = Core.Instance?.JailManager;
+            if (jailManager != null)
             {
-                ModLogger.Info($"Starting BookingProcess for {player.name} with sentence: {sentence.JailTime}s, Fine: ${sentence.FineAmount}");
-                bookingProcess.StartBooking(player, sentence);
-                
-                // Wait for booking to complete (monitored by BookingProcess)
-                while (bookingProcess.IsBookingInProgress())
-                {
-                    yield return new WaitForSeconds(1f);
-                }
-                
-                ModLogger.Info($"Booking process completed for {player.name}");
+                jailManager.AttachBookingProcess(Core.ResolveBookingProcess());
+                yield return jailManager.RunBookingProcess(player, sentence);
+                yield break;
             }
-            else
-            {
-                ModLogger.Error("BookingProcess.Instance is null - cannot start booking!");
-                // Fallback: wait a short time then proceed
-                yield return new WaitForSeconds(5f);
-            }
+
+            ModLogger.Error("JailManager is null - cannot start booking through manager seam");
+            yield return new WaitForSeconds(5f);
         }
 
         /// <summary>
@@ -1014,10 +1052,11 @@ namespace Behind_Bars.Systems
             }
 
             // Store current position
-            if (_lastKnownPlayerPosition.ContainsKey(player.name))
-                _lastKnownPlayerPosition[player.name] = new Vector3(14.2921f, 1.9777f, 37.8714f); // Police station exit
+            string playerStateKey = GetPlayerStateKey(player);
+            if (_lastKnownPlayerPosition.ContainsKey(playerStateKey))
+                _lastKnownPlayerPosition[playerStateKey] = new Vector3(14.2921f, 1.9777f, 37.8714f); // Police station exit
             else
-                _lastKnownPlayerPosition.Add(player.name, player.transform.position);
+                _lastKnownPlayerPosition.Add(playerStateKey, player.transform.position);
 
             var holdingCell = GetAvailableHoldingCell(jailController);
             if (holdingCell == null)
@@ -1026,7 +1065,7 @@ namespace Behind_Bars.Systems
                 yield break;
             }
 
-            Transform spawnPoint = holdingCell.AssignPlayerToSpawnPoint(player.name);
+            Transform spawnPoint = holdingCell.AssignPlayerToSpawnPoint(player);
             if (spawnPoint == null)
             {
                 yield return FallbackJailMethod(player, sentence);
@@ -1041,29 +1080,12 @@ namespace Behind_Bars.Systems
             // Keep controls enabled during processing
             ModLogger.Info("Player controls kept enabled during processing");
 
-            // Start booking process immediately - it will handle the intake officer escort
+            // Start booking through the jail-manager seam - it will handle the intake officer escort.
             ModLogger.Info($"Starting booking process for {player.name} in holding cell");
-            var bookingProcess = BookingProcess.Instance;
-            if (bookingProcess != null)
-            {
-                bookingProcess.StartBooking(player, sentence);
-                
-                // Wait for booking to complete (monitored by BookingProcess)
-                while (bookingProcess.IsBookingInProgress())
-                {
-                    yield return new WaitForSeconds(1f);
-                }
-                
-                ModLogger.Info($"Booking process completed for {player.name}");
-            }
-            else
-            {
-                ModLogger.Error("BookingProcess.Instance is null - falling back to simple wait");
-                yield return WaitWithControlMaintenance(5f, player);
-            }
+            yield return StartBookingProcess(player, sentence, holdingCell);
 
             // Release from holding cell (but don't release from jail yet)
-            holdingCell.ReleasePlayerFromSpawnPoint(player.name);
+            holdingCell.ReleasePlayerFromSpawnPoint(player);
             holdingCell.cellDoor.UnlockDoor();
         }
 
@@ -1081,7 +1103,7 @@ namespace Behind_Bars.Systems
 
             // Check if player already has a cell assigned (from booking process)
             JailCell mainCell = null;
-            var cellManager = CellAssignmentManager.Instance;
+            var cellManager = Core.ResolveCellAssignmentManager();
             if (cellManager != null)
             {
                 int assignedCellNumber = cellManager.GetPlayerCellNumber(player);
@@ -1105,7 +1127,7 @@ namespace Behind_Bars.Systems
                 var holdingCell = GetAvailableHoldingCell(jailController);
                 if (holdingCell != null)
                 {
-                    Transform holdingSpawn = holdingCell.AssignPlayerToSpawnPoint(player.name);
+                    Transform holdingSpawn = holdingCell.AssignPlayerToSpawnPoint(player);
                     if (holdingSpawn != null)
                     {
                         player.transform.position = holdingSpawn.position;
@@ -1113,7 +1135,7 @@ namespace Behind_Bars.Systems
                         // Start tracking full sentence (processing time was separate)
                         ModLogger.Info($"Starting jail sentence tracking in holding cell: {sentence.JailTime} game minutes ({GameTimeManager.FormatGameTime(sentence.JailTime)})");
                         yield return WaitForJailSentence(sentence.JailTime, player);
-                        holdingCell.ReleasePlayerFromSpawnPoint(player.name);
+                        holdingCell.ReleasePlayerFromSpawnPoint(player);
                         holdingCell.cellDoor.UnlockDoor();
                         // Use enhanced release system for time served
                         SafeInitiateEnhancedRelease(player, ReleaseManager.ReleaseType.TimeServed);
@@ -1123,7 +1145,7 @@ namespace Behind_Bars.Systems
             }
 
             // Get spawn point in main cell
-            Transform cellSpawnPoint = mainCell.AssignPlayerToSpawnPoint(player.name);
+            Transform cellSpawnPoint = mainCell.AssignPlayerToSpawnPoint(player);
             if (cellSpawnPoint == null)
             {
                 ModLogger.Error($"No spawn point in main cell {mainCell.cellName}");
@@ -1144,7 +1166,7 @@ namespace Behind_Bars.Systems
             ModLogger.Info($"Player {player.name} has served their main cell time");
 
             // Release from main cell
-            mainCell.ReleasePlayerFromSpawnPoint(player.name);
+            mainCell.ReleasePlayerFromSpawnPoint(player);
             mainCell.cellDoor.UnlockDoor();
 
             // Use enhanced release system for time served
@@ -1196,8 +1218,19 @@ namespace Behind_Bars.Systems
             yield return WaitForJailSentence(sentence.JailTime, player);
 
             ModLogger.Info($"Player {player.name} has served their jail time (fallback method)");
-            // Use enhanced release system for time served
-            SafeInitiateEnhancedRelease(player, ReleaseManager.ReleaseType.TimeServed);
+            var jailManager = Core.Instance?.JailManager;
+            if (jailManager != null)
+            {
+                jailManager.CompletePostSentenceRelease(player);
+            }
+            else
+            {
+                var releaseType = ConsumePendingReleaseType(player);
+                float bailAmount = releaseType == ReleaseManager.ReleaseType.BailPayment
+                    ? Core.ResolveBailSystem()?.GetBailAmount(player) ?? 0f
+                    : 0f;
+                SafeInitiateEnhancedRelease(player, releaseType, bailAmount);
+            }
         }
 
         /// <summary>
@@ -1205,6 +1238,13 @@ namespace Behind_Bars.Systems
         /// </summary>
         public void InitiateEnhancedRelease(Player player, ReleaseManager.ReleaseType releaseType, float bailAmount = 0f)
         {
+            var jailManager = Core.Instance?.JailManager;
+            if (jailManager != null)
+            {
+                jailManager.InitiateEnhancedRelease(player, releaseType, bailAmount);
+                return;
+            }
+
             if (player == null)
             {
                 ModLogger.Error("Cannot initiate release for null player");
@@ -1222,7 +1262,13 @@ namespace Behind_Bars.Systems
                 StorePlayerExitPosition(player);
 
                 // Use ReleaseManager for coordinated release
-                if (ReleaseManager.Instance != null)
+                var releaseManager = Core.ResolveReleaseManager();
+                if (releaseManager == null)
+                {
+                    ModLogger.Warn("JailSystem: release manager missing during enhanced release; retrying bootstrap");
+                    releaseManager = ReleaseManager.BootstrapManagedInstance();
+                }
+                if (releaseManager != null)
                 {
                     string reason = releaseType switch
                     {
@@ -1233,7 +1279,7 @@ namespace Behind_Bars.Systems
                         _ => "Release ordered"
                     };
 
-                    bool releaseStarted = ReleaseManager.Instance.InitiateRelease(player, releaseType, bailAmount, reason);
+                    bool releaseStarted = releaseManager.InitiateRelease(player, releaseType, bailAmount, reason);
                     if (releaseStarted)
                     {
                         ModLogger.Info($"Enhanced release started for {player.name}");
@@ -1261,9 +1307,20 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Safely initiate enhanced release, checking for existing releases first
         /// </summary>
-        private void SafeInitiateEnhancedRelease(Player player, ReleaseManager.ReleaseType releaseType)
+        private void SafeInitiateEnhancedRelease(Player player, ReleaseManager.ReleaseType releaseType, float bailAmount = 0f)
         {
-            var releaseManager = ReleaseManager.Instance;
+            var jailManager = Core.Instance?.JailManager;
+            if (jailManager != null)
+            {
+                jailManager.SafeInitiateEnhancedRelease(player, releaseType, bailAmount);
+                return;
+            }
+
+            var releaseManager = Core.ResolveReleaseManager();
+            if (releaseManager == null)
+            {
+                releaseManager = ReleaseManager.BootstrapManagedInstance();
+            }
             if (releaseManager != null && releaseManager.IsReleaseInProgress(player))
             {
                 ModLogger.Info($"Player {player.name} release skipped - release already in progress (early release system handling it)");
@@ -1272,7 +1329,7 @@ namespace Behind_Bars.Systems
             else
             {
                 ModLogger.Info($"Initiating {releaseType} release for {player.name}");
-                InitiateEnhancedRelease(player, releaseType);
+                InitiateEnhancedRelease(player, releaseType, bailAmount);
             }
         }
 
@@ -1281,13 +1338,32 @@ namespace Behind_Bars.Systems
         /// </summary>
         public IEnumerator StartJailTimeAfterBooking(Player player, JailSentence sentence)
         {
+            var jailManager = Core.Instance?.JailManager;
+            if (jailManager != null)
+            {
+                yield return jailManager.StartJailTimeAfterBooking(player, sentence);
+                yield break;
+            }
+
             ModLogger.Info($"Starting jail time for {player.name} after booking completion - {sentence.JailTime}s");
 
             // Wait for the jail time with control maintenance
             yield return WaitForJailSentence(sentence.JailTime, player);
 
             // After jail time completes, safely trigger release (checks for existing releases)
-            SafeInitiateEnhancedRelease(player, ReleaseManager.ReleaseType.TimeServed);
+            var activeJailManager = Core.Instance?.JailManager;
+            if (activeJailManager != null)
+            {
+                activeJailManager.CompletePostSentenceRelease(player);
+            }
+            else
+            {
+                var releaseType = ConsumePendingReleaseType(player);
+                float bailAmount = releaseType == ReleaseManager.ReleaseType.BailPayment
+                    ? Core.ResolveBailSystem()?.GetBailAmount(player) ?? 0f
+                    : 0f;
+                SafeInitiateEnhancedRelease(player, releaseType, bailAmount);
+            }
         }
 
         /// <summary>
@@ -1297,7 +1373,7 @@ namespace Behind_Bars.Systems
         {
             try
             {
-                var persistentData = PersistentPlayerData.Instance;
+                var persistentData = Core.ResolvePersistentPlayerData();
                 if (persistentData != null)
                 {
                     string arrestId = persistentData.CreateInventorySnapshot(player);
@@ -1316,7 +1392,7 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Store player's current position as exit position
         /// </summary>
-        private void StorePlayerExitPosition(Player player)
+        internal void StorePlayerExitPosition(Player player)
         {
             try
             {
@@ -1325,10 +1401,10 @@ namespace Behind_Bars.Systems
                 ModLogger.Info($"Storing police station exit position for {player.name}: {exitPosition}");
 
                 // Store in persistent data for cross-session support
-                var persistentData = PersistentPlayerData.Instance;
+                var persistentData = Core.ResolvePersistentPlayerData();
                 if (persistentData != null)
                 {
-                    persistentData.StorePlayerExitPosition(player.name, exitPosition);
+                    persistentData.StorePlayerExitPosition(player, exitPosition);
                 }
             }
             catch (System.Exception ex)
@@ -1346,18 +1422,27 @@ namespace Behind_Bars.Systems
             {
                 ModLogger.Info($"Clearing jail status for {player.name}");
 
-                JailTimeTracker.Instance.ClearInJail(player);
+                var jailManager = Core.Instance?.JailManager;
+                if (jailManager != null)
+                {
+                    jailManager.ClearPlayerInJail(player);
+                }
+                else
+                {
+                    Core.ResolveJailTimeTracker().ClearInJail(player);
+                }
 
                 // Clear stored exit position
-                if (_lastKnownPlayerPosition.ContainsKey(player.name))
+                string playerStateKey = GetPlayerStateKey(player);
+                if (_lastKnownPlayerPosition.ContainsKey(playerStateKey))
                 {
-                    _lastKnownPlayerPosition.Remove(player.name);
+                    _lastKnownPlayerPosition.Remove(playerStateKey);
                 }
 
                 // Update UI
                 try
                 {
-                    BehindBarsUIManager.Instance?.DestroyJailInfoUI();
+                    Core.ResolveUIManager().DestroyJailInfoUI();
                 }
                 catch (System.Exception ex)
                 {
@@ -1391,7 +1476,7 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Legacy release method - still used as fallback
         /// </summary>
-        private void ReleasePlayerFromJail(Player player)
+        internal void ReleasePlayerFromJail(Player player)
         {
             ModLogger.Info($"Releasing player {player.name} from jail");
 
@@ -1434,7 +1519,7 @@ namespace Behind_Bars.Systems
             // Hide the jail info UI
             try
             {
-                BehindBarsUIManager.Instance.DestroyJailInfoUI();
+                Core.ResolveUIManager().DestroyJailInfoUI();
                 ModLogger.Debug("Jail info UI hidden on player release");
             }
             catch (Exception ex)
@@ -1547,8 +1632,8 @@ namespace Behind_Bars.Systems
 
                 // Calculate proper bail amount using BailSystem (consistent with payment system)
                 // Try to get stored bail amount first, otherwise calculate it
-                var bailSystemForUI = new BailSystem();
-                float bailAmount = bailSystemForUI.GetBailAmount(player);
+                var bailSystemForUI = Core.ResolveBailSystem();
+                float bailAmount = bailSystemForUI?.GetBailAmount(player) ?? 0f;
                 
                 // If no stored bail amount, calculate it
                 if (bailAmount <= 0)
@@ -1556,16 +1641,19 @@ namespace Behind_Bars.Systems
                     float fineAmount = CalculateTotalCrimeFines(player);
                     if (fineAmount > 0)
                     {
-                        var bailOffer = bailSystemForUI.CalculateBailAmount(player, fineAmount);
-                        bailAmount = bailOffer.Amount;
-                        // Store it for consistency
-                        bailSystemForUI.StoreBailAmount(player, bailAmount);
+                        if (bailSystemForUI != null)
+                        {
+                            var bailOffer = bailSystemForUI.CalculateBailAmount(player, fineAmount);
+                            bailAmount = bailOffer.Amount;
+                            // Store it for consistency
+                            bailSystemForUI.StoreBailAmount(player, bailAmount);
+                        }
                     }
                 }
                 string bailInfo = FormatBailAmount(bailAmount);
 
                 // Show the UI using the BehindBarsUIManager WITHOUT starting timer (timer starts after booking)
-                BehindBarsUIManager.Instance.ShowJailInfoUI(
+                Core.ResolveUIManager().ShowJailInfoUI(
                     crimeInfo,
                     timeInfo,
                     bailInfo,
@@ -1766,23 +1854,28 @@ namespace Behind_Bars.Systems
             {
                 ModLogger.Info($"Resetting jail state for {player.name} before new arrest");
 
-                // 1. Clear any active booking process
-                // Note: BookingProcess handles its own cleanup when player is arrested
-                var bookingProcess = BBHelpers.FindObjectOfTypeSafe<BookingProcess>();
-                if (bookingProcess != null)
+                // 1. Clear any active booking/release process through the jail-manager seam.
+                var jailManager = Core.Instance?.JailManager;
+                if (jailManager != null)
                 {
-                    ModLogger.Info("BookingProcess found - it will handle its own cleanup");
+                    jailManager.ResetActiveJailFlow(player);
+                    ModLogger.Info("Reset active booking and release process state");
                 }
-
-                // 2. Clear any active release process
-                var releaseManager = ReleaseManager.Instance;
-                if (releaseManager != null)
+                else
                 {
-                    releaseManager.CancelPlayerRelease(player);
+                    // Note: BookingProcess handles its own cleanup when player is arrested.
+                    var bookingProcess = BBHelpers.FindObjectOfTypeSafe<BookingProcess>();
+                    if (bookingProcess != null)
+                    {
+                        ModLogger.Info("BookingProcess found - it will handle its own cleanup");
+                    }
+
+                    var releaseManager = Core.ResolveReleaseManager();
+                    releaseManager?.CancelPlayerRelease(player);
                     ModLogger.Info("Cancelled any active release process");
                 }
 
-                // 3. Clear escort registrations
+                // 2. Clear escort registrations
                 var officerCoordinator = OfficerCoordinator.Instance;
                 if (officerCoordinator != null)
                 {
@@ -1790,10 +1883,10 @@ namespace Behind_Bars.Systems
                     ModLogger.Info("Cleared all escort registrations");
                 }
 
-                // 4. Clear release grace period (player is being arrested)
+                // 3. Clear release grace period (player is being arrested)
                 ParoleSearchSystem.Instance.ClearReleaseTime(player);
 
-                // 5. Reset station states
+                // 4. Reset station states
                 ResetStationStates(player);
 
                 ModLogger.Info($"Jail state reset completed for {player.name}");
@@ -1812,7 +1905,7 @@ namespace Behind_Bars.Systems
             try
             {
                 // Get rap sheet to check parole status
-                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
                 if (rapSheet == null)
                 {
                     ModLogger.Debug($"[PAROLE VIOLATION] No rap sheet found for {player.name} - skipping violation check");

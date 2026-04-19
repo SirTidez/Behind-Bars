@@ -5,6 +5,8 @@ using Behind_Bars.Utils;
 using Behind_Bars.Systems;
 using Behind_Bars.Systems.Jail;
 using Behind_Bars.Systems.CrimeTracking;
+using Behind_Bars.Systems.Parole;
+using Behind_Bars.Systems.Parole.Conditions;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine.UI;
@@ -997,7 +999,7 @@ namespace Behind_Bars.UI
                     }
 #endif
                 }
-                catch (Exception ex)
+                catch (Exception)
                 {
                     // Player.Local not available yet
                     if (attempts % 50 == 0) // Log every 5 seconds
@@ -1179,13 +1181,14 @@ namespace Behind_Bars.UI
 
                 // CRITICAL: Don't show parole status UI if player is in jail
                 // Use IsInJail to check jail status (set immediately on arrest, before sentence tracking starts)
-                if (JailTimeTracker.Instance != null && JailTimeTracker.Instance.IsInJail(player))
+                var jailTimeTracker = Core.ResolveJailTimeTracker();
+                if (jailTimeTracker != null && jailTimeTracker.IsInJail(player))
                 {
                     return new ParoleStatusData { IsOnParole = false };
                 }
 
                 // Get cached rap sheet (loads from file only once)
-                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                var rapSheet = Core.GetRapSheet(player);
                 if (rapSheet == null)
                 {
                     // No rap sheet available - player is not on parole
@@ -1202,6 +1205,32 @@ namespace Behind_Bars.UI
                 var searchProbability = rapSheet.GetSearchProbability();
                 var searchPercent = Mathf.RoundToInt(searchProbability * 100f);
 
+                // Get curfew time if applicable
+                string curfewTime = "";
+                var conditionManager = Core.ResolveParoleConditionManager();
+                if (conditionManager != null)
+                {
+                    var activeConditions = conditionManager.GetActiveConditions();
+                    if (activeConditions != null)
+                    {
+                        foreach (var condition in activeConditions)
+                        {
+                            if (condition is CurfewCondition)
+                            {
+                                curfewTime = CurfewCondition.GetCurfewDisplayTime(rapSheet.LSILevel);
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Get compliance streak
+                int streakDays = paroleRecord.GetConsecutiveHighComplianceDays();
+
+                // Get outstanding fees
+                float feesOwed = paroleRecord.GetTotalFeesOwed() - paroleRecord.GetTotalFeesPaid();
+                if (feesOwed < 0f) feesOwed = 0f;
+
                 return new ParoleStatusData
                 {
                     IsOnParole = true,
@@ -1209,7 +1238,11 @@ namespace Behind_Bars.UI
                     TimeRemainingFormatted = FormatTimeRemaining(remainingTime),
                     SupervisionLevel = rapSheet.LSILevel,
                     SearchProbabilityPercent = searchPercent,
-                    ViolationCount = paroleRecord.GetViolationCount()
+                    ViolationCount = paroleRecord.GetViolationCount(),
+                    CurfewTime = curfewTime,
+                    ComplianceStreakDays = streakDays,
+                    ComplianceStreakRequired = 3,
+                    OutstandingFees = feesOwed
                 };
             }
             catch (System.Exception ex)
@@ -1262,7 +1295,8 @@ namespace Behind_Bars.UI
 #else
                     var player = ScheduleOne.PlayerScripts.Player.Local;
 #endif
-                    if (player != null && JailTimeTracker.Instance != null && JailTimeTracker.Instance.IsInJail(player))
+                    var jailTimeTracker = Core.ResolveJailTimeTracker();
+                    if (player != null && jailTimeTracker != null && jailTimeTracker.IsInJail(player))
                     {
                         if (_paroleStatusUI != null && _paroleStatusUI.IsVisible())
                         {
