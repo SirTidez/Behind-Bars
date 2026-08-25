@@ -462,6 +462,51 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private IEnumerator WaitForScannerCameraOverride(float timeoutSeconds = 0.60f)
+        {
+            // OverrideTransform interpolates on the live PlayerCamera.  The
+            // right-arm snapshot must not be placed while that camera is
+            // still looking from the player's previous position: doing so
+            // made the first scanner frame bake correctly but render well
+            // outside the scanner view.
+            if (interactionCamera == null)
+            {
+                yield break;
+            }
+
+            var livePlayerCamera = PlayerSingleton<PlayerCamera>.Instance;
+            Camera liveCamera = livePlayerCamera != null ? livePlayerCamera.Camera : null;
+            if (liveCamera == null)
+            {
+                ModLogger.Warn("[Fingerprint Scan] Live player camera was unavailable while waiting for scanner framing");
+                yield break;
+            }
+
+            float elapsed = 0f;
+            const float positionTolerance = 0.025f;
+            const float facingTolerance = 0.9995f;
+            while (elapsed < timeoutSeconds)
+            {
+                float positionError = Vector3.Distance(liveCamera.transform.position, interactionCamera.transform.position);
+                float facingAlignment = Vector3.Dot(liveCamera.transform.forward, interactionCamera.transform.forward);
+                if (positionError <= positionTolerance && facingAlignment >= facingTolerance)
+                {
+                    ModLogger.Info($"[Fingerprint Scan] Scanner camera framing settled in {elapsed:F2}s (position-error={positionError:F3}m, facing={facingAlignment:F4})");
+                    yield break;
+                }
+
+                elapsed += Time.unscaledDeltaTime;
+                yield return null;
+            }
+
+            float finalPositionError = Vector3.Distance(liveCamera.transform.position, interactionCamera.transform.position);
+            float finalFacingAlignment = Vector3.Dot(liveCamera.transform.forward, interactionCamera.transform.forward);
+            ModLogger.Warn($"[Fingerprint Scan] Scanner camera framing did not fully settle before timeout (position-error={finalPositionError:F3}m, facing={finalFacingAlignment:F4}); continuing with authored scanner frame");
+        }
+
         private void ExitHandScanInteraction()
         {
             if (!handScanControlsLocked)
@@ -2016,8 +2061,22 @@ namespace Behind_Bars.Systems.Jail
             }
 
             Vector3 viewport = activeCamera.WorldToViewportPoint(meshRenderer.bounds.center);
+            Vector3 targetViewport = scanTarget != null
+                ? activeCamera.WorldToViewportPoint(scanTarget.position)
+                : Vector3.zero;
+            Vector3 palmWorldPosition = scannerArmSnapshotRoot.transform.position + scannerArmPalmOffset;
+            Vector3 palmViewport = activeCamera.WorldToViewportPoint(palmWorldPosition);
             bool layerVisible = (activeCamera.cullingMask & (1 << scannerArmSnapshotRoot.layer)) != 0;
-            ModLogger.Info($"[Fingerprint Scan] Snapshot render diagnostic: layer={scannerArmSnapshotRoot.layer}, camera-sees-layer={layerVisible}, enabled={meshRenderer.enabled}, viewport=({viewport.x:F2}, {viewport.y:F2}, {viewport.z:F2}), bounds={meshRenderer.bounds.size}");
+            string authoredCameraDiagnostic = string.Empty;
+            if (interactionCamera != null)
+            {
+                float cameraPositionError = Vector3.Distance(activeCamera.transform.position, interactionCamera.transform.position);
+                float cameraFacingAlignment = Vector3.Dot(activeCamera.transform.forward, interactionCamera.transform.forward);
+                Vector3 authoredTargetViewport = interactionCamera.WorldToViewportPoint(scanTarget.position);
+                authoredCameraDiagnostic = $", authored-target=({authoredTargetViewport.x:F2}, {authoredTargetViewport.y:F2}, {authoredTargetViewport.z:F2}), camera-error={cameraPositionError:F3}m/{cameraFacingAlignment:F4}";
+            }
+
+            ModLogger.Info($"[Fingerprint Scan] Snapshot render diagnostic: layer={scannerArmSnapshotRoot.layer}, camera-sees-layer={layerVisible}, enabled={meshRenderer.enabled}, bounds-viewport=({viewport.x:F2}, {viewport.y:F2}, {viewport.z:F2}), target-viewport=({targetViewport.x:F2}, {targetViewport.y:F2}, {targetViewport.z:F2}), palm-viewport=({palmViewport.x:F2}, {palmViewport.y:F2}, {palmViewport.z:F2}), bounds={meshRenderer.bounds.size}{authoredCameraDiagnostic}");
         }
 
         private void RestoreScannerArmSnapshot()
@@ -2981,6 +3040,10 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info("Starting fingerprint scan process");
 
             EnterHandScanInteraction();
+            // The camera transition takes 0.15 seconds.  Do not build the
+            // scanner-only mesh during that transition: it has no second
+            // chance to re-anchor once the camera reaches the station view.
+            yield return WaitForScannerCameraOverride();
             PositionHandTargetAtScanStart();
 
             // Pose the real avatar once, capture its right forearm/hand into
@@ -3022,6 +3085,7 @@ namespace Behind_Bars.Systems.Jail
             }
 
             yield return AnimateScannerArmArrival(0.32f);
+            LogScannerArmSnapshotViewport();
             ShowScannerStatusIndicator();
             SetScannerStatusIndicator(false);
 
