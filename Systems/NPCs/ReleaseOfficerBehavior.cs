@@ -2906,6 +2906,8 @@ namespace Behind_Bars.Systems.NPCs
 
             // Ensure any pending ready-to-leave choice listener is detached before teardown.
             DialogueChoiceListener.Unregister(dialogueHandler);
+            npcDialogueWrapper?.Dispose();
+            npcDialogueWrapper = null;
 
             // Unregister from the canonical NPC registry.
             var npcManager = Core.Instance?.NpcManager;

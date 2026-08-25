@@ -45,6 +45,7 @@ namespace Behind_Bars.Systems.NPCs
 
         public static PrisonNPCManager Instance { get; private set; }
         private Coroutine? npcInitializationCoroutine;
+        private readonly List<Coroutine> guardDialogueInitializationCoroutines = new();
         
         // NPC spawning status
         public bool IsSpawningComplete { get; private set; } = false;
@@ -124,6 +125,16 @@ namespace Behind_Bars.Systems.NPCs
                 MelonCoroutines.Stop(npcInitializationCoroutine);
                 npcInitializationCoroutine = null;
             }
+
+            foreach (var coroutine in guardDialogueInitializationCoroutines)
+            {
+                if (coroutine != null)
+                {
+                    MelonCoroutines.Stop(coroutine);
+                }
+            }
+
+            guardDialogueInitializationCoroutines.Clear();
 
             IsSpawningComplete = false;
             isPatrolInProgress = false;
@@ -2758,7 +2769,12 @@ namespace Behind_Bars.Systems.NPCs
                 var jailAudioController = BBHelpers.AddComponentSafe<JailNPCAudioController>(guardObject);
                 ModLogger.Debug($"✓ JailNPCAudioController added to guard {guardObject.name}");
 
-                MelonCoroutines.Start(InitializeGuardDialogueWhenReady(guardObject, npcComponent));
+                var dialogueInitializationCoroutine = MelonCoroutines.Start(
+                    InitializeGuardDialogueWhenReady(guardObject, npcComponent)) as Coroutine;
+                if (dialogueInitializationCoroutine != null)
+                {
+                    guardDialogueInitializationCoroutines.Add(dialogueInitializationCoroutine);
+                }
 
                 ModLogger.Debug($"✓ Audio system configured for guard: {guardObject.name}");
             }

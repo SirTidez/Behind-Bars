@@ -90,6 +90,32 @@ namespace Behind_Bars.Systems.Dialogue
         }
 
         /// <summary>
+        /// Removes UnityEvent listeners owned by this wrapper. Clearing callback dictionaries
+        /// alone does not detach the wrapper from a native DialogueHandler.
+        /// </summary>
+        public void Dispose()
+        {
+            if (_eventHandler != null && _eventsHooked)
+            {
+                EventHelper.RemoveListener<string>(Internal_OnChoice, _eventHandler.onDialogueChoiceChosen);
+                EventHelper.RemoveListener<string>(Internal_OnNode, _eventHandler.onDialogueNodeDisplayed);
+            }
+
+            if (_eventHandler != null)
+            {
+                foreach (var clearOnce in _oneShotConversationStartListeners)
+                {
+                    EventHelper.RemoveListener(clearOnce, _eventHandler.onConversationStart);
+                }
+            }
+
+            _oneShotConversationStartListeners.Clear();
+            ClearCallbacks();
+            _eventHandler = null;
+            _eventsHooked = false;
+        }
+
+        /// <summary>
         /// Starts a dialogue by container name present on the NPC's handler.
         /// </summary>
         public void Start(string containerName, bool enableBehaviour = true, string entryNodeLabel = "ENTRY")
@@ -181,11 +207,12 @@ namespace Behind_Bars.Systems.Dialogue
         {
             if (Handler == null || _eventsHooked)
                 return;
+            _eventHandler = Handler;
             _eventsHooked = true;
             // Handler events are invoked from DialogueHandler.ChoiceCallback and DialogueCallback
             // These are UnityEvent<string>, so we use AddListener<string>
-            EventHelper.AddListener<string>(Internal_OnChoice, Handler.onDialogueChoiceChosen);
-            EventHelper.AddListener<string>(Internal_OnNode, Handler.onDialogueNodeDisplayed);
+            EventHelper.AddListener<string>(Internal_OnChoice, _eventHandler.onDialogueChoiceChosen);
+            EventHelper.AddListener<string>(Internal_OnNode, _eventHandler.onDialogueNodeDisplayed);
         }
 
         /// <summary>
@@ -308,13 +335,22 @@ namespace Behind_Bars.Systems.Dialogue
 
             controller.SetOverrideContainer(container);
 
-            // Clear the override as soon as the conversation actually starts
-            void ClearOnce()
+            // Clear the override as soon as the conversation actually starts. Keep a stable
+            // listener reference so a scene transition can remove it if dialogue never opens.
+            Action clearOnce = null;
+            clearOnce = () =>
             {
                 try { controller.ClearOverrideContainer(); } catch { }
-                try { EventHelper.RemoveListener((System.Action)ClearOnce, Handler.onConversationStart); } catch { }
+                try { EventHelper.RemoveListener(clearOnce, _eventHandler?.onConversationStart); } catch { }
+                _oneShotConversationStartListeners.Remove(clearOnce);
+            };
+            _eventHandler ??= Handler;
+            try
+            {
+                EventHelper.AddListener(clearOnce, _eventHandler?.onConversationStart);
+                _oneShotConversationStartListeners.Add(clearOnce);
             }
-            try { EventHelper.AddListener((System.Action)ClearOnce, Handler.onConversationStart); } catch { }
+            catch { }
 
             return true;
         }
@@ -386,6 +422,8 @@ namespace Behind_Bars.Systems.Dialogue
 #endif
         private readonly Dictionary<string, List<Action>> _choiceCallbacks = new Dictionary<string, List<Action>>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, List<Action>> _nodeCallbacks = new Dictionary<string, List<Action>>(StringComparer.OrdinalIgnoreCase);
+        private readonly List<Action> _oneShotConversationStartListeners = new List<Action>();
+        private DialogueHandler _eventHandler;
         private bool _eventsHooked;
     }
 }

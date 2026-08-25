@@ -69,6 +69,25 @@ namespace Behind_Bars.Systems.CrimeTracking
         [SaveableField("conditionWarningCounts")]
         private Dictionary<string, int> conditionWarningCounts;
 
+        // A check-in window must survive save/load; the ParoleManager's runtime dictionary is
+        // only a cache of this record-owned schedule.
+        [SaveableField("scheduledCheckInDay")]
+        private int scheduledCheckInDay;
+
+        [SaveableField("scheduledCheckInStartMinute")]
+        private int scheduledCheckInStartMinute;
+
+        [SaveableField("scheduledCheckInEndMinute")]
+        private int scheduledCheckInEndMinute;
+
+        [SaveableField("scheduledCheckInReminderSent")]
+        private bool scheduledCheckInReminderSent;
+
+        // Warrant enforcement is runtime-driven, but the warrant itself is a parole outcome
+        // and must be restored when the player reloads before being arrested.
+        [SaveableField("activeAgentWarrant")]
+        private bool activeAgentWarrant;
+
         [SaveableField("consecutiveHighComplianceDays")]
         private int consecutiveHighComplianceDays;
 
@@ -114,6 +133,11 @@ namespace Behind_Bars.Systems.CrimeTracking
             this.officerRapport = new OfficerRapportRecord();
             this.activeConditionIds = new List<string>();
             this.conditionWarningCounts = new Dictionary<string, int>();
+            this.scheduledCheckInDay = -1;
+            this.scheduledCheckInStartMinute = -1;
+            this.scheduledCheckInEndMinute = -1;
+            this.scheduledCheckInReminderSent = false;
+            this.activeAgentWarrant = false;
             this.consecutiveHighComplianceDays = 0;
             this.lsiStepDownCount = 0;
             this.homeVisitsMissed = 0;
@@ -138,6 +162,11 @@ namespace Behind_Bars.Systems.CrimeTracking
             this.officerRapport = new OfficerRapportRecord();
             this.activeConditionIds = new List<string>();
             this.conditionWarningCounts = new Dictionary<string, int>();
+            this.scheduledCheckInDay = -1;
+            this.scheduledCheckInStartMinute = -1;
+            this.scheduledCheckInEndMinute = -1;
+            this.scheduledCheckInReminderSent = false;
+            this.activeAgentWarrant = false;
             this.consecutiveHighComplianceDays = 0;
             this.lsiStepDownCount = 0;
             this.homeVisitsMissed = 0;
@@ -207,6 +236,8 @@ namespace Behind_Bars.Systems.CrimeTracking
             paroleStartTime = currentGameTime;
             paroleTermLengthInSeconds = termLengthInGameMinutes; // Store in game minutes (kept name for JSON compatibility)
             paroleEndTime = paroleStartTime + termLengthInGameMinutes;
+            ClearDailyCheckInSchedule();
+            SetActiveAgentWarrant(false);
 
             ModLogger.Info($"Started parole for {player.name}. Term: {termLengthInGameMinutes} game minutes ({GameTimeManager.FormatGameTime(termLengthInGameMinutes)}). Ends at game time: {paroleEndTime}");
             // Game's save system handles saving automatically - no manual file saving needed
@@ -226,6 +257,8 @@ namespace Behind_Bars.Systems.CrimeTracking
             }
 
             isOnParole = false;
+            ClearDailyCheckInSchedule();
+            SetActiveAgentWarrant(false);
             float actualEndGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
 
             ModLogger.Info($"Ended parole for {player.name}. Was scheduled to end at game time: {paroleEndTime}, actually ended at game time: {actualEndGameTime}");
@@ -334,6 +367,23 @@ namespace Behind_Bars.Systems.CrimeTracking
 
             ModLogger.Info($"[PAROLE] Extended paused parole for {player.name} by {additionalGameMinutes} game minutes ({GameTimeManager.FormatGameTime(additionalGameMinutes)}). New remaining time: {pausedRemainingTime} game minutes ({GameTimeManager.FormatGameTime(pausedRemainingTime)})");
             // Game's save system handles saving automatically - no manual file saving needed
+            return true;
+        }
+
+        /// <summary>
+        /// Extends an active parole term and persists the new end time. Runtime trackers are
+        /// intentionally updated by their owning manager after this record mutation.
+        /// </summary>
+        public bool ExtendActiveParole(float additionalGameMinutes)
+        {
+            if (!isOnParole || isPaused || additionalGameMinutes <= 0f)
+            {
+                return false;
+            }
+
+            paroleEndTime += additionalGameMinutes;
+            paroleTermLengthInSeconds += additionalGameMinutes;
+            ModLogger.Info($"[PAROLE] Extended active parole for {player?.name ?? "player"} by {additionalGameMinutes} game minutes.");
             return true;
         }
 
@@ -777,6 +827,47 @@ namespace Behind_Bars.Systems.CrimeTracking
             {
                 conditionWarningCounts?.Remove(conditionId);
             }
+        }
+
+        #endregion
+
+        #region Daily Check-In and Warrant Methods
+
+        public bool TryGetDailyCheckInSchedule(out int dayIndex, out int startMinuteOfDay, out int endMinuteOfDay, out bool reminderSent)
+        {
+            dayIndex = scheduledCheckInDay;
+            startMinuteOfDay = scheduledCheckInStartMinute;
+            endMinuteOfDay = scheduledCheckInEndMinute;
+            reminderSent = scheduledCheckInReminderSent;
+            return dayIndex >= 0 && startMinuteOfDay >= 0 && endMinuteOfDay >= startMinuteOfDay;
+        }
+
+        public void SetDailyCheckInSchedule(int dayIndex, int startMinuteOfDay, int endMinuteOfDay)
+        {
+            scheduledCheckInDay = dayIndex;
+            scheduledCheckInStartMinute = startMinuteOfDay;
+            scheduledCheckInEndMinute = endMinuteOfDay;
+            scheduledCheckInReminderSent = false;
+        }
+
+        public void MarkDailyCheckInReminderSent()
+        {
+            scheduledCheckInReminderSent = true;
+        }
+
+        public void ClearDailyCheckInSchedule()
+        {
+            scheduledCheckInDay = -1;
+            scheduledCheckInStartMinute = -1;
+            scheduledCheckInEndMinute = -1;
+            scheduledCheckInReminderSent = false;
+        }
+
+        public bool HasActiveAgentWarrant() => activeAgentWarrant;
+
+        public void SetActiveAgentWarrant(bool active)
+        {
+            activeAgentWarrant = active;
         }
 
         #endregion

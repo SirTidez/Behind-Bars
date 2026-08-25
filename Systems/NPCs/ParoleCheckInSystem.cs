@@ -79,6 +79,9 @@ namespace Behind_Bars.Systems.NPCs
 
         private void OnDestroy()
         {
+            dialogueWrapper?.Dispose();
+            dialogueWrapper = null;
+
             if (currentCheckInParolee != null)
             {
                 ReleaseCheckInOwnership(currentCheckInParolee);

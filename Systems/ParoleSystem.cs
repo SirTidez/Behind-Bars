@@ -371,6 +371,11 @@ namespace Behind_Bars.Systems
             int currentMinuteOfDay = GetCurrentMinuteOfDayInternal();
             string playerKey = GetPlayerRuntimeKey(player);
 
+            if (paroleRecord.HasActiveAgentWarrant())
+            {
+                _playersWithActiveWarrants.Add(playerKey);
+            }
+
             if (_paroleRecords.TryGetValue(playerKey, out var existingRecord) && existingRecord != null)
             {
                 if (existingRecord.Status == ParoleStatus.Active)
@@ -558,6 +563,13 @@ namespace Behind_Bars.Systems
                 return;
             }
 
+            var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
+            if (rapSheet?.CurrentParoleRecord != null)
+            {
+                rapSheet.CurrentParoleRecord.SetActiveAgentWarrant(true);
+                Core.ResolveRapSheetManager().MarkRapSheetChanged(player);
+            }
+
             bool isNewWarrant = _playersWithActiveWarrants.Add(GetPlayerRuntimeKey(player));
             TriggerPolicePursuitForWarrant(player);
 
@@ -603,6 +615,12 @@ namespace Behind_Bars.Systems
             {
                 _playersWithActiveWarrants.Remove(playerKey);
                 _lastWarrantEnforcementTime.Remove(playerKey);
+                var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
+                if (rapSheet?.CurrentParoleRecord != null)
+                {
+                    rapSheet.CurrentParoleRecord.SetActiveAgentWarrant(false);
+                    Core.ResolveRapSheetManager().MarkRapSheetChanged(player);
+                }
                 ModLogger.Info($"ParoleSystem: Cleared active warrant for {player.name} after arrest");
                 return;
             }
@@ -752,6 +770,13 @@ namespace Behind_Bars.Systems
             _pendingOfficerTexts.Remove(playerKey);
             _playersWithActiveWarrants.Remove(playerKey);
             _lastWarrantEnforcementTime.Remove(playerKey);
+
+            var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
+            if (rapSheet?.CurrentParoleRecord != null)
+            {
+                rapSheet.CurrentParoleRecord.SetActiveAgentWarrant(false);
+                Core.ResolveRapSheetManager().MarkRapSheetChanged(player);
+            }
         }
 
         /// <summary>
@@ -947,6 +972,19 @@ namespace Behind_Bars.Systems
                 float extension = record.DurationGameMinutes * 0.2f; // 20% extension
                 record.DurationGameMinutes += extension;
                 record.TimeRemainingGameMinutes += extension;
+
+                try
+                {
+                    var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(record.Player);
+                    if (rapSheet?.CurrentParoleRecord?.ExtendActiveParole(extension) == true)
+                    {
+                        Core.ResolveRapSheetManager().MarkRapSheetChanged(record.Player);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Warn($"ParoleSystem: Failed to persist parole extension for {record.Player.name}: {ex.Message}");
+                }
 
                 // Update ParoleTimeTracker with new duration
                 Core.ResolveParoleManager().StopTracking(record.Player);

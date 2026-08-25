@@ -240,6 +240,13 @@ namespace Behind_Bars.Systems
                 }
             }
 
+            if (TryRestorePersistedDailyCheckIn(player, out var persistedRequirement))
+            {
+                dailyCheckInRequirements[playerKey] = persistedRequirement;
+                dailyCheckInScheduledDay[playerKey] = persistedRequirement.DayIndex;
+                return;
+            }
+
             float windowMinutes = GetDailyCheckInWindowMinutes(player);
             if (!TryBuildDailyCheckInWindow(currentMinuteOfDay, windowMinutes, out int windowStartMinuteOfDay, out int windowEndMinuteOfDay))
             {
@@ -257,6 +264,7 @@ namespace Behind_Bars.Systems
                 Completed = false
             };
             dailyCheckInScheduledDay[playerKey] = currentDayIndex;
+            PersistDailyCheckInRequirement(player, dailyCheckInRequirements[playerKey]);
 
             SendDailyCheckInInstructionText(player, windowStartMinuteOfDay, windowEndMinuteOfDay);
             ModLogger.Info($"ParoleManager: Scheduled daily check-in for {player.name} (day index {currentDayIndex}, {FormatMinuteOfDay(windowStartMinuteOfDay)} - {FormatMinuteOfDay(windowEndMinuteOfDay)})");
@@ -269,9 +277,15 @@ namespace Behind_Bars.Systems
                 return;
             }
 
-            if (!dailyCheckInRequirements.TryGetValue(GetPlayerRuntimeKey(player), out var requirement) || requirement == null)
+            string playerKey = GetPlayerRuntimeKey(player);
+            if (!dailyCheckInRequirements.TryGetValue(playerKey, out var requirement) || requirement == null)
             {
-                return;
+                if (!TryRestorePersistedDailyCheckIn(player, out requirement))
+                {
+                    return;
+                }
+
+                dailyCheckInRequirements[playerKey] = requirement;
             }
 
             if (requirement.Completed || requirement.ReminderSent || requirement.DayIndex != currentDayIndex)
@@ -286,6 +300,7 @@ namespace Behind_Bars.Systems
             }
 
             requirement.ReminderSent = true;
+            PersistDailyCheckInRequirement(player, requirement);
 
             string message =
                 $"{GetPlayerDisplayName(player)}, reminder: your parole check-in window starts in one hour. " +
@@ -304,12 +319,18 @@ namespace Behind_Bars.Systems
 
             if (!dailyCheckInRequirements.TryGetValue(playerKey, out var requirement) || requirement == null)
             {
-                return;
+                if (!TryRestorePersistedDailyCheckIn(player, out requirement))
+                {
+                    return;
+                }
+
+                dailyCheckInRequirements[playerKey] = requirement;
             }
 
             if (requirement.Completed)
             {
                 dailyCheckInRequirements.Remove(playerKey);
+                ClearPersistedDailyCheckIn(player);
                 return;
             }
 
@@ -322,6 +343,7 @@ namespace Behind_Bars.Systems
 
             HandleMissedDailyCheckIn(player, requirement);
             dailyCheckInRequirements.Remove(playerKey);
+            ClearPersistedDailyCheckIn(player);
         }
 
         /// <summary>
@@ -369,6 +391,7 @@ namespace Behind_Bars.Systems
             {
                 requirement.Completed = true;
                 dailyCheckInRequirements.Remove(playerKey);
+                ClearPersistedDailyCheckIn(player);
                 ModLogger.Info($"ParoleManager: Daily check-in completed for {player.name}");
 
                 try
@@ -408,7 +431,12 @@ namespace Behind_Bars.Systems
             string playerKey = GetPlayerRuntimeKey(player);
             if (!dailyCheckInRequirements.TryGetValue(playerKey, out var requirement) || requirement == null)
             {
-                return CheckInStatus.NoScheduledWindow;
+                if (!TryRestorePersistedDailyCheckIn(player, out requirement))
+                {
+                    return CheckInStatus.NoScheduledWindow;
+                }
+
+                dailyCheckInRequirements[playerKey] = requirement;
             }
 
             windowText = $"{FormatMinuteOfDay(requirement.WindowStartMinuteOfDay)} and {FormatMinuteOfDay(requirement.WindowEndMinuteOfDay)}";
@@ -423,6 +451,7 @@ namespace Behind_Bars.Systems
                 {
                     HandleMissedDailyCheckIn(player, requirement);
                     dailyCheckInRequirements.Remove(playerKey);
+                    ClearPersistedDailyCheckIn(player);
                 }
 
                 return CheckInStatus.MissedWindow;
@@ -452,6 +481,7 @@ namespace Behind_Bars.Systems
             dailyCheckInRequirements.Remove(playerKey);
             dailyCheckInScheduledDay.Remove(playerKey);
             activeCheckInSessions.Remove(playerKey);
+            ClearPersistedDailyCheckIn(player);
         }
 
         /// <summary>
@@ -460,6 +490,74 @@ namespace Behind_Bars.Systems
         public void EvaluateLSIStepDown(Player player)
         {
             ParoleSystem.EvaluateLSIStepDown(player);
+        }
+
+        private bool TryRestorePersistedDailyCheckIn(Player player, out DailyCheckInRequirement requirement)
+        {
+            requirement = null;
+            var paroleRecord = Core.ResolveRapSheetManager().GetRapSheet(player)?.CurrentParoleRecord;
+            if (paroleRecord == null ||
+                !paroleRecord.TryGetDailyCheckInSchedule(
+                    out int dayIndex,
+                    out int startMinuteOfDay,
+                    out int endMinuteOfDay,
+                    out bool reminderSent))
+            {
+                return false;
+            }
+
+            requirement = new DailyCheckInRequirement
+            {
+                DayIndex = dayIndex,
+                WindowStartMinuteOfDay = startMinuteOfDay,
+                WindowEndMinuteOfDay = endMinuteOfDay,
+                ReminderSent = reminderSent,
+                Completed = false
+            };
+            return true;
+        }
+
+        private void PersistDailyCheckInRequirement(Player player, DailyCheckInRequirement requirement)
+        {
+            if (player == null || requirement == null)
+            {
+                return;
+            }
+
+            var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
+            var paroleRecord = rapSheet?.CurrentParoleRecord;
+            if (paroleRecord == null)
+            {
+                return;
+            }
+
+            paroleRecord.SetDailyCheckInSchedule(
+                requirement.DayIndex,
+                requirement.WindowStartMinuteOfDay,
+                requirement.WindowEndMinuteOfDay);
+            if (requirement.ReminderSent)
+            {
+                paroleRecord.MarkDailyCheckInReminderSent();
+            }
+
+            Core.ResolveRapSheetManager().MarkRapSheetChanged(player);
+        }
+
+        private void ClearPersistedDailyCheckIn(Player player)
+        {
+            if (player == null)
+            {
+                return;
+            }
+
+            var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
+            if (rapSheet?.CurrentParoleRecord == null)
+            {
+                return;
+            }
+
+            rapSheet.CurrentParoleRecord.ClearDailyCheckInSchedule();
+            Core.ResolveRapSheetManager().MarkRapSheetChanged(player);
         }
 
         private float GetDailyCheckInWindowMinutes(Player player)

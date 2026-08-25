@@ -37,6 +37,32 @@ namespace Behind_Bars.Systems.NPCs
         private static bool loggedDonorFailure;
         private static readonly List<PendingNetworkSpawn> pendingNetworkSpawns = new();
         private static bool spawnPumpRunning;
+        private static Coroutine spawnPumpCoroutine;
+
+        /// <summary>
+        /// Cancels scene-owned FishNet spawn work. Native template assets deliberately survive
+        /// scene changes, but queued live NPC instances must never be spawned into a menu or a
+        /// subsequent save.
+        /// </summary>
+        internal static void CancelForSceneExit()
+        {
+            if (spawnPumpCoroutine != null)
+            {
+                MelonCoroutines.Stop(spawnPumpCoroutine);
+                spawnPumpCoroutine = null;
+            }
+
+            spawnPumpRunning = false;
+            foreach (var pending in pendingNetworkSpawns)
+            {
+                if (pending.NpcObject != null)
+                {
+                    UnityEngine.Object.Destroy(pending.NpcObject);
+                }
+            }
+
+            pendingNetworkSpawns.Clear();
+        }
 
         internal static IEnumerator Prewarm()
         {
@@ -527,7 +553,7 @@ namespace Behind_Bars.Systems.NPCs
             if (!spawnPumpRunning)
             {
                 spawnPumpRunning = true;
-                MelonCoroutines.Start(ProcessPendingNetworkSpawns());
+                spawnPumpCoroutine = MelonCoroutines.Start(ProcessPendingNetworkSpawns()) as Coroutine;
             }
         }
 
@@ -609,6 +635,7 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             spawnPumpRunning = false;
+            spawnPumpCoroutine = null;
         }
 
         private sealed class PendingNetworkSpawn

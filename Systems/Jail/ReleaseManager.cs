@@ -1770,6 +1770,7 @@ namespace Behind_Bars.Systems.Jail
                         if (!dialogueEverActive)
                         {
                             ModLogger.Warn($"Post-release compliance: dialogue failed to start for {player.name}");
+                            dialogue.Dispose();
                             dialogue = null;
                         }
                     }
@@ -1887,6 +1888,7 @@ namespace Behind_Bars.Systems.Jail
             finally
             {
                 Core.ResolveUIManager().HideOfficerCommand();
+                dialogue?.Dispose();
                 if (!playerUnfrozen)
                 {
                     UnfreezePlayer(player);

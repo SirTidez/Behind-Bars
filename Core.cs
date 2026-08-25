@@ -2462,6 +2462,9 @@ namespace Behind_Bars
                 try { ResolvePrisonNpcManager()?.CancelForSceneExit(); }
                 catch (Exception ex) { ModLogger.Warn($"NPC manager shutdown reported an issue: {ex.Message}"); }
 
+                try { JailNpcPrefabLifecycle.CancelForSceneExit(); }
+                catch (Exception ex) { ModLogger.Warn($"NPC spawn lifecycle shutdown reported an issue: {ex.Message}"); }
+
                 try
                 {
                     if (ReleaseManager.TryGetRegisteredInstance(out var releaseManager))
