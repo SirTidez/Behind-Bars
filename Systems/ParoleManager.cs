@@ -741,7 +741,7 @@ namespace Behind_Bars.Systems
 
             rapSheet.AddParoleViolation(violation);
             Core.ResolveRapSheetManager().MarkRapSheetChanged(player);
-            IssueAgentWarrant(player);
+            IssueAgentWarrant(player, ViolationType.MissedCheckIn);
 
             string violationMessage =
                 $"{GetPlayerDisplayName(player)}, this is your second missed check-in. You are now in parole violation. " +
@@ -766,9 +766,9 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Issue a warrant through the manager-owned parole seam.
         /// </summary>
-        public void IssueAgentWarrant(Player player)
+        public void IssueAgentWarrant(Player player, ViolationType cause = ViolationType.Other)
         {
-            ParoleSystem.IssueAgentWarrantInternal(player);
+            ParoleSystem.IssueAgentWarrantInternal(player, cause);
         }
 
         /// <summary>

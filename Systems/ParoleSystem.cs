@@ -556,12 +556,18 @@ namespace Behind_Bars.Systems
             return Core.ResolveParoleManager().NotifyDailyCheckInCompleted(player);
         }
 
-        internal void IssueAgentWarrantInternal(Player player)
+        internal void IssueAgentWarrantInternal(Player player, ViolationType cause = ViolationType.Other)
         {
             if (player == null)
             {
                 return;
             }
+
+            // The native law system needs an ordinary Crime instance to begin its normal
+            // police response. Preserve the actual parole charge separately so custody does
+            // not later record that transport crime (currently Witness Intimidation) as the
+            // reason for the warrant arrest.
+            Core.Instance?.JailSystem?.RegisterPendingParoleArrestCause(player, cause);
 
             var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
             if (rapSheet?.CurrentParoleRecord != null)
@@ -1203,7 +1209,7 @@ namespace Behind_Bars.Systems
 
                 if (issueWarrant)
                 {
-                    IssueAgentWarrantInternal(player);
+                    IssueAgentWarrantInternal(player, ViolationType.CurfewViolation);
                     SendSupervisingOfficerText(player,
                         "Repeated curfew violation. A parole warrant has been issued.");
                     ModLogger.Warn($"[CURFEW] Warrant escalation recorded for {player.name} via {source}");

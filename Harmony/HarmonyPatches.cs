@@ -1000,6 +1000,23 @@ namespace Behind_Bars.Harmony
             return string.IsNullOrWhiteSpace(typeName) ? displayName ?? string.Empty : typeName;
         }
 
+        /// <summary>
+        /// The parole warrant path intentionally uses this stock crime only to enter the
+        /// game's police-response state. Its persisted legal attribution is the explicit
+        /// parole violation carried by JailSystem, not witness intimidation.
+        /// </summary>
+        private static bool IsNativeWarrantCarrier(Crime crime)
+        {
+            if (crime == null)
+            {
+                return false;
+            }
+
+            return crime is WitnessIntimidation ||
+                   string.Equals(crime.GetType().Name, nameof(WitnessIntimidation), StringComparison.Ordinal) ||
+                   string.Equals(crime.CrimeName, "Witness Intimidation", StringComparison.OrdinalIgnoreCase);
+        }
+
         private static string BuildCrimeEventKey(CrimeInstance crimeInstance)
         {
             if (crimeInstance == null)
@@ -1048,7 +1065,13 @@ namespace Behind_Bars.Harmony
                     return;
                 }
 
-                // Check if player is on parole - if so, pause it during incarceration
+                ViolationType explicitParoleCause = ViolationType.Other;
+                bool hasExplicitParoleArrestCause = Core.Instance?.JailSystem?
+                    .TryGetPendingParoleArrestCauseForCustody(player, out explicitParoleCause) == true;
+
+                // Check if player is on parole - if so, pause it during incarceration. A
+                // warrant/search has already recorded its specific parole violation, so do
+                // not add a second generic "New Crime" violation while carrying it into jail.
                 if (rapSheet.CurrentParoleRecord != null && rapSheet.CurrentParoleRecord.IsOnParole())
                 {
                     if (!rapSheet.CurrentParoleRecord.IsPaused())
@@ -1056,14 +1079,21 @@ namespace Behind_Bars.Harmony
                         rapSheet.PauseParole(); // Use helper method that marks RapSheet as changed
                         ModLogger.Info($"[PAROLE] Player {player.name} was on parole at time of arrest - parole time paused");
 
-                        // Add a violation for being arrested while on parole
-                        var arrestViolation = new ViolationRecord(
-                            ViolationType.NewCrime,
-                            "Player was arrested and charged with new crimes while on parole supervision",
-                            3.0f
-                        );
-                        rapSheet.AddParoleViolation(arrestViolation); // Use helper method that marks RapSheet as changed
-                        ModLogger.Info($"[PAROLE] Added violation for arrest while on parole");
+                        if (!hasExplicitParoleArrestCause)
+                        {
+                            // Add a violation for being arrested while on parole.
+                            var arrestViolation = new ViolationRecord(
+                                ViolationType.NewCrime,
+                                "Player was arrested and charged with new crimes while on parole supervision",
+                                3.0f
+                            );
+                            rapSheet.AddParoleViolation(arrestViolation); // Use helper method that marks RapSheet as changed
+                            ModLogger.Info($"[PAROLE] Added violation for arrest while on parole");
+                        }
+                        else
+                        {
+                            ModLogger.Info($"[PAROLE] Preserved explicit parole arrest cause '{explicitParoleCause}' for {player.name}");
+                        }
                     }
                     else
                     {
@@ -1095,7 +1125,9 @@ namespace Behind_Bars.Harmony
                 {
                     foreach (var snapshot in nativeCrimeSnapshots)
                     {
-                        if (snapshot?.Crime == null || IsRepresentedByEnhancedCrime(snapshot, activeCrimes))
+                        if (snapshot?.Crime == null ||
+                            IsRepresentedByEnhancedCrime(snapshot, activeCrimes) ||
+                            (hasExplicitParoleArrestCause && IsNativeWarrantCarrier(snapshot.Crime)))
                         {
                             continue;
                         }

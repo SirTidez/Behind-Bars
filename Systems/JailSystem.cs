@@ -1925,6 +1925,17 @@ namespace Behind_Bars.Systems
             ModLogger.Info($"[PAROLE VIOLATION] Registered pending custody cause '{GetParoleViolationDisplayName(violationType)}' for {player.name}");
         }
 
+        /// <summary>
+        /// Returns the explicit parole violation that initiated the current arrest, when one
+        /// is available. The native wanted system needs a concrete game Crime to begin a
+        /// pursuit, but that carrier crime is not the charge the player should receive for a
+        /// parole warrant.
+        /// </summary>
+        internal bool TryGetPendingParoleArrestCauseForCustody(Player player, out ViolationType violationType)
+        {
+            return TryGetPendingParoleArrestCause(player, out violationType);
+        }
+
         internal void ClearSceneTransientParoleArrestCauses()
         {
             pendingParoleArrestCauses.Clear();
