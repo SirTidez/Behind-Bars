@@ -17,8 +17,9 @@ using ScheduleOne.NPCs;
 namespace Behind_Bars.Systems.NPCs
 {
     /// <summary>
-    /// Controls inmate NPC behavior within their assigned cells
-    /// Makes them walk around randomly as if going insane from confinement
+    /// Provides temporary jail-wide wandering for inmates until the daily
+    /// schedule system supplies explicit activity destinations. An assigned
+    /// cell remains the inmate's home/spawn reference, not a movement cage.
     /// </summary>
     public class InmateBehavior : MonoBehaviour
     {
@@ -33,7 +34,9 @@ namespace Behind_Bars.Systems.NPCs
         private float minMoveDistance = 0.5f;
         private float maxMoveDistance = 2.5f;
 
-        // Cell bounds
+        // Cell ownership/home bounds. These are intentionally not used to
+        // constrain temporary wandering: the prison NavMesh does not align
+        // exactly with individual cell colliders.
         private Bounds cellBounds;
         private int assignedCellNumber = -1;
         private bool hasCellBounds = false;
@@ -78,7 +81,7 @@ namespace Behind_Bars.Systems.NPCs
                 return;
             }
 
-            // Configure nav agent for cell movement
+            // Configure nav agent for temporary jail wandering.
             navAgent.enabled = true;
             navAgent.speed = moveSpeed;
             navAgent.angularSpeed = 180f;
@@ -104,8 +107,8 @@ namespace Behind_Bars.Systems.NPCs
             // Some inmates pace more, others wander more randomly
             isPacing = UnityEngine.Random.Range(0f, 1f) > 0.6f; // 40% chance to be a pacer
 
-            // Start behavior using MelonCoroutines
-            inmateBehaviorCoroutine = MelonCoroutines.Start(InmateCellBehavior()) as Coroutine;
+            // Start behavior using MelonCoroutines.
+            inmateBehaviorCoroutine = MelonCoroutines.Start(InmateWanderBehavior()) as Coroutine;
         }
 
         void InitializeCellBounds()
@@ -163,7 +166,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        IEnumerator InmateCellBehavior()
+        private IEnumerator InmateWanderBehavior()
         {
             yield return new WaitForSeconds(UnityEngine.Random.Range(0.5f, 2f)); // Initial random delay
 
@@ -176,7 +179,10 @@ namespace Behind_Bars.Systems.NPCs
                     yield break;
                 }
 
-                if (!hasCellBounds || navAgent == null || !navAgent.enabled)
+                // A missing home-cell collider must not immobilize an inmate.
+                // Assigned cells are needed for custody logic, whereas the
+                // temporary movement path only needs a live NavMesh agent.
+                if (navAgent == null || !navAgent.enabled)
                 {
                     yield return new WaitForSeconds(5f);
                     continue;
@@ -193,18 +199,15 @@ namespace Behind_Bars.Systems.NPCs
                 // Check if it's time to move
                 if (Time.time >= nextMoveTime && !isMoving)
                 {
-                    // Get a random destination in the cell
-                    Vector3 destination = GetRandomPointInCell();
-
-                    // Use NavMeshAgent to move there
-                    if (TrySetCellDestination(destination))
+                    if (TryGetTemporaryJailWanderDestination(out Vector3 destination) &&
+                        TrySetWanderDestination(destination))
                     {
                         isMoving = true;
                         currentDestination = destination;
                     }
                     else
                     {
-                        LogNavMeshDiagnostic($"could not set a cell destination near {destination}");
+                        LogNavMeshDiagnostic("could not find a complete path to a temporary jail wander destination");
                         nextMoveTime = Time.time + 2f;
                     }
                 }
@@ -225,29 +228,67 @@ namespace Behind_Bars.Systems.NPCs
 
         // Removed - no longer needed with simple movement
 
-        Vector3 GetRandomPointInCell()
+        private bool TryGetTemporaryJailWanderDestination(out Vector3 destination)
         {
-            // Generate a random point within cell bounds - using full bounds for realistic movement
-            float x = cellBounds.center.x + UnityEngine.Random.Range(-cellBounds.size.x * 0.45f, cellBounds.size.x * 0.45f);
-            float z = cellBounds.center.z + UnityEngine.Random.Range(-cellBounds.size.z * 0.45f, cellBounds.size.z * 0.45f);
-            float y = transform.position.y; // Keep at current floor level
-
-            Vector3 randomPoint = new Vector3(x, y, z);
-
-            // Sample the NavMesh to get a valid position
-            UnityEngine.AI.NavMeshHit hit;
-            if (UnityEngine.AI.NavMesh.SamplePosition(randomPoint, out hit, 2.0f, UnityEngine.AI.NavMesh.AllAreas) &&
-                cellBounds.Contains(hit.position))
+            destination = Vector3.zero;
+            if (navAgent == null || !navAgent.isOnNavMesh)
             {
-                return hit.position; // Return the valid NavMesh position
+                return false;
             }
 
-            // A cell can be adjacent to, but not itself covered by, the baked NavMesh. In that
-            // case keep the inmate at its verified agent location instead of retrying an off-mesh
-            // transform position every movement tick.
-            return navAgent != null && navAgent.isOnNavMesh
-                ? navAgent.nextPosition
-                : transform.position;
+            // Authored patrol markers define a jail-only navigation domain.
+            // Sampling around them lets temporary inmates circulate through
+            // the cell block/day-room without choosing the city's global
+            // NavMesh. A future daily lifecycle can replace these candidates
+            // with scheduled activity locations while retaining this path
+            // validation seam.
+            List<Transform> jailAnchors = Core.JailController?.GetPatrolPoints();
+            const int attempts = 12;
+            for (int attempt = 0; attempt < attempts; attempt++)
+            {
+                Vector3 requestedPoint;
+                // Prefer authored shared-area markers, then try local
+                // reachable movement on the last few attempts. The latter
+                // keeps an inmate active if their cell connection is blocked
+                // while doors or streamed NavMesh links are settling.
+                if (jailAnchors != null && jailAnchors.Count > 0 && attempt < attempts - 4)
+                {
+                    Transform anchor = jailAnchors[UnityEngine.Random.Range(0, jailAnchors.Count)];
+                    if (anchor == null)
+                    {
+                        continue;
+                    }
+
+                    Vector2 offset = UnityEngine.Random.insideUnitCircle * UnityEngine.Random.Range(0.35f, 2.25f);
+                    requestedPoint = anchor.position + new Vector3(offset.x, 0f, offset.y);
+                }
+                else
+                {
+                    // Authoring markers are not available in every legacy
+                    // jail bundle. Keep a local, complete-path fallback
+                    // rather than falling back to an unrestricted world-wide
+                    // NavMesh sample.
+                    Vector2 offset = UnityEngine.Random.insideUnitCircle.normalized *
+                                     UnityEngine.Random.Range(minMoveDistance, maxMoveDistance * 3f);
+                    requestedPoint = transform.position + new Vector3(offset.x, 0f, offset.y);
+                }
+
+                if (!NavMesh.SamplePosition(requestedPoint, out NavMeshHit hit, 2.5f, NavMesh.AllAreas))
+                {
+                    continue;
+                }
+
+                if (Vector3.Distance(navAgent.nextPosition, hit.position) < minMoveDistance ||
+                    !HasCompletePathTo(hit.position))
+                {
+                    continue;
+                }
+
+                destination = hit.position;
+                return true;
+            }
+
+            return false;
         }
 
         private bool EnsureAgentOnNavMesh()
@@ -268,7 +309,6 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             if (NavMesh.SamplePosition(transform.position, out var hit, 8f, NavMesh.AllAreas) &&
-                (!hasCellBounds || cellBounds.Contains(hit.position)) &&
                 navAgent.Warp(hit.position) && navAgent.isOnNavMesh)
             {
                 ModLogger.Debug($"[NPC Spawn] Recovered inmate {gameObject.name} onto NavMesh at {hit.position}");
@@ -278,28 +318,22 @@ namespace Behind_Bars.Systems.NPCs
             return false;
         }
 
-        private bool TrySetCellDestination(Vector3 destination)
+        private bool HasCompletePathTo(Vector3 destination)
         {
             if (!EnsureAgentOnNavMesh())
             {
                 return false;
             }
 
-            if (!hasCellBounds || !cellBounds.Contains(destination))
-            {
-                return false;
-            }
+            var path = new NavMeshPath();
+            return navAgent.CalculatePath(destination, path) &&
+                   path.status == NavMeshPathStatus.PathComplete &&
+                   path.corners != null && path.corners.Length >= 2;
+        }
 
-            if (NavMesh.SamplePosition(destination, out var hit, 2f, NavMesh.AllAreas))
-            {
-                if (!cellBounds.Contains(hit.position))
-                {
-                    return false;
-                }
-
-                destination = hit.position;
-            }
-            else
+        private bool TrySetWanderDestination(Vector3 destination)
+        {
+            if (!EnsureAgentOnNavMesh() || !HasCompletePathTo(destination))
             {
                 return false;
             }
@@ -340,7 +374,7 @@ namespace Behind_Bars.Systems.NPCs
 
         void SetDestination(Vector3 destination)
         {
-            if (TrySetCellDestination(destination))
+            if (TrySetWanderDestination(destination))
             {
                 currentDestination = destination;
                 isMoving = true;
