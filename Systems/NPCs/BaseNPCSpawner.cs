@@ -533,7 +533,7 @@ namespace Behind_Bars.Systems.NPCs
         private static void AddInmateBehavior(GameObject npcInstance)
         {
             // Inmates use BaseJailNPC for basic movement and interaction
-            var baseNPC = npcInstance.GetComponent<BaseJailNPC>();
+            var baseNPC = BBHelpers.GetComponentSafe<BaseJailNPC>(npcInstance);
             if (baseNPC == null)
             {
                 // BaseNPC should inherit from MonoBehaviour, not BaseJailNPC

@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -140,7 +141,7 @@ namespace Behind_Bars.Systems.NPCs
 
         void Awake()
         {
-            npcController = GetComponent<BaseJailNPC>();
+            npcController = BBHelpers.GetComponentSafe<BaseJailNPC>(gameObject);
             navAgent = GetComponent<UnityEngine.AI.NavMeshAgent>();
         }
 

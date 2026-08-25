@@ -192,7 +192,7 @@ namespace Behind_Bars.Systems.NPCs
                 else if (npcType == NPCType.JailInmate)
                 {
                     // Add basic inmate behavior (using BaseJailNPC)
-                    var baseNPC = npcObject.GetComponent<BaseJailNPC>();
+                    var baseNPC = BBHelpers.GetComponentSafe<BaseJailNPC>(npcObject);
                     if (baseNPC != null)
                     {
                         // Configure as inmate
@@ -211,7 +211,7 @@ namespace Behind_Bars.Systems.NPCs
                     }
 
                     // Keep BaseJailNPC for basic movement but disable complex behaviors
-                    var baseNPC = npcObject.GetComponent<BaseJailNPC>();
+                    var baseNPC = BBHelpers.GetComponentSafe<BaseJailNPC>(npcObject);
                     if (baseNPC != null)
                     {
                         ModLogger.Debug("TestNPC will use BaseJailNPC for basic movement only");

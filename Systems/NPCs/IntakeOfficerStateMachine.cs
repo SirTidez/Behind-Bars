@@ -172,11 +172,11 @@ namespace Behind_Bars.Systems.NPCs
         private void EnsureSecurityDoorComponent()
         {
             // Check if SecurityDoorBehavior is already attached
-            var existingSecurityDoor = GetComponent<SecurityDoorBehavior>();
+            var existingSecurityDoor = BBHelpers.GetComponentSafe<SecurityDoorBehavior>(gameObject);
             if (existingSecurityDoor == null)
             {
                 // Add SecurityDoorBehavior component to this IntakeOfficer
-                var securityDoor = gameObject.AddComponent<SecurityDoorBehavior>();
+                var securityDoor = BBHelpers.AddComponentSafe<SecurityDoorBehavior>(gameObject);
                 ModLogger.Debug("IntakeOfficer: Added SecurityDoorBehavior component for automated door operations");
             }
             else
@@ -1139,11 +1139,13 @@ namespace Behind_Bars.Systems.NPCs
         private SecurityDoorBehavior GetSecurityDoor()
         {
             // Try to get SecurityDoor component from this GameObject first
-            var securityDoor = GetComponent<SecurityDoorBehavior>();
+            var securityDoor = BBHelpers.GetComponentSafe<SecurityDoorBehavior>(gameObject);
             if (securityDoor != null) return securityDoor;
 
             // Fallback to JailController (centralized SecurityDoor)
-            return Core.JailController?.GetComponent<SecurityDoorBehavior>();
+            return Core.JailController != null
+                ? BBHelpers.GetComponentSafe<SecurityDoorBehavior>(Core.JailController.gameObject)
+                : null;
         }
 
 

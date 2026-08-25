@@ -321,7 +321,7 @@ namespace Behind_Bars.Systems.Jail
             isProcessing = false;
             
             // Add JailBed component for sleeping functionality
-            var jailBed = GetComponent<JailBed>();
+            var jailBed = BBHelpers.GetComponentSafe<JailBed>(gameObject);
             if (jailBed == null)
             {
                 jailBed = BBHelpers.AddComponentSafe<JailBed>(gameObject);
@@ -355,7 +355,7 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info($"Resetting bed setup for {(isTopBunk ? "top bunk" : "bottom bunk")} in {cellName}");
             
             // Remove JailBed component if it exists
-            var jailBed = GetComponent<JailBed>();
+            var jailBed = BBHelpers.GetComponentSafe<JailBed>(gameObject);
             if (jailBed != null)
             {
                 DestroyImmediate(jailBed);

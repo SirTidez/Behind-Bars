@@ -1,5 +1,6 @@
 using UnityEngine;
 using Behind_Bars.Helpers;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 using static Behind_Bars.Systems.NPCs.ParoleOfficerBehavior;
 
 namespace Behind_Bars.Systems.NPCs
@@ -50,7 +51,7 @@ namespace Behind_Bars.Systems.NPCs
 
         private void Awake()
         {
-            npcComponent = GetComponent<BaseJailNPC>();
+            npcComponent = BBHelpers.GetComponentSafe<BaseJailNPC>(gameObject);
             if (npcComponent == null)
             {
                 ModLogger.Error($"StationaryBehavior on {gameObject.name} requires BaseJailNPC component");

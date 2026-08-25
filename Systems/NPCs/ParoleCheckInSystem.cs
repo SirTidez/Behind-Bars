@@ -69,7 +69,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             paroleOfficer = BBHelpers.GetComponentSafe<ParoleOfficerBehavior>(gameObject);
             dialogueController = BBHelpers.GetComponentSafe<JailNPCDialogueController>(gameObject);
-            stationaryBehavior = GetComponent<StationaryBehavior>();
+            stationaryBehavior = BBHelpers.GetComponentSafe<StationaryBehavior>(gameObject);
         }
 
         private void Start()
@@ -247,7 +247,7 @@ namespace Behind_Bars.Systems.NPCs
 
             if (paroleOfficer.IsIntakeProcessingActive())
             {
-                var baseNpcBusy = GetComponent<BaseJailNPC>();
+                var baseNpcBusy = BBHelpers.GetComponentSafe<BaseJailNPC>(gameObject);
                 baseNpcBusy?.TrySendNPCMessage("I am processing intake right now. Come back in a moment.", 3f);
                 dialogueWrapper?.End();
                 EnsureContainerOnInteract();
@@ -257,7 +257,7 @@ namespace Behind_Bars.Systems.NPCs
             var parolee = FindNearbyParoleeForInteraction();
             if (parolee == null)
             {
-                var baseNpcNoPlayer = GetComponent<BaseJailNPC>();
+                var baseNpcNoPlayer = BBHelpers.GetComponentSafe<BaseJailNPC>(gameObject);
                 baseNpcNoPlayer?.TrySendNPCMessage("Step closer if you need to check in.", 3f);
                 EnsureContainerOnInteract();
                 return;
@@ -376,7 +376,7 @@ namespace Behind_Bars.Systems.NPCs
 
             if (dialogueController == null)
             {
-                var baseNpcFallback = GetComponent<BaseJailNPC>();
+                var baseNpcFallback = BBHelpers.GetComponentSafe<BaseJailNPC>(gameObject);
                 baseNpcFallback?.TrySendNPCMessage("You are not eligible to check in right now.", 3f);
                 EnsureContainerOnInteract();
                 return;
@@ -395,7 +395,7 @@ namespace Behind_Bars.Systems.NPCs
 
             if (status == ParoleManager.CheckInStatus.TooEarly && !string.IsNullOrWhiteSpace(windowText))
             {
-                var baseNpc = GetComponent<BaseJailNPC>();
+                var baseNpc = BBHelpers.GetComponentSafe<BaseJailNPC>(gameObject);
                 baseNpc?.TrySendNPCMessage($"Your check-in window is between {windowText}.", 4f);
             }
 
@@ -446,7 +446,7 @@ namespace Behind_Bars.Systems.NPCs
             // Face the parolee
             if (parolee != null)
             {
-                var baseNPC = GetComponent<BaseJailNPC>();
+                var baseNPC = BBHelpers.GetComponentSafe<BaseJailNPC>(gameObject);
                 if (baseNPC != null)
                 {
                     baseNPC.LookAt(parolee.transform.position);

@@ -303,7 +303,7 @@ namespace Behind_Bars.Systems.Jail
             if (bedTransform == null) return;
 
             // Remove any existing JailBed component (for backwards compatibility)
-            JailBed existingBed = bedTransform.GetComponent<JailBed>();
+            JailBed existingBed = BBHelpers.GetComponentSafe<JailBed>(bedTransform.gameObject);
             if (existingBed != null)
             {
                 DestroyImmediate(existingBed);
@@ -314,7 +314,7 @@ namespace Behind_Bars.Systems.Jail
             GameObject instantiatedPrefab = InstantiatePrisonBedPrefab(bedTransform);
 
             // 2. Add PrisonBedInteractable script component to the bed for interaction logic
-            PrisonBedInteractable bedInteractable = bedTransform.GetComponent<PrisonBedInteractable>();
+            PrisonBedInteractable bedInteractable = BBHelpers.GetComponentSafe<PrisonBedInteractable>(bedTransform.gameObject);
             if (bedInteractable == null)
             {
                 bedInteractable = BBHelpers.AddComponentSafe<PrisonBedInteractable>(bedTransform.gameObject);

@@ -538,10 +538,10 @@ public class CellDetail
         {
             if (cellBedBottom != null)
             {
-                var prisonBed = cellBedBottom.GetComponent<PrisonBedInteractable>();
+                var prisonBed = BBHelpers.GetComponentSafe<PrisonBedInteractable>(cellBedBottom.gameObject);
                 if (prisonBed != null && prisonBed.IsComplete)
                 {
-                    var jailBed = cellBedBottom.GetComponent<JailBed>();
+                    var jailBed = BBHelpers.GetComponentSafe<JailBed>(cellBedBottom.gameObject);
                     if (jailBed != null)
                         beds.Add(jailBed);
                 }
@@ -549,10 +549,10 @@ public class CellDetail
 
             if (cellBedTop != null)
             {
-                var prisonBed = cellBedTop.GetComponent<PrisonBedInteractable>();
+                var prisonBed = BBHelpers.GetComponentSafe<PrisonBedInteractable>(cellBedTop.gameObject);
                 if (prisonBed != null && prisonBed.IsComplete)
                 {
-                    var jailBed = cellBedTop.GetComponent<JailBed>();
+                    var jailBed = BBHelpers.GetComponentSafe<JailBed>(cellBedTop.gameObject);
                     if (jailBed != null)
                         beds.Add(jailBed);
                 }
@@ -577,10 +577,10 @@ public class CellDetail
         // Check for completed PrisonBedInteractable with JailBed (bottom preferred)
         if (cellBedBottom != null)
         {
-            var prisonBed = cellBedBottom.GetComponent<PrisonBedInteractable>();
+            var prisonBed = BBHelpers.GetComponentSafe<PrisonBedInteractable>(cellBedBottom.gameObject);
             if (prisonBed != null && prisonBed.IsComplete)
             {
-                var jailBed = cellBedBottom.GetComponent<JailBed>();
+                var jailBed = BBHelpers.GetComponentSafe<JailBed>(cellBedBottom.gameObject);
                 if (jailBed != null)
                     return jailBed;
             }
@@ -588,10 +588,10 @@ public class CellDetail
 
         if (cellBedTop != null)
         {
-            var prisonBed = cellBedTop.GetComponent<PrisonBedInteractable>();
+            var prisonBed = BBHelpers.GetComponentSafe<PrisonBedInteractable>(cellBedTop.gameObject);
             if (prisonBed != null && prisonBed.IsComplete)
             {
-                var jailBed = cellBedTop.GetComponent<JailBed>();
+                var jailBed = BBHelpers.GetComponentSafe<JailBed>(cellBedTop.gameObject);
                 if (jailBed != null)
                     return jailBed;
             }
@@ -610,14 +610,14 @@ public class CellDetail
 
         if (cellBedBottom != null)
         {
-            var prisonBed = cellBedBottom.GetComponent<PrisonBedInteractable>();
+            var prisonBed = BBHelpers.GetComponentSafe<PrisonBedInteractable>(cellBedBottom.gameObject);
             if (prisonBed != null)
                 beds.Add(prisonBed);
         }
 
         if (cellBedTop != null)
         {
-            var prisonBed = cellBedTop.GetComponent<PrisonBedInteractable>();
+            var prisonBed = BBHelpers.GetComponentSafe<PrisonBedInteractable>(cellBedTop.gameObject);
             if (prisonBed != null)
                 beds.Add(prisonBed);
         }
