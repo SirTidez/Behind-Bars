@@ -447,6 +447,29 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
+        /// Ends status presentation synchronously before a scene transition.  This
+        /// avoids the fade coroutine writing to a HUD CanvasGroup after it unloads.
+        /// </summary>
+        public void CancelForSceneExit()
+        {
+            if (_fadeCoroutine != null)
+            {
+                MelonLoader.MelonCoroutines.Stop(_fadeCoroutine);
+                _fadeCoroutine = null;
+            }
+
+            if (_canvasGroup != null)
+            {
+                _canvasGroup.alpha = 0f;
+            }
+
+            if (_statusPanel != null)
+            {
+                _statusPanel.SetActive(false);
+            }
+        }
+
+        /// <summary>
         /// Format LSI level with search probability
         /// </summary>
         /// <summary>

@@ -1445,6 +1445,37 @@ namespace Behind_Bars.UI
             _officerCommandManager = null;
             _currentCommand = null;
 
+            // These managers are deliberately persistent during gameplay, but their
+            // children are parented to the scene HUD.  Cancel presentation first and
+            // discard the persistent hosts so a menu transition cannot resume a fade
+            // against destroyed UI objects.
+            try { _bailUI?.CancelForSceneExit(); }
+            catch (System.Exception ex) { ModLogger.Warn($"Bail UI scene cleanup ignored an issue: {ex.Message}"); }
+            try { _paroleStatusUI?.CancelForSceneExit(); }
+            catch (System.Exception ex) { ModLogger.Warn($"Parole status scene cleanup ignored an issue: {ex.Message}"); }
+            try { _paroleConditionsUI?.CancelForSceneExit(); }
+            catch (System.Exception ex) { ModLogger.Warn($"Parole conditions scene cleanup ignored an issue: {ex.Message}"); }
+
+            if (_bailManager != null)
+            {
+                UnityEngine.Object.Destroy(_bailManager);
+            }
+            if (_paroleStatusManager != null)
+            {
+                UnityEngine.Object.Destroy(_paroleStatusManager);
+            }
+            if (_paroleConditionsManager != null)
+            {
+                UnityEngine.Object.Destroy(_paroleConditionsManager);
+            }
+
+            _bailUI = null;
+            _bailManager = null;
+            _paroleStatusUI = null;
+            _paroleStatusManager = null;
+            _paroleConditionsUI = null;
+            _paroleConditionsManager = null;
+
             if (_isSubscribedToArrestEvents)
             {
                 ReleaseManager.OnReleaseCompleted -= HandlePlayerReleased;

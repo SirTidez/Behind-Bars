@@ -314,6 +314,31 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
+        /// Ends presentation synchronously before the gameplay HUD is destroyed.
+        /// Scene teardown must not rely on a fade coroutine that can resume against a
+        /// destroyed CanvasGroup in the menu scene.
+        /// </summary>
+        public void CancelForSceneExit()
+        {
+            _isVisible = false;
+            if (_fadeCoroutine != null)
+            {
+                MelonLoader.MelonCoroutines.Stop(_fadeCoroutine);
+                _fadeCoroutine = null;
+            }
+
+            if (_canvasGroup != null)
+            {
+                _canvasGroup.alpha = 0f;
+            }
+
+            if (_bailPanel != null)
+            {
+                _bailPanel.SetActive(false);
+            }
+        }
+
+        /// <summary>
         /// Fade in animation
         /// </summary>
         private IEnumerator FadeIn()

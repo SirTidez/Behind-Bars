@@ -78,6 +78,7 @@ namespace Behind_Bars.UI
         private bool _isInitialized = false;
         private bool _isVisible = false;
         private Coroutine _keyDetectionCoroutine;
+        private Coroutine _fadeCoroutine;
 
         public void Start()
         {
@@ -846,7 +847,11 @@ namespace Behind_Bars.UI
                 _isVisible = true;
 
                 // Fade in
-                MelonLoader.MelonCoroutines.Start(FadeIn());
+                if (_fadeCoroutine != null)
+                {
+                    MelonLoader.MelonCoroutines.Stop(_fadeCoroutine);
+                }
+                _fadeCoroutine = MelonLoader.MelonCoroutines.Start(FadeIn()) as Coroutine;
 
                 // Start key detection
                 if (_keyDetectionCoroutine != null)
@@ -908,7 +913,11 @@ namespace Behind_Bars.UI
                 }
 
                 // Fade out and hide
-                MelonLoader.MelonCoroutines.Start(FadeOut());
+                if (_fadeCoroutine != null)
+                {
+                    MelonLoader.MelonCoroutines.Stop(_fadeCoroutine);
+                }
+                _fadeCoroutine = MelonLoader.MelonCoroutines.Start(FadeOut()) as Coroutine;
 
                 ModLogger.Info("ParoleConditionsUI: Hiding parole conditions");
             }
@@ -924,6 +933,35 @@ namespace Behind_Bars.UI
         public bool IsVisible()
         {
             return _isInitialized && _overlayPanel != null && _overlayPanel.activeSelf && _canvasGroup.alpha > 0 && _isVisible;
+        }
+
+        /// <summary>
+        /// Stops the dismissal and fade routines before the gameplay HUD unloads.
+        /// </summary>
+        public void CancelForSceneExit()
+        {
+            _isVisible = false;
+            if (_keyDetectionCoroutine != null)
+            {
+                MelonLoader.MelonCoroutines.Stop(_keyDetectionCoroutine);
+                _keyDetectionCoroutine = null;
+            }
+
+            if (_fadeCoroutine != null)
+            {
+                MelonLoader.MelonCoroutines.Stop(_fadeCoroutine);
+                _fadeCoroutine = null;
+            }
+
+            if (_canvasGroup != null)
+            {
+                _canvasGroup.alpha = 0f;
+            }
+
+            if (_overlayPanel != null)
+            {
+                _overlayPanel.SetActive(false);
+            }
         }
 
         /// <summary>
