@@ -956,11 +956,8 @@ namespace Behind_Bars.Systems.NPCs
 
         private void HandleMonitoringLogic()
         {
-            // Basic area monitoring - can be expanded
-            if (role == GuardRole.IntakeOfficer)
-            {
-                CheckForNewArrivals();
-            }
+            // Intake orchestration is owned by IntakeOfficerStateMachine/BookingProcess.
+            // Monitoring guards deliberately have no independent arrival polling path.
         }
 
         private void HandleEscortLogic()
@@ -973,12 +970,6 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             CheckPrisonerCompliance();
-        }
-
-        private void CheckForNewArrivals()
-        {
-            // This would integrate with the booking system to detect new prisoners
-            // For now, it's a placeholder for future expansion
         }
 
         #endregion

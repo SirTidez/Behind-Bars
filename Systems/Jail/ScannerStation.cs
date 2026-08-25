@@ -187,7 +187,6 @@ namespace Behind_Bars.Systems.Jail
             // player camera and only appeared framed if the player manually
             // stood in the correct spot.
             SetupPalmScannerComponents();
-            SetupOldIKComponents();
             HideLegacyPalmPlaceholder();
 
             // Find components using exact hierarchy paths
@@ -348,11 +347,6 @@ namespace Behind_Bars.Systems.Jail
             scannerScanAwayDirection = ResolveScannerAwayDirection();
             scannerScanFrameLocked = scannerScanAwayDirection.sqrMagnitude > 0.0001f;
             ModLogger.Info($"[Fingerprint Scan] Locked scanner frame: camera={(interactionCamera != null ? interactionCamera.name : "missing")}, target={(scanTarget != null ? scanTarget.name : "missing")}, away={scannerScanAwayDirection}");
-        }
-
-        private void SetupOldIKComponents()
-        {
-            ModLogger.Info("Setting up live-hand fingerprint scanner components");
         }
 
         private void HideLegacyPalmPlaceholder()

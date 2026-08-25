@@ -1056,11 +1056,8 @@ namespace Behind_Bars.Systems.NPCs
 
         private void HandleMonitoringLogic()
         {
-            // Basic area monitoring - can be expanded
-            if (role == ParoleOfficerRole.SupervisingOfficer)
-            {
-                CheckForNewArrivals();
-            }
+            // DynamicParoleOfficerManager and ParoleIntakeStateMachine own arrival/intake work.
+            // Monitoring officers deliberately have no independent arrival polling path.
         }
 
         /// <summary>
@@ -1337,12 +1334,6 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             CheckParoleeCompliance();
-        }
-
-        private void CheckForNewArrivals()
-        {
-            // This would integrate with the booking system to detect new parolees
-            // For now, it's a placeholder for future expansion
         }
 
         #endregion

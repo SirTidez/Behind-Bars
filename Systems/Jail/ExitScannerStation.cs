@@ -102,7 +102,6 @@ namespace Behind_Bars.Systems.Jail
             }
             else
             {
-                SetupOldIKComponents();
             }
 
             // Find components using exact hierarchy paths
@@ -264,12 +263,6 @@ namespace Behind_Bars.Systems.Jail
             }
 
             ModLogger.Debug($"Palm scanner setup complete - Camera: {interactionCamera != null}, Palm: {palmModel != null}, Audio: {scannerAudio != null}");
-        }
-
-        private void SetupOldIKComponents()
-        {
-            // Old IK system setup (same as original scanner)
-            ModLogger.Debug("Setting up old IK system for exit scanner");
         }
 
         private void SetupIkTargetVisualizer()

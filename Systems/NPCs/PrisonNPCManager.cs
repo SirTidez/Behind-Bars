@@ -52,7 +52,6 @@ namespace Behind_Bars.Systems.NPCs
 
         // NPC tracking
         private List<PrisonGuard> activeGuards = new List<PrisonGuard>();
-        private List<ParoleOfficer> activeParoleOfficers = new List<ParoleOfficer>();
         private List<PrisonInmate> activeInmates = new List<PrisonInmate>();
         
         // Guard coordination for IL2CPP-safe management
@@ -72,7 +71,6 @@ namespace Behind_Bars.Systems.NPCs
         
         // Spawn areas (will be set by JailController)
         private Transform[] guardSpawnPoints;
-        private Transform[] paroleOfficerSpawnPoints;
         private Transform[] inmateSpawnPoints;
         
         // Guard assignment tracking
@@ -83,14 +81,6 @@ namespace Behind_Bars.Systems.NPCs
             GuardBehavior.GuardAssignment.Booking1
         };
         
-        private readonly ParoleOfficerBehavior.ParoleOfficerAssignment[] paroleOfficerAssignments = {
-            ParoleOfficerBehavior.ParoleOfficerAssignment.PoliceStationSupervisor,  // Supervising officer (stationary)
-            ParoleOfficerBehavior.ParoleOfficerAssignment.PoliceStationPatrol,      // PoliceStation route patrol
-            ParoleOfficerBehavior.ParoleOfficerAssignment.NorthtownPatrol,          // North route
-            ParoleOfficerBehavior.ParoleOfficerAssignment.UptownPatrol,             // East route
-            ParoleOfficerBehavior.ParoleOfficerAssignment.WestsidePatrol,           // West route
-            ParoleOfficerBehavior.ParoleOfficerAssignment.DocksPatrol               // Canal route
-        };
 
         private void Awake()
         {
@@ -189,8 +179,6 @@ namespace Behind_Bars.Systems.NPCs
             // Create inmate spawn points near the jail center
             CreateInmateSpawnPoints(jailController);
 
-            // Create parole officer spawn points
-            CreateParoleOfficerSpawnPoints(jailController);
         }
 
         /// <summary>
@@ -226,36 +214,6 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Debug($"Created {inmateSpawnPoints.Length} inmate spawn points");
         }
 
-        private void CreateParoleOfficerSpawnPoints(JailController jailController)
-        {
-            var spawnPoints = new List<Transform>();
-
-            // Create spawn points near the downtown police station
-            Vector3 policeStationPos = new Vector3(50f, 0f, 50f); // Example position TODO: Find exact coordinates for spawn point
-
-            // Create spawn points in a circle around the parking lot of the police station
-            // Spawn in a half-circle starting from the door of the police station
-            int numPoints = 5; // Example number of patroling officers
-            float radius = 6f;
-            
-            for (int i = 0; i < numPoints; i++)
-            {
-                float angle = (180f / numPoints) * i * Mathf.Deg2Rad;
-                Vector3 spawnPos = policeStationPos + new Vector3(
-                    Mathf.Cos(angle) * radius,
-                    0f,
-                    Mathf.Sin(angle) * radius
-                );
-
-                GameObject spawnPoint = new GameObject($"ParoleOfficerSpawnPoint_{i}");
-                spawnPoint.transform.position = spawnPos;
-                spawnPoint.transform.SetParent(transform);
-                spawnPoints.Add(spawnPoint.transform);
-            }
-
-            paroleOfficerSpawnPoints = spawnPoints.ToArray();
-        }
-
         /// <summary>
         /// Initialize NPCs in the prison
         /// </summary>
@@ -269,8 +227,7 @@ namespace Behind_Bars.Systems.NPCs
             // Spawn guards first
             yield return SpawnGuards();
             
-            // NOTE: Parole officers are now spawned dynamically by DynamicParoleOfficerManager
-            // REMOVED: yield return SpawnParoleOfficers();
+            // DynamicParoleOfficerManager is the sole owner of parole-officer creation.
             
             // Initialize dynamic parole officer manager
             InitializeDynamicParoleOfficerManager();
@@ -533,86 +490,6 @@ namespace Behind_Bars.Systems.NPCs
                     return $"Release Officer {GetRandomOfficerName()}";
                 default:
                     return $"Officer {index + 1}"; // Guard Room officers get generic names
-            }
-        }
-
-        /// <summary>
-        /// Spawn parole officers with preset routes
-        /// </summary>
-        private IEnumerator SpawnParoleOfficers()
-        {
-            ModLogger.Debug("Spawning parole officers with preset routes...");
-            
-            for (int i = 0; i < paroleOfficerAssignments.Length; i++)
-            {
-                var assignment = paroleOfficerAssignments[i];
-                Vector3 spawnPosition = GetSpawnPositionForParoleOfficer(assignment);
-                
-                string officerName = GetParoleOfficerNameForAssignment(assignment);
-                string badge = $"HCPO{1000 + i}";
-                
-                var paroleOfficer = SpawnParoleOfficer(spawnPosition, officerName, badge, assignment);
-                if (paroleOfficer != null)
-                {
-                    activeParoleOfficers.Add(paroleOfficer);
-                    ModLogger.Debug($"✓ Spawned parole officer {paroleOfficer.badgeNumber} at {assignment}");
-                }
-                else
-                {
-                    ModLogger.Error($"Failed to spawn parole officer for assignment {assignment}");
-                }
-                
-                yield return new WaitForSeconds(0.8f);
-            }
-            
-            ModLogger.Debug($"✓ Parole officers spawned");
-        }
-
-        /// <summary>
-        /// Get spawn position for a parole officer based on their assignment
-        /// </summary>
-        private Vector3 GetSpawnPositionForParoleOfficer(ParoleOfficerBehavior.ParoleOfficerAssignment assignment)
-        {
-            // The supervising officer is permanently posted at the courthouse check-in point.
-            if (assignment == ParoleOfficerBehavior.ParoleOfficerAssignment.PoliceStationSupervisor)
-            {
-                return PresetParoleOfficerRoutes.GetSupervisingOfficerStation();
-            }
-            
-            // For all other assignments: Get route from AssignmentToRouteMap and return first waypoint
-            if (ParoleOfficerBehavior.AssignmentToRouteMap.TryGetValue(assignment, out string routeName) && !string.IsNullOrEmpty(routeName))
-            {
-                var route = PresetParoleOfficerRoutes.GetRoute(routeName);
-                if (route != null && route.points != null && route.points.Length > 0)
-                {
-                    return route.points[0];
-                }
-                else
-                {
-                    ModLogger.Error($"Route {routeName} not found or has no waypoints for assignment {assignment}");
-                }
-            }
-            
-            // Fallback to police station position
-            ModLogger.Warn($"Using fallback spawn position for assignment {assignment}");
-            return new Vector3(27.0941f, 1.065f, 45.0492f);
-        }
-
-        /// <summary>
-        /// Get name for parole officer based on assignment
-        /// </summary>
-        private string GetParoleOfficerNameForAssignment(ParoleOfficerBehavior.ParoleOfficerAssignment assignment)
-        {
-            string randomName = GetRandomOfficerName();
-            
-            switch (assignment)
-            {
-                case ParoleOfficerBehavior.ParoleOfficerAssignment.PoliceStationSupervisor:
-                    return $"Supervising Officer {randomName}";
-                case ParoleOfficerBehavior.ParoleOfficerAssignment.PoliceStationPatrol:
-                    return $"Station Officer {randomName}";
-                default:
-                    return $"Parole Officer {randomName}";
             }
         }
 
