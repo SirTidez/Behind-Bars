@@ -192,6 +192,15 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Debug($"GuardBehavior initialized: {role} guard {badgeNumber} at {assignment}");
         }
 
+        protected override void OnDestroy()
+        {
+            // Guard registration outlives Unity object destruction unless it is removed
+            // explicitly. Leaving the stale behavior in the manager can make later scene
+            // sessions pick a destroyed guard for an escort or lockdown response.
+            Core.Instance?.NpcManager?.UnregisterGuard(this);
+            base.OnDestroy();
+        }
+
         public void Initialize(GuardAssignment guardAssignment, string badge = "")
         {
             assignment = guardAssignment;

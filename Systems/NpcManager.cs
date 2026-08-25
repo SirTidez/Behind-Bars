@@ -214,6 +214,20 @@ namespace Behind_Bars.Systems
         }
 
         /// <summary>
+        /// Removes a guard from both deferred and live canonical registries.
+        /// </summary>
+        public void UnregisterGuard(GuardBehavior guard)
+        {
+            if (guard == null)
+            {
+                return;
+            }
+
+            pendingGuardRegistrations.Remove(guard);
+            GetPrisonNpcManager()?.UnregisterGuard(guard);
+        }
+
+        /// <summary>
         /// Register a parole officer with the canonical NPC registry.
         /// </summary>
         public void RegisterParoleOfficer(ParoleOfficerBehavior officer)
@@ -226,6 +240,20 @@ namespace Behind_Bars.Systems
             }
 
             prisonNpcManager.RegisterParoleOfficer(officer);
+        }
+
+        /// <summary>
+        /// Removes a parole officer from both deferred and live canonical registries.
+        /// </summary>
+        public void UnregisterParoleOfficer(ParoleOfficerBehavior officer)
+        {
+            if (officer == null)
+            {
+                return;
+            }
+
+            pendingParoleOfficerRegistrations.Remove(officer);
+            GetPrisonNpcManager()?.UnregisterParoleOfficer(officer);
         }
 
         /// <summary>

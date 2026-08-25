@@ -236,7 +236,8 @@ namespace Behind_Bars.Systems.NPCs
 
             // Sample the NavMesh to get a valid position
             UnityEngine.AI.NavMeshHit hit;
-            if (UnityEngine.AI.NavMesh.SamplePosition(randomPoint, out hit, 2.0f, UnityEngine.AI.NavMesh.AllAreas))
+            if (UnityEngine.AI.NavMesh.SamplePosition(randomPoint, out hit, 2.0f, UnityEngine.AI.NavMesh.AllAreas) &&
+                cellBounds.Contains(hit.position))
             {
                 return hit.position; // Return the valid NavMesh position
             }
@@ -267,6 +268,7 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             if (NavMesh.SamplePosition(transform.position, out var hit, 8f, NavMesh.AllAreas) &&
+                (!hasCellBounds || cellBounds.Contains(hit.position)) &&
                 navAgent.Warp(hit.position) && navAgent.isOnNavMesh)
             {
                 ModLogger.Debug($"[NPC Spawn] Recovered inmate {gameObject.name} onto NavMesh at {hit.position}");
@@ -283,9 +285,23 @@ namespace Behind_Bars.Systems.NPCs
                 return false;
             }
 
+            if (!hasCellBounds || !cellBounds.Contains(destination))
+            {
+                return false;
+            }
+
             if (NavMesh.SamplePosition(destination, out var hit, 2f, NavMesh.AllAreas))
             {
+                if (!cellBounds.Contains(hit.position))
+                {
+                    return false;
+                }
+
                 destination = hit.position;
+            }
+            else
+            {
+                return false;
             }
 
             return navAgent.SetDestination(destination);

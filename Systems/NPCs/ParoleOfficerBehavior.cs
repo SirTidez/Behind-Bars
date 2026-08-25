@@ -191,6 +191,15 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Debug($"ParoleOfficerBehavior initialized: {role} officer {badgeNumber} at {assignment}");
         }
 
+        protected override void OnDestroy()
+        {
+            // Dynamic parole officers are spawned/despawned with the Main scene. Pair their
+            // registration so a stale Unity object cannot remain eligible for a later search,
+            // check-in, or release-intake assignment.
+            Core.Instance?.NpcManager?.UnregisterParoleOfficer(this);
+            base.OnDestroy();
+        }
+
         public void Initialize(ParoleOfficerBehavior.ParoleOfficerAssignment guardAssignment, string badge = "")
         {
             assignment = guardAssignment;
