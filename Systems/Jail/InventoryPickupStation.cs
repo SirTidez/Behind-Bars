@@ -1093,32 +1093,27 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         private void CompletePickupWithoutStorage(Player player)
         {
-            ModLogger.Info("Completing pickup without storage interface");
+            ModLogger.Warn("Storage presentation failed; transferring property through the emergency direct-transfer path");
 
-            // Clear stored items from persistent storage
-            ClearStoredItemsForPlayer(player);
-
-            // Unlock player inventory
-            InventoryProcessor.UnlockPlayerInventory(player);
-            ModLogger.Info("Player inventory unlocked");
-
-            // Notify the ReleaseManager that inventory processing is complete
-            var releaseManager = Core.ResolveReleaseManager();
-            if (releaseManager != null)
+            // Never clear the persistent snapshot merely because its UI could
+            // not be created. DirectItemTransfer performs the same clothing
+            // restoration, exact-ID jail-item cleanup, property return, and
+            // completion notification in that order.
+            if (player == null)
             {
-                releaseManager.OnInventoryProcessingComplete(player);
+                ModLogger.Error("Cannot run emergency property transfer without a player");
+                return;
             }
 
-            // Show notification
             if (Core.ResolveUIManager() != null)
             {
                 Core.ResolveUIManager().ShowNotification(
-                    "Storage system unavailable - process completed",
+                    "Storage interface unavailable - returning property directly",
                     NotificationType.Warning
                 );
             }
 
-            CompletePickup();
+            MelonCoroutines.Start(DirectItemTransfer(player));
         }
 
         /// <summary>

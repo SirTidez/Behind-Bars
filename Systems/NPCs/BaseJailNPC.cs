@@ -350,7 +350,11 @@ namespace Behind_Bars.Systems.NPCs
 
         public virtual bool MoveTo(Vector3 destination, float tolerance = -1f)
         {
-            if (navAgent == null || !navAgent.enabled) return false;
+            if (navAgent == null || !navAgent.enabled || !navAgent.isOnNavMesh)
+            {
+                ModLogger.Warn($"{gameObject.name} cannot move: NavMesh agent is unavailable or off the NavMesh");
+                return false;
+            }
 
             if (tolerance > 0) positionTolerance = tolerance;
 
@@ -358,7 +362,11 @@ namespace Behind_Bars.Systems.NPCs
             hasReachedDestination = false;
             lastDestinationTime = Time.time;
 
-            navAgent.SetDestination(destination);
+            if (!navAgent.SetDestination(destination))
+            {
+                ModLogger.Warn($"{gameObject.name} could not set destination {destination}");
+                return false;
+            }
             ChangeState(NPCState.Moving);
 
             // ModLogger.Debug($"{gameObject.name} moving to {destination}");
@@ -367,7 +375,15 @@ namespace Behind_Bars.Systems.NPCs
 
         public virtual bool HasReachedDestination()
         {
-            if (navAgent == null || !navAgent.enabled) return true;
+            if (navAgent == null || !navAgent.enabled || !navAgent.isOnNavMesh)
+            {
+                return false;
+            }
+
+            if (!navAgent.pathPending && navAgent.pathStatus != NavMeshPathStatus.PathComplete)
+            {
+                return false;
+            }
 
             bool pathComplete = !navAgent.pathPending && navAgent.remainingDistance < positionTolerance;
             bool distanceCheck = Vector3.Distance(transform.position, currentDestination) < positionTolerance;
@@ -493,11 +509,11 @@ namespace Behind_Bars.Systems.NPCs
 
         public virtual void LookAt(Vector3 target, float duration = 2f)
         {
-            if (lookControllerAvailable && lookController != null)
-            {
-                MelonCoroutines.Start(LookAtTarget(target, duration));
-                //StartCoroutine(LookAtTarget(target, duration));
-            }
+            // The native AvatarLookController is not exposed consistently on
+            // both runtimes. A planar body rotation is deterministic and
+            // makes the dialogue call sites truthful even when that optional
+            // controller is absent.
+            MelonCoroutines.Start(LookAtTarget(target, duration));
         }
 
         public virtual void LookAt(Transform target, float duration = 2f)
@@ -513,10 +529,35 @@ namespace Behind_Bars.Systems.NPCs
 #endif
         protected IEnumerator LookAtTarget(Vector3 target, float duration)
         {
-            if (!lookControllerAvailable) yield break;
+            Vector3 direction = target - transform.position;
+            direction.y = 0f;
+            if (direction.sqrMagnitude < 0.0001f)
+            {
+                yield break;
+            }
 
-            // Look controller methods not available in current build - simplified implementation
-            yield return new WaitForSeconds(duration);
+            Quaternion startRotation = transform.rotation;
+            Quaternion targetRotation = Quaternion.LookRotation(direction.normalized, Vector3.up);
+            float angle = Quaternion.Angle(startRotation, targetRotation);
+            if (angle < 1f)
+            {
+                yield break;
+            }
+
+            // Scale the requested duration by angular distance so callers
+            // retain a natural hold time without making small corrections
+            // visibly sluggish.
+            float turnDuration = Mathf.Clamp((angle / 180f) * Mathf.Max(duration, 0.1f), 0.08f, Mathf.Max(duration, 0.1f));
+            float elapsed = 0f;
+            while (elapsed < turnDuration)
+            {
+                elapsed += Time.deltaTime;
+                float progress = Mathf.SmoothStep(0f, 1f, elapsed / turnDuration);
+                transform.rotation = Quaternion.Slerp(startRotation, targetRotation, progress);
+                yield return null;
+            }
+
+            transform.rotation = targetRotation;
         }
 
         #endregion

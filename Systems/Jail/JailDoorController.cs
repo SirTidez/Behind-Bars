@@ -63,6 +63,11 @@ namespace Behind_Bars.Systems.Jail
 
         void HandleDoorKeyboardShortcuts()
         {
+            if (!Core.EnableDeveloperShortcuts)
+            {
+                return;
+            }
+
             if (Input.GetKey(modifierKey) && Input.GetKeyDown(KeyCode.Alpha1))
             {
                 ToggleBookingDoor(booking.prisonEntryDoor, "Prison Enter Door");

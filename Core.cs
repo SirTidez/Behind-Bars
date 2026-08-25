@@ -516,6 +516,12 @@ namespace Behind_Bars
         private static MelonPreferences_Entry<bool>? _enableDebugLoggingEntry;
         public static bool EnableDebugLogging => _enableDebugLoggingEntry?.Value ?? false;
 
+        // Explicitly opt-in developer controls. These manipulate prison doors,
+        // lighting, and booking state, so they must never be active in normal
+        // play merely because the debug assembly is installed.
+        private static MelonPreferences_Entry<bool>? _enableDeveloperShortcutsEntry;
+        public static bool EnableDeveloperShortcuts => _enableDeveloperShortcutsEntry?.Value ?? false;
+
 #if !MONO
         /// <summary>
         /// Registers all IL2CPP types with ClassInjector before any scene code can spawn them.
@@ -695,6 +701,13 @@ namespace Behind_Bars
                 "Enable debug logging",
                 "Show detailed debug logs. Enable this if you're experiencing issues and need to report bugs. Warning: This will produce a lot of log output."
             );
+
+            _enableDeveloperShortcutsEntry = _prefsCategory.CreateEntry<bool>(
+                "EnableDeveloperShortcuts",
+                false,
+                "Enable developer jail shortcuts",
+                "Enables destructive Alt-key jail and door test shortcuts. Keep disabled during normal gameplay."
+            );
             
             // Initialize UpdateChecker with preferences
             Utils.UpdateChecker.InitializePreferences(
@@ -704,6 +717,7 @@ namespace Behind_Bars
             );
             ModLogger.Debug("Update checking preferences initialized");
             ModLogger.Info($"Debug logging: {(EnableDebugLogging ? "ENABLED" : "DISABLED")} (default: disabled)");
+            ModLogger.Info($"Developer jail shortcuts: {(EnableDeveloperShortcuts ? "ENABLED" : "DISABLED")} (default: disabled)");
 
             // Initialize core systems
             HarmonyPatches.Initialize(this);

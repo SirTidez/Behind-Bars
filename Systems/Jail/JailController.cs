@@ -88,6 +88,11 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
 
     void HandleLightingKeyBindings()
     {
+        if (!Behind_Bars.Core.EnableDeveloperShortcuts)
+        {
+            return;
+        }
+
         // Guard control inputs (restored from old version)
         if (Input.GetKey(modifierKey) && Input.GetKeyDown(emergencyLockdownKey))
         {

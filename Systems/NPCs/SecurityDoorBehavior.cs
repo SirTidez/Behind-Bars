@@ -73,6 +73,8 @@ namespace Behind_Bars.Systems.NPCs
         private Player escortedInmate;
         private float stateStartTime;
         private Coroutine currentDoorOperation;
+        private bool lastDoorPointMoveSucceeded;
+        private bool lastEscortWaitSucceeded;
 
         // Component references
         private BaseJailNPC npcController;
@@ -377,9 +379,20 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private IEnumerator ExecuteDoorOperation()
         {
+            if (currentTransition == null)
+            {
+                FailDoorOperation("No active door transition");
+                yield break;
+            }
+
             // 1. Move to entry door point
             ChangeState(DoorState.MovingToEntryPoint);
             yield return MoveToDoorPoint(currentTransition.entryPoint);
+            if (!lastDoorPointMoveSucceeded)
+            {
+                FailDoorOperation("Could not reach entry door point");
+                yield break;
+            }
 
             // 2. Security check at entry point (brief pause)
             ChangeState(DoorState.SecurityCheckAtEntry);
@@ -389,17 +402,32 @@ namespace Behind_Bars.Systems.NPCs
             ChangeState(DoorState.OpeningDoor);
             OpenDoor();
             yield return new WaitForSeconds(timingConfig.doorOpenAnimTime);
+            if (currentTransition.door == null || !currentTransition.door.IsOpen())
+            {
+                FailDoorOperation("Door did not open");
+                yield break;
+            }
 
             // 4. Optional: Wait for escorted inmate
             if (isEscorting && escortedInmate != null)
             {
                 ChangeState(DoorState.WaitingForEscort);
                 yield return WaitForEscortedInmate();
+                if (!lastEscortWaitSucceeded)
+                {
+                    FailDoorOperation("Escorted prisoner did not clear the door in time");
+                    yield break;
+                }
             }
 
             // 5. Move through to exit door point
             ChangeState(DoorState.MovingToExitPoint);
             yield return MoveToDoorPoint(currentTransition.exitPoint);
+            if (!lastDoorPointMoveSucceeded)
+            {
+                FailDoorOperation("Could not reach exit door point");
+                yield break;
+            }
 
             // 6. Security check at exit point
             ChangeState(DoorState.SecurityCheckAtExit);
@@ -422,17 +450,26 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private IEnumerator MoveToDoorPoint(Transform targetPoint)
         {
-            if (navAgent == null || targetPoint == null) yield break;
+            lastDoorPointMoveSucceeded = false;
+            if (navAgent == null || targetPoint == null || !navAgent.enabled || !navAgent.isOnNavMesh)
+            {
+                ModLogger.Warn("SecurityDoorBehavior: Cannot move to door point; NavMesh agent or target is unavailable");
+                yield break;
+            }
 
             // Only use X and Z from door point - let NavMesh control Y position
             Vector3 destination = new Vector3(targetPoint.position.x, transform.position.y, targetPoint.position.z);
-            navAgent.SetDestination(destination);
+            if (!navAgent.SetDestination(destination))
+            {
+                ModLogger.Warn($"SecurityDoorBehavior: NavMesh rejected door destination {destination}");
+                yield break;
+            }
 
             // Wait until we reach the point
             float timeout = 15f; // Max 15 seconds to reach door point
             float startTime = Time.time;
 
-            while (Time.time - startTime < timeout)
+            while (Time.time - startTime < timeout && navAgent.enabled && navAgent.isOnNavMesh)
             {
                 // Calculate distance ignoring Y axis
                 Vector3 npcPos2D = new Vector3(transform.position.x, 0, transform.position.z);
@@ -441,9 +478,16 @@ namespace Behind_Bars.Systems.NPCs
 
                 if (distance <= timingConfig.positionTolerance)
                 {
+                    lastDoorPointMoveSucceeded = true;
                     break;
                 }
                 yield return new WaitForSeconds(0.1f);
+            }
+
+            if (!lastDoorPointMoveSucceeded)
+            {
+                ModLogger.Warn($"SecurityDoorBehavior: Timed out reaching door point '{targetPoint.name}'");
+                yield break;
             }
 
             // Face the door point properly (only horizontal rotation)
@@ -463,9 +507,14 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private IEnumerator WaitForEscortedInmate()
         {
-            if (escortedInmate == null) yield break;
+            lastEscortWaitSucceeded = false;
+            if (escortedInmate == null || currentTransition?.exitPoint == null || currentTransition?.door == null)
+            {
+                yield break;
+            }
 
             float lastReminderTime = Time.time;
+            float timeoutAt = Time.time + Mathf.Max(10f, timingConfig.escortWaitTime);
 
             // Send initial message to inmate
             if (npcController != null)
@@ -473,8 +522,10 @@ namespace Behind_Bars.Systems.NPCs
                 npcController.TrySendNPCMessage("Go through the door.", 3f);
             }
 
-            // Wait indefinitely until prisoner actually goes through the door
-            while (true)
+            // The old indefinite wait could leave an officer repeatedly saying
+            // “Go through the door” after a route or door failure. Bound the
+            // wait and surface a recoverable failure to the owning escort.
+            while (Time.time < timeoutAt)
             {
                 // Check if prisoner is close to the exit point (not just close to guard)
                 float distanceToExitPoint = Vector3.Distance(currentTransition.exitPoint.position, escortedInmate.transform.position);
@@ -509,6 +560,7 @@ namespace Behind_Bars.Systems.NPCs
                     ModLogger.Debug($"SecurityDoor: Prisoner through door - distance: {distanceToExitPoint:F2}m, behind exit: {playerBehindExit}, behind door: {playerBehindDoor}");
                     // Both have passed through, wait a bit more for safety then close
                     yield return new WaitForSeconds(timingConfig.doorCloseDelay);
+                    lastEscortWaitSucceeded = true;
                     break;
                 }
 
@@ -523,6 +575,11 @@ namespace Behind_Bars.Systems.NPCs
                 }
 
                 yield return new WaitForSeconds(0.5f);
+            }
+
+            if (!lastEscortWaitSucceeded)
+            {
+                ModLogger.Warn("SecurityDoorBehavior: Escort wait timed out before the prisoner cleared the door");
             }
         }
 
@@ -561,6 +618,23 @@ namespace Behind_Bars.Systems.NPCs
             onDoorOperationComplete?.Invoke(doorName);
 
             // Reset state
+            ChangeState(DoorState.Idle);
+            currentTransition = null;
+            isEscorting = false;
+            escortedInmate = null;
+            currentDoorOperation = null;
+        }
+
+        private void FailDoorOperation(string reason)
+        {
+            string doorName = currentTransition?.doorName ?? "Unknown";
+            ModLogger.Warn($"SecurityDoorBehavior: Door operation failed for {doorName}: {reason}");
+
+            // A failed route must not leave a door open while the owning
+            // intake/release state machine regains control.
+            CloseDoor();
+            onDoorOperationFailed?.Invoke($"{doorName}: {reason}");
+
             ChangeState(DoorState.Idle);
             currentTransition = null;
             isEscorting = false;

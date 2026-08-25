@@ -3068,7 +3068,11 @@ namespace Behind_Bars.Systems.Jail
             isScanning = false;
             handScanProcessCoroutine = null;
 
-            if (bookingProcess.fingerprintComplete)
+            // Scene teardown can clear the booking object after the loop
+            // exits but before this coroutine resumes. Treat that as an
+            // interrupted scan and restore the normal interaction state;
+            // never dereference a stale IL2CPP component here.
+            if (bookingProcess != null && bookingProcess.fingerprintComplete)
             {
                 if (interactableObject != null)
                 {

@@ -2159,6 +2159,12 @@ namespace Behind_Bars.Systems.NPCs
             // its mugshot instruction and the delayed walk to that station.
             AbortPendingIntakeActions();
 
+            // AbortPendingIntakeActions stops the moving escort, but the route may already
+            // have opened a holding or shared booking door. Secure the exact tracked route
+            // before its indices are reset so an interrupted intake never leaves an open
+            // cell or corridor behind.
+            CloseAllIntakeDoors();
+
             // Reset all state
             currentPrisoner = null;
             assignedCellNumber = -1;

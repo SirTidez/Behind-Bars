@@ -42,6 +42,7 @@ namespace Behind_Bars.Systems.Jail
         private Player incidentPlayer;
         private GuardBehavior initiatingGuard;
         private bool resumeInterruptedBooking;
+        private Coroutine incidentCoroutine;
 
 #if !MONO
         public GuardAssaultLockdownManager(IntPtr ptr) : base(ptr) { }
@@ -54,13 +55,7 @@ namespace Behind_Bars.Systems.Jail
 
         private void OnDestroy()
         {
-            // Scene exit can interrupt the pursuit coroutine. Never leave the local player
-            // unable to punch, move, or look after the jail root is torn down.
-            HarmonyPatches.SetGuardLockdownInputLocked(false);
-            if (lockdownActive)
-            {
-                TryCloseBlackOverlay();
-            }
+            CancelForSceneExit();
 
             if (_instance == this)
             {
@@ -157,7 +152,7 @@ namespace Behind_Bars.Systems.Jail
             }
 
             ModLogger.Warn($"[LOCKDOWN] {player.name} assaulted jail staff. Emergency response engaged; wanted level intentionally unchanged.");
-            MelonCoroutines.Start(ResolveIncident());
+            incidentCoroutine = MelonCoroutines.Start(ResolveIncident()) as Coroutine;
         }
 
         private static bool SuspendInterruptedIntake(Player player)
@@ -386,21 +381,37 @@ namespace Behind_Bars.Systems.Jail
 
         private void RestoreJailAfterSecure()
         {
-            foreach (var registeredGuard in Core.Instance?.NpcManager?.GetRegisteredGuards() ?? Enumerable.Empty<GuardBehavior>())
-            {
-                registeredGuard?.ExitEmergencyLockdown();
-            }
-
-            // The normal lighting state is the player-visible signal that the emergency is
-            // over. Clear every emergency-only route lock before making that transition, but
-            // preserve the secured player's cell/holding-cell lock as ordinary custody.
-            Core.JailController?.doorController?.ClearEmergencyRouteLockdown();
-            Core.JailController?.SetJailLighting(JailLightingController.LightingState.Normal);
-            lockdownActive = false;
+            RestoreNormalCustodyState();
             ModLogger.Info("[LOCKDOWN] Fully cleared after the player was secured; guards, shared routes, and lighting restored to normal custody state.");
         }
 
         private void EndLockdownWithoutTransfer(string reason)
+        {
+            RestoreNormalCustodyState();
+            ModLogger.Error($"[LOCKDOWN] Emergency response ended without securing the player; guards, shared routes, and lighting were restored: {reason}");
+        }
+
+        /// <summary>
+        /// Cancels a scene-local incident without allowing its pursuit, disciplinary delay,
+        /// or stale guard state to leak into a later Main-scene session.
+        /// </summary>
+        public void CancelForSceneExit()
+        {
+            if (incidentCoroutine != null)
+            {
+                MelonCoroutines.Stop(incidentCoroutine);
+                incidentCoroutine = null;
+            }
+
+            SetSubdualControls(false);
+            TryCloseBlackOverlay();
+            RestoreNormalCustodyState();
+            incidentPlayer = null;
+            initiatingGuard = null;
+            resumeInterruptedBooking = false;
+        }
+
+        private void RestoreNormalCustodyState()
         {
             foreach (var registeredGuard in Core.Instance?.NpcManager?.GetRegisteredGuards() ?? Enumerable.Empty<GuardBehavior>())
             {
@@ -410,7 +421,7 @@ namespace Behind_Bars.Systems.Jail
             Core.JailController?.doorController?.ClearEmergencyRouteLockdown();
             Core.JailController?.SetJailLighting(JailLightingController.LightingState.Normal);
             lockdownActive = false;
-            ModLogger.Error($"[LOCKDOWN] Emergency response ended without securing the player; guards, shared routes, and lighting were restored: {reason}");
+            incidentCoroutine = null;
         }
 
         private static void SetSubdualControls(bool locked)

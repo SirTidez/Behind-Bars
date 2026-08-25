@@ -178,16 +178,22 @@ namespace Behind_Bars.Systems.NPCs
         {
             if (officer == null || player == null) yield break;
 
+            bool playerFrozen = false;
+            bool arrestInitiated = false;
+
             // Record search time
             lastSearchTime[player] = Time.time;
 
-            // Freeze player movement during search
+            try
+            {
+                // Freeze player movement during search
 #if MONO
-            PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
+                PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
 #else
-            PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
+                PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
 #endif
-            ModLogger.Debug($"Frozen player {player.name} movement for parole search");
+                playerFrozen = true;
+                ModLogger.Debug($"Frozen player {player.name} movement for parole search");
 
             // Announce search - notification already shown in CheckForSearchOpportunities
             officer.PlayGuardVoiceCommand(
@@ -298,8 +304,8 @@ namespace Behind_Bars.Systems.NPCs
                 ModLogger.Error("CrimeDetectionSystem not available for contraband search");
                 officer.ShowSearchResults(false);
                 
-                // Restore player movement before exiting
-                RestorePlayerMovement(player);
+                // The finally block restores movement and patrol ownership on every
+                // non-arrest exit, including this dependency failure.
                 yield break;
             }
 
@@ -308,7 +314,6 @@ namespace Behind_Bars.Systems.NPCs
                 player,
                 ContrabandSearchContext.Parole);
 
-            bool arrestInitiated = false;
             if (detectedCrimes != null && detectedCrimes.Count > 0)
             {
                 // Contraband found!
@@ -330,25 +335,27 @@ namespace Behind_Bars.Systems.NPCs
 
             // Only restore player movement if arrest was NOT initiated
             // If arrest was initiated, the arrest process will handle player state
-            if (!arrestInitiated)
-            {
-                // Resume patrol after delay (notification will auto-hide)
-                yield return new WaitForSeconds(2f);
-                
-                // Restore player movement after search completes
-                RestorePlayerMovement(player);
-                
-                // If still in search activity, resume patrol
-                if (officer.GetCurrentActivity() == ParoleOfficerBehavior.ParoleOfficerActivity.SearchingParolee)
+                if (!arrestInitiated)
                 {
-                    officer.StartPatrol();
+                    // Keep the result visible briefly; finally performs the one authoritative
+                    // movement/patrol restoration even if this coroutine is interrupted.
+                    yield return new WaitForSeconds(2f);
+                }
+                else
+                {
+                    ModLogger.Info($"Arrest initiated for {player.name} - leaving player state to the arrest flow");
                 }
             }
-            else
+            finally
             {
-                ModLogger.Info($"Arrest initiated for {player.name} - skipping movement restoration and patrol resume");
-                // Don't restore movement - arrest process will handle it
-                // Don't resume patrol - officer is handling the arrest
+                if (playerFrozen && !arrestInitiated)
+                {
+                    RestorePlayerMovement(player);
+                    if (officer != null && officer.GetCurrentActivity() == ParoleOfficerBehavior.ParoleOfficerActivity.SearchingParolee)
+                    {
+                        officer.StartPatrol();
+                    }
+                }
             }
         }
         

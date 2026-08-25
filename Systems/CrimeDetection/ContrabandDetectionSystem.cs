@@ -7,6 +7,7 @@ using System;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
+using Il2CppScheduleOne.DevUtilities;
 using Il2CppScheduleOne.ItemFramework;
 using Il2CppScheduleOne.Product;
 using Il2CppScheduleOne.AvatarFramework;
@@ -14,6 +15,7 @@ using Il2CppScheduleOne.Law;
 using Il2CppScheduleOne.UI;
 #else
 using ScheduleOne.PlayerScripts;
+using ScheduleOne.DevUtilities;
 using ScheduleOne.ItemFramework;
 using ScheduleOne.Product;
 using ScheduleOne.AvatarFramework;
@@ -77,15 +79,14 @@ namespace Behind_Bars.Systems.CrimeDetection
             }
             
             var inventory = player._inventory;
-            if (inventory == null)
-            {
-                ModLogger.Debug("Player inventory is null!");
-                return detectedCrimes;
-            }
-
             ModLogger.Debug($"Player: {player.name}, Inventory exists: {inventory != null}");
 
-            // Use the native player inventory collection for this runtime.
+            // A Player's serialized inventory array is often empty on the
+            // current IL2CPP build even while PlayerInventory still owns
+            // equipped and hotbar items. Prefer it when populated, then fall
+            // back to the same native slot enumeration used by persistent
+            // property capture. This is essential for parole searches: an
+            // M1911 in a live slot must reach WeaponPossession.
             if (inventory != null && inventory.Length > 0)
             {
                 ModLogger.Debug($"Using Player.Inventory array with {inventory.Length} slots");
@@ -96,11 +97,35 @@ namespace Behind_Bars.Systems.CrimeDetection
                 }
                 return ProcessInventorySlots(inventorySlotsFromArray, player.transform.position, detectedCrimes, context);
             }
-            else
+
+            var liveInventory = PlayerSingleton<PlayerInventory>.Instance;
+            if (liveInventory != null)
             {
-                ModLogger.Debug("Player.Inventory array is null/empty!");
-                return detectedCrimes;
+                var nativeSlots = new List<object>();
+                try
+                {
+                    foreach (var slot in liveInventory.GetAllInventorySlots())
+                    {
+                        if (slot != null)
+                        {
+                            nativeSlots.Add(slot);
+                        }
+                    }
+                }
+                catch (Exception exception)
+                {
+                    ModLogger.Error($"Unable to enumerate live PlayerInventory slots for contraband search: {exception.Message}");
+                }
+
+                if (nativeSlots.Count > 0)
+                {
+                    ModLogger.Debug($"Using PlayerInventory.GetAllInventorySlots with {nativeSlots.Count} slots");
+                    return ProcessInventorySlots(nativeSlots, player.transform.position, detectedCrimes, context);
+                }
             }
+
+            ModLogger.Debug("Player inventory array and live slot collection are empty");
+            return detectedCrimes;
         }
         
         private List<CrimeInstance> ProcessInventorySlots(

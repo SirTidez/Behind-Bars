@@ -329,6 +329,13 @@ namespace Behind_Bars.Systems.Jail
                 return false;
             }
 
+            var cellManager = Core.ResolveCellAssignmentManager();
+            if (cellManager == null || cellManager.GetPlayerCellNumber(player) < 0)
+            {
+                ModLogger.Error($"Cannot finish booking after cell escort for {player.name}: the player has no confirmed assigned cell");
+                return false;
+            }
+
             ModLogger.Info($"Final-cell escort secured {player.name}; finishing active booking and starting sentence");
             FinishBooking();
             return true;
@@ -740,16 +747,27 @@ namespace Behind_Bars.Systems.Jail
                 {
                     ModLogger.Info("Booking complete - guards opening holding cell doors");
                     
-                    // Use the door system to open doors
-                    // This simulates what guards would do
-                    // Use the public UnlockAll method which will unlock holding cell doors
+                    // Only open the exact holding cell occupied by this prisoner. UnlockAll
+                    // also clears unrelated cell locks and can leak an interrupted intake route.
                     try
                     {
-                        var jailController_cast = jailController as JailController;
-                        if (jailController_cast != null)
+                        int holdingCellIndex = currentPlayer != null
+                            ? jailController.FindPlayerHoldingCell(currentPlayer)
+                            : -1;
+                        if (holdingCellIndex >= 0 && jailController.doorController != null)
                         {
-                            jailController_cast.UnlockAll();
-                            ModLogger.Info("✓ Guards unlocked all holding cell doors");
+                            if (jailController.doorController.UnlockAndOpenHoldingCellDoor(holdingCellIndex))
+                            {
+                                ModLogger.Info($"Guards opened holding cell {holdingCellIndex} for the active prisoner");
+                            }
+                            else
+                            {
+                                ModLogger.Warn($"Could not open holding cell {holdingCellIndex} for the active prisoner");
+                            }
+                        }
+                        else
+                        {
+                            ModLogger.Warn("Guard door control skipped: active prisoner was not assigned to a holding cell");
                         }
                     }
                     catch (System.Exception ex)
@@ -951,17 +969,25 @@ namespace Behind_Bars.Systems.Jail
             
             ModLogger.Info($"Escort process completed for {currentPlayer?.name}");
             
-            // Assign cell and finish booking
-            AssignPlayerCell();
-            FinishBooking();
+            // Never start a sentence unless a final cell assignment succeeded.
+            // The canonical intake path normally finalizes through
+            // FinishBookingAfterCellEscort; this protects the legacy monitor too.
+            if (AssignPlayerCell())
+            {
+                FinishBooking();
+            }
+            else
+            {
+                ModLogger.Error("Escort completed without a confirmed cell assignment; booking remains active for recovery");
+            }
         }
         
         /// <summary>
         /// Assign a cell to the current player
         /// </summary>
-        private void AssignPlayerCell()
+        private bool AssignPlayerCell()
         {
-            if (currentPlayer == null) return;
+            if (currentPlayer == null) return false;
             
             var cellManager = Core.ResolveCellAssignmentManager();
             if (cellManager != null)
@@ -975,15 +1001,18 @@ namespace Behind_Bars.Systems.Jail
                             $"You have been assigned to cell {cellNumber}", 
                             NotificationType.Direction
                         );
+                    return true;
                 }
                 else
                 {
                     ModLogger.Error($"Failed to assign cell to {currentPlayer.name}");
+                    return false;
                 }
             }
             else
             {
                 ModLogger.Warn("CellAssignmentManager not available");
+                return false;
             }
         }
         
@@ -1007,6 +1036,11 @@ namespace Behind_Bars.Systems.Jail
         // Debug/Testing methods
         void Update()
         {
+            if (!Core.EnableDeveloperShortcuts)
+            {
+                return;
+            }
+
             // Escort is now triggered immediately when booking starts, not on completion
             
             // Debug commands

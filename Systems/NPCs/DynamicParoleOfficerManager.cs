@@ -109,6 +109,8 @@ namespace Behind_Bars.Systems.NPCs
         private Player preparedReleaseParolee;
         private Vector3 preparedReleaseMeetingPoint;
         private Coroutine preparedReleaseMeetingCoroutine;
+        private Coroutine retryInitializeCoroutine;
+        private Coroutine delayedIntakeNotificationCoroutine;
 
         #endregion
 
@@ -201,7 +203,7 @@ namespace Behind_Bars.Systems.NPCs
                 if (npcManager == null)
                 {
                     ModLogger.Error("DynamicParoleOfficerManager: NpcManager not found");
-                    MelonCoroutines.Start(RetryInitialize());
+                    StartInitializationRetry();
                     return;
                 }
 
@@ -236,7 +238,7 @@ namespace Behind_Bars.Systems.NPCs
                 if (currentPlayer == null)
                 {
                     ModLogger.Debug("DynamicParoleOfficerManager: Local player not found, will retry");
-                    MelonCoroutines.Start(RetryInitialize());
+                    StartInitializationRetry();
                     return;
                 }
 
@@ -314,6 +316,16 @@ namespace Behind_Bars.Systems.NPCs
             if (!isInitialized)
             {
                 ModLogger.Error("DynamicParoleOfficerManager: Failed to initialize after retries");
+            }
+
+            retryInitializeCoroutine = null;
+        }
+
+        private void StartInitializationRetry()
+        {
+            if (retryInitializeCoroutine == null)
+            {
+                retryInitializeCoroutine = MelonCoroutines.Start(RetryInitialize()) as Coroutine;
             }
         }
 
@@ -523,7 +535,10 @@ namespace Behind_Bars.Systems.NPCs
                 return false;
             }
 
-            MelonCoroutines.Start(DelayedIntakeNotification(player));
+            if (delayedIntakeNotificationCoroutine == null)
+            {
+                delayedIntakeNotificationCoroutine = MelonCoroutines.Start(DelayedIntakeNotification(player)) as Coroutine;
+            }
             return true;
         }
 
@@ -590,6 +605,8 @@ namespace Behind_Bars.Systems.NPCs
             }
             finally
             {
+                delayedIntakeNotificationCoroutine = null;
+
                 if (player != null)
                 {
                     supervisingOfficerInteractionCoordinator.ClearPendingIntake(player);
@@ -1210,6 +1227,18 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private void Cleanup()
         {
+            if (retryInitializeCoroutine != null)
+            {
+                MelonCoroutines.Stop(retryInitializeCoroutine);
+                retryInitializeCoroutine = null;
+            }
+
+            if (delayedIntakeNotificationCoroutine != null)
+            {
+                MelonCoroutines.Stop(delayedIntakeNotificationCoroutine);
+                delayedIntakeNotificationCoroutine = null;
+            }
+
             UnsubscribeFromEvents();
             CancelPreparedSupervisingOfficerForRelease(preparedReleaseParolee);
             DespawnAllOfficers();

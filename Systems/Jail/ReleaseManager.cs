@@ -522,6 +522,12 @@ namespace Behind_Bars.Systems.Jail
                 return true;
             }
 
+            if (HasQueuedRelease(playerKey))
+            {
+                ModLogger.Debug($"Release already queued for {player.name}; duplicate request ignored");
+                return true;
+            }
+
             // Queue the release if no officers available
             releaseQueue.Enqueue(releaseRequest);
             ModLogger.Debug($"Release for {player.name} queued - no officers available");
@@ -783,8 +789,24 @@ namespace Behind_Bars.Systems.Jail
 #endif
         private void CompleteRelease(ReleaseRequest request)
         {
+            if (request == null || request.status == ReleaseStatus.Completed)
+            {
+                return;
+            }
+
+            // Completion can be signalled by both the officer state machine
+            // and the exit-scanner callback. Claim the active request before
+            // invoking external systems so only the winner performs the
+            // teleport, inventory handoff, parole setup, and sentence stop.
+            if (!activeReleases.TryGetValue(request.playerKey, out var activeRequest) || !ReferenceEquals(activeRequest, request))
+            {
+                ModLogger.Debug($"Ignoring stale release-completion callback for {request.playerKey}");
+                return;
+            }
+
             ModLogger.Debug($"Completing release for {request.player.name}");
             request.status = ReleaseStatus.Completed;
+            activeReleases.Remove(request.playerKey);
 
             // CRITICAL: Hide officer command notification before teleporting player
             Core.ResolveUIManager().HideOfficerCommand();
@@ -845,9 +867,6 @@ namespace Behind_Bars.Systems.Jail
                 StartSceneCoroutine(WaitForParoleConditionsAcknowledgment(request.player, bailAmountPaid, fineAmount, termLength, lsiLevel, lsiBreakdown, jailTimeInfo, recentCrimes, generalConditions, specialConditions));
             }
 
-            // Clean up
-            activeReleases.Remove(request.playerKey);
-
             // Process queued releases
             ProcessQueuedReleases();
 
@@ -901,9 +920,16 @@ namespace Behind_Bars.Systems.Jail
 
         private void ProcessQueuedReleases()
         {
-            if (releaseQueue.Count > 0)
+            while (releaseQueue.Count > 0)
             {
                 var nextRelease = releaseQueue.Dequeue();
+                if (nextRelease == null || nextRelease.player == null ||
+                    !Core.ResolveJailTimeTracker().IsInJail(nextRelease.player))
+                {
+                    ModLogger.Debug($"Discarded stale queued release for {nextRelease?.playerKey ?? "unknown"}");
+                    continue;
+                }
+
                 if (TryAssignOfficer(nextRelease))
                 {
                     activeReleases[nextRelease.playerKey] = nextRelease;
@@ -915,6 +941,10 @@ namespace Behind_Bars.Systems.Jail
                     // Put it back in queue if still no officers available
                     releaseQueue.Enqueue(nextRelease);
                 }
+
+                // An eligible request was either started or restored to the
+                // queue. Do not consume the whole queue in one frame.
+                break;
             }
         }
 
@@ -2328,11 +2358,13 @@ namespace Behind_Bars.Systems.Jail
             try
             {
                 string playerKey = GetPlayerRuntimeKey(player);
+                RemoveQueuedReleaseRequests(playerKey);
 
                 if (activeReleases.ContainsKey(playerKey))
                 {
                     var request = activeReleases[playerKey];
                     ModLogger.Debug($"Cancelling active release for {player.name} (Status: {request.status})");
+                    request.status = ReleaseStatus.Failed;
 
                     ReleaseAssignedOfficer(request, true);
 
@@ -2344,7 +2376,7 @@ namespace Behind_Bars.Systems.Jail
                 }
                 else
                 {
-                    ModLogger.Debug($"No active release found for {player.name} - nothing to cancel");
+                    ModLogger.Debug($"No active release found for {player.name}; removed any queued release request");
                 }
             }
             catch (System.Exception ex)
@@ -2550,6 +2582,47 @@ namespace Behind_Bars.Systems.Jail
             {
                 request.status = newStatus;
                 ModLogger.Debug($"Release status updated for {player.name}: {newStatus}");
+            }
+        }
+
+        private bool HasQueuedRelease(string playerKey)
+        {
+            foreach (var request in releaseQueue)
+            {
+                if (request != null && request.playerKey == playerKey)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void RemoveQueuedReleaseRequests(string playerKey)
+        {
+            if (string.IsNullOrEmpty(playerKey) || releaseQueue.Count == 0)
+            {
+                return;
+            }
+
+            int initialCount = releaseQueue.Count;
+            int removedCount = 0;
+            for (int index = 0; index < initialCount; index++)
+            {
+                var request = releaseQueue.Dequeue();
+                if (request != null && request.playerKey == playerKey)
+                {
+                    request.status = ReleaseStatus.Failed;
+                    removedCount++;
+                    continue;
+                }
+
+                releaseQueue.Enqueue(request);
+            }
+
+            if (removedCount > 0)
+            {
+                ModLogger.Debug($"Removed {removedCount} queued release request(s) for {playerKey}");
             }
         }
 

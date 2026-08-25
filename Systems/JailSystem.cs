@@ -813,38 +813,38 @@ namespace Behind_Bars.Systems
                     if (bailSystem.CanPlayerAffordBail(player, bailAmount))
                     {
                         ModLogger.Info($"[BAIL] Player {player.name} pressed bail payment key");
-                        
-                        // Hide bail UI immediately
-                        Core.ResolveUIManager().HideBailUI();
-                        
-                        // Update jail status UI to show "Bailed Out"
-                        var uiWrapper = Core.ResolveUIManager().GetUIWrapper();
-                        if (uiWrapper != null)
-                        {
-                            uiWrapper.SetBailedOutStatus();
-                        }
-                        
-                        // Stop sentence tracking (cancel time-based release)
-                        if (jailManager != null)
-                        {
-                            jailManager.StopSentenceTracking(player);
-                        }
-                        else
-                        {
-                            Core.ResolveJailTimeTracker().StopTracking(player);
-                        }
-                        
-                        // Process bail payment and wait for it to mark the pending bail release state.
+
+                        // Payment can fail after the affordability pre-check
+                        // (missing MoneyManager, a concurrent cash change, or
+                        // no release-manager handoff). Keep custody tracking
+                        // and the normal UI alive until a bail release has
+                        // actually been authorized.
                         yield return bailSystem.ProcessBailPayment(player, bailAmount, false);
 
                         if (jailManager != null ? jailManager.HasPendingReleaseType(player) : HasPendingReleaseType(player))
                         {
+                            Core.ResolveUIManager().HideBailUI();
+                            var uiWrapper = Core.ResolveUIManager().GetUIWrapper();
+                            uiWrapper?.SetBailedOutStatus();
+
+                            if (jailManager != null)
+                            {
+                                jailManager.StopSentenceTracking(player);
+                            }
+                            else
+                            {
+                                Core.ResolveJailTimeTracker().StopTracking(player);
+                            }
+
                             bailPaid = true;
                             ModLogger.Info($"[BAIL] Bail payment completed for {player.name}; release will proceed after custody cleanup");
                             break;
                         }
 
-                        ModLogger.Info($"[BAIL] Bail payment initiated for {player.name}");
+                        ModLogger.Warn($"[BAIL] Bail payment was not authorized for {player.name}; sentence tracking remains active");
+                        Core.ResolveUIManager().ShowNotification(
+                            "Bail payment could not be completed. You remain in custody.",
+                            NotificationType.Warning);
                     }
                     else
                     {

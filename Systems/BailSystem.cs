@@ -128,17 +128,10 @@ namespace Behind_Bars.Systems
 
         public bool CanFriendsPayBail(Player player, float bailAmount)
         {
-            // Check if we're in multiplayer
-            if (!IsMultiplayer())
-                return false;
-            
-            // TODO: Implement friend bail payment logic
-            // This should:
-            // 1. Check if other players are online
-            // 2. Check if they have enough money
-            // 3. Check if they're willing to help
-            
-            return true; // Placeholder
+            // Friend-funded bail has no authoritative payer, deduction, or
+            // network confirmation path yet. Do not expose a successful
+            // result until that transaction can be completed safely.
+            return false;
         }
 
         private bool IsMultiplayer()
@@ -161,14 +154,8 @@ namespace Behind_Bars.Systems
             
             if (isFriendPayment)
             {
-                // TODO: Implement friend payment logic
-                // This should:
-                // 1. Deduct money from friend's account
-                // 2. Show confirmation to both players
-                // 3. Release the arrested player
-
-                yield return new WaitForSeconds(1f);
-                ModLogger.Info($"Bail paid by friend for {player.name}");
+                ModLogger.Warn($"Friend-paid bail is unavailable; no bail was processed for {player.name}");
+                yield break;
             }
             else
             {
@@ -194,37 +181,52 @@ namespace Behind_Bars.Systems
                 ModLogger.Info($"Bail paid by {player.name}");
             }
 
-            // Store the bail amount for release processing
-            StoreBailAmount(player, bailAmount);
+            // Only commit the payment once the custody system has accepted a
+            // corresponding release authorization. If it cannot, reverse the
+            // local cash mutation so a failed handoff cannot consume bail and
+            // leave sentence tracking active.
+            if (!TryRecordBailAuthorization(player))
+            {
+                if (!isFriendPayment && MoneyManager.Instance != null)
+                {
+                    MoneyManager.Instance.ChangeCashBalance(bailAmount);
+                    ModLogger.Warn($"Returned ${bailAmount:F0} after bail authorization failed for {player.name}");
+                }
+                yield break;
+            }
 
-            // Mark the bail payment as authorized; JailSystem will complete custody cleanup
-            // and trigger the final release path after the sentence wait ends.
-            yield return ReleasePlayerOnBail(player);
+            StoreBailAmount(player, bailAmount);
+            yield return new WaitForSeconds(1f);
         }
 
-        private IEnumerator ReleasePlayerOnBail(Player player)
+        private bool TryRecordBailAuthorization(Player player)
         {
             ModLogger.Info($"Recording bail authorization for {player.name}");
 
             try
             {
                 var jailManager = Core.Instance?.JailManager;
-                if (jailManager != null)
-                {
-                    jailManager.MarkPendingReleaseType(player, ReleaseManager.ReleaseType.BailPayment);
-                    ModLogger.Info($"{player.name} bail payment recorded; awaiting custody cleanup before release");
-                }
-                else
+                if (jailManager == null)
                 {
                     ModLogger.Error("JailManager not found - cannot record bail authorization");
+                    return false;
                 }
+
+                jailManager.MarkPendingReleaseType(player, ReleaseManager.ReleaseType.BailPayment);
+                if (!jailManager.HasPendingReleaseType(player))
+                {
+                    ModLogger.Error($"Bail authorization was not retained for {player.name}");
+                    return false;
+                }
+
+                ModLogger.Info($"{player.name} bail payment recorded; awaiting custody cleanup before release");
+                return true;
             }
             catch (System.Exception ex)
             {
                 ModLogger.Error($"Error recording bail authorization: {ex.Message}");
+                return false;
             }
-
-            yield return new WaitForSeconds(1f);
         }
 
         /// <summary>
