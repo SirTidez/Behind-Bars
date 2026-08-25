@@ -672,5 +672,14 @@ namespace Behind_Bars.Systems
         {
             ParoleSystem.IssueAgentWarrantInternal(player);
         }
+
+        /// <summary>
+        /// Routes curfew enforcement through the owned parole system so all sources
+        /// share persisted warnings, formal violations, and warrant escalation.
+        /// </summary>
+        public void ReportCurfewViolation(Player player, RapSheet rapSheet, string source)
+        {
+            ParoleSystem.ReportCurfewViolation(player, rapSheet, source);
+        }
     }
 }

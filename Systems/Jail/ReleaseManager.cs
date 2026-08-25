@@ -252,9 +252,17 @@ namespace Behind_Bars.Systems.Jail
 
         #region Events
 
+        // Keep Mono's public integration surface, but do not export managed delegate
+        // fields from the IL2CPP-injected release manager type.
+#if MONO
         public static System.Action<Player, ReleaseType> OnReleaseStarted;
         public static System.Action<Player, ReleaseType> OnReleaseCompleted;
         public static System.Action<Player, string> OnReleaseFailed;
+#else
+        internal static System.Action<Player, ReleaseType> OnReleaseStarted;
+        internal static System.Action<Player, ReleaseType> OnReleaseCompleted;
+        internal static System.Action<Player, string> OnReleaseFailed;
+#endif
 
         #endregion
 

@@ -63,6 +63,12 @@ namespace Behind_Bars.Systems.CrimeTracking
         [SaveableField("activeConditionIds")]
         private List<string> activeConditionIds;
 
+        // Persists graduated condition warnings independently of formal violations.  A
+        // warning must survive save/load or a player can indefinitely avoid the next
+        // enforcement tier by reloading between check-ins.
+        [SaveableField("conditionWarningCounts")]
+        private Dictionary<string, int> conditionWarningCounts;
+
         [SaveableField("consecutiveHighComplianceDays")]
         private int consecutiveHighComplianceDays;
 
@@ -107,6 +113,7 @@ namespace Behind_Bars.Systems.CrimeTracking
             this.lastInteractionGameTime = 0f;
             this.officerRapport = new OfficerRapportRecord();
             this.activeConditionIds = new List<string>();
+            this.conditionWarningCounts = new Dictionary<string, int>();
             this.consecutiveHighComplianceDays = 0;
             this.lsiStepDownCount = 0;
             this.homeVisitsMissed = 0;
@@ -130,6 +137,7 @@ namespace Behind_Bars.Systems.CrimeTracking
             this.lastInteractionGameTime = 0f;
             this.officerRapport = new OfficerRapportRecord();
             this.activeConditionIds = new List<string>();
+            this.conditionWarningCounts = new Dictionary<string, int>();
             this.consecutiveHighComplianceDays = 0;
             this.lsiStepDownCount = 0;
             this.homeVisitsMissed = 0;
@@ -730,6 +738,45 @@ namespace Behind_Bars.Systems.CrimeTracking
         public bool IsConditionActive(string conditionId)
         {
             return activeConditionIds != null && activeConditionIds.Contains(conditionId);
+        }
+
+        /// <summary>
+        /// Records and returns the next persisted warning count for a parole condition.
+        /// Formal violations remain separate entries in the parole record.
+        /// </summary>
+        public int RecordConditionWarning(string conditionId)
+        {
+            if (string.IsNullOrWhiteSpace(conditionId))
+            {
+                return 0;
+            }
+
+            conditionWarningCounts ??= new Dictionary<string, int>();
+            int nextCount = GetConditionWarningCount(conditionId) + 1;
+            conditionWarningCounts[conditionId] = nextCount;
+            return nextCount;
+        }
+
+        /// <summary>
+        /// Returns the persisted warning count for a condition.
+        /// </summary>
+        public int GetConditionWarningCount(string conditionId)
+        {
+            return !string.IsNullOrWhiteSpace(conditionId) && conditionWarningCounts != null &&
+                   conditionWarningCounts.TryGetValue(conditionId, out int warningCount)
+                ? warningCount
+                : 0;
+        }
+
+        /// <summary>
+        /// Clears persisted warnings after the player satisfies a condition.
+        /// </summary>
+        public void ResetConditionWarnings(string conditionId)
+        {
+            if (!string.IsNullOrWhiteSpace(conditionId))
+            {
+                conditionWarningCounts?.Remove(conditionId);
+            }
         }
 
         #endregion

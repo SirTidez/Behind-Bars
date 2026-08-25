@@ -815,7 +815,7 @@ namespace Behind_Bars.Systems.NPCs
                 if (distance > detectionRange) continue;
 
                 // Curfew check (officer-proximity detection for all LSI levels)
-                if (Core.ResolveParoleConditionManager().IsConditionActive("curfew"))
+                if (rapSheet.CurrentParoleRecord.IsConditionActive("curfew"))
                 {
                     int currentMinuteOfDay = (int)(GameTimeManager.Instance.GetCurrentGameTimeInMinutes() % 1440f);
 
@@ -827,21 +827,15 @@ namespace Behind_Bars.Systems.NPCs
                         float currentTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
                         if (currentTime - lastInteraction < 30f) continue; // 30 game min cooldown
 
-                        rapSheet.CurrentParoleRecord.AdjustComplianceScore(-5f);
-                        rapSheet.CurrentParoleRecord.AdjustRapport(-5f);
-                        rapSheet.CurrentParoleRecord.RecordInteraction();
-
-                        var curfewDisplay = CurfewCondition.GetCurfewDisplayTime(rapSheet.LSILevel);
-                        Core.ResolveParoleManager()?.SendSupervisingOfficerText(player,
-                            $"Officer {badgeNumber} spotted you outside past your {curfewDisplay} curfew. Go home now.");
-
-                        Core.ResolveRapSheetManager().MarkRapSheetChanged(player);
-                        ModLogger.Info($"[PATROL] Officer {badgeNumber} detected curfew violation for {player.name}");
+                        Core.ResolveParoleManager()?.ReportCurfewViolation(
+                            player,
+                            rapSheet,
+                            $"Officer {badgeNumber} patrol observation");
                     }
                 }
 
                 // Restricted zone check
-                if (Core.ResolveParoleConditionManager().IsConditionActive("restricted_zones"))
+                if (rapSheet.CurrentParoleRecord.IsConditionActive("restricted_zones"))
                 {
                     var (isRestricted, zoneName) = RestrictedZoneCondition.IsInRestrictedZone(
                         player.transform.position, rapSheet);

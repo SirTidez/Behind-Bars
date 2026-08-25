@@ -686,7 +686,7 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private IEnumerator ProcessDrugTest(Player parolee, RapSheet rapSheet, ParoleRecord paroleRecord)
         {
-            if (!Core.ResolveParoleConditionManager().IsConditionActive("drug_test"))
+            if (!paroleRecord.IsConditionActive("drug_test"))
                 yield break;
 
             // Random chance of test based on LSI level
@@ -867,7 +867,7 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private IEnumerator ProcessEmploymentCheck(Player parolee, RapSheet rapSheet, ParoleRecord paroleRecord)
         {
-            if (!Core.ResolveParoleConditionManager().IsConditionActive("employment"))
+            if (!paroleRecord.IsConditionActive("employment"))
                 yield break;
 
             bool isEmployed = EmploymentCondition.IsPlayerEmployed();
@@ -875,19 +875,16 @@ namespace Behind_Bars.Systems.NPCs
             if (isEmployed)
             {
                 // Employed - minor positive feedback
+                paroleRecord.ResetConditionWarnings("employment");
+                Core.ResolveRapSheetManager().MarkRapSheetChanged(parolee);
                 ModLogger.Debug($"[EMPLOYMENT] {parolee.name} is employed (owns property/business)");
                 yield break; // No special dialogue needed for positive result
             }
 
-            // Not employed - graduated consequences
-            // Track unemployment warnings using a simple counter approach via missed check-ins
-            // We'll use the violation count for employment-type violations as the counter
-            int employmentWarnings = 0;
-            foreach (var v in paroleRecord.GetViolations())
-            {
-                if (v.Details != null && v.Details.Contains("employment"))
-                    employmentWarnings++;
-            }
+            // Not employed - graduated consequences.  Warning progression lives on
+            // the persisted parole record rather than being inferred from formal
+            // violations, which previously reset it after every save/load.
+            int employmentWarnings = paroleRecord.RecordConditionWarning("employment");
 
             if (employmentWarnings < EmploymentCondition.WARNINGS_BEFORE_VIOLATION)
             {
@@ -901,9 +898,9 @@ namespace Behind_Bars.Systems.NPCs
                 }
 
                 Core.ResolveParoleManager()?.SendSupervisingOfficerText(parolee,
-                    $"Employment reminder: You need to maintain employment or income. Warning {employmentWarnings + 1}/{EmploymentCondition.WARNINGS_BEFORE_VIOLATION}.");
+                    $"Employment reminder: You need to maintain employment or income. Warning {employmentWarnings}/{EmploymentCondition.WARNINGS_BEFORE_VIOLATION}.");
 
-                ModLogger.Info($"[EMPLOYMENT] Warning {employmentWarnings + 1} for {parolee.name}");
+                ModLogger.Info($"[EMPLOYMENT] Warning {employmentWarnings} for {parolee.name}");
             }
             else
             {
@@ -912,13 +909,14 @@ namespace Behind_Bars.Systems.NPCs
                 paroleRecord.AdjustRapport(-5f);
 
                 var violation = new ViolationRecord(ViolationType.Other,
-                    $"Failed to maintain employment ({employmentWarnings + 1} consecutive failures)", 1.5f);
+                    $"Failed to maintain employment ({employmentWarnings} consecutive failures)", 1.5f);
                 rapSheet.AddParoleViolation(violation);
+                paroleRecord.ResetConditionWarnings("employment");
 
                 Core.ResolveParoleManager()?.SendSupervisingOfficerText(parolee,
                     "Employment condition violated. Formal violation recorded.");
 
-                ModLogger.Info($"[EMPLOYMENT] Formal violation for {parolee.name} after {employmentWarnings + 1} failures");
+                ModLogger.Info($"[EMPLOYMENT] Formal violation for {parolee.name} after {employmentWarnings} failures");
             }
 
             Core.ResolveRapSheetManager().MarkRapSheetChanged(parolee);

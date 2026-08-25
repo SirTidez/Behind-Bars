@@ -860,7 +860,7 @@ namespace Behind_Bars.Systems
 
                             // Electronic monitoring curfew check (Severe LSI only - always-on)
                             if (rapSheet.LSILevel == LSILevel.Severe &&
-                                paroleConditionManager.IsConditionActive("curfew"))
+                                rapSheet.CurrentParoleRecord?.IsConditionActive("curfew") == true)
                             {
                                 CheckElectronicCurfew(record.Player, rapSheet, currentMinuteOfDay);
                             }
@@ -1117,45 +1117,68 @@ namespace Behind_Bars.Systems
             if (currentGameTime - lastCurfewCheck < 5f)
                 return;
 
-            // Curfew violation detected via electronic monitoring
-            int violationCount = 0;
-            foreach (var v in paroleRecord.GetViolations())
+            ReportCurfewViolation(player, rapSheet,
+                $"electronic monitoring at {FormatMinuteOfDayInternal(currentMinuteOfDay)}");
+        }
+
+        /// <summary>
+        /// Applies the one authoritative curfew-enforcement ladder.  Both electronic
+        /// monitoring and an officer witness call this method so warnings persist and
+        /// cannot diverge from formal violations or warrant escalation.
+        /// </summary>
+        internal void ReportCurfewViolation(Player player, RapSheet rapSheet, string source)
+        {
+            if (player == null || rapSheet?.CurrentParoleRecord == null)
             {
-                if (v.ViolationType == ViolationType.CurfewViolation)
-                    violationCount++;
+                return;
             }
 
-            if (violationCount == 0)
+            var paroleRecord = rapSheet.CurrentParoleRecord;
+            string playerKey = GetPlayerRuntimeKey(player);
+            if (_playersWithActiveWarrants.Contains(playerKey))
             {
-                // First violation: compliance penalty + rapport hit
+                return;
+            }
+
+            int warningCount = paroleRecord.RecordConditionWarning("curfew");
+            string curfewTime = CurfewCondition.GetCurfewDisplayTime(rapSheet.LSILevel);
+
+            if (warningCount == 1)
+            {
                 paroleRecord.AdjustComplianceScore(-5f);
                 paroleRecord.AdjustRapport(-5f);
                 SendSupervisingOfficerText(player,
-                    $"Electronic monitoring alert: You are outside your residence past curfew ({CurfewCondition.GetCurfewDisplayTime(rapSheet.LSILevel)}). Return home immediately.");
-                ModLogger.Info($"[CURFEW] First curfew violation for {player.name} via electronic monitoring");
-            }
-            else if (violationCount == 1)
-            {
-                // Second violation: formal ViolationRecord
-                var violation = new ViolationRecord(ViolationType.CurfewViolation,
-                    $"Curfew violation detected via electronic monitoring at {FormatMinuteOfDayInternal(currentMinuteOfDay)}", 1.5f);
-                rapSheet.AddParoleViolation(violation);
-                paroleRecord.AdjustRapport(-10f);
-                SendSupervisingOfficerText(player,
-                    "Second curfew violation. A formal violation has been recorded on your parole record.");
-                ModLogger.Info($"[CURFEW] Second curfew violation for {player.name} - formal violation recorded");
+                    $"Curfew warning: you are outside past your {curfewTime} curfew ({source}). Return home immediately.");
+                ModLogger.Info($"[CURFEW] Warning 1 recorded for {player.name} via {source}");
             }
             else
             {
-                // Third+ violation: warrant escalation
-                var violation = new ViolationRecord(ViolationType.CurfewViolation,
-                    $"Repeated curfew violation ({violationCount + 1} total) detected via electronic monitoring", 2.5f);
-                rapSheet.AddParoleViolation(violation);
-                IssueAgentWarrantInternal(player);
-                ModLogger.Info($"[CURFEW] Multiple curfew violations for {player.name} - warrant escalation");
+                bool issueWarrant = warningCount >= 3;
+                float severity = issueWarrant ? 2.5f : 1.5f;
+                string details = issueWarrant
+                    ? $"Repeated curfew violation (warning {warningCount}) detected via {source}"
+                    : $"Curfew violation detected via {source}";
+
+                rapSheet.AddParoleViolation(new ViolationRecord(ViolationType.CurfewViolation, details, severity));
+                paroleRecord.AdjustComplianceScore(issueWarrant ? -10f : -5f);
+                paroleRecord.AdjustRapport(issueWarrant ? -15f : -10f);
+
+                if (issueWarrant)
+                {
+                    IssueAgentWarrantInternal(player);
+                    SendSupervisingOfficerText(player,
+                        "Repeated curfew violation. A parole warrant has been issued.");
+                    ModLogger.Warn($"[CURFEW] Warrant escalation recorded for {player.name} via {source}");
+                }
+                else
+                {
+                    SendSupervisingOfficerText(player,
+                        "Second curfew warning. A formal parole violation has been recorded.");
+                    ModLogger.Info($"[CURFEW] Formal violation recorded for {player.name} via {source}");
+                }
             }
 
-            paroleRecord.RecordInteraction(); // Use interaction time as throttle
+            paroleRecord.RecordInteraction();
             Core.ResolveRapSheetManager().MarkRapSheetChanged(player);
         }
 

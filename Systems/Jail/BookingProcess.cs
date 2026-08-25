@@ -75,12 +75,22 @@ namespace Behind_Bars.Systems.Jail
             CellEscort
         }
 
-        // Events for state machine integration
+        // Events for state machine integration.  These remain public in the Mono
+        // surface for backwards compatibility, but an IL2CPP-injected component
+        // must not expose managed delegate fields in its native type metadata.
+#if MONO
         public System.Action<Player> OnMugshotCompleted;
         public System.Action<Player> OnFingerprintCompleted;
         public System.Action<Player> OnInventoryDropOffCompleted;
         public System.Action<Player> OnBookingStarted;
         public System.Action<Player> OnBookingCompleted;
+#else
+        internal System.Action<Player> OnMugshotCompleted;
+        internal System.Action<Player> OnFingerprintCompleted;
+        internal System.Action<Player> OnInventoryDropOffCompleted;
+        internal System.Action<Player> OnBookingStarted;
+        internal System.Action<Player> OnBookingCompleted;
+#endif
 
         public static BookingProcess Instance
         {
