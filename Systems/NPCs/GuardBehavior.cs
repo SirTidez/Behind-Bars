@@ -47,7 +47,8 @@ namespace Behind_Bars.Systems.NPCs
             GuardRoom0,    // Guard room spawn point 0
             GuardRoom1,    // Guard room spawn point 1
             Booking0,      // Booking spawn point 0 (usually intake officer)
-            Booking1       // Booking spawn point 1
+            Booking1,      // Booking spawn point 1
+            DayRoomPatrol  // Dedicated officer for the cell-block/day-room circuit
         }
 
         public enum GuardActivity
@@ -107,6 +108,21 @@ namespace Behind_Bars.Systems.NPCs
         private int currentPatrolIndex = 0;
         private float lastPatrolTime = 0f;
         private bool isOnDuty = true;
+        private Vector3 dayRoomInspectionTarget;
+        private bool hasDayRoomInspectionTarget;
+        private Vector3[] dayRoomInspectionTargets = Array.Empty<Vector3>();
+        private bool dayRoomPatrolBatonEquipped;
+        private bool dayRoomNativeMovementLogged;
+
+        // Deliberately below the game's ordinary walking pace so the day-room guard
+        // reads as an observant patrol rather than a response/escort movement.
+        private const float DayRoomPatrolSpeed = 0.25f;
+        private const int DayRoomPatrolSpeedPriority = 100;
+        private const string DayRoomPatrolSpeedControlId = "BehindBars.DayRoomPatrol";
+        private const float DayRoomPatrolWaitTime = 2.5f;
+        private const float DayRoomLookTurnSpeed = 360f;
+        private const string DayRoomPatrolBatonResourcePath = "Avatar/Equippables/Baton";
+        private const string EmptyEquippableResourcePath = "";
 
         #endregion
 
@@ -163,6 +179,7 @@ namespace Behind_Bars.Systems.NPCs
             InitializePatrolPoints();
             InitializeIntakeStations();
             SetupGuardRole();
+            EnsureDayRoomPatrolBaton();
 
             // Register with PrisonNPCManager
             var npcManager = Core.Instance?.NpcManager;
@@ -192,6 +209,9 @@ namespace Behind_Bars.Systems.NPCs
                     break;
                 case GuardAssignment.Booking1:
                     role = GuardRole.BookingStationary;
+                    break;
+                case GuardAssignment.DayRoomPatrol:
+                    role = GuardRole.PatrolGuard;
                     break;
             }
 
@@ -291,6 +311,8 @@ namespace Behind_Bars.Systems.NPCs
 
         private void SetupGuardRole()
         {
+            ConfigureDayRoomPatrolProfile();
+
             switch (role)
             {
                 case GuardRole.IntakeOfficer:
@@ -373,6 +395,7 @@ namespace Behind_Bars.Systems.NPCs
             switch (currentActivity)
             {
                 case GuardActivity.Patrolling:
+                    MaintainDayRoomCellInspection();
                     HandlePatrolLogic();
                     break;
                 case GuardActivity.MonitoringArea:
@@ -414,7 +437,7 @@ namespace Behind_Bars.Systems.NPCs
 
         private void HandlePatrolLogic()
         {
-            if (!patrolInitialized || availablePatrolPoints.Count == 0) return;
+            if (!patrolInitialized || GetPatrolPointCount() == 0) return;
 
             float waitTime =
 #if MONO
@@ -431,8 +454,9 @@ namespace Behind_Bars.Systems.NPCs
 
         public void StartPatrol()
         {
-            if (availablePatrolPoints.Count == 0) return;
+            if (GetPatrolPointCount() == 0) return;
 
+            EnsureDayRoomPatrolBaton();
             currentActivity = GuardActivity.Patrolling;
             currentPatrolIndex = 0;
 
@@ -448,15 +472,289 @@ namespace Behind_Bars.Systems.NPCs
 
         private void MoveToNextPatrolPoint()
         {
-            if (availablePatrolPoints.Count == 0) return;
+            int patrolPointCount = GetPatrolPointCount();
+            if (patrolPointCount == 0) return;
 
-            var targetPoint = availablePatrolPoints[currentPatrolIndex];
-            MoveTo(targetPoint.position);
+            int targetIndex = currentPatrolIndex;
+            Vector3 targetPosition = GetPatrolPointPosition(targetIndex);
+            SetDayRoomInspectionTarget(targetPosition, targetIndex);
+            ApplyDayRoomPatrolSpeedControl();
+            MoveTo(targetPosition);
 
-            currentPatrolIndex = (currentPatrolIndex + 1) % availablePatrolPoints.Count;
+            currentPatrolIndex = (currentPatrolIndex + 1) % patrolPointCount;
             lastPatrolTime = Time.time;
 
             ModLogger.Debug($"Guard {badgeNumber} patrolling to point {currentPatrolIndex}");
+        }
+
+        public override bool MoveTo(Vector3 destination, float tolerance = -1f)
+        {
+            // BaseJailNPC's direct NavMeshAgent path is kept for every other guard role.
+            // The day-room guard must use the native NPC movement owner so its native
+            // NPCSpeedController has authority over the effective walking speed.
+            if (assignment != GuardAssignment.DayRoomPatrol || npcComponent?.Movement == null || !npcComponent.Movement.CanMove())
+            {
+                return base.MoveTo(destination, tolerance);
+            }
+
+            if (tolerance > 0)
+            {
+                positionTolerance = tolerance;
+            }
+
+            ApplyDayRoomPatrolSpeedControl();
+            currentDestination = destination;
+            hasReachedDestination = false;
+            lastDestinationTime = Time.time;
+            npcComponent.Movement.SetDestination(destination);
+            ChangeState(NPCState.Moving);
+
+            if (!dayRoomNativeMovementLogged)
+            {
+                dayRoomNativeMovementLogged = true;
+                ModLogger.Info($"Day-room guard {badgeNumber} is using native NPC movement at {DayRoomPatrolSpeed:F2} speed multiplier");
+            }
+
+            return true;
+        }
+
+        private void ConfigureDayRoomPatrolProfile()
+        {
+            if (assignment != GuardAssignment.DayRoomPatrol)
+            {
+                if (navAgent != null)
+                {
+                    navAgent.updateRotation = true;
+                }
+
+                return;
+            }
+
+            if (navAgent != null)
+            {
+                navAgent.speed = DayRoomPatrolSpeed;
+                navAgent.acceleration = Mathf.Min(navAgent.acceleration, 4f);
+                // Let the native NavMesh agent own the walking-facing direction.  Forcing
+                // the guard to face a cell while travelling made the agent walk sideways or
+                // backwards when a route segment ran parallel to the cell block.
+                navAgent.updateRotation = true;
+            }
+
+            ApplyDayRoomPatrolSpeedControl();
+
+#if MONO
+            patrolRoute.speed = DayRoomPatrolSpeed;
+            patrolRoute.waitTime = DayRoomPatrolWaitTime;
+#else
+            patrolWaitTime = DayRoomPatrolWaitTime;
+#endif
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void ApplyDayRoomPatrolSpeedControl()
+        {
+            if (assignment != GuardAssignment.DayRoomPatrol || npcComponent?.Movement?.SpeedController == null)
+            {
+                return;
+            }
+
+            try
+            {
+                // The native NPC movement system owns the NavMeshAgent's effective speed
+                // after a destination is set.  Apply a named native control rather than
+                // relying on the agent value alone, which native movement later replaces.
+                var speedController = npcComponent.Movement.SpeedController;
+                speedController.RemoveSpeedControl(DayRoomPatrolSpeedControlId);
+                speedController.AddSpeedControl(new NPCSpeedController.SpeedControl(
+                    DayRoomPatrolSpeedControlId,
+                    DayRoomPatrolSpeedPriority,
+                    DayRoomPatrolSpeed));
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"Day-room guard {badgeNumber} could not apply native patrol speed: {ex.Message}");
+            }
+        }
+
+        private void SetDayRoomInspectionTarget(Vector3 patrolPoint, int patrolIndex)
+        {
+            hasDayRoomInspectionTarget = false;
+            if (assignment != GuardAssignment.DayRoomPatrol)
+            {
+                return;
+            }
+
+            // The route builder pairs every authored circulation marker with the nearest
+            // cell interior.  Use that recorded target so a stop always faces the cell row
+            // beside that part of the patrol circuit.
+            if (patrolIndex >= 0 && patrolIndex < dayRoomInspectionTargets.Length)
+            {
+                dayRoomInspectionTarget = dayRoomInspectionTargets[patrolIndex];
+                hasDayRoomInspectionTarget = true;
+                return;
+            }
+
+            var jailController = Core.JailController;
+            if (jailController?.cells == null)
+            {
+                return;
+            }
+
+            float closestDistanceSquared = float.MaxValue;
+            foreach (var cell in jailController.cells)
+            {
+                Transform doorPoint = cell?.cellDoor?.doorPoint;
+                Transform interiorTarget = cell?.cellBounds ?? cell?.cellTransform;
+                if (doorPoint == null || interiorTarget == null)
+                {
+                    continue;
+                }
+
+                float distanceSquared = (doorPoint.position - patrolPoint).sqrMagnitude;
+                if (distanceSquared < closestDistanceSquared)
+                {
+                    closestDistanceSquared = distanceSquared;
+                    dayRoomInspectionTarget = interiorTarget.position;
+                    hasDayRoomInspectionTarget = true;
+                }
+            }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void EnsureDayRoomPatrolBaton()
+        {
+            if (assignment != GuardAssignment.DayRoomPatrol || dayRoomPatrolBatonEquipped || npcComponent == null)
+            {
+                return;
+            }
+
+            try
+            {
+                // Native NPC API only. This is the game's persistent AvatarEquippable seam;
+                // no S1API component, wrapper, or dependency is involved.
+                npcComponent.SetEquippable_Return(DayRoomPatrolBatonResourcePath);
+                dayRoomPatrolBatonEquipped = true;
+                ModLogger.Debug($"Day-room guard {badgeNumber} equipped police baton");
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"Day-room guard {badgeNumber} could not equip police baton: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Applies the native equippable state used during a jail emergency. The game's NPC
+        /// avatar exposes one active equippable slot, so the responding guard draws the Taser
+        /// while the remaining guards retain their visible police batons.
+        /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        public void EnterEmergencyLockdown(bool isPrimaryResponder)
+        {
+            StopMovement();
+            currentActivity = GuardActivity.RespondingToIncident;
+
+            try
+            {
+                npcComponent?.SetEquippable_Return(isPrimaryResponder
+                    ? "Avatar/Equippables/Taser"
+                    : "Avatar/Equippables/Baton");
+                ModLogger.Debug($"Guard {badgeNumber} entered lockdown with {(isPrimaryResponder ? "Taser" : "baton")} active");
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"Guard {badgeNumber} could not set lockdown equipment: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Marks the visible point at which the responding guard has reached and subdued the
+        /// prisoner. The lockdown manager owns the blackout and transfer immediately after it.
+        /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        public void PerformLockdownSubdual()
+        {
+            StopMovement();
+            currentActivity = GuardActivity.RespondingToIncident;
+            TrySendNPCMessage("Get down!", 1.5f);
+            ModLogger.Info($"Guard {badgeNumber} reached the prisoner and delivered the lockdown subdual");
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        public void ExitEmergencyLockdown()
+        {
+            // Each guard has a single native equippable slot. Clear the response
+            // Taser/baton before restoring its ordinary assignment so the emergency
+            // weapon never leaks into normal jail behavior.
+            ClearEmergencyEquippable();
+
+            if (assignment == GuardAssignment.DayRoomPatrol)
+            {
+                dayRoomPatrolBatonEquipped = false;
+                EnsureDayRoomPatrolBaton();
+                StartPatrol();
+                return;
+            }
+
+            currentActivity = GuardActivity.MonitoringArea;
+            StopMovement();
+            TrySendNPCMessage("Area secure.", 1.5f);
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void ClearEmergencyEquippable()
+        {
+            if (npcComponent == null)
+            {
+                return;
+            }
+
+            try
+            {
+                npcComponent.SetEquippable_Return(EmptyEquippableResourcePath);
+                ModLogger.Debug($"Guard {badgeNumber} cleared emergency equippable state");
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"Guard {badgeNumber} could not clear emergency equipment: {ex.Message}");
+            }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        public NPC GetNativeNpc()
+        {
+            return npcComponent;
+        }
+
+        private void MaintainDayRoomCellInspection()
+        {
+            if (assignment != GuardAssignment.DayRoomPatrol || !hasDayRoomInspectionTarget)
+            {
+                return;
+            }
+
+            Vector3 towardCell = dayRoomInspectionTarget - transform.position;
+            towardCell.y = 0f;
+            if (towardCell.sqrMagnitude < 0.01f)
+            {
+                return;
+            }
+
+            Quaternion desiredRotation = Quaternion.LookRotation(towardCell.normalized, Vector3.up);
+            transform.rotation = Quaternion.RotateTowards(transform.rotation, desiredRotation, DayRoomLookTurnSpeed * Time.deltaTime);
         }
 
 #if !MONO
@@ -465,14 +763,61 @@ namespace Behind_Bars.Systems.NPCs
         public void AssignPatrolRoute(Vector3[] points)
         {
 #if MONO
-            patrolRoute.points = points;
+            patrolRoute.points = points?.ToArray() ?? Array.Empty<Vector3>();
 #else
-            patrolRoutePoints = points ?? Array.Empty<Vector3>();
+            patrolRoutePoints = points?.ToArray() ?? Array.Empty<Vector3>();
 #endif
             if (currentActivity == GuardActivity.Patrolling)
             {
                 StartPatrol();
             }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        public void AssignDayRoomPatrolRoute(Vector3[] points, Vector3[] inspectionTargets)
+        {
+            dayRoomInspectionTargets = inspectionTargets?.ToArray() ?? Array.Empty<Vector3>();
+            AssignPatrolRoute(points);
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private int GetPatrolPointCount()
+        {
+#if MONO
+            if (patrolRoute?.points != null && patrolRoute.points.Length > 0)
+            {
+                return patrolRoute.points.Length;
+            }
+#else
+            if (patrolRoutePoints != null && patrolRoutePoints.Length > 0)
+            {
+                return patrolRoutePoints.Length;
+            }
+#endif
+            return availablePatrolPoints.Count;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private Vector3 GetPatrolPointPosition(int index)
+        {
+#if MONO
+            if (patrolRoute?.points != null && patrolRoute.points.Length > 0)
+            {
+                return patrolRoute.points[index % patrolRoute.points.Length];
+            }
+#else
+            if (patrolRoutePoints != null && patrolRoutePoints.Length > 0)
+            {
+                return patrolRoutePoints[index % patrolRoutePoints.Length];
+            }
+#endif
+            return availablePatrolPoints[index % availablePatrolPoints.Count].position;
         }
 
         #endregion
@@ -746,8 +1091,9 @@ namespace Behind_Bars.Systems.NPCs
 
             ModLogger.Info($"Guard {badgeNumber}: Attacked by player {attacker.name}");
 
-            // Guards have zero tolerance for being attacked
-            HandlePlayerAttack(attacker);
+            // The central manager owns lockdown state, custody transfer, and duplicate
+            // suppression. This callback can precede the health postfix on some runtimes.
+            Harmony.HarmonyPatches.TryBeginJailGuardAssault(this, attacker);
         }
 
         private void HandlePlayerAttack(Player attacker)
@@ -768,22 +1114,7 @@ namespace Behind_Bars.Systems.NPCs
             // Initiate arrest procedure
             try
             {
-                // Route the arrest through the jail manager seam.
-                var jailManager = Core.Instance?.JailManager;
-                if (jailManager != null)
-                {
-                    // Trigger immediate arrest for assault
-                    ModLogger.Info($"Guard {badgeNumber}: Initiating immediate arrest for assault by {attacker.name}");
-
-                    // Use the immediate arrest system
-                    MelonCoroutines.Start(jailManager.HandleImmediateArrest(attacker));
-
-                    ModLogger.Info($"Guard {badgeNumber}: Player {attacker.name} arrested for assault on officer");
-                }
-                else
-                {
-                    ModLogger.Error($"Guard {badgeNumber}: Could not access jail manager for arrest");
-                }
+                Harmony.HarmonyPatches.TryBeginJailGuardAssault(this, attacker);
 
                 // If intake officer, interrupt intake process
                 if (role == GuardRole.IntakeOfficer && intakeStateMachine != null)

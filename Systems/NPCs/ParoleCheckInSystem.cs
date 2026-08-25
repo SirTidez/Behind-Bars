@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
+using Behind_Bars.Systems.CrimeDetection;
 using Behind_Bars.Systems.CrimeTracking;
 using Behind_Bars.Systems.Dialogue;
 using Behind_Bars.Systems.Parole;
@@ -57,6 +58,7 @@ namespace Behind_Bars.Systems.NPCs
 
         private Player currentCheckInParolee;
         private bool isProcessingCheckIn = false;
+        private bool checkInArrestInitiated;
         private Dictionary<Player, float> lastCheckInTimes = new Dictionary<Player, float>();
 
         #endregion
@@ -178,10 +180,11 @@ namespace Behind_Bars.Systems.NPCs
             var builder = new DialogueContainerBuilder();
             builder.AddNode("ENTRY", "Do you need to report for your parole check-in?", choices =>
             {
-                choices.Add(CHECK_IN_CHOICE_LABEL, "Yes, I am here to check in.", "end");
-                choices.Add("checkin_later", "Not right now.", "end");
+                choices.Add(CHECK_IN_CHOICE_LABEL, "Yes, I am here to check in.", "checkin_processing");
+                choices.Add("checkin_later", "Not right now.", "checkin_later_node");
             });
-            builder.AddNode("end", string.Empty, null);
+            builder.AddNode("checkin_processing", "Understood. I am reviewing your parole record now.", null);
+            builder.AddNode("checkin_later_node", "Return during your assigned check-in window when you are ready to report.", null);
             builder.SetAllowExit(true);
 
             var container = builder.Build(CHECK_IN_DIALOGUE_CONTAINER_NAME);
@@ -243,6 +246,7 @@ namespace Behind_Bars.Systems.NPCs
             {
                 var baseNpcBusy = GetComponent<BaseJailNPC>();
                 baseNpcBusy?.TrySendNPCMessage("I am processing intake right now. Come back in a moment.", 3f);
+                dialogueWrapper?.End();
                 EnsureContainerOnInteract();
                 return;
             }
@@ -255,12 +259,6 @@ namespace Behind_Bars.Systems.NPCs
                 EnsureContainerOnInteract();
                 return;
             }
-
-            try
-            {
-                dialogueWrapper?.End();
-            }
-            catch { }
 
             InitiateCheckIn(parolee);
         }
@@ -406,6 +404,7 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private IEnumerator ProcessCheckIn(Player parolee)
         {
+            checkInArrestInitiated = false;
             if (dialogueController == null)
             {
                 dialogueController = BBHelpers.GetComponentSafe<JailNPCDialogueController>(gameObject);
@@ -492,6 +491,16 @@ namespace Behind_Bars.Systems.NPCs
 
                 yield return new WaitForSeconds(CHECK_IN_PROCESSING_TIME);
 
+                // A scheduled check-in is a routine compliance event, not just a record
+                // review. Inspect the player's carried inventory before marking the visit
+                // complete; weapons are only classified as contraband in this parole path.
+                yield return ProcessRoutinePocketSearch(parolee);
+                if (checkInArrestInitiated)
+                {
+                    AbortCheckInForArrest(parolee);
+                    yield break;
+                }
+
                 // Drug test phase (if condition is active)
                 yield return ProcessDrugTest(parolee, rapSheet, paroleRecord);
 
@@ -532,12 +541,78 @@ namespace Behind_Bars.Systems.NPCs
                 dialogueController.UpdateGreetingForState("Idle");
             }
 
+            try
+            {
+                dialogueWrapper?.End();
+            }
+            catch { }
+
             // Return to entrance position if stationary
             if (stationaryBehavior != null)
             {
                 stationaryBehavior.ReturnToPosition();
             }
 
+            EnsureContainerOnInteract();
+        }
+
+        private IEnumerator ProcessRoutinePocketSearch(Player parolee)
+        {
+            if (parolee == null || paroleOfficer == null)
+            {
+                yield break;
+            }
+
+            dialogueController?.UpdateGreetingForState("CheckInReviewing");
+            paroleOfficer.UpdateSearchNotification("Routine pocket search - remain still");
+            paroleOfficer.TrySendNPCMessage("Before I clear this check-in, I need to search your pockets. Remain still.", 4f);
+            yield return new WaitForSeconds(1.25f);
+
+            var crimeDetectionSystem = CrimeDetectionSystem.Instance;
+            if (crimeDetectionSystem == null)
+            {
+                ModLogger.Warn("ParoleCheckInSystem: Skipped pocket search because CrimeDetectionSystem was unavailable");
+                yield break;
+            }
+
+            var detectedCrimes = new ContrabandDetectionSystem(crimeDetectionSystem).PerformContrabandSearch(
+                parolee,
+                ContrabandSearchContext.Parole);
+
+            if (detectedCrimes != null && detectedCrimes.Count > 0)
+            {
+                checkInArrestInitiated = ParoleSearchSystem.Instance.ProcessDetectedParoleContraband(
+                    paroleOfficer,
+                    parolee,
+                    detectedCrimes,
+                    "scheduled parole check-in pocket search");
+                paroleOfficer.ShowSearchResults(true, detectedCrimes.Count);
+                yield break;
+            }
+
+            paroleOfficer.ShowSearchResults(false);
+            paroleOfficer.TrySendNPCMessage("Pocket search is clear. Continuing your check-in.", 3f);
+            yield return new WaitForSeconds(1f);
+        }
+
+        private void AbortCheckInForArrest(Player parolee)
+        {
+            ModLogger.Info($"ParoleCheckInSystem: Ended check-in for {parolee?.name ?? "unknown parolee"} because a compliance search initiated custody");
+
+            isProcessingCheckIn = false;
+            currentCheckInParolee = null;
+            if (parolee != null)
+            {
+                EndCheckInSession(parolee);
+            }
+
+            try
+            {
+                dialogueWrapper?.End();
+            }
+            catch { }
+
+            stationaryBehavior?.ReturnToPosition();
             EnsureContainerOnInteract();
         }
 

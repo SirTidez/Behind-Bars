@@ -36,6 +36,7 @@ namespace Behind_Bars.UI
 
         private bool _isInitialized = false;
         private Coroutine _fadeCoroutine;
+        private Coroutine _canvasInitializationCoroutine;
 
         public void Start()
         {
@@ -60,7 +61,10 @@ namespace Behind_Bars.UI
                 if (hudCanvas == null)
                 {
                     ModLogger.Warn("OfficerCommandUI: Player HUD Canvas not found on first attempt, waiting...");
-                    MelonLoader.MelonCoroutines.Start(WaitForCanvasAndCreate());
+                    if (_canvasInitializationCoroutine == null)
+                    {
+                        _canvasInitializationCoroutine = MelonLoader.MelonCoroutines.Start(WaitForCanvasAndCreate()) as Coroutine;
+                    }
                     return;
                 }
 
@@ -250,6 +254,7 @@ namespace Behind_Bars.UI
                 if (hudCanvas != null)
                 {
                     ModLogger.Info($"OfficerCommandUI: Player HUD Canvas found after {attempts + 1} attempts");
+                    _canvasInitializationCoroutine = null;
                     CreateUIWithCanvas(hudCanvas);
                     yield break;
                 }
@@ -258,6 +263,7 @@ namespace Behind_Bars.UI
             }
 
             ModLogger.Error($"OfficerCommandUI: Could not find Player HUD Canvas after {maxAttempts} attempts");
+            _canvasInitializationCoroutine = null;
         }
 
         /// <summary>
@@ -383,7 +389,40 @@ namespace Behind_Bars.UI
         /// </summary>
         public bool IsVisible()
         {
-            return _isInitialized && _commandPanel != null && _commandPanel.activeSelf && _canvasGroup.alpha > 0;
+            return _isInitialized && _commandPanel != null && _canvasGroup != null && _commandPanel.activeSelf && _canvasGroup.alpha > 0;
+        }
+
+        /// <summary>
+        /// Stops the UI's scene-bound routines before the HUD canvas is unloaded.
+        /// The component itself may persist between scenes, but its panel is owned by the current HUD.
+        /// </summary>
+        public void CancelForSceneExit()
+        {
+            if (_fadeCoroutine != null)
+            {
+                MelonLoader.MelonCoroutines.Stop(_fadeCoroutine);
+                _fadeCoroutine = null;
+            }
+
+            if (_canvasInitializationCoroutine != null)
+            {
+                MelonLoader.MelonCoroutines.Stop(_canvasInitializationCoroutine);
+                _canvasInitializationCoroutine = null;
+            }
+
+            if (_commandPanel != null)
+            {
+                _commandPanel.SetActive(false);
+            }
+
+            _commandPanel = null;
+            _backgroundImage = null;
+            _officerTypeText = null;
+            _commandText = null;
+            _progressText = null;
+            _escortIndicator = null;
+            _canvasGroup = null;
+            _isInitialized = false;
         }
 
         /// <summary>
@@ -391,17 +430,33 @@ namespace Behind_Bars.UI
         /// </summary>
         private IEnumerator FadeIn()
         {
+            if (!Core.IsGameplaySceneActive || _canvasGroup == null || _commandPanel == null)
+            {
+                yield break;
+            }
+
             float fadeTime = 0.3f;
             float elapsed = 0f;
 
             while (elapsed < fadeTime)
             {
+                if (!Core.IsGameplaySceneActive || _canvasGroup == null || _commandPanel == null)
+                {
+                    yield break;
+                }
+
                 elapsed += Time.deltaTime;
                 _canvasGroup.alpha = Mathf.Lerp(0f, 1f, elapsed / fadeTime);
                 yield return null;
             }
 
+            if (_canvasGroup == null)
+            {
+                yield break;
+            }
+
             _canvasGroup.alpha = 1f;
+            _fadeCoroutine = null;
         }
 
         /// <summary>
@@ -409,19 +464,40 @@ namespace Behind_Bars.UI
         /// </summary>
         private IEnumerator FadeOut()
         {
+            if (!Core.IsGameplaySceneActive || _canvasGroup == null || _commandPanel == null)
+            {
+                yield break;
+            }
+
             float fadeTime = 0.5f;
             float elapsed = 0f;
             float startAlpha = _canvasGroup.alpha;
 
             while (elapsed < fadeTime)
             {
+                if (!Core.IsGameplaySceneActive || _canvasGroup == null || _commandPanel == null)
+                {
+                    yield break;
+                }
+
                 elapsed += Time.deltaTime;
                 _canvasGroup.alpha = Mathf.Lerp(startAlpha, 0f, elapsed / fadeTime);
                 yield return null;
             }
 
+            if (_canvasGroup == null || _commandPanel == null)
+            {
+                yield break;
+            }
+
             _canvasGroup.alpha = 0f;
             _commandPanel.SetActive(false);
+            _fadeCoroutine = null;
+        }
+
+        private void OnDestroy()
+        {
+            CancelForSceneExit();
         }
     }
 }

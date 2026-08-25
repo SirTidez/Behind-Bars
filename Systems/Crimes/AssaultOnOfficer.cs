@@ -7,13 +7,16 @@ using ScheduleOne.Law;
 
 namespace Behind_Bars.Systems.Crimes
 {
+    /// <summary>
+    /// A persistent Behind Bars charge for assaulting a law-enforcement officer.
+    /// </summary>
     [Serializable]
-    public class Manslaughter : Crime
+    public class AssaultOnOfficer : Crime
     {
         public override string CrimeName
         {
             get;
             set;
-        } = "Involuntary Manslaughter";
+        } = "Assault on an LEO";
     }
 }

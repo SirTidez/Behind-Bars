@@ -135,9 +135,9 @@ namespace Behind_Bars.Systems.Jail
         
         private void OnExit(ExitAction action)
         {
-            if (!action.Used && inScannerView && action.exitType == ExitType.Escape)
+            if (!action.Used && inScannerView && action.Type == ExitType.Primary)
             {
-                action.Used = true;
+                action.Use();
                 EndScannerView();
             }
         }

@@ -1,4 +1,6 @@
+using System;
 using System.Collections;
+using System.Collections.Generic;
 using Behind_Bars.Helpers;
 using Behind_Bars.UI;
 using Behind_Bars.Harmony;
@@ -33,6 +35,20 @@ namespace Behind_Bars.Systems
     {
         private const float MIN_JAIL_TIME = Constants.DEFAULT_MIN_JAIL_TIME;
         private const float MAX_JAIL_TIME = Constants.DEFAULT_MAX_JAIL_TIME;
+        private const float PendingParoleArrestCauseLifetimeSeconds = 120f;
+
+        // Native arrest callbacks can run before the saved RapSheet violation collection
+        // reflects a search result. This runtime-only state carries the already-known
+        // custody cause across that narrow boundary. It is keyed by stable player ID and
+        // explicitly cleared on scene shutdown.
+        private sealed class PendingParoleArrestCause
+        {
+            public ViolationType ViolationType;
+            public DateTime ExpiresAtUtc;
+        }
+
+        private readonly Dictionary<string, PendingParoleArrestCause> pendingParoleArrestCauses =
+            new Dictionary<string, PendingParoleArrestCause>();
 
         public enum JailSeverity
         {
@@ -56,7 +72,7 @@ namespace Behind_Bars.Systems
         /// </summary>
         public IEnumerator HandleImmediateArrest(Player player)
         {
-            if (player == null)
+            if (player == null || !Core.IsGameplaySceneActive)
             {
                 yield break;
             }
@@ -115,9 +131,8 @@ namespace Behind_Bars.Systems
                 ModLogger.Error($"[CRIME SYNC] Error syncing crimes: {ex.Message}");
             }*/
             
-            // CRITICAL: DO NOT clear crimes here - they need to be logged to RapSheet first
-            // Crimes will be cleared AFTER they've been logged and used for sentence calculation
-            // The clearing happens in LogCrimesToRapSheet after crimes are saved
+            // Capture native crimes before clearing them. The Harmony rap-sheet path merges
+            // this stable arrest snapshot with enhanced crimes and deduplicates the event.
             try
             {
                 ModLogger.Info($"[RAP SHEET] Logging arrest to rap sheet for {player.name}");
@@ -146,10 +161,9 @@ namespace Behind_Bars.Systems
                 {
                     ModLogger.Warn($"[RAP SHEET] [DEBUG] CrimeData is NULL!");
                 }
-                //TODO: Added clearing player crimes
+                var nativeCrimeSnapshots = Behind_Bars.Harmony.HarmonyPatches.CaptureNativeCrimesForArrest(player);
+                Behind_Bars.Harmony.HarmonyPatches.LogCrimesToRapSheet(player, nativeCrimeSnapshots);
                 player.CrimeData.ClearCrimes();
-                
-                Behind_Bars.Harmony.HarmonyPatches.LogCrimesToRapSheet(player);
                 CrimeDetectionSystem.Instance.CrimeRecord.ClearWantedLevel();
             }
             catch (Exception ex)
@@ -171,6 +185,10 @@ namespace Behind_Bars.Systems
 
             // Show "Busted" effect like the original game
             yield return ShowBustedEffect();
+            if (!Core.IsGameplaySceneActive)
+            {
+                yield break;
+            }
             
             // Restore UI interactions so player can interact during booking process
             Behind_Bars.Harmony.HarmonyPatches.RestoreUIInteractions();
@@ -623,6 +641,10 @@ namespace Behind_Bars.Systems
                 // Wait for the check interval or remaining time, whichever is shorter
                 float timeToWait = Mathf.Min(checkInterval, waitTime - elapsed);
                 yield return new WaitForSeconds(timeToWait);
+                if (!Core.IsGameplaySceneActive)
+                {
+                    yield break;
+                }
                 elapsed += timeToWait;
 
                 // Ensure controls are still enabled
@@ -715,11 +737,21 @@ namespace Behind_Bars.Systems
                 ModLogger.Info($"[BAIL] Updated jail status UI bail amount to ${bailAmount:F0}");
             }
 
-            // Show bail UI if player can afford it
-            if (bailAmount > 0 && bailSystem != null && bailSystem.CanPlayerAffordBail(player, bailAmount))
+            // Bail cannot begin until the intake officer has returned to post.  This keeps a
+            // fast bailout from assigning the release officer while intake still owns the cell
+            // handoff and door state.
+            bool bailReleaseReady = jailManager?.IsBailReleaseReady(player) == true;
+
+            // Show bail UI only when the release path is ready and the player can afford it.
+            if (bailAmount > 0 && bailReleaseReady && bailSystem != null && bailSystem.CanPlayerAffordBail(player, bailAmount))
             {
                 Core.ResolveUIManager().ShowBailUI(bailAmount);
                 ModLogger.Info($"[BAIL] Showing bail UI for {player.name}: ${bailAmount:F0}");
+            }
+            else if (bailAmount > 0 && !bailReleaseReady)
+            {
+                Core.ResolveUIManager().HideBailUI();
+                ModLogger.Info($"[BAIL] Bail controls are deferred for {player.name} until the intake officer returns to post");
             }
             else if (bailAmount > 0)
             {
@@ -738,6 +770,10 @@ namespace Behind_Bars.Systems
             while (!sentenceComplete && !bailPaid)
             {
                 yield return new WaitForSeconds(checkInterval);
+                if (!Core.IsGameplaySceneActive)
+                {
+                    yield break;
+                }
 
                 if (jailManager != null ? jailManager.HasPendingReleaseType(player) : HasPendingReleaseType(player))
                 {
@@ -767,7 +803,12 @@ namespace Behind_Bars.Systems
                     ModLogger.Info($"[BAIL DEBUG] Key {Core.BailoutKey} pressed! bailAmount: {bailAmount}, bailSystem: {(bailSystem != null ? "available" : "null")}");
                 }
                 
-                if (bailAmount > 0 && bailKeyJustPressed && bailSystem != null)
+                bailReleaseReady = jailManager?.IsBailReleaseReady(player) == true;
+                if (bailAmount > 0 && bailKeyJustPressed && !bailReleaseReady)
+                {
+                    ModLogger.Debug($"[BAIL] Ignoring bailout key for {player.name}; intake officer has not returned to post");
+                }
+                else if (bailAmount > 0 && bailKeyJustPressed && bailSystem != null)
                 {
                     if (bailSystem.CanPlayerAffordBail(player, bailAmount))
                     {
@@ -823,17 +864,18 @@ namespace Behind_Bars.Systems
                     
                     if (bailAmount > 0 && bailSystem != null)
                     {
+                        bailReleaseReady = jailManager?.IsBailReleaseReady(player) == true;
                         bool canAfford = bailSystem.CanPlayerAffordBail(player, bailAmount);
                         bool uiVisible = Core.ResolveUIManager().IsBailUIVisible();
                         
-                        if (canAfford && !uiVisible)
+                        if (bailReleaseReady && canAfford && !uiVisible)
                         {
-                            // Player gained enough cash - show UI
+                            // Player gained enough cash after intake finished - show UI.
                             Core.ResolveUIManager().ShowBailUI(bailAmount);
                         }
-                        else if (!canAfford && uiVisible)
+                        else if ((!bailReleaseReady || !canAfford) && uiVisible)
                         {
-                            // Player lost cash - hide UI
+                            // Bail must disappear again if release readiness is lost or cash is unavailable.
                             Core.ResolveUIManager().HideBailUI();
                         }
                     }
@@ -964,6 +1006,8 @@ namespace Behind_Bars.Systems
 
             // Teleport player to holding cell
             player.transform.position = spawnPoint.position;
+            player.transform.rotation = Quaternion.LookRotation(Vector3.left, Vector3.up);
+            ModLogger.Debug($"Placed {player.name} in holding cell facing west for intake");
 
             // Lock the holding cell door
             holdingCell.cellDoor.LockDoor();
@@ -979,12 +1023,21 @@ namespace Behind_Bars.Systems
 
             // NEW: Start booking process instead of just waiting
             yield return StartBookingProcess(player, sentence, holdingCell);
+            if (!Core.IsGameplaySceneActive)
+            {
+                yield break;
+            }
 
             ModLogger.Info($"Player {player.name} has completed booking process");
 
             // Start actual jail time AFTER booking completion (using game time tracking)
             ModLogger.Info($"Booking complete - now starting full jail sentence of {sentence.JailTime} game minutes");
             yield return WaitForJailSentence(sentence.JailTime, player);
+
+            if (!Core.IsGameplaySceneActive || player == null)
+            {
+                yield break;
+            }
 
             // Release from holding cell
             holdingCell.ReleasePlayerFromSpawnPoint(player);
@@ -1035,6 +1088,10 @@ namespace Behind_Bars.Systems
 
             // First, put them in holding cell for "processing"
             yield return SendPlayerToHoldingCellForProcessing(player, sentence);
+            if (!Core.IsGameplaySceneActive)
+            {
+                yield break;
+            }
 
             // Then move to main jail cell
             //yield return TransferToMainJailCell(player, sentence);
@@ -1074,6 +1131,8 @@ namespace Behind_Bars.Systems
 
             // Teleport to holding cell
             player.transform.position = spawnPoint.position;
+            player.transform.rotation = Quaternion.LookRotation(Vector3.left, Vector3.up);
+            ModLogger.Debug($"Placed {player.name} in holding cell facing west for intake");
             holdingCell.cellDoor.LockDoor();
             holdingCell.cellDoor.CloseDoor();
 
@@ -1135,6 +1194,10 @@ namespace Behind_Bars.Systems
                         // Start tracking full sentence (processing time was separate)
                         ModLogger.Info($"Starting jail sentence tracking in holding cell: {sentence.JailTime} game minutes ({GameTimeManager.FormatGameTime(sentence.JailTime)})");
                         yield return WaitForJailSentence(sentence.JailTime, player);
+                        if (!Core.IsGameplaySceneActive || player == null)
+                        {
+                            yield break;
+                        }
                         holdingCell.ReleasePlayerFromSpawnPoint(player);
                         holdingCell.cellDoor.UnlockDoor();
                         // Use enhanced release system for time served
@@ -1162,6 +1225,11 @@ namespace Behind_Bars.Systems
 
             // Wait for full sentence time (processing time was separate, already waited)
             yield return WaitForJailSentence(sentence.JailTime, player);
+
+            if (!Core.IsGameplaySceneActive || player == null)
+            {
+                yield break;
+            }
 
             ModLogger.Info($"Player {player.name} has served their main cell time");
 
@@ -1216,6 +1284,11 @@ namespace Behind_Bars.Systems
             ModLogger.Info($"Player {player.name} using fallback jail method (screen blackout) for {sentence.JailTime}s");
 
             yield return WaitForJailSentence(sentence.JailTime, player);
+
+            if (!Core.IsGameplaySceneActive || player == null)
+            {
+                yield break;
+            }
 
             ModLogger.Info($"Player {player.name} has served their jail time (fallback method)");
             var jailManager = Core.Instance?.JailManager;
@@ -1349,6 +1422,11 @@ namespace Behind_Bars.Systems
 
             // Wait for the jail time with control maintenance
             yield return WaitForJailSentence(sentence.JailTime, player);
+
+            if (!Core.IsGameplaySceneActive || player == null)
+            {
+                yield break;
+            }
 
             // After jail time completes, safely trigger release (checks for existing releases)
             var activeJailManager = Core.Instance?.JailManager;
@@ -1670,12 +1748,77 @@ namespace Behind_Bars.Systems
         }
 
         /// <summary>
+        /// Refresh the active jail sidebar after a custody-only charge is added. The
+        /// booking UI is otherwise intentionally static, which left the visible
+        /// charge and bail amount stale after an in-jail assault penalty.
+        /// </summary>
+        public void RefreshCustodyChargeDisplay(Player player)
+        {
+            if (player == null)
+            {
+                return;
+            }
+
+            try
+            {
+                JailSeverity severity = DetermineSeverityFromCrimeData(player.CrimeData);
+                string crimeInfo = GetCrimeDescription(severity, player);
+                float fineAmount = CalculateTotalCrimeFines(player);
+                var bailSystem = Core.ResolveBailSystem();
+                float bailAmount = bailSystem != null
+                    ? bailSystem.CalculateBailAmount(player, fineAmount).Amount
+                    : CalculateBailAmount(fineAmount, severity);
+
+                bailSystem?.StoreBailAmount(player, bailAmount);
+
+                var uiWrapper = Core.ResolveUIManager().GetUIWrapper();
+                if (uiWrapper != null)
+                {
+                    uiWrapper.SetCrimeInfo(crimeInfo);
+                    uiWrapper.UpdateBailAmount(bailAmount);
+
+                    var timeTracker = Core.ResolveJailTimeTracker();
+                    if (timeTracker.IsTracking(player))
+                    {
+                        uiWrapper.SetTimeInfo(timeTracker.GetFormattedRemainingTime(player));
+                    }
+                }
+
+                ModLogger.Info($"[LOCKDOWN] Refreshed custody charge sidebar: Crime={crimeInfo}; Bail=${bailAmount:F0}");
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"[LOCKDOWN] Could not refresh custody charge sidebar: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// Get a user-friendly description of the crimes committed
         /// ENHANCED: Now includes crimes from our enhanced detection system
         /// </summary>
         private string GetCrimeDescription(JailSeverity severity, Player player)
         {
-            var allCrimes = new System.Collections.Generic.List<string>();
+            // A street officer assault is represented in both the mod record and
+            // the native mirror. Merge by display name and retain the larger count,
+            // rather than showing the same event twice in the booking sidebar.
+            var crimeCounts = new System.Collections.Generic.Dictionary<string, int>();
+
+            void MergeCount(string crimeName, int count)
+            {
+                if (string.IsNullOrWhiteSpace(crimeName) || count <= 0)
+                {
+                    return;
+                }
+
+                if (crimeCounts.TryGetValue(crimeName, out int currentCount))
+                {
+                    crimeCounts[crimeName] = Mathf.Max(currentCount, count);
+                }
+                else
+                {
+                    crimeCounts[crimeName] = count;
+                }
+            }
 
             // First, get crimes from our enhanced crime detection system
             var crimeDetectionSystem = HarmonyPatches.GetCrimeDetectionSystem();
@@ -1684,13 +1827,7 @@ namespace Behind_Bars.Systems
                 var crimeSummary = crimeDetectionSystem.GetCrimeSummary();
                 foreach (var crimeEntry in crimeSummary)
                 {
-                    string crimeName = crimeEntry.Key;
-                    int count = crimeEntry.Value;
-
-                    if (count > 1)
-                        allCrimes.Add($"{crimeName} ({count}x)");
-                    else
-                        allCrimes.Add(crimeName);
+                    MergeCount(crimeEntry.Key, crimeEntry.Value);
                 }
             }
 
@@ -1703,15 +1840,27 @@ namespace Behind_Bars.Systems
                     int count = crimeEntry.Value;
                     string crimeName = GetFriendlyCrimeName(crime.GetType().Name);
 
-                    if (count > 1)
-                        allCrimes.Add($"{crimeName} ({count}x)");
-                    else
-                        allCrimes.Add(crimeName);
+                    MergeCount(crimeName, count);
                 }
             }
 
-            if (allCrimes.Count > 0)
-                return string.Join(", ", allCrimes.ToArray());
+            // A parole search can be the sole arrest source and deliberately does not
+            // create a normal street wanted crime. Surface the freshly recorded violation
+            // here so the custody UI names the actual reason for this arrest rather than
+            // falling back to the generic severity label (for example, "Minor Infractions").
+            string paroleViolationName = GetCurrentArrestParoleViolationName(player);
+            if (!string.IsNullOrEmpty(paroleViolationName))
+            {
+                MergeCount(paroleViolationName, 1);
+            }
+
+            if (crimeCounts.Count > 0)
+            {
+                return string.Join(", ", crimeCounts
+                    .OrderBy(entry => entry.Key, StringComparer.Ordinal)
+                    .Select(entry => entry.Value > 1 ? $"{entry.Key} ({entry.Value}x)" : entry.Key)
+                    .ToArray());
+            }
 
             // Fallback to severity-based descriptions
             switch (severity)
@@ -1722,6 +1871,104 @@ namespace Behind_Bars.Systems
                 case JailSeverity.Severe: return "Major Criminal Activity";
                 default: return "Unknown Charges";
             }
+        }
+
+        private string GetCurrentArrestParoleViolationName(Player player)
+        {
+            try
+            {
+                if (TryGetPendingParoleArrestCause(player, out var pendingCause))
+                {
+                    return GetParoleViolationDisplayName(pendingCause);
+                }
+
+                var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
+                var paroleRecord = rapSheet?.CurrentParoleRecord;
+                if (paroleRecord == null)
+                {
+                    return string.Empty;
+                }
+
+                var violation = paroleRecord.GetViolations()
+                    ?.Where(candidate => candidate != null && candidate.ViolationTime >= DateTime.Now.AddMinutes(-2))
+                    .OrderByDescending(candidate => candidate.ViolationTime)
+                    .FirstOrDefault();
+
+                return violation == null ? string.Empty : GetParoleViolationDisplayName(violation.ViolationType);
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"Unable to resolve current parole violation for custody UI: {ex.Message}");
+                return string.Empty;
+            }
+        }
+
+        internal void RegisterPendingParoleArrestCause(Player player, ViolationType violationType)
+        {
+            if (player == null)
+            {
+                return;
+            }
+
+            string playerKey = Core.ResolvePlayerKey(player);
+            if (string.IsNullOrWhiteSpace(playerKey))
+            {
+                return;
+            }
+
+            pendingParoleArrestCauses[playerKey] = new PendingParoleArrestCause
+            {
+                ViolationType = violationType,
+                ExpiresAtUtc = DateTime.UtcNow.AddSeconds(PendingParoleArrestCauseLifetimeSeconds)
+            };
+
+            ModLogger.Info($"[PAROLE VIOLATION] Registered pending custody cause '{GetParoleViolationDisplayName(violationType)}' for {player.name}");
+        }
+
+        internal void ClearSceneTransientParoleArrestCauses()
+        {
+            pendingParoleArrestCauses.Clear();
+        }
+
+        private bool TryGetPendingParoleArrestCause(Player player, out ViolationType violationType)
+        {
+            violationType = ViolationType.Other;
+            if (player == null)
+            {
+                return false;
+            }
+
+            string playerKey = Core.ResolvePlayerKey(player);
+            if (string.IsNullOrWhiteSpace(playerKey) ||
+                !pendingParoleArrestCauses.TryGetValue(playerKey, out var pendingCause))
+            {
+                return false;
+            }
+
+            if (pendingCause == null || pendingCause.ExpiresAtUtc < DateTime.UtcNow)
+            {
+                pendingParoleArrestCauses.Remove(playerKey);
+                return false;
+            }
+
+            violationType = pendingCause.ViolationType;
+            return true;
+        }
+
+        private static string GetParoleViolationDisplayName(ViolationType violationType)
+        {
+            return violationType switch
+            {
+                ViolationType.IllegalWeaponPossession => "Parole Violation - Illegal Weapon",
+                ViolationType.ContrabandPossession => "Parole Violation - Contraband Possession",
+                ViolationType.MissedCheckIn => "Parole Violation - Missed Check-In",
+                ViolationType.NewCrime => "Parole Violation - New Crime",
+                ViolationType.RestrictedAreaViolation => "Parole Violation - Restricted Area",
+                ViolationType.CurfewViolation => "Parole Violation - Curfew Violation",
+                ViolationType.ContactWithKnownCriminals => "Parole Violation - Contact with Known Criminals",
+                ViolationType.Other => "Parole Violation",
+                _ => string.Empty
+            };
         }
 
         /// <summary>
@@ -1758,6 +2005,7 @@ namespace Behind_Bars.Systems
                 case "Murder": return "Murder";
                 case "Manslaughter": return "Involuntary Manslaughter";
                 case "AssaultOnCivilian": return "Assault on Civilian";
+                case "AssaultOnOfficer": return "Assault on an LEO";
                 case "WitnessIntimidation": return "Witness Intimidation";
 
                 // Drug possession crimes
@@ -1915,6 +2163,29 @@ namespace Behind_Bars.Systems
                 // Check if player is currently on parole
                 if (rapSheet.CurrentParoleRecord != null && rapSheet.CurrentParoleRecord.IsOnParole())
                 {
+                    if (TryGetPendingParoleArrestCause(player, out var pendingCause))
+                    {
+                        ModLogger.Info($"[PAROLE VIOLATION] Preserving pending search cause '{GetParoleViolationDisplayName(pendingCause)}' for {player.name}; generic NewCrime record skipped");
+                        return;
+                    }
+
+                    // A parole search can already have recorded a specific violation
+                    // (for example, illegal weapon possession) immediately before it
+                    // invokes the arrest path. Do not overwrite that cause with a second,
+                    // generic NewCrime violation during the same incident.
+                    bool hasFreshSpecificViolation = rapSheet.CurrentParoleRecord
+                        .GetViolations()
+                        ?.Any(violation =>
+                            violation != null &&
+                            violation.ViolationType != ViolationType.NewCrime &&
+                            violation.ViolationTime >= DateTime.Now.AddSeconds(-30)) == true;
+
+                    if (hasFreshSpecificViolation)
+                    {
+                        ModLogger.Info($"[PAROLE VIOLATION] Preserving freshly recorded specific violation for {player.name}; generic NewCrime record skipped");
+                        return;
+                    }
+
                     ModLogger.Info($"[PAROLE VIOLATION] Player {player.name} was on parole at time of arrest - recording violation");
 
                     // Create violation record for being arrested while on parole

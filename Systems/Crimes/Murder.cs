@@ -10,7 +10,11 @@ namespace Behind_Bars.Systems.Crimes
     [Serializable]
     public class Murder : Crime
     {
-        public override string CrimeName { get; set; } = "Murder";
+        public override string CrimeName
+        {
+            get;
+            set;
+        } = "Murder";
         
         public string VictimType { get; set; } = "Civilian";
         

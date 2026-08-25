@@ -205,6 +205,15 @@ namespace Behind_Bars.Systems
             BehindBarsUIManager.Instance.DestroyJailInfoUI();
         }
 
+        /// <summary>
+        /// Releases scene-owned UI callbacks while retaining the manager service for the next Main scene.
+        /// </summary>
+        public void ShutdownSceneUI()
+        {
+            BehindBarsUIManager.Instance.ShutdownSceneUI();
+            _isInitialized = false;
+        }
+
         public void UpdateOfficerCommand(OfficerCommandData data)
         {
             if (!_isInitialized)

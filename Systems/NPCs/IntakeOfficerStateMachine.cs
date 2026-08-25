@@ -81,6 +81,13 @@ namespace Behind_Bars.Systems.NPCs
         private Transform guardPostTransform;
         private int assignedCellNumber = -1;
         private int currentHoldingCellIndex = -1;  // Which holding cell contains the current prisoner
+        private string currentHoldingCellName = "";
+        private Player requiredHoldingCellPrisoner;
+        private string requiredHoldingCellName = "";
+        private bool resumingDisciplinaryIntake;
+        // A punishment-cell repeat starts on the booking side of the inner corridor door.
+        // A direct cell escort must therefore traverse that door before the prison-entry door.
+        private bool requiresBookingInnerDoorBeforeCellEscort;
 
         // State tracking to prevent spam
         private bool playerExitDetected = false;
@@ -89,6 +96,8 @@ namespace Behind_Bars.Systems.NPCs
         // Timing variables
         private new float stateStartTime;
         private float delayDuration;
+        private float nextCellAssignmentRetryTime;
+        private const float CellAssignmentRetryInterval = 2f;
 
         // Station definitions
         private Dictionary<string, IntakeStation> intakeStations;
@@ -101,6 +110,11 @@ namespace Behind_Bars.Systems.NPCs
 
         // Continuous rotation system
         private object continuousLookingCoroutine;
+        private object playerFacingCommandCoroutine;
+        private object mugshotEscortCoroutine;
+        private object delayedDoorCloseCoroutine;
+        private object delayedNavigationResumeCoroutine;
+        private object retryIntakeCoroutine;
 
         // Destination tracking to prevent duplicate events
         private Dictionary<string, bool> stationDestinationProcessed = new Dictionary<string, bool>();
@@ -186,21 +200,21 @@ namespace Behind_Bars.Systems.NPCs
                 {
                     stationName = "MugshotStation",
                     doorPointName = "MugshotStation",
-                    guardMessage = "Go take your mugshot!",
+                    guardMessage = "Walk over and take your mugshot.",
                     messageDuration = 3f
                 },
                 ["ScannerStation"] = new IntakeStation
                 {
                     stationName = "ScannerStation",
                     doorPointName = "ScannerStation",
-                    guardMessage = "Scan in.",
+                    guardMessage = "Now come here and let us take your fingerprints.",
                     messageDuration = 2f
                 },
                 ["Storage"] = new IntakeStation
                 {
                     stationName = "Storage",
                     doorPointName = "Storage",
-                    guardMessage = "Follow me to storage.",
+                    guardMessage = "Walk over to storage and collect your prison gear.",
                     messageDuration = 3f
                 }
             };
@@ -238,8 +252,8 @@ namespace Behind_Bars.Systems.NPCs
             var securityDoor = GetSecurityDoor();
             if (securityDoor != null)
             {
-                securityDoor.OnDoorOperationComplete += HandleSecurityDoorOperationComplete;
-                securityDoor.OnDoorOperationFailed += HandleSecurityDoorOperationFailed;
+                securityDoor.AddDoorOperationCompleteListener(HandleSecurityDoorOperationComplete);
+                securityDoor.AddDoorOperationFailedListener(HandleSecurityDoorOperationFailed);
                 ModLogger.Info("IntakeOfficer: Subscribed to SecurityDoor events");
             }
             else
@@ -280,39 +294,41 @@ namespace Behind_Bars.Systems.NPCs
                         new[] { "Waiting for the next intake.", "Everything's running smoothly.", "Ready for processing." });
 
                     dialogueController.AddStateDialogue("Processing", "Time to process you.",
-                        new[] { "Follow me.", "This way.", "Stay close." });
+                        new[] { "Time to process you." });
 
-                    // Escort states - show "Follow me" during movement
-                    dialogueController.AddStateDialogue("EscortToHolding", "Follow me.",
-                        new[] { "This way.", "Keep moving.", "Stay close." });
+                    // Every interactive greeting mirrors the active intake task. Do not
+                    // attach generic/random responses here: they can be spoken after the
+                    // officer has already advanced to a different station.
+                    dialogueController.AddStateDialogue("EscortToHolding", "Come with me to processing.",
+                        new[] { "Come with me to processing." });
 
-                    dialogueController.AddStateDialogue("EscortToMugshot", "Follow me.",
-                        new[] { "This way.", "Keep moving.", "Stay close." });
+                    dialogueController.AddStateDialogue("EscortToMugshot", "Walk over and take your mugshot.",
+                        new[] { "Walk over and take your mugshot." });
 
-                    dialogueController.AddStateDialogue("EscortToScanner", "Follow me.",
-                        new[] { "This way.", "Keep moving.", "Stay close." });
+                    dialogueController.AddStateDialogue("EscortToScanner", "Now come here and let us take your fingerprints.",
+                        new[] { "Now come here and let us take your fingerprints." });
 
-                    dialogueController.AddStateDialogue("EscortToStorage", "Follow me.",
-                        new[] { "This way.", "Keep moving.", "Stay close." });
+                    dialogueController.AddStateDialogue("EscortToStorage", "Walk over to storage and collect your prison gear.",
+                        new[] { "Walk over to storage and collect your prison gear." });
 
-                    dialogueController.AddStateDialogue("EscortToCell", "Follow me.",
-                        new[] { "This way.", "Keep moving.", "Stay close." });
+                    dialogueController.AddStateDialogue("EscortToCell", "Follow me to your cell.",
+                        new[] { "Follow me to your cell." });
 
                     // Action states - show specific instructions when at destination
                     dialogueController.AddStateDialogue("AtMugshot", "Go take your mugshot!",
-                        new[] { "Stand in front of the camera.", "Look straight ahead.", "Don't move." });
+                        new[] { "Go take your mugshot!" });
 
                     dialogueController.AddStateDialogue("AtScanner", "Place your hand on the scanner.",
-                        new[] { "Scan in.", "Press your palm down.", "Hold still." });
+                        new[] { "Place your hand on the scanner." });
 
                     dialogueController.AddStateDialogue("AtStorage", "Drop your belongings and pick up prison items.",
-                        new[] { "Put your things in the box.", "Take the prison uniform.", "Change quickly." });
+                        new[] { "Drop your belongings and pick up prison items." });
 
-                    dialogueController.AddStateDialogue("AtCell", "This is your cell.",
-                        new[] { "Get in.", "This is where you'll be staying.", "Inside." });
+                    dialogueController.AddStateDialogue("AtCell", "Step inside your cell.",
+                        new[] { "Step inside your cell." });
 
-                    dialogueController.AddStateDialogue("AtHolding", "Go through the door.",
-                        new[] { "Step inside.", "Move in.", "Enter the holding area." });
+                    dialogueController.AddStateDialogue("AtHolding", "Step out of the cell.",
+                        new[] { "Step out of the cell." });
 
                     // Start with idle state
                     dialogueController.UpdateGreetingForState("Idle");
@@ -345,6 +361,7 @@ namespace Behind_Bars.Systems.NPCs
 
         protected override void OnDisable()
         {
+            AbortPendingIntakeActions();
             base.OnDisable();
         }
 
@@ -457,21 +474,10 @@ namespace Behind_Bars.Systems.NPCs
                 return;
             }
 
-            // Check if we're currently escorting and far from destination
-            bool showEscortDialog = IsCurrentlyEscorting();
-
-            string dialogueState;
-
-            if (showEscortDialog)
+            // The visible/interactable greeting must stay aligned with the exact state;
+            // replacing it with a generic escort line caused out-of-order instructions.
+            string dialogueState = state switch
             {
-                // If we're escorting and far from destination, always show "Follow me"
-                dialogueState = "EscortToHolding"; // Use any escort state - they all show "Follow me"
-            }
-            else
-            {
-                // Use state-specific dialog when close to destination or not escorting
-                dialogueState = state switch
-                {
                     IntakeState.Idle => "Idle",
                     IntakeState.WaitingForBooking => "Idle",
                     IntakeState.DelayBeforeFetch => "Processing",
@@ -496,8 +502,7 @@ namespace Behind_Bars.Systems.NPCs
 
                     IntakeState.ReturningToPost => "Processing",
                     _ => "Idle"
-                };
-            }
+            };
 
             ModLogger.Debug($"IntakeOfficer: UpdateDialogueForState - setting dialogue state to '{dialogueState}' for intake state {state}");
             dialogueController.UpdateGreetingForState(dialogueState);
@@ -581,7 +586,7 @@ namespace Behind_Bars.Systems.NPCs
             {
                 IntakeState.WaitingForPlayerExit => new OfficerCommandData(
                     "INTAKE OFFICER",
-                    "Go through the door",
+                    "Step out of the cell",
                     1, 5, false),
 
                 IntakeState.EscortToMugshot => new OfficerCommandData(
@@ -654,10 +659,6 @@ namespace Behind_Bars.Systems.NPCs
 
                 case IntakeState.EscortToHolding:
                     NavigateToStation("HoldingCell");
-                    break;
-
-                case IntakeState.OpeningHoldingDoor:
-                    OpenHoldingCellDoor();
                     break;
 
                 case IntakeState.EscortToMugshot:
@@ -734,7 +735,8 @@ namespace Behind_Bars.Systems.NPCs
                         playerExitDetected = true;
                         ModLogger.Info($"IntakeOfficer: Player has exited holding cell {currentHoldingCellIndex}");
                         // Add a 2-second delay before closing door to ensure player is fully clear
-                        MelonCoroutines.Start(DelayedDoorClose());
+                        StopPendingDelayedDoorClose();
+                        delayedDoorCloseCoroutine = MelonCoroutines.Start(DelayedDoorClose());
                     }
                 }
             }
@@ -762,10 +764,7 @@ namespace Behind_Bars.Systems.NPCs
             {
                 if (bookingProcess.prisonGearPickupComplete)
                 {
-                    ModLogger.Info("IntakeOfficer: Prison gear pickup detected as complete, proceeding to cell assignment");
-                    // Assign cell before escorting
-                    AssignPrisonerCell();
-                    ChangeIntakeState(IntakeState.EscortToCell);
+                    BeginCellEscortAfterAssignment();
                 }
                 else
                 {
@@ -819,7 +818,7 @@ namespace Behind_Bars.Systems.NPCs
                 if (doorOpened)
                 {
                     ModLogger.Info($"IntakeOfficer: Holding cell {currentHoldingCellIndex} door opened successfully");
-                    SendGuardMessage("Come with me.", 3f);
+                    SendGuardMessage("Step out of the cell.", 3f);
                     ChangeIntakeState(IntakeState.WaitingForPlayerExit);
                 }
                 else
@@ -837,33 +836,89 @@ namespace Behind_Bars.Systems.NPCs
 
         private void HandleClosingHoldingDoorState()
         {
-            // Use the stored holding cell index from when intake started
-            if (currentHoldingCellIndex != -1)
+            if (currentHoldingCellIndex < 0)
             {
-                var jailController = Core.JailController;
-                if (jailController?.doorController != null)
-                {
-                    bool doorClosed = jailController.doorController.CloseHoldingCellDoor(currentHoldingCellIndex);
-                    if (doorClosed)
-                    {
-                        ModLogger.Info($"IntakeOfficer: Holding cell {currentHoldingCellIndex} door closed successfully");
-                    }
-                    else
-                    {
-                        ModLogger.Error($"IntakeOfficer: Failed to close holding cell {currentHoldingCellIndex} door");
-                    }
-                }
+                ModLogger.Error("IntakeOfficer: Cannot continue intake because no holding cell is tracked");
+                ChangeIntakeState(IntakeState.ReturningToPost);
+                return;
             }
 
-            // Proceed to mugshot regardless
-            SendGuardMessage("Follow me.", 3f);
+            var jailController = Core.JailController;
+            // The disciplinary resume must never begin the next escort while the player is
+            // still in the punishment cell. Revalidate here because this runs after the
+            // delayed exit check and immediately before the storage route can be selected.
+            if (resumingDisciplinaryIntake &&
+                jailController != null &&
+                jailController.IsPlayerInHoldingCellBounds(currentPrisoner, currentHoldingCellIndex))
+            {
+                playerExitDetected = false;
+                doorCloseInitiated = false;
+                ModLogger.Warn($"IntakeOfficer: Disciplinary prisoner is still inside holding cell {currentHoldingCellIndex}; keeping the holding door open before resuming booking");
+                ChangeIntakeState(IntakeState.WaitingForPlayerExit);
+                return;
+            }
+
+            bool doorClosed = jailController?.doorController?.CloseHoldingCellDoor(currentHoldingCellIndex) ?? false;
+            if (!doorClosed)
+            {
+                ModLogger.Error($"IntakeOfficer: Holding cell {currentHoldingCellIndex} must be closed before escorting to mugshot; retrying");
+                return;
+            }
+
+            if (resumingDisciplinaryIntake)
+            {
+                ContinueDisciplinaryIntakeFromCheckpoint();
+                return;
+            }
+
+            ModLogger.Info($"IntakeOfficer: Holding cell {currentHoldingCellIndex} secured; continuing to mugshot");
             ChangeIntakeState(IntakeState.EscortToMugshot);
+        }
+
+        /// <summary>
+        /// Continues a booking that was interrupted by a staff-assault hold. Completion
+        /// flags are retained by BookingProcess, so we select only the first unfinished
+        /// station and never replay property or clothing work that already succeeded.
+        /// </summary>
+        private void ContinueDisciplinaryIntakeFromCheckpoint()
+        {
+            resumingDisciplinaryIntake = false;
+            if (bookingProcess == null)
+            {
+                ModLogger.Error("IntakeOfficer: Cannot resume disciplinary intake because BookingProcess is unavailable");
+                ChangeIntakeState(IntakeState.ReturningToPost);
+                return;
+            }
+
+            if (!bookingProcess.mugshotComplete)
+            {
+                ModLogger.Info("IntakeOfficer: Resuming disciplinary intake at mugshot");
+                ChangeIntakeState(IntakeState.EscortToMugshot);
+                return;
+            }
+
+            if (!bookingProcess.fingerprintComplete)
+            {
+                ModLogger.Info("IntakeOfficer: Resuming disciplinary intake at fingerprint scanner");
+                ChangeIntakeState(IntakeState.EscortToScanner);
+                return;
+            }
+
+            if (!bookingProcess.prisonGearPickupComplete)
+            {
+                ModLogger.Info("IntakeOfficer: Resuming disciplinary intake at storage");
+                ChangeIntakeState(IntakeState.EscortToStorage);
+                return;
+            }
+
+            ModLogger.Info("IntakeOfficer: All booking stations were complete before disciplinary hold; resuming at cell escort");
+            BeginCellEscortAfterAssignment();
         }
 
         private void HandleOpeningCellDoorState()
         {
             // Door opening should complete quickly, then wait for player entry
-            SendGuardMessage("Get in.", 2f);
+            SendGuardMessage("Step inside your cell.", 2f);
             ChangeIntakeState(IntakeState.WaitingForCellEntry);
         }
 
@@ -872,6 +927,11 @@ namespace Behind_Bars.Systems.NPCs
             // Door closing should complete quickly, then return to post
             SendGuardMessage("Processing complete.", 3f);
             CloseCellDoor();
+
+            // A disciplinary repeat can resume directly at the cell escort after all
+            // stations are complete. That route intentionally bypasses the legacy escort
+            // monitor, so finalize the booking only after the prisoner is actually secured.
+            bookingProcess?.FinishBookingAfterCellEscort(currentPrisoner);
             ChangeIntakeState(IntakeState.ReturningToPost);
         }
 
@@ -919,6 +979,18 @@ namespace Behind_Bars.Systems.NPCs
             // Set destination for dialog distance checking
             destinationPosition = doorPoint.position;
 
+            // The mugshot order is the first transition the player has to read
+            // and act on.  Keep the officer posted long enough for its command
+            // to be seen before starting the escort walk.
+            if (stationName == "MugshotStation")
+            {
+                StopPendingMugshotEscort();
+                mugshotEscortCoroutine = MelonCoroutines.Start(
+                    AnnounceMugshotThenStartEscort(doorPoint, station.guardMessage, station.messageDuration));
+                ModLogger.Info("IntakeOfficer: Holding position for the mugshot instruction");
+                return;
+            }
+
             // Navigate to station
             MoveTo(doorPoint.position);
 
@@ -929,6 +1001,28 @@ namespace Behind_Bars.Systems.NPCs
             OnStationReached?.Invoke(stationName);
 #endif
             ModLogger.Info($"IntakeOfficer: Navigating to {stationName}");
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private IEnumerator AnnounceMugshotThenStartEscort(Transform doorPoint, string message, float duration)
+        {
+            yield return WaitForPlayerFacingThenSendGuardMessage(message, duration);
+            yield return new WaitForSeconds(3.5f);
+
+            if (currentState != IntakeState.EscortToMugshot || doorPoint == null)
+            {
+                mugshotEscortCoroutine = null;
+                yield break;
+            }
+
+            MoveTo(doorPoint.position);
+#if MONO
+            OnStationReached?.Invoke("MugshotStation");
+#endif
+            ModLogger.Info("IntakeOfficer: Beginning escort to MugshotStation after instruction hold");
+            mugshotEscortCoroutine = null;
         }
 
         private void NavigateToAssignedCell()
@@ -1005,12 +1099,16 @@ namespace Behind_Bars.Systems.NPCs
             {
                 MoveTo(guardPostTransform.position);
                 ModLogger.Info("IntakeOfficer: Returning to guard post");
+
+                // Keep the intake active until the officer is physically back at the post.
+                // A release cannot safely begin while this officer still owns the cell-return
+                // portion of the booking flow.
+                CloseAllIntakeDoors();
+                return;
             }
 
-            // Close all doors that were opened during intake process
+            ModLogger.Warn("IntakeOfficer: Guard post was unavailable; completing intake without a return walk");
             CloseAllIntakeDoors();
-
-            // Complete intake process
             CompleteIntakeProcess();
         }
 
@@ -1027,6 +1125,7 @@ namespace Behind_Bars.Systems.NPCs
             doorCloseInitiated = true;
 
             yield return new WaitForSeconds(2f); // Give player time to fully exit
+            delayedDoorCloseCoroutine = null;
             ChangeIntakeState(IntakeState.ClosingHoldingDoor);
         }
 
@@ -1093,6 +1192,14 @@ namespace Behind_Bars.Systems.NPCs
             }
             else if (currentState == IntakeState.EscortToCell)
             {
+                // Normal booking reaches storage through this door. A disciplinary direct
+                // cell escort starts back in booking, so open the booking door first.
+                if (requiresBookingInnerDoorBeforeCellEscort && !triggeredDoorOperations.Contains("BookingInnerDoor"))
+                {
+                    TriggerBookingInnerDoorIfNeeded();
+                    return;
+                }
+
                 TriggerPrisonEntryDoorIfNeeded();
             }
         }
@@ -1122,7 +1229,8 @@ namespace Behind_Bars.Systems.NPCs
             // IMPORTANT: Give guard time to move away from door before resuming navigation
             // SecurityDoor finishes but guard needs to clear the door area first
             ModLogger.Info("IntakeOfficer: Waiting for guard to clear door area before resuming navigation");
-            MelonCoroutines.Start(DelayedNavigationResume());
+            StopPendingDelayedNavigationResume();
+            delayedNavigationResumeCoroutine = MelonCoroutines.Start(DelayedNavigationResume());
         }
 
 #if !MONO
@@ -1151,6 +1259,7 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             ModLogger.Info($"IntakeOfficer: Navigation resumed for state: {currentState}");
+            delayedNavigationResumeCoroutine = null;
         }
 
         private void HandleSecurityDoorOperationFailed(string doorName)
@@ -1187,6 +1296,11 @@ namespace Behind_Bars.Systems.NPCs
                 return;
             }
 
+            if (securityDoor.IsBusy())
+            {
+                return;
+            }
+
             // Trigger SecurityDoor operation for booking inner door
             // SecurityDoor will handle: movement to door point → security delay → unlock → open
             string triggerName = "BookingDoorTrigger_FromBooking"; // Guard moving from booking area to hall
@@ -1214,6 +1328,11 @@ namespace Behind_Bars.Systems.NPCs
             {
                 ModLogger.Error("IntakeOfficer: No SecurityDoor component available - falling back to direct door control");
                 FallbackDirectDoorControl("PrisonEntryDoor");
+                return;
+            }
+
+            if (securityDoor.IsBusy())
+            {
                 return;
             }
 
@@ -1330,7 +1449,7 @@ namespace Behind_Bars.Systems.NPCs
                 case IntakeState.EscortToStorage:
                     // Rotate to face the storage station and send arrival message
                     RotateToFaceStationTarget("Storage");
-                    SendGuardMessage("Pick up your prison gear.", 3f);
+                    SendGuardMessage("Store your belongings and collect your prison gear.", 3f);
                     ChangeIntakeState(IntakeState.WaitingForStorage);
                     break;
 
@@ -1342,7 +1461,7 @@ namespace Behind_Bars.Systems.NPCs
                 case IntakeState.ReturningToPost:
                     // Start continuous rotation when back at post
                     StartContinuousPlayerLooking();
-                    ChangeIntakeState(IntakeState.Idle);
+                    CompleteIntakeProcess();
                     break;
 
                 default:
@@ -1457,11 +1576,14 @@ namespace Behind_Bars.Systems.NPCs
             {
                 ModLogger.Info($"IntakeOfficer: Intake delayed due to coordination conflict - will retry");
                 // Retry after a short delay
-                MelonCoroutines.Start(RetryIntakeAfterDelay(player, 5f));
+                StopPendingRetryIntake();
+                retryIntakeCoroutine = MelonCoroutines.Start(RetryIntakeAfterDelay(player, 5f));
                 return;
             }
 
             currentPrisoner = player;
+            assignedCellNumber = -1;
+            nextCellAssignmentRetryTime = 0f;
 
             // Reset state tracking flags for new intake
             playerExitDetected = false;
@@ -1473,16 +1595,43 @@ namespace Behind_Bars.Systems.NPCs
             // Reset SecurityDoor state
             isSecurityDoorActive = false;
 
-            // Determine which holding cell contains this player using JailController's centralized method
+            // Determine which holding cell contains this player using JailController's centralized method.
+            // A disciplinary repeat intake supplies a named cell so this is never redirected by
+            // prefab traversal order or a stale previous holding-cell cache.
             var jailController = Core.JailController;
-            currentHoldingCellIndex = jailController?.FindPlayerHoldingCell(player) ?? -1;
+            if (requiredHoldingCellPrisoner == player && !string.IsNullOrEmpty(requiredHoldingCellName))
+            {
+                currentHoldingCellIndex = jailController?.GetHoldingCellRuntimeIndexByName(requiredHoldingCellName) ?? -1;
+                if (currentHoldingCellIndex < 0 || !jailController.IsPlayerInHoldingCellBounds(player, currentHoldingCellIndex))
+                {
+                    ModLogger.Error($"IntakeOfficer: Disciplinary repeat intake requires {requiredHoldingCellName}, but {player.name} is not inside that holding cell");
+                    ClearRequiredHoldingCell();
+                    OfficerCoordinator.Instance.UnregisterEscort(this);
+                    currentPrisoner = null;
+                    return;
+                }
+
+                currentHoldingCellName = requiredHoldingCellName;
+                ModLogger.Info($"IntakeOfficer: Using required disciplinary holding cell {currentHoldingCellName} (runtime index {currentHoldingCellIndex}) for {player.name}");
+                ClearRequiredHoldingCell();
+            }
+            else
+            {
+                currentHoldingCellIndex = jailController?.FindPlayerHoldingCell(player) ?? -1;
+                currentHoldingCellName = currentHoldingCellIndex >= 0 && jailController != null && currentHoldingCellIndex < jailController.holdingCells.Count
+                    ? jailController.holdingCells[currentHoldingCellIndex].cellTransform?.name ?? ""
+                    : "";
+            }
+
             if (currentHoldingCellIndex == -1)
             {
                 ModLogger.Error($"IntakeOfficer: Could not find player {player.name} in any holding cell");
+                OfficerCoordinator.Instance.UnregisterEscort(this);
+                currentPrisoner = null;
                 return;
             }
 
-            ModLogger.Info($"IntakeOfficer: Player {player.name} found in holding cell {currentHoldingCellIndex}");
+            ModLogger.Info($"IntakeOfficer: Player {player.name} found in holding cell {currentHoldingCellIndex} ({currentHoldingCellName})");
 #if MONO
             OnIntakeStarted?.Invoke(player);
 #endif
@@ -1497,6 +1646,8 @@ namespace Behind_Bars.Systems.NPCs
         private IEnumerator RetryIntakeAfterDelay(Player player, float delay)
         {
             yield return new WaitForSeconds(delay);
+
+            retryIntakeCoroutine = null;
 
             // Try again if still idle and player is still valid
             if (currentState == IntakeState.Idle && player != null)
@@ -1529,10 +1680,7 @@ namespace Behind_Bars.Systems.NPCs
             if (currentState == IntakeState.WaitingForStorage)
             {
                 ModLogger.Info("IntakeOfficer: Inventory processing completed, proceeding to cell");
-                // Assign cell before escorting
-                AssignPrisonerCell();
-                // Actually transition to escorting to cell
-                ChangeIntakeState(IntakeState.EscortToCell);
+                BeginCellEscortAfterAssignment();
             }
             else
             {
@@ -1565,19 +1713,27 @@ namespace Behind_Bars.Systems.NPCs
             switch (stationName)
             {
                 case "HoldingCell":
-                    //jailController.holdingCell00GuardPoint;
-
-                    // Look for HoldingCell_00/HoldingDoorHolder[0]/DoorPoint
-                    foreach (Transform t in allTransforms)
+                    if (!string.IsNullOrEmpty(currentHoldingCellName))
                     {
-                        if (t.name == "DoorPoint" &&
-                            t.parent?.name.Contains("HoldingDoor") == true &&
-                            t.parent?.parent?.name.Contains("HoldingCell") == true)
+                        var guardPoint = jailController.GetGuardPoint(currentHoldingCellName);
+                        if (guardPoint != null)
                         {
-                            ModLogger.Info($"Found holding cell door point: {t.name} under {t.parent.parent.name}");
-                            return t;
+                            ModLogger.Info($"Using assigned holding-cell guard point for {currentHoldingCellName}");
+                            return guardPoint;
+                        }
+
+                        if (currentHoldingCellIndex >= 0 && currentHoldingCellIndex < jailController.holdingCells.Count)
+                        {
+                            var holdingCellDoorPoint = jailController.holdingCells[currentHoldingCellIndex].cellDoor?.doorPoint;
+                            if (holdingCellDoorPoint != null)
+                            {
+                                ModLogger.Info($"Using holding-cell door point from {currentHoldingCellName}");
+                                return holdingCellDoorPoint;
+                            }
                         }
                     }
+
+                    ModLogger.Error("IntakeOfficer: No targeted holding-cell guard point was available");
                     break;
 
                 case "MugshotStation":
@@ -1644,9 +1800,30 @@ namespace Behind_Bars.Systems.NPCs
             return null;
         }
 
-        private void AssignPrisonerCell()
+        private void BeginCellEscortAfterAssignment()
         {
-            if (currentPrisoner == null) return;
+            if (Time.time < nextCellAssignmentRetryTime)
+            {
+                return;
+            }
+
+            if (TryAssignPrisonerCell())
+            {
+                ChangeIntakeState(IntakeState.EscortToCell);
+                return;
+            }
+
+            nextCellAssignmentRetryTime = Time.time + CellAssignmentRetryInterval;
+            SendGuardMessage("Remain here while I assign your cell.", CellAssignmentRetryInterval);
+            ModLogger.Warn($"IntakeOfficer: Cell assignment unavailable; retaining {currentPrisoner?.name} at storage and retrying in {CellAssignmentRetryInterval:F0}s");
+        }
+
+        private bool TryAssignPrisonerCell()
+        {
+            if (currentPrisoner == null)
+            {
+                return false;
+            }
 
             var cellManager = Core.ResolveCellAssignmentManager();
             if (cellManager != null)
@@ -1655,18 +1832,19 @@ namespace Behind_Bars.Systems.NPCs
                 if (assignedCellNumber >= 0)
                 {
                     ModLogger.Debug($"Assigned prisoner to cell {assignedCellNumber}");
+                    return true;
                 }
-                else
-                {
-                    ModLogger.Error("Failed to assign cell to prisoner");
-                    assignedCellNumber = 0; // Default to cell 0
-                }
+
+                ModLogger.Error("Failed to assign cell to prisoner; no fallback cell will be used");
             }
             else
             {
                 ModLogger.Error("CellAssignmentManager not available");
-                assignedCellNumber = 0; // Default to cell 0
             }
+
+            assignedCellNumber = -1;
+            nextCellAssignmentRetryTime = 0f;
+            return false;
         }
 
         private void CloseCellDoor()
@@ -1689,27 +1867,6 @@ namespace Behind_Bars.Systems.NPCs
             else
             {
                 ModLogger.Error("IntakeOfficer: No door controller available for closing jail cell door");
-            }
-        }
-
-        private void OpenHoldingCellDoor()
-        {
-            var jailController = Core.JailController;
-            if (jailController?.holdingCells?.Count > 0)
-            {
-                var holdingCell = jailController.holdingCells[0];
-                if (holdingCell.cellDoor != null)
-                {
-                    if (holdingCell.cellDoor.IsClosed())
-                    {
-                        holdingCell.cellDoor.OpenDoor();
-                        ModLogger.Info("Opened holding cell door");
-                    }
-                }
-                else
-                {
-                    ModLogger.Warn("No door found on holding cell");
-                }
             }
         }
 
@@ -1742,14 +1899,167 @@ namespace Behind_Bars.Systems.NPCs
 
         private void SendGuardMessage(string message, float duration)
         {
-            // Use the enhanced message system that supports native dialog
-            TrySendNPCMessage(message, duration);
+            // A command must be emitted once. The previous follow-up contextual
+            // message selected a random interaction from the state and could
+            // contradict the command that just advanced the intake process.
+            // Do not snap the player toward the officer.  The command is held
+            // until a short, gentle turn has completed, unless the player is
+            // already facing the officer.  Mugshot positioning remains owned
+            // by MugshotStation and is intentionally not involved here.
+            StopPendingPlayerFacingCommand();
 
-            // Also trigger contextual dialogue if available (for when player interacts with NPC)
+            playerFacingCommandCoroutine = MelonCoroutines.Start(
+                WaitForPlayerFacingThenSendGuardMessage(message, duration));
+        }
+
+        private void StopPendingPlayerFacingCommand()
+        {
+            if (playerFacingCommandCoroutine == null)
+            {
+                return;
+            }
+
+            MelonCoroutines.Stop(playerFacingCommandCoroutine);
+            playerFacingCommandCoroutine = null;
+        }
+
+        private void StopPendingMugshotEscort()
+        {
+            if (mugshotEscortCoroutine == null)
+            {
+                return;
+            }
+
+            MelonCoroutines.Stop(mugshotEscortCoroutine);
+            mugshotEscortCoroutine = null;
+        }
+
+        private void StopPendingDelayedDoorClose()
+        {
+            if (delayedDoorCloseCoroutine == null)
+            {
+                return;
+            }
+
+            MelonCoroutines.Stop(delayedDoorCloseCoroutine);
+            delayedDoorCloseCoroutine = null;
+        }
+
+        private void StopPendingDelayedNavigationResume()
+        {
+            if (delayedNavigationResumeCoroutine == null)
+            {
+                return;
+            }
+
+            MelonCoroutines.Stop(delayedNavigationResumeCoroutine);
+            delayedNavigationResumeCoroutine = null;
+        }
+
+        private void StopPendingRetryIntake()
+        {
+            if (retryIntakeCoroutine == null)
+            {
+                return;
+            }
+
+            MelonCoroutines.Stop(retryIntakeCoroutine);
+            retryIntakeCoroutine = null;
+        }
+
+        /// <summary>
+        /// Tears down all actions owned by the interrupted intake session. State fields alone
+        /// are not enough: Melon coroutines and an active NavMesh path can continue to issue
+        /// the prior prisoner's command after the officer appears to have returned to post.
+        /// </summary>
+        private void AbortPendingIntakeActions()
+        {
+            StopPendingPlayerFacingCommand();
+            StopPendingMugshotEscort();
+            StopPendingDelayedDoorClose();
+            StopPendingDelayedNavigationResume();
+            StopPendingRetryIntake();
+            StopContinuousPlayerLooking();
+
+            // SecurityDoor owns a separate escort coroutine.  Merely clearing the local
+            // tracking flag leaves that coroutine alive, where it can continue to prompt
+            // the prisoner to go through the old corridor door during a disciplinary hold.
+            var securityDoor = GetSecurityDoor();
+            if (securityDoor != null && securityDoor.IsBusy())
+            {
+                securityDoor.StopDoorOperation();
+                ModLogger.Info("IntakeOfficer: Stopped the active security-door escort while cancelling intake");
+            }
+
+            isSecurityDoorActive = false;
+            destinationPosition = transform.position;
+            StopMovement();
+            HideOfficerCommandNotification();
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private IEnumerator WaitForPlayerFacingThenSendGuardMessage(string message, float duration)
+        {
+            if (currentPrisoner != null)
+            {
+                Vector3 directionToOfficer = transform.position - currentPrisoner.transform.position;
+                directionToOfficer.y = 0f;
+
+                if (directionToOfficer.sqrMagnitude >= 0.001f)
+                {
+                    Quaternion targetRotation = Quaternion.LookRotation(directionToOfficer.normalized, Vector3.up);
+                    float initialAngle = Quaternion.Angle(currentPrisoner.transform.rotation, targetRotation);
+
+                    // Avoid an unnecessary camera movement when the player is
+                    // already looking at the officer.
+                    if (initialAngle > 4f)
+                    {
+                        float turnDuration = Mathf.Clamp(initialAngle / 220f, 0.18f, 0.65f);
+                        Quaternion startingRotation = currentPrisoner.transform.rotation;
+                        float elapsed = 0f;
+
+                        while (elapsed < turnDuration && currentPrisoner != null)
+                        {
+                            elapsed += Time.deltaTime;
+                            float progress = Mathf.Clamp01(elapsed / turnDuration);
+                            progress = progress * progress * (3f - 2f * progress);
+                            currentPrisoner.transform.rotation = Quaternion.Slerp(
+                                startingRotation,
+                                targetRotation,
+                                progress);
+                            yield return null;
+                        }
+
+                        if (currentPrisoner != null)
+                        {
+                            currentPrisoner.transform.rotation = targetRotation;
+                        }
+                    }
+                }
+            }
+
+            EmitGuardMessage(message, duration);
+            playerFacingCommandCoroutine = null;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void EmitGuardMessage(string message, float duration)
+        {
+
             if (dialogueController != null)
             {
-                dialogueController.SendContextualMessage("interaction");
+                dialogueController.SendGuardCommand(
+                    JailNPCAudioController.GuardCommandType.Move,
+                    message,
+                    useRadio: false);
+                return;
             }
+
+            TrySendNPCMessage(message, duration);
         }
 
 
@@ -1765,8 +2075,12 @@ namespace Behind_Bars.Systems.NPCs
             // Reset state
             currentPrisoner = null;
             assignedCellNumber = -1;
+            nextCellAssignmentRetryTime = 0f;
             currentTargetStation = "";
             currentHoldingCellIndex = -1;
+            currentHoldingCellName = "";
+            ClearRequiredHoldingCell();
+            requiresBookingInnerDoorBeforeCellEscort = false;
 
             // Reset state tracking flags
             playerExitDetected = false;
@@ -1785,6 +2099,30 @@ namespace Behind_Bars.Systems.NPCs
         public Player GetCurrentPrisoner() => currentPrisoner;
         public bool IsProcessingIntake() => currentState != IntakeState.Idle;
         public string GetCurrentTargetStation() => currentTargetStation;
+
+        /// <summary>
+        /// Requires the next booking event for this prisoner to start from the supplied holding
+        /// cell. Used after a disciplinary hold so the canonical intake state machine fetches
+        /// the player from the actual punishment cell rather than the first holding-cell door.
+        /// </summary>
+        public bool PrepareDisciplinaryRepeatIntake(Player player, string holdingCellName)
+        {
+            var jailController = Core.JailController;
+            int holdingCellIndex = jailController?.GetHoldingCellRuntimeIndexByName(holdingCellName) ?? -1;
+            if (player == null || currentState != IntakeState.Idle || holdingCellIndex < 0 ||
+                !jailController.IsPlayerInHoldingCellBounds(player, holdingCellIndex))
+            {
+                ModLogger.Error($"IntakeOfficer: Cannot prepare disciplinary repeat intake from {holdingCellName}; officer idle={currentState == IntakeState.Idle}, holding index={holdingCellIndex}");
+                return false;
+            }
+
+            requiredHoldingCellPrisoner = player;
+            requiredHoldingCellName = holdingCellName;
+            resumingDisciplinaryIntake = true;
+            requiresBookingInnerDoorBeforeCellEscort = true;
+            ModLogger.Info($"IntakeOfficer: Prepared repeat intake for {player.name} from {holdingCellName} (runtime index {holdingCellIndex})");
+            return true;
+        }
 
         /// <summary>
         /// Force start intake process (for testing)
@@ -1816,18 +2154,35 @@ namespace Behind_Bars.Systems.NPCs
             // Unregister from officer coordination
             OfficerCoordinator.Instance.UnregisterEscort(this);
 
+            // Stop every pending command/escort before releasing the prisoner reference.
+            // This is required when disciplinary lockdown interrupts the officer between
+            // its mugshot instruction and the delayed walk to that station.
+            AbortPendingIntakeActions();
+
             // Reset all state
             currentPrisoner = null;
             assignedCellNumber = -1;
+            nextCellAssignmentRetryTime = 0f;
             currentTargetStation = "";
             currentHoldingCellIndex = -1;
+            currentHoldingCellName = "";
+            ClearRequiredHoldingCell();
+            resumingDisciplinaryIntake = false;
+            requiresBookingInnerDoorBeforeCellEscort = false;
             playerExitDetected = false;
             doorCloseInitiated = false;
+            ResetDoorTracking();
 
             // Return to idle immediately
             ChangeIntakeState(IntakeState.Idle);
 
             ModLogger.Info("IntakeOfficer: Intake canceled - now available for new prisoner");
+        }
+
+        private void ClearRequiredHoldingCell()
+        {
+            requiredHoldingCellPrisoner = null;
+            requiredHoldingCellName = "";
         }
 
         /// <summary>
@@ -2054,6 +2409,8 @@ namespace Behind_Bars.Systems.NPCs
 
         new void OnDestroy()
         {
+            AbortPendingIntakeActions();
+
             // Unsubscribe from events
             if (bookingProcess != null)
             {
@@ -2067,8 +2424,8 @@ namespace Behind_Bars.Systems.NPCs
             var securityDoor = GetSecurityDoor();
             if (securityDoor != null)
             {
-                securityDoor.OnDoorOperationComplete -= HandleSecurityDoorOperationComplete;
-                securityDoor.OnDoorOperationFailed -= HandleSecurityDoorOperationFailed;
+                securityDoor.RemoveDoorOperationCompleteListener(HandleSecurityDoorOperationComplete);
+                securityDoor.RemoveDoorOperationFailedListener(HandleSecurityDoorOperationFailed);
             }
 
             // Movement completion is handled via BaseJailNPC.NotifyDestinationReached override.

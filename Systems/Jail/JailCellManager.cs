@@ -437,6 +437,46 @@ namespace Behind_Bars.Systems.Jail
             return AssignPlayerToHoldingCellInternal(GetPlayerRuntimeKey(player), player.name);
         }
 
+        /// <summary>
+        /// Assigns a player to a named holding cell. This is used for the disciplinary
+        /// hold path so the reserved HoldingCell_01 is selected independently of prefab order.
+        /// </summary>
+        public Transform AssignPlayerToHoldingCellByName(Player player, string holdingCellName)
+        {
+            if (player == null || string.IsNullOrEmpty(holdingCellName))
+            {
+                return null;
+            }
+
+            string occupantKey = GetPlayerRuntimeKey(player);
+            var holdingCell = holdingCells.FirstOrDefault(cell =>
+                cell != null && string.Equals(cell.cellTransform?.name, holdingCellName, StringComparison.Ordinal));
+            if (holdingCell == null)
+            {
+                ModLogger.Error($"Holding cell '{holdingCellName}' was not found for disciplinary hold");
+                return null;
+            }
+
+            var existingSpawn = holdingCell.spawnPointOccupancy.FirstOrDefault(sp => sp.occupantKey == occupantKey);
+            if (existingSpawn != null)
+            {
+                return existingSpawn.spawnPoint;
+            }
+
+            var availableSpawn = holdingCell.spawnPointOccupancy.FirstOrDefault(sp => !sp.isOccupied);
+            if (availableSpawn == null)
+            {
+                ModLogger.Error($"Holding cell '{holdingCellName}' has no free disciplinary spawn point for {player.name}");
+                return null;
+            }
+
+            availableSpawn.isOccupied = true;
+            availableSpawn.occupantKey = occupantKey;
+            availableSpawn.occupantName = player.name;
+            ModLogger.Info($"Assigned {player.name} to reserved disciplinary cell {holdingCellName} spawn point {availableSpawn.spawnIndex}");
+            return availableSpawn.spawnPoint;
+        }
+
         private Transform AssignPlayerToHoldingCellByNameForDiagnostics(string playerName)
         {
             return AssignPlayerToHoldingCellInternal(playerName, playerName);
@@ -526,6 +566,41 @@ namespace Behind_Bars.Systems.Jail
             return holdingCells.FirstOrDefault(c => c.cellIndex == cellIndex);
         }
 
+        public CellDetail GetHoldingCellByName(string holdingCellName)
+        {
+            if (string.IsNullOrEmpty(holdingCellName))
+            {
+                return null;
+            }
+
+            return holdingCells.FirstOrDefault(cell =>
+                cell != null && string.Equals(cell.cellTransform?.name, holdingCellName, StringComparison.Ordinal));
+        }
+
+        /// <summary>
+        /// Gets the runtime list index used by both holding-cell bounds checks and the door
+        /// controller. This intentionally differs from CellDetail.cellIndex, which preserves
+        /// the authored child index in the prison prefab.
+        /// </summary>
+        public int GetHoldingCellRuntimeIndexByName(string holdingCellName)
+        {
+            if (string.IsNullOrEmpty(holdingCellName))
+            {
+                return -1;
+            }
+
+            for (int i = 0; i < holdingCells.Count; i++)
+            {
+                var holdingCell = holdingCells[i];
+                if (holdingCell != null && string.Equals(holdingCell.cellTransform?.name, holdingCellName, StringComparison.Ordinal))
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
         /// <summary>
         /// Find which holding cell contains the specified player
         /// </summary>
@@ -577,21 +652,17 @@ namespace Behind_Bars.Systems.Jail
                 return false;
             }
 
-            // Calculate world position of bounds manually
-            Vector3 playerPos = player.transform.position;
-            Transform boundsTransform = boundsCollider.transform;
-            Vector3 boundsWorldCenter = boundsTransform.TransformPoint(boundsCollider.center);
-            Vector3 boundsWorldSize = Vector3.Scale(boundsCollider.size, boundsTransform.lossyScale);
+            // BoxCollider.center and size are expressed in the collider transform's local
+            // space.  Testing against a world-aligned box loses the transform rotation and
+            // can incorrectly report that a prisoner has left a rotated holding cell.
+            Vector3 localPlayerPosition = boundsCollider.transform.InverseTransformPoint(player.transform.position);
+            Vector3 halfSize = boundsCollider.size * 0.5f;
+            Vector3 min = boundsCollider.center - halfSize;
+            Vector3 max = boundsCollider.center + halfSize;
 
-            // Manual bounds checking
-            Vector3 min = boundsWorldCenter - boundsWorldSize * 0.5f;
-            Vector3 max = boundsWorldCenter + boundsWorldSize * 0.5f;
-
-            bool contains = (playerPos.x >= min.x && playerPos.x <= max.x) &&
-                           (playerPos.y >= min.y && playerPos.y <= max.y) &&
-                           (playerPos.z >= min.z && playerPos.z <= max.z);
-
-            return contains;
+            return localPlayerPosition.x >= min.x && localPlayerPosition.x <= max.x &&
+                   localPlayerPosition.y >= min.y && localPlayerPosition.y <= max.y &&
+                   localPlayerPosition.z >= min.z && localPlayerPosition.z <= max.z;
         }
 
         /// <summary>

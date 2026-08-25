@@ -234,6 +234,7 @@ namespace Behind_Bars.Systems.Jail
 
         // Queue for releases when guards are busy
         private Queue<ReleaseRequest> releaseQueue = new Queue<ReleaseRequest>();
+        private readonly List<Coroutine> sceneCoroutineHandles = new List<Coroutine>();
 
         // Available release officers
         private List<ActiveReleaseOfficerBehavior> availableOfficers = new List<ActiveReleaseOfficerBehavior>();
@@ -278,6 +279,7 @@ namespace Behind_Bars.Systems.Jail
 
         private void OnDestroy()
         {
+            CancelForSceneExit();
             CleanupAllActiveReleaseCallbacks();
 
             if (_instance == this)
@@ -305,20 +307,21 @@ namespace Behind_Bars.Systems.Jail
                 var jailController = Core.JailController;
                 if (jailController != null)
                 {
-                    // Look for a designated exit point
-                    var exitTransform = jailController.transform.Find("PrisonExit");
+                    // Prefer the active jail hierarchy. The legacy PrisonExit marker no longer
+                    // exists in current builds; ExitTrigger is the scene-owned release boundary.
+                    var exitTransform = jailController.transform.Find("PrisonExit") ??
+                                        jailController.exitScanner?.exitTrigger ??
+                                        jailController.transform.Find("Hallway/ExitScannerStation/ExitTrigger") ??
+                                        jailController.transform.Find("ExitScannerStation/ExitTrigger") ??
+                                        jailController.exitScanner?.areaRoot;
                     if (exitTransform != null)
                     {
                         prisonExitPoint = exitTransform;
-                        ModLogger.Debug($"Found prison exit point at {prisonExitPoint.position}");
+                        ModLogger.Debug($"Found prison exit point at {prisonExitPoint.position} ({prisonExitPoint.name})");
                     }
                     else
                     {
-                        // Create a default exit point outside the jail
-                        var defaultExit = new GameObject("DefaultPrisonExit");
-                        defaultExit.transform.position = new Vector3(0, 1, 0); // Adjust as needed
-                        prisonExitPoint = defaultExit.transform;
-                        ModLogger.Warn("Created default prison exit point - should be configured properly");
+                        ModLogger.Error("No jail exit trigger or exit-scanner anchor was found; release escorts remain unavailable until the jail hierarchy is ready.");
                     }
                 }
             }
@@ -455,6 +458,9 @@ namespace Behind_Bars.Systems.Jail
         /// <summary>
         /// Start the release process for a player
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         public bool InitiateRelease(Player player, ReleaseType releaseType, float bailAmount = 0f, string reason = "")
         {
             if (player == null)
@@ -555,6 +561,9 @@ namespace Behind_Bars.Systems.Jail
 
         #region Release Process Management
 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private bool TryAssignOfficer(ReleaseRequest request)
         {
             RefreshAvailableOfficersFromRegistry();
@@ -600,15 +609,23 @@ namespace Behind_Bars.Systems.Jail
             return false;
         }
 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private void StartReleaseProcess(ReleaseRequest request)
         {
             ModLogger.Debug($"Starting release process for {request.player.name}");
             request.status = ReleaseStatus.GuardDispatched;
 
+            // Start the supervising officer's walk from the courthouse now, in parallel
+            // with the release officer's trip to the cell. The officer waits at the
+            // police-station exit until the player dismisses the conditions summary.
+            DynamicParoleOfficerManager.Instance?.PrepareSupervisingOfficerForRelease(request.player, request.exitPosition);
+
             // Start the escort sequence
             if (request.assignedOfficer != null)
             {
-                MelonCoroutines.Start(ReleaseProcessCoroutine(request));
+                StartSceneCoroutine(ReleaseProcessCoroutine(request));
             }
             else
             {
@@ -761,6 +778,9 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info($"Storage exit wait complete for {request.player.name}");
         }
 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private void CompleteRelease(ReleaseRequest request)
         {
             ModLogger.Debug($"Completing release for {request.player.name}");
@@ -822,7 +842,7 @@ namespace Behind_Bars.Systems.Jail
 
                 // Freeze player and show UI
                 // Grace period already started above - this prevents searches during UI display
-                MelonCoroutines.Start(WaitForParoleConditionsAcknowledgment(request.player, bailAmountPaid, fineAmount, termLength, lsiLevel, lsiBreakdown, jailTimeInfo, recentCrimes, generalConditions, specialConditions));
+                StartSceneCoroutine(WaitForParoleConditionsAcknowledgment(request.player, bailAmountPaid, fineAmount, termLength, lsiLevel, lsiBreakdown, jailTimeInfo, recentCrimes, generalConditions, specialConditions));
             }
 
             // Clean up
@@ -837,10 +857,14 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Debug($"Release completed for {request.player.name} - all escorts cleared");
         }
 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private void FailRelease(ReleaseRequest request, string reason)
         {
             ModLogger.Error($"Release failed for {request.player.name}: {reason}");
             request.status = ReleaseStatus.Failed;
+            DynamicParoleOfficerManager.Instance?.CancelPreparedSupervisingOfficerForRelease(request.player);
             var officerIdle = reason.Contains("officer idle");
 
             // CRITICAL: Clear ALL escort registrations for this player to prevent conflicts
@@ -947,6 +971,9 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private List<string> GetLegalItemsForReturn(Player player)
         {
             var legalItems = new List<string>();
@@ -1167,6 +1194,9 @@ namespace Behind_Bars.Systems.Jail
         /// Formula: Base time + (crimes * multiplier) + LSI modifier
         /// </summary>
         /// <returns>Parole duration in game minutes</returns>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private float CalculateParoleDuration(RapSheet rapSheet, bool hasRapSheet)
         {
             // Game time scale: 1 game minute = 1 real second, 1 game hour = 60 game minutes, 1 game day = 1440 game minutes
@@ -1221,6 +1251,9 @@ namespace Behind_Bars.Systems.Jail
         /// Used when extending paused parole
         /// </summary>
         /// <returns>Additional time in game minutes</returns>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private float CalculateAdditionalParoleTime(RapSheet rapSheet, bool hasRapSheet)
         {
             const float CRIME_MULTIPLIER = 240f;   // 4 game hours per crime (240 game minutes)
@@ -1260,6 +1293,9 @@ namespace Behind_Bars.Systems.Jail
         /// Calculate all release summary data for the parole conditions UI
         /// Returns bail amount, fine amount, parole term length, LSI level, LSI breakdown, jail time info, recent crimes, and conditions (split into general and special)
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         public (float bailAmountPaid, float fineAmount, float termLengthGameMinutes, LSILevel lsiLevel, 
             (int totalScore, int crimeCountScore, int severityScore, int violationScore, int pastParoleScore, LSILevel resultingLevel) lsiBreakdown,
             (float originalSentenceTime, float timeServed) jailTimeInfo,
@@ -1412,6 +1448,7 @@ namespace Behind_Bars.Systems.Jail
                 ViolationType.RestrictedAreaViolation => "Parole Violation - Restricted Area",
                 ViolationType.CurfewViolation => "Parole Violation - Curfew Violation",
                 ViolationType.ContactWithKnownCriminals => "Parole Violation - Contact with Known Criminals",
+                ViolationType.IllegalWeaponPossession => "Parole Violation - Illegal Weapon",
                 ViolationType.Other => "Parole Violation",
                 _ => "Parole Violation"
             };
@@ -1420,6 +1457,9 @@ namespace Behind_Bars.Systems.Jail
         /// <summary>
         /// Split conditions into general (for everyone) and special (based on crimes/criteria)
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private (List<string> generalConditions, List<string> specialConditions) SplitConditionsIntoGeneralAndSpecial(Player player, RapSheet rapSheet, List<string> allConditions)
         {
             // Try to use the ParoleConditionManager for dynamic conditions based on active parole conditions
@@ -1562,6 +1602,9 @@ namespace Behind_Bars.Systems.Jail
         /// <summary>
         /// Get default parole conditions list (placeholder for now)
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private List<string> GetDefaultParoleConditions()
         {
             return new List<string>
@@ -1631,6 +1674,9 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private IEnumerator HandlePostReleaseOfficerCompliance(Player player, System.Action onImmediateArrestTriggered)
         {
             if (player == null)
@@ -2011,6 +2057,9 @@ namespace Behind_Bars.Systems.Jail
             officer.ReturnToAssignedPost(fallbackPosition);
         }
 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private NPCDialogueWrapper BuildPostReleaseComplianceDialogue(ParoleOfficerBehavior officer, Player player, System.Action onComplete)
         {
             if (officer == null || player == null)
@@ -2121,6 +2170,9 @@ namespace Behind_Bars.Systems.Jail
         /// Wait for player to acknowledge parole conditions UI
         /// Freezes player, shows UI, waits for dismissal, then starts grace period
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private IEnumerator WaitForParoleConditionsAcknowledgment(Player player, float bailAmountPaid, float fineAmount, float termLengthGameMinutes, 
             LSILevel lsiLevel, (int totalScore, int crimeCountScore, int severityScore, int violationScore, int pastParoleScore, LSILevel resultingLevel) lsiBreakdown,
             (float originalSentenceTime, float timeServed) jailTimeInfo, List<string> recentCrimes, List<string> generalConditions, List<string> specialConditions)
@@ -2131,6 +2183,12 @@ namespace Behind_Bars.Systems.Jail
             {
                 // Freeze player
                 FreezePlayer(player);
+
+                // Begin the canonical supervisor approach before the conditions screen is
+                // visible.  The player remains frozen by this release flow, while the officer
+                // walks to the release door and is ready to begin the check-in escort as soon
+                // as the player dismisses the summary.
+                StartSceneCoroutine(PrepareCanonicalParoleIntake(player));
 
                 // Show UI with all release summary data
                 Core.ResolveUIManager().ShowParoleConditionsUI(player, bailAmountPaid, fineAmount, termLengthGameMinutes, lsiLevel, lsiBreakdown, jailTimeInfo, recentCrimes, generalConditions, specialConditions);
@@ -2179,8 +2237,12 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Error($"Error hiding parole conditions UI: {ex.Message}");
             }
 
-            bool immediateArrestTriggered = false;
-            yield return HandlePostReleaseOfficerCompliance(player, () => immediateArrestTriggered = true);
+            // The supervising officer can still be finishing its scene-local spawn when the
+            // player dismisses this summary.  Do not fall back to the legacy compliance
+            // dialogue in that race: it teleports the officer to the player and competes with
+            // the canonical intake escort/state machine.  Wait briefly for the canonical
+            // behavior instead, preserving the acknowledged release summary for it.
+            yield return HandOffReleaseSummaryToCanonicalIntake(player);
 
             try
             {
@@ -2189,14 +2251,11 @@ namespace Behind_Bars.Systems.Jail
                 // Parole term timer is already running from teleportation,
                 // and grace period for searches started immediately upon release
 
-                // Show parole status UI now that release summary UI is dismissed
-                if (!immediateArrestTriggered)
-                {
-                    Core.ResolveUIManager().ShowParoleStatus();
-                    ModLogger.Debug($"Showing parole status UI for {player.name} after release summary dismissal");
-                }
+                // Show parole status UI now that the release summary is dismissed.
+                Core.ResolveUIManager().ShowParoleStatus();
+                ModLogger.Debug($"Showing parole status UI for {player.name} after release summary dismissal");
 
-                ModLogger.Info($"Parole conditions acknowledged by {player.name} - post-release compliance handled");
+                ModLogger.Info($"Parole conditions acknowledged by {player.name} - canonical intake handoff completed");
             }
             catch (System.Exception ex)
             {
@@ -2213,6 +2272,9 @@ namespace Behind_Bars.Systems.Jail
             return player != null && activeReleases.ContainsKey(GetPlayerRuntimeKey(player));
         }
 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         public ReleaseStatus GetReleaseStatus(Player player)
         {
             if (player == null)
@@ -2374,6 +2436,9 @@ namespace Behind_Bars.Systems.Jail
         /// <summary>
         /// Called when a Release Officer successfully completes an escort
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private void HandleEscortCompleted(ReleaseRequest request, Player player)
         {
             if (request.playerKey != GetPlayerRuntimeKey(player))
@@ -2389,8 +2454,58 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
+        /// Cancels release and parole-intake routines that belong to the unloading Main scene.
+        /// Persistent release data is not altered; only volatile requests and callbacks are discarded.
+        /// </summary>
+        public void CancelForSceneExit()
+        {
+            foreach (var coroutine in sceneCoroutineHandles)
+            {
+                if (coroutine != null)
+                {
+                    MelonCoroutines.Stop(coroutine);
+                }
+            }
+            sceneCoroutineHandles.Clear();
+
+            foreach (var request in activeReleases.Values.ToList())
+            {
+                try
+                {
+                    ReleaseAssignedOfficer(request, true);
+                }
+                catch (Exception ex)
+                {
+                    // Scene teardown can race Unity object destruction. Continue releasing
+                    // the remaining requests instead of leaving the manager half-cleaned.
+                    ModLogger.Warn($"ReleaseManager scene-exit officer cleanup ignored an issue: {ex.Message}");
+                }
+            }
+            activeReleases.Clear();
+            releaseQueue.Clear();
+            CleanupAllActiveReleaseCallbacks();
+            ModLogger.Debug("ReleaseManager cancelled active scene release work");
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private Coroutine StartSceneCoroutine(IEnumerator routine)
+        {
+            var coroutine = MelonCoroutines.Start(routine) as Coroutine;
+            if (coroutine != null)
+            {
+                sceneCoroutineHandles.Add(coroutine);
+            }
+            return coroutine;
+        }
+
+        /// <summary>
         /// Called when a Release Officer fails an escort
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private void HandleEscortFailed(ReleaseRequest request, Player player, string reason)
         {
             if (request.playerKey != GetPlayerRuntimeKey(player))
@@ -2408,6 +2523,9 @@ namespace Behind_Bars.Systems.Jail
         /// <summary>
         /// Called when a Release Officer updates their status during escort
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private void HandleStatusUpdate(ReleaseRequest request, Player player, ActiveReleaseOfficerBehavior.ReleaseState officerState)
         {
             if (request.playerKey != GetPlayerRuntimeKey(player))
@@ -2435,6 +2553,9 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private void AttachOfficerCallbacks(ReleaseRequest request, ActiveReleaseOfficerBehavior officer)
         {
             if (request == null || officer == null)
@@ -2456,6 +2577,9 @@ namespace Behind_Bars.Systems.Jail
 #endif
         }
 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private void DetachOfficerCallbacks(ReleaseRequest request)
         {
             if (request == null)
@@ -2490,6 +2614,9 @@ namespace Behind_Bars.Systems.Jail
 #endif
         }
 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private void ReleaseAssignedOfficer(ReleaseRequest request, bool returnToPost)
         {
             if (request == null)
@@ -2526,6 +2653,82 @@ namespace Behind_Bars.Systems.Jail
             {
                 ReleaseAssignedOfficer(request, false);
             }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private IEnumerator HandOffReleaseSummaryToCanonicalIntake(Player player)
+        {
+            const float handoffTimeoutSeconds = 8f;
+            float deadline = Time.realtimeSinceStartup + handoffTimeoutSeconds;
+
+            while (Time.realtimeSinceStartup < deadline)
+            {
+                if (player == null || player.gameObject == null)
+                {
+                    yield break;
+                }
+
+                var supervisingOfficer = Core.Instance?.NpcManager?.GetSupervisingOfficer();
+                var intakeStateMachine = supervisingOfficer != null
+                    ? BBHelpers.GetComponentSafe<ParoleIntakeStateMachine>(supervisingOfficer.gameObject)
+                    : null;
+
+                if (intakeStateMachine != null)
+                {
+                    // This is idempotent while the dynamic parole manager is also bringing
+                    // the officer online.  Starting here closes the release-summary timing
+                    // window without bypassing the canonical behavior.
+                    intakeStateMachine.StartParoleIntake(player);
+                    if (intakeStateMachine.NotifyReleaseSummaryDismissed(player))
+                    {
+                        UnfreezePlayer(player);
+                        ModLogger.Info($"ReleaseManager: Handed post-release flow to the canonical supervising officer intake escort for {player.name}");
+                        yield break;
+                    }
+                }
+
+                yield return null;
+            }
+
+            // Do not revive the retired manager-owned compliance sequence here.  It can
+            // teleport the officer and leave the canonical intake state unable to resume.
+            UnfreezePlayer(player);
+            ModLogger.Error($"ReleaseManager: Canonical parole intake was unavailable for {handoffTimeoutSeconds:0}s after {player.name} dismissed the release summary");
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private IEnumerator PrepareCanonicalParoleIntake(Player player)
+        {
+            const float preparationTimeoutSeconds = 8f;
+            float deadline = Time.realtimeSinceStartup + preparationTimeoutSeconds;
+
+            while (Time.realtimeSinceStartup < deadline)
+            {
+                if (player == null || player.gameObject == null)
+                {
+                    yield break;
+                }
+
+                var supervisingOfficer = Core.Instance?.NpcManager?.GetSupervisingOfficer();
+                var intakeStateMachine = supervisingOfficer != null
+                    ? BBHelpers.GetComponentSafe<ParoleIntakeStateMachine>(supervisingOfficer.gameObject)
+                    : null;
+
+                if (intakeStateMachine != null)
+                {
+                    intakeStateMachine.StartParoleIntake(player);
+                    ModLogger.Info($"ReleaseManager: Supervising officer is approaching {player.name} while the parole conditions summary is visible");
+                    yield break;
+                }
+
+                yield return null;
+            }
+
+            ModLogger.Warn($"ReleaseManager: Supervising officer was not ready to approach {player.name} while the parole conditions summary was visible");
         }
 
         #endregion

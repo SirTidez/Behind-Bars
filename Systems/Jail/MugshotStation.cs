@@ -50,6 +50,7 @@ namespace Behind_Bars.Systems.Jail
         private bool isCapturing = false;
         private BookingProcess bookingProcess;
         private Player currentPlayer;
+        private Coroutine mugshotCaptureCoroutine;
         
         void Start()
         {
@@ -274,7 +275,7 @@ namespace Behind_Bars.Systems.Jail
             StartCameraView();
             
             // Start mugshot process
-            MelonCoroutines.Start(CaptureMugshot(currentPlayer));
+            mugshotCaptureCoroutine = MelonCoroutines.Start(CaptureMugshot(currentPlayer)) as Coroutine;
         }
         
         private void StartCameraView()
@@ -355,6 +356,36 @@ namespace Behind_Bars.Systems.Jail
                 interactableObject.SetMessage("Take mugshot");
                 interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
             }
+        }
+
+        /// <summary>
+        /// Restores camera/input ownership if the Main scene unloads during a mugshot.
+        /// </summary>
+        public void CancelForSceneExit()
+        {
+            if (mugshotCaptureCoroutine != null)
+            {
+                MelonCoroutines.Stop(mugshotCaptureCoroutine);
+                mugshotCaptureCoroutine = null;
+            }
+
+            if (flashLightComponent != null)
+            {
+                flashLightComponent.enabled = false;
+            }
+
+            ExitCameraView();
+            isCapturing = false;
+        }
+
+        private void OnDisable()
+        {
+            CancelForSceneExit();
+        }
+
+        private void OnDestroy()
+        {
+            CancelForSceneExit();
         }
 
 #if !MONO
@@ -457,6 +488,7 @@ namespace Behind_Bars.Systems.Jail
             
             // Exit camera view and restore normal view
             ExitCameraView();
+            mugshotCaptureCoroutine = null;
             
             ModLogger.Info("Mugshot capture completed successfully");
         }

@@ -13,6 +13,7 @@ using FishNet.Connection;
 
 namespace Behind_Bars.Harmony
 {
+#if MONO
     /// <summary>
     /// Patches StorageEntity to make PrisonStorageEntity work locally without network sync
     /// </summary>
@@ -139,4 +140,5 @@ namespace Behind_Bars.Harmony
             return itemInstance.GetType().Name;
         }
     }
+#endif
 }

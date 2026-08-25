@@ -8,10 +8,12 @@ using Behind_Bars.Utils;
 #if !MONO
 using Il2CppTMPro;
 using Il2CppScheduleOne.DevUtilities;
+using Il2CppScheduleOne.PlayerScripts;
 using Il2CppScheduleOne.UI;
 #else
 using TMPro;
 using ScheduleOne.DevUtilities;
+using ScheduleOne.PlayerScripts;
 using ScheduleOne.UI;
 #endif
 
@@ -58,6 +60,26 @@ namespace Behind_Bars.UI
         {
             // Stop repeating updates when disabled
             CancelInvoke(nameof(UpdateWantedDisplay));
+        }
+
+        /// <summary>
+        /// Releases the old scene canvas presentation while retaining the registered
+        /// component for the next gameplay scene. The panel is parented to the game's
+        /// HUD canvas, which is destroyed when returning to Menu.
+        /// </summary>
+        public void ReleaseScenePresentation()
+        {
+            CancelInvoke(nameof(UpdateWantedDisplay));
+
+            if (_wantedPanel != null)
+            {
+                UnityEngine.Object.Destroy(_wantedPanel);
+            }
+
+            _wantedPanel = null;
+            _wantedLevelText = null;
+            _crimeCountText = null;
+            _isInitialized = false;
         }
         
         /// <summary>
@@ -213,6 +235,16 @@ namespace Behind_Bars.UI
                     // Hide panel if no crime system
                     if (_wantedPanel != null)
                         _wantedPanel.SetActive(false);
+                    return;
+                }
+
+                // The wanted overlay communicates active street heat. A player who
+                // is already in custody may still have recorded street crimes, but
+                // that state must not occupy the HUD during intake or imprisonment.
+                var localPlayer = Player.Local;
+                if (localPlayer != null && Core.ResolveJailTimeTracker().IsInJail(localPlayer))
+                {
+                    _wantedPanel.SetActive(false);
                     return;
                 }
                 

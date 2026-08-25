@@ -12,6 +12,10 @@ namespace Behind_Bars.Systems.NPCs
 {
     public static class PresetParoleOfficerRoutes
     {
+        // Authored scene marker: "Next to the courthouse" in Main.unity.  Keep this
+        // independent of S1API so the supervising officer owns a stable native-map post.
+        private static readonly Vector3 SupervisingOfficerStation = new Vector3(71.705f, 1.065f, 24.632f);
+
         private static Dictionary<string, PatrolRoute> AllRoutes = new Dictionary<string, PatrolRoute>();
         public static PatrolRoute PoliceStation;
         public static PatrolRoute North;
@@ -130,6 +134,14 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         public static PatrolRoute GetRoute(string name) { return AllRoutes[name]; }
+
+        /// <summary>
+        /// Gets the supervising officer's permanent check-in post in front of the courthouse.
+        /// </summary>
+        public static Vector3 GetSupervisingOfficerStation()
+        {
+            return SupervisingOfficerStation;
+        }
 
         public static void AddRoute(string name, PatrolRoute route) {
             if (AllRoutes.ContainsKey(name)) {

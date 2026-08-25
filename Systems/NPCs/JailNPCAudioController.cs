@@ -50,6 +50,7 @@ namespace Behind_Bars.Systems.NPCs
         private bool isInitialized = false;
         private float lastCommandTime = 0f;
         private Coroutine currentVoiceRoutine;
+        private Coroutine delayedInitializationRoutine;
 
         // Guard voice line types
         public enum GuardCommandType
@@ -82,7 +83,7 @@ namespace Behind_Bars.Systems.NPCs
             SetupVOEmitter();
 
             // Delay initialization to ensure all components are ready
-            MelonCoroutines.Start(DelayedInitialization());
+            delayedInitializationRoutine = MelonCoroutines.Start(DelayedInitialization()) as Coroutine;
             //StartCoroutine(DelayedInitialization());
         }
 
@@ -230,8 +231,7 @@ namespace Behind_Bars.Systems.NPCs
 
                 if (voiceEmitter != null && mainVoiceSource != null)
                 {
-                    // Configure VOEmitter settings
-                    voiceEmitter.PitchMultiplier = 1.0f + UnityEngine.Random.Range(-pitchVariation, pitchVariation);
+                    voiceEmitter.SetRuntimePitchMultiplier(1.0f + UnityEngine.Random.Range(-pitchVariation, pitchVariation));
 
                     // Find and set a VODatabase from existing NPCs or create one
                     SetupVODatabase();
@@ -336,7 +336,7 @@ namespace Behind_Bars.Systems.NPCs
 
             if (currentVoiceRoutine != null)
             {
-                StopCoroutine(currentVoiceRoutine);
+                MelonCoroutines.Stop(currentVoiceRoutine);
             }
 
             currentVoiceRoutine = (Coroutine)MelonCoroutines.Start(PlayGuardCommandCoroutine(commandType, useRadio));
@@ -681,7 +681,7 @@ namespace Behind_Bars.Systems.NPCs
             {
                 if (currentVoiceRoutine != null)
                 {
-                    StopCoroutine(currentVoiceRoutine);
+                    MelonCoroutines.Stop(currentVoiceRoutine);
                     currentVoiceRoutine = null;
                 }
 
@@ -726,6 +726,11 @@ namespace Behind_Bars.Systems.NPCs
         protected virtual void OnDestroy()
         {
             StopVoiceCommand();
+            if (delayedInitializationRoutine != null)
+            {
+                MelonCoroutines.Stop(delayedInitializationRoutine);
+                delayedInitializationRoutine = null;
+            }
         }
     }
 }

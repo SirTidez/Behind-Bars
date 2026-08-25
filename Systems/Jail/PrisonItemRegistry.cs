@@ -157,9 +157,9 @@ namespace Behind_Bars.Systems.Jail
 #if MONO
                     var itemDef = ScriptableObject.CreateInstance<BuildableItemDefinition>();
 #else
-                    // Create item definition via reflection to avoid IL2CPP base-type binding issues
-                    var itemDefType = Type.GetType("Il2CppScheduleOne.ItemFramework.BuildableItemDefinition, Il2CppScheduleOne.ItemFramework", false);
-                    var itemDef = itemDefType != null ? System.Activator.CreateInstance(itemDefType) : null;
+                    // Use the generated wrapper constructor so reflection later observes the native
+                    // ItemDefinition wrapper, rather than only its base ScriptableObject wrapper.
+                    object itemDef = new BuildableItemDefinition();
 #endif
                     if (itemDef == null)
                     {

@@ -261,7 +261,7 @@ namespace Behind_Bars.Systems.Jail
             float currentTime = Time.time;
             if (currentTime - _lastFrustumUpdateTime >= FRUSTUM_UPDATE_INTERVAL)
             {
-                GeometryUtility.CalculateFrustumPlanes(playerCamera, _cachedFrustumPlanes);
+                UnityEngine.GeometryUtility.CalculateFrustumPlanes(playerCamera, _cachedFrustumPlanes);
                 _lastFrustumUpdateTime = currentTime;
             }
 
@@ -403,7 +403,7 @@ namespace Behind_Bars.Systems.Jail
             {
                 // Use cached frustum planes instead of recalculating (expensive operation)
                 Bounds monitorBounds = GetMonitorBounds(monitor);
-                if (!GeometryUtility.TestPlanesAABB(_cachedFrustumPlanes, monitorBounds))
+                if (!UnityEngine.GeometryUtility.TestPlanesAABB(_cachedFrustumPlanes, monitorBounds))
                 {
                     return false;
                 }

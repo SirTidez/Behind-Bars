@@ -210,12 +210,33 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
             doorController.SetupDoors();
         }
 
+        ConfigureIntakeCorridorDoorOpening();
+
         lightingController.Initialize(transform);
 
         // Performance: Initialize NPCUpdateManager for event-driven NPC updates
         InitializeNPCUpdateSystem();
 
         ModLogger.Debug("✓ All controllers initialized");
+    }
+
+    /// <summary>
+    /// Narrows only the Booking_InnerDoor swing. This is the intake-side door to the shared
+    /// hallway; a full 135 degree opening lets the player outrun the escort trigger.
+    /// </summary>
+    void ConfigureIntakeCorridorDoorOpening()
+    {
+        const float intakeCorridorOpenAngle = 105f;
+        JailDoor bookingInnerDoor = areaManager?.GetBooking()?.bookingInnerDoor;
+        if (bookingInnerDoor == null)
+        {
+            ModLogger.Warn("Booking_InnerDoor was not available to configure its intake corridor opening");
+            return;
+        }
+
+        float direction = bookingInnerDoor.openAngle < 0f ? -1f : 1f;
+        bookingInnerDoor.openAngle = direction * intakeCorridorOpenAngle;
+        ModLogger.Info($"Configured Booking_InnerDoor to open {intakeCorridorOpenAngle:0} degrees toward the intake corridor");
     }
 
     /// <summary>
@@ -425,11 +446,14 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     public void RotateAllMonitors() => monitorController?.RotateAllMonitors();
     public void SetMonitorCamera(MonitorController monitor, SecurityCamera camera) => monitorController?.SetMonitorCamera(monitor, camera);
     public Transform AssignPlayerToHoldingCell(Player player) => cellManager?.AssignPlayerToHoldingCell(player);
+    public Transform AssignPlayerToHoldingCellByName(Player player, string holdingCellName) => cellManager?.AssignPlayerToHoldingCellByName(player, holdingCellName);
     public void ReleasePlayerFromHoldingCell(Player player) => cellManager?.ReleasePlayerFromHoldingCell(player);
     public CellDetail GetAvailableJailCell() => cellManager?.GetAvailableJailCell();
     public CellDetail GetAvailableHoldingCell() => cellManager?.GetAvailableHoldingCell();
     public CellDetail GetCellByIndex(int cellIndex) => cellManager?.GetCellByIndex(cellIndex);
     public CellDetail GetHoldingCellByIndex(int cellIndex) => cellManager?.GetHoldingCellByIndex(cellIndex);
+    public CellDetail GetHoldingCellByName(string holdingCellName) => cellManager?.GetHoldingCellByName(holdingCellName);
+    public int GetHoldingCellRuntimeIndexByName(string holdingCellName) => cellManager?.GetHoldingCellRuntimeIndexByName(holdingCellName) ?? -1;
     public int FindPlayerHoldingCell(Player player) => cellManager?.FindPlayerHoldingCell(player) ?? -1;
     public bool IsPlayerInHoldingCellBounds(Player player, int holdingCellIndex) => cellManager?.IsPlayerInHoldingCellBounds(player, holdingCellIndex) ?? false;
     public bool HasPlayerExitedHoldingCell(Player player, int holdingCellIndex) => cellManager?.HasPlayerExitedHoldingCell(player, holdingCellIndex) ?? true;

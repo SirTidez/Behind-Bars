@@ -649,6 +649,9 @@ namespace Behind_Bars.UI
         /// <summary>
         /// Show the parole conditions UI with specified data
         /// </summary>
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
         public void Show(float bailAmountPaid, float fineAmount, float termLengthGameMinutes, LSILevel lsiLevel,
             (int totalScore, int crimeCountScore, int severityScore, int violationScore, int pastParoleScore, LSILevel resultingLevel) lsiBreakdown,
             (float originalSentenceTime, float timeServed) jailTimeInfo, List<string> recentCrimes,
@@ -863,6 +866,9 @@ namespace Behind_Bars.UI
         /// <summary>
         /// Get human-readable description of LSI level
         /// </summary>
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
         private string GetLSIDescription(LSILevel lsiLevel)
         {
             switch (lsiLevel)

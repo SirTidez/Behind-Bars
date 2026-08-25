@@ -161,22 +161,17 @@ public class JailBed : MonoBehaviour
                 return;
             }
             
-            // This is the key part - exactly like Schedule I's bed
-            if (networkObject != null)
+            // SleepCanvas owns the active bed/sleep state in the current game API.
+            // Do not write the removed Player.CurrentBed field directly.
+            if (networkObject == null)
             {
-                player.CurrentBed = networkObject; // Set the current bed
+                ModLogger.Debug("Jail bed has no NetworkObject; opening the native sleep menu without a bed binding");
             }
-            else
-            {
-                // Try to set it to null first, then find a suitable NetworkObject
-                player.CurrentBed = null;
-                ModLogger.Debug("No NetworkObject available for jail bed");
-            }
-            
-            // Open Schedule I's sleep canvas - exactly like Schedule I's bed does
+
+            // Open Schedule I's current native sleep menu.
             try
             {
-                Singleton<SleepCanvas>.Instance.SetIsOpen(true);
+                Singleton<SleepCanvas>.Instance.OpenMenu();
                 Singleton<SleepCanvas>.Instance.SleepButtonPressed();
                 ModLogger.Info($"Opened sleep canvas for {bedName}");
             }

@@ -103,6 +103,13 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private bool isInitializing = false;
 
+        // A release begins before the parole record becomes active. Retain the
+        // supervising officer only for that narrow bridge so they can walk to the
+        // police-station release point instead of appearing after the summary closes.
+        private Player preparedReleaseParolee;
+        private Vector3 preparedReleaseMeetingPoint;
+        private Coroutine preparedReleaseMeetingCoroutine;
+
         #endregion
 
         #region References
@@ -158,6 +165,10 @@ namespace Behind_Bars.Systems.NPCs
         private void OnDestroy()
         {
             Cleanup();
+            if (Instance == this)
+            {
+                Instance = null;
+            }
         }
 
         #endregion
@@ -519,6 +530,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Delayed intake handoff that retries until the supervising officer can actually take the player.
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private IEnumerator DelayedIntakeNotification(Player player)
         {
             try
@@ -592,6 +606,7 @@ namespace Behind_Bars.Systems.NPCs
 
             ModLogger.Info($"DynamicParoleOfficerManager: Parole ended for {player.name}");
             isPlayerOnParole = false;
+            CancelPreparedSupervisingOfficerForRelease(player);
             supervisingOfficerInteractionCoordinator.ClearPlayer(player);
 
             // Despawn all officers
@@ -652,7 +667,14 @@ namespace Behind_Bars.Systems.NPCs
 
             if (!isPlayerOnParole)
             {
-                // Ensure all officers are despawned
+                if (HasPreparedReleaseMeeting())
+                {
+                    EnsureSupervisingOfficer();
+                    return;
+                }
+
+                // Ensure all officers are despawned when there is no active or pending
+                // parole supervision.
                 DespawnAllOfficers();
                 return;
             }
@@ -692,6 +714,100 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Starts the supervising officer's walk to a pending release point before parole
+        /// becomes active. The canonical intake state machine remains responsible for the
+        /// greeting and escort once the release summary is dismissed.
+        /// </summary>
+        internal void PrepareSupervisingOfficerForRelease(Player player, Vector3 meetingPoint)
+        {
+            if (!isInitialized || player == null)
+            {
+                ModLogger.Warn("DynamicParoleOfficerManager: Cannot pre-position supervising officer before initialization");
+                return;
+            }
+
+            preparedReleaseParolee = player;
+            preparedReleaseMeetingPoint = meetingPoint;
+            EnsureSupervisingOfficer();
+
+            if (preparedReleaseMeetingCoroutine == null)
+            {
+                preparedReleaseMeetingCoroutine = MelonCoroutines.Start(PrepareSupervisingOfficerForReleaseCoroutine()) as Coroutine;
+            }
+
+            ModLogger.Info($"DynamicParoleOfficerManager: Preparing supervising officer to meet {player.name} at release point {meetingPoint}");
+        }
+
+        internal void CancelPreparedSupervisingOfficerForRelease(Player player)
+        {
+            if (preparedReleaseParolee == null || (player != null && preparedReleaseParolee != player))
+            {
+                return;
+            }
+
+            if (preparedReleaseMeetingCoroutine != null)
+            {
+                MelonCoroutines.Stop(preparedReleaseMeetingCoroutine);
+                preparedReleaseMeetingCoroutine = null;
+            }
+
+            if (activeOfficers.TryGetValue(ParoleOfficerAssignment.PoliceStationSupervisor, out var supervisingOfficer) && supervisingOfficer != null)
+            {
+                BBHelpers.GetComponentSafe<ParoleIntakeStateMachine>(supervisingOfficer.gameObject)?.StopIntakeProcess();
+            }
+
+            preparedReleaseParolee = null;
+            ModLogger.Info("DynamicParoleOfficerManager: Cancelled pending supervising-officer release meeting");
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private IEnumerator PrepareSupervisingOfficerForReleaseCoroutine()
+        {
+            const float timeoutSeconds = 90f;
+            float deadline = Time.realtimeSinceStartup + timeoutSeconds;
+
+            try
+            {
+                while (Time.realtimeSinceStartup < deadline && HasPreparedReleaseMeeting())
+                {
+                    EnsureSupervisingOfficer();
+
+                    if (activeOfficers.TryGetValue(ParoleOfficerAssignment.PoliceStationSupervisor, out var supervisingOfficer) && supervisingOfficer != null)
+                    {
+                        var intakeStateMachine = BBHelpers.GetComponentSafe<ParoleIntakeStateMachine>(supervisingOfficer.gameObject);
+                        if (intakeStateMachine != null)
+                        {
+                            intakeStateMachine.PrepareForReleaseMeeting(preparedReleaseParolee, preparedReleaseMeetingPoint);
+                            ModLogger.Info($"DynamicParoleOfficerManager: Supervising officer is walking to the police-station release point for {preparedReleaseParolee.name}");
+                            yield break;
+                        }
+                    }
+
+                    yield return new WaitForSeconds(0.5f);
+                }
+
+                if (HasPreparedReleaseMeeting())
+                {
+                    ModLogger.Warn("DynamicParoleOfficerManager: Timed out preparing supervising officer for pending release");
+                }
+            }
+            finally
+            {
+                preparedReleaseMeetingCoroutine = null;
+            }
+        }
+
+        private bool HasPreparedReleaseMeeting()
+        {
+            return preparedReleaseParolee != null && preparedReleaseParolee.gameObject != null;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private ParoleOfficerBehavior FindExistingSupervisingOfficer()
         {
             var allParoleOfficers = BBHelpers.FindObjectsOfTypeSafe<ParoleOfficerBehavior>();
@@ -735,6 +851,9 @@ namespace Behind_Bars.Systems.NPCs
             return firstSupervisor;
         }
 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private void DeduplicateSupervisingOfficers(ParoleOfficerBehavior keeper)
         {
             if (keeper == null)
@@ -817,6 +936,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Spawn an officer with the given assignment
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private void SpawnOfficer(ParoleOfficerAssignment assignment)
         {
             if (spawnedAssignments.Contains(assignment))
@@ -867,6 +989,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Despawn an officer with the given assignment
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private void DespawnOfficer(ParoleOfficerAssignment assignment)
         {
             if (!spawnedAssignments.Contains(assignment))
@@ -912,6 +1037,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Spawn supervising officer (always at police station)
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private void SpawnSupervisingOfficer()
         {
             SpawnOfficer(ParoleOfficerAssignment.PoliceStationSupervisor);
@@ -924,6 +1052,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Get distance from player position to a route
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private float GetDistanceToRoute(ParoleOfficerAssignment assignment, Vector3 position)
         {
             try
@@ -957,6 +1088,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Get closest distance from position to route (considers waypoints and line segments)
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private float GetClosestDistanceToRoute(ParoleOfficerBehavior.PatrolRoute route, Vector3 position)
         {
             if (route.points == null || route.points.Length == 0)
@@ -1018,16 +1152,15 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Get spawn position for an assignment
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private Vector3 GetSpawnPositionForAssignment(ParoleOfficerAssignment assignment)
         {
-            // For supervising officer: Use police station route first waypoint
+            // The supervising officer is permanently posted at the courthouse.
             if (assignment == ParoleOfficerAssignment.PoliceStationSupervisor)
             {
-                var route = PresetParoleOfficerRoutes.GetRoute("PoliceStation");
-                if (route != null && route.points != null && route.points.Length > 0)
-                {
-                    return route.points[0];
-                }
+                return PresetParoleOfficerRoutes.GetSupervisingOfficerStation();
             }
 
             // For patrol officers: Use their route's first waypoint
@@ -1049,6 +1182,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Get officer name for assignment
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private string GetOfficerNameForAssignment(ParoleOfficerAssignment assignment)
         {
             string[] names = { "Billy", "Kelly", "Johnson", "Martinez", "Thompson", "Garcia" };
@@ -1075,6 +1211,7 @@ namespace Behind_Bars.Systems.NPCs
         private void Cleanup()
         {
             UnsubscribeFromEvents();
+            CancelPreparedSupervisingOfficerForRelease(preparedReleaseParolee);
             DespawnAllOfficers();
             isInitialized = false;
             isInitializing = false;
@@ -1102,6 +1239,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Check if an assignment is currently spawned
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         public bool IsOfficerSpawned(ParoleOfficerAssignment assignment)
         {
             return spawnedAssignments.Contains(assignment);
@@ -1119,6 +1259,9 @@ namespace Behind_Bars.Systems.NPCs
         /// Gate a supervising-officer interaction through the private coordinator.
         /// Used by intake handoff and check-in initiation to prevent duplicate controller starts.
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         internal bool TryBeginSupervisingOfficerInteraction(Player parolee, ParoleOfficerBehavior officer, SupervisingOfficerInteractionKind interactionKind)
         {
             return supervisingOfficerInteractionCoordinator.TryBeginInteraction(parolee, officer, interactionKind);
@@ -1127,6 +1270,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Reserve a supervising-officer check-in session before the downstream controller accepts it.
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         internal bool TryReserveCheckIn(Player parolee, ParoleOfficerBehavior officer)
         {
             return supervisingOfficerInteractionCoordinator.TryReserveCheckIn(parolee, officer);
@@ -1135,6 +1281,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Mark a supervising-officer interaction as actively started after the downstream controller accepts it.
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         internal void MarkSupervisingOfficerInteractionStarted(Player parolee, ParoleOfficerBehavior officer, SupervisingOfficerInteractionKind interactionKind)
         {
             switch (interactionKind)
@@ -1151,6 +1300,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// End a supervising-officer interaction through the private coordinator.
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         internal void EndSupervisingOfficerInteraction(Player parolee, ParoleOfficerBehavior officer, SupervisingOfficerInteractionKind interactionKind)
         {
             supervisingOfficerInteractionCoordinator.EndInteraction(parolee, officer, interactionKind);
@@ -1159,6 +1311,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Complete a supervising-officer check-in session through the private coordinator.
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         internal void CompleteSupervisingOfficerCheckIn(Player parolee, ParoleOfficerBehavior officer)
         {
             supervisingOfficerInteractionCoordinator.CompleteCheckIn(parolee, officer);
@@ -1167,6 +1322,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Commit a supervising-officer check-in after the parole system has admitted the parolee.
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         internal void StartCheckIn(Player parolee, ParoleOfficerBehavior officer)
         {
             supervisingOfficerInteractionCoordinator.StartCheckIn(parolee, officer);
@@ -1175,6 +1333,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Cancel a supervising-officer intake reservation through the private coordinator.
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         internal void CancelSupervisingOfficerIntake(Player parolee, ParoleOfficerBehavior officer)
         {
             supervisingOfficerInteractionCoordinator.CancelIntake(parolee, officer);
@@ -1183,6 +1344,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Cancel a supervising-officer check-in reservation through the private coordinator.
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         internal void CancelCheckIn(Player parolee, ParoleOfficerBehavior officer)
         {
             supervisingOfficerInteractionCoordinator.CompleteCheckIn(parolee, officer);

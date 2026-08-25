@@ -33,6 +33,7 @@ namespace Behind_Bars.Systems.CrimeDetection
     public class WitnessSystem
     {
         private Dictionary<string, WitnessState> _witnesses = new Dictionary<string, WitnessState>();
+        private int _sceneGeneration;
 
         public WitnessSystem()
         {
@@ -251,15 +252,22 @@ namespace Behind_Bars.Systems.CrimeDetection
         {
             ModLogger.Info($"Scheduling police call from {witness.name} in {delay} seconds");
 
-            MelonCoroutines.Start(DelayedPoliceCall(witness, crime, perpetrator, delay));
+            MelonCoroutines.Start(DelayedPoliceCall(witness, crime, perpetrator, delay, _sceneGeneration));
         }
 
         /// <summary>
         /// Coroutine to call police after a delay
         /// </summary>
-        private IEnumerator DelayedPoliceCall(NPC witness, CrimeInstance crime, Player perpetrator, float delay)
+        private IEnumerator DelayedPoliceCall(NPC witness, CrimeInstance crime, Player perpetrator, float delay, int generation)
         {
             yield return new WaitForSeconds(delay);
+
+            // Melon coroutines are process-owned. A stale witness must never reach into
+            // a newly loaded save after the scene that scheduled it has gone away.
+            if (generation != _sceneGeneration || !Core.IsGameplaySceneActive)
+            {
+                yield break;
+            }
 
             // Check if witness is still alive and conscious
             if (witness == null || !witness.IsConscious)
@@ -420,6 +428,16 @@ namespace Behind_Bars.Systems.CrimeDetection
                 return new List<CrimeInstance>(_witnesses[witnessId].WitnessedCrimes);
             }
             return new List<CrimeInstance>();
+        }
+
+        /// <summary>
+        /// Invalidates delayed witness work and releases scene NPC references at the
+        /// Main-to-Menu boundary.
+        /// </summary>
+        public void ResetSceneRuntimeState()
+        {
+            _sceneGeneration++;
+            _witnesses.Clear();
         }
     }
 

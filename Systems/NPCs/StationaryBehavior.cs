@@ -165,14 +165,6 @@ namespace Behind_Bars.Systems.NPCs
                     ReturnToPosition();
                 }
             }
-            {
-                // Only auto-return if we're significantly away (not just minor drift)
-                float distance = Vector3.Distance(transform.position, stationaryPosition);
-                if (distance > positionTolerance * 2f)
-                {
-                    ReturnToPosition();
-                }
-            }
         }
 
         #endregion

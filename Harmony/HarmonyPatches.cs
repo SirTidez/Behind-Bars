@@ -1,12 +1,15 @@
 ﻿using Behind_Bars.Helpers;
 using Behind_Bars.Systems.CrimeDetection;
 using Behind_Bars.Systems.CrimeTracking;
+using Behind_Bars.Systems.Crimes;
 using Behind_Bars.Systems.Jail;
+using Behind_Bars.Systems.NPCs;
 using HarmonyLib;
 using System.Collections;
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
 using Il2CppScheduleOne.UI;
+using Il2CppScheduleOne.Persistence;
 using Il2CppScheduleOne.NPCs;
 using Il2CppScheduleOne.Combat;
 using Il2CppScheduleOne.Police;
@@ -14,6 +17,7 @@ using Il2CppScheduleOne.Law;
 #else
 using ScheduleOne.PlayerScripts;
 using ScheduleOne.UI;
+using ScheduleOne.Persistence;
 using ScheduleOne.NPCs;
 using ScheduleOne.Combat;
 using ScheduleOne.Police;
@@ -26,6 +30,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace Behind_Bars.Harmony
 {
@@ -36,15 +41,112 @@ namespace Behind_Bars.Harmony
         private static bool _jailSystemHandlingArrest = false;
         private static CrimeDetectionSystem? _crimeDetectionSystem;
         private static bool _mugshotInProgress = false;
+        private static bool _fingerprintScanInputLocked = false;
+        private static bool _guardLockdownInputLocked = false;
+        private static bool _nativeLoadingHoldRequested;
+        private static bool _nativeLoadingCloseAllowed;
+        private static bool _nativeLoadingCloseCoroutineActive;
+        private static int _nativeLoadingSession;
+        private static string _nativeLoadingStatus = "Preparing Behind Bars...";
         
         // Cooldown tracking for assault detection to prevent duplicates
         private static Dictionary<string, float> _assaultCooldown = new Dictionary<string, float>();
         private const float ASSAULT_COOLDOWN_SECONDS = 3f; // Prevent duplicate processing within 3 seconds
+        private const float PENDING_CIVILIAN_ASSAULT_SECONDS = 1.5f;
+        private static PendingCivilianAssault? _pendingCivilianAssault;
+        private static readonly HashSet<string> _persistedArrestCrimeEventKeys = new HashSet<string>();
+        private static int _nativeArrestCaptureSequence;
+
+        internal sealed class NativeArrestCrimeSnapshot
+        {
+            public int CaptureId { get; }
+            public Crime Crime { get; }
+            public int Quantity { get; }
+            public Vector3 Location { get; }
+
+            public NativeArrestCrimeSnapshot(int captureId, Crime crime, int quantity, Vector3 location)
+            {
+                CaptureId = captureId;
+                Crime = crime;
+                Quantity = Mathf.Max(0, quantity);
+                Location = location;
+            }
+        }
+
+        /// <summary>
+        /// Correlates the game's generic native Assault submission with the civilian damage
+        /// event that caused it. We retain damage handling, but defer the native wanted
+        /// escalation to the witness/police-call path owned by CrimeDetectionSystem.
+        /// </summary>
+        private sealed class PendingCivilianAssault
+        {
+            public string PlayerKey = string.Empty;
+            public string VictimId = string.Empty;
+            public float ExpiresAt;
+            public bool NativeAddCrimeSuppressed;
+        }
         
         public static void Initialize(Core core)
         {
             _core = core;
             _crimeDetectionSystem = new CrimeDetectionSystem();
+        }
+
+        /// <summary>
+        /// Keeps the game's existing loading screen visible during the final load phase
+        /// while Behind Bars initializes its scene-owned systems.
+        /// </summary>
+        public static void BeginNativeLoadingScreenHold(int gameplaySession)
+        {
+            _nativeLoadingSession = gameplaySession;
+            _nativeLoadingHoldRequested = true;
+            _nativeLoadingCloseAllowed = false;
+            _nativeLoadingCloseCoroutineActive = false;
+            _nativeLoadingStatus = "Preparing Behind Bars...";
+            ModLogger.Debug($"[Native Loading] Requested final loading-screen step for gameplay session {gameplaySession}");
+        }
+
+        /// <summary>
+        /// Updates the game-owned loading-screen text for the active Behind Bars scene
+        /// startup. The session check prevents stale coroutines from writing into a later load.
+        /// </summary>
+        public static void SetNativeLoadingScreenStatus(int gameplaySession, string status)
+        {
+            if (!_nativeLoadingHoldRequested || _nativeLoadingSession != gameplaySession || string.IsNullOrWhiteSpace(status))
+            {
+                return;
+            }
+
+            _nativeLoadingStatus = status;
+            ModLogger.Debug($"[Native Loading] {status}");
+        }
+
+        /// <summary>
+        /// Completes the final Behind Bars startup step and lets the game close its own
+        /// loading screen on the next close request.
+        /// </summary>
+        public static void CompleteNativeLoadingScreenHold(int gameplaySession)
+        {
+            if (!_nativeLoadingHoldRequested || _nativeLoadingSession != gameplaySession)
+            {
+                return;
+            }
+
+            _nativeLoadingHoldRequested = false;
+            ModLogger.Debug($"[Native Loading] Behind Bars startup complete for gameplay session {gameplaySession}");
+        }
+
+        /// <summary>
+        /// Cancels a pending native loading-screen hold during scene exit. This never
+        /// attempts to close a loading screen outside the Main scene.
+        /// </summary>
+        public static void CancelNativeLoadingScreenHold()
+        {
+            _nativeLoadingHoldRequested = false;
+            _nativeLoadingCloseAllowed = false;
+            _nativeLoadingCloseCoroutineActive = false;
+            _nativeLoadingSession = 0;
+            _nativeLoadingStatus = "Preparing Behind Bars...";
         }
         
         /// <summary>
@@ -63,6 +165,183 @@ namespace Behind_Bars.Harmony
         {
             _mugshotInProgress = inProgress;
             ModLogger.Info($"Mugshot mode set to: {inProgress}");
+        }
+
+        /// <summary>
+        /// Suppresses only the local player's native punch input while the
+        /// fingerprint scanner owns the primary mouse button for hand dragging.
+        /// </summary>
+        public static void SetFingerprintScanInputLocked(bool locked)
+        {
+            _fingerprintScanInputLocked = locked;
+        }
+
+        /// <summary>
+        /// Suppress the local player's combat input while the guard-assault blackout and
+        /// custody transfer are running. Scanner ownership remains independent.
+        /// </summary>
+        public static void SetGuardLockdownInputLocked(bool locked)
+        {
+            _guardLockdownInputLocked = locked;
+        }
+
+        /// <summary>
+        /// Clears transient scene-only patch state before the Main scene unloads.
+        /// Saved RapSheet data is intentionally not touched here; the live crime record
+        /// and pending witness work are scene-owned and must be discarded.
+        /// </summary>
+        public static void ResetSceneTransientState()
+        {
+            _jailSystemHandlingArrest = false;
+            _mugshotInProgress = false;
+            _fingerprintScanInputLocked = false;
+            _guardLockdownInputLocked = false;
+            CancelNativeLoadingScreenHold();
+            _assaultCooldown.Clear();
+            _pendingCivilianAssault = null;
+            _persistedArrestCrimeEventKeys.Clear();
+            _nativeArrestCaptureSequence = 0;
+            _crimeDetectionSystem?.ResetSceneRuntimeState();
+            Core.Instance?.JailSystem?.ClearSceneTransientParoleArrestCauses();
+            ModLogger.Debug("Harmony transient jail state reset for scene exit");
+        }
+
+        /// <summary>
+        /// Takes an in-memory copy of the game's current crime collection before custody
+        /// clears that transient native state. The snapshot is scoped to one arrest.
+        /// </summary>
+        internal static List<NativeArrestCrimeSnapshot> CaptureNativeCrimesForArrest(Player player)
+        {
+            var snapshots = new List<NativeArrestCrimeSnapshot>();
+            if (player?.CrimeData?.Crimes == null)
+            {
+                return snapshots;
+            }
+
+            int captureId = ++_nativeArrestCaptureSequence;
+            foreach (var crimeEntry in player.CrimeData.Crimes)
+            {
+                if (crimeEntry.Key == null || crimeEntry.Value <= 0)
+                {
+                    continue;
+                }
+
+                snapshots.Add(new NativeArrestCrimeSnapshot(
+                    captureId,
+                    crimeEntry.Key,
+                    crimeEntry.Value,
+                    player.transform.position));
+            }
+
+            ModLogger.Info($"[RAP SHEET] Captured {snapshots.Sum(snapshot => snapshot.Quantity)} native crime event(s) before clearing CrimeData for {player.name}");
+            return snapshots;
+        }
+
+        [HarmonyPatch(typeof(PunchController), "UpdateInput")]
+        [HarmonyPrefix]
+        private static bool PunchController_UpdateInput_Prefix(PunchController __instance)
+        {
+            return !(_fingerprintScanInputLocked || _guardLockdownInputLocked) || __instance == null || __instance.player != Player.Local;
+        }
+
+        [HarmonyPatch(typeof(LoadManager), "GetLoadStatusText")]
+        [HarmonyPostfix]
+        private static void LoadManager_GetLoadStatusText_Postfix(ref string __result)
+        {
+            if (ShouldHoldNativeLoadingScreen())
+            {
+                __result = _nativeLoadingStatus;
+            }
+        }
+
+        [HarmonyPatch(typeof(LoadingScreen), "Close")]
+        [HarmonyPrefix]
+        private static bool LoadingScreen_Close_Prefix(LoadingScreen __instance)
+        {
+            if (_nativeLoadingCloseAllowed || !ShouldHoldNativeLoadingScreen())
+            {
+                return true;
+            }
+
+            if (!_nativeLoadingCloseCoroutineActive)
+            {
+                _nativeLoadingCloseCoroutineActive = true;
+                MelonCoroutines.Start(WaitForBehindBarsStartupThenClose(__instance, _nativeLoadingSession));
+                ModLogger.Debug("[Native Loading] Delaying the game's loading-screen close for Behind Bars startup");
+            }
+
+            return false;
+        }
+
+        private static bool ShouldHoldNativeLoadingScreen()
+        {
+            if (!_nativeLoadingHoldRequested || !Core.IsGameplaySceneActive ||
+                !string.Equals(SceneManager.GetActiveScene().name, "Main", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            try
+            {
+                var loadManager = LoadManager.Instance;
+                return loadManager != null && loadManager.IsLoading;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static IEnumerator WaitForBehindBarsStartupThenClose(LoadingScreen loadingScreen, int gameplaySession)
+        {
+            const float safetyTimeoutSeconds = 90f;
+            float elapsed = 0f;
+
+            while (_nativeLoadingHoldRequested &&
+                   _nativeLoadingSession == gameplaySession &&
+                   Core.IsGameplaySceneActive &&
+                   elapsed < safetyTimeoutSeconds)
+            {
+                elapsed += Time.unscaledDeltaTime;
+                yield return null;
+            }
+
+            bool timedOut = _nativeLoadingHoldRequested && _nativeLoadingSession == gameplaySession && elapsed >= safetyTimeoutSeconds;
+            if (timedOut)
+            {
+                ModLogger.Warn($"[Native Loading] Behind Bars startup exceeded {safetyTimeoutSeconds:F0}s; releasing the game's loading screen to avoid a permanent load lock");
+                _nativeLoadingHoldRequested = false;
+            }
+
+            _nativeLoadingCloseCoroutineActive = false;
+            if (!Core.IsGameplaySceneActive ||
+                !string.Equals(SceneManager.GetActiveScene().name, "Main", StringComparison.OrdinalIgnoreCase) ||
+                loadingScreen == null)
+            {
+                yield break;
+            }
+
+            try
+            {
+                _nativeLoadingCloseAllowed = true;
+                loadingScreen.Close();
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"[Native Loading] Could not resume the game's loading screen close: {ex.Message}");
+            }
+            finally
+            {
+                _nativeLoadingCloseAllowed = false;
+            }
+        }
+
+        /// <summary>
+        /// Routes an in-jail guard attack through the single emergency-lockdown owner.
+        /// </summary>
+        public static bool TryBeginJailGuardAssault(GuardBehavior guard, Player player)
+        {
+            return GuardAssaultLockdownManager.TryBeginJailStaffAssault(guard, player, _crimeDetectionSystem);
         }
         
         /// <summary>
@@ -307,14 +586,50 @@ namespace Behind_Bars.Harmony
         */
 
         [HarmonyPatch(typeof(PlayerCrimeData), "AddCrime")]
+        [HarmonyPrefix]
+        public static bool PlayerCrimeData_AddCrime_Prefix(PlayerCrimeData __instance, Crime crime, int quantity)
+        {
+            if (!TrySuppressImmediateCivilianAssault(__instance, crime))
+            {
+                return true;
+            }
+
+            ModLogger.Info("[Crime Tracking] Deferred native civilian Assault escalation until a witness calls police");
+            return false;
+        }
+
+        [HarmonyPatch(typeof(PlayerCrimeData), "AddCrime")]
         [HarmonyPostfix]
         public static void PlayerCrimeData_AddCrime_PostFix(PlayerCrimeData __instance, Crime crime, int quantity)
         {
             try
             {
+                // Harmony may still run postfixes after a prefix skips the original method.
+                // Do not turn the deferred civilian offense back into an immediate record here.
+                if (TryConsumeSuppressedCivilianAssault(__instance, crime))
+                {
+                    return;
+                }
+
                 var cds = CrimeDetectionSystem.Instance;
                 if (cds != null && crime != null)
                 {
+                    // The base game submits generic Assault after a street officer is hit.
+                    // Convert that authoritative native-crime event here instead of relying
+                    // on the NPC health callback, which does not fire for every police hit
+                    // path on current IL2CPP builds.
+                    if (TryConvertNativeStreetOfficerAssault(__instance, crime, quantity, out var officer))
+                    {
+                        cds.ProcessOfficerAssault(
+                            officer,
+                            __instance.Player,
+                            applyWantedLevel: true,
+                            persistToRapSheet: false,
+                            mirrorNativeCrime: false);
+                        ModLogger.Info($"[Crime Tracking] Converted native street Assault to Assault on an LEO for {__instance.Player.name}");
+                        return;
+                    }
+
                     if (!cds.ShouldMirrorNativeCrime(__instance.Player, crime))
                     {
                         ModLogger.Debug($"[Crime Tracking] Skipping mirrored native crime {crime.CrimeName} (mod-managed event already recorded)");
@@ -334,6 +649,125 @@ namespace Behind_Bars.Harmony
             {
                 ModLogger.Error($"[Crime Tracking] Error adding crime to record: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Reclassifies the generic native Assault emitted for a player striking a nearby
+        /// police officer.  This runs after the game's AddCrime call, so it preserves the
+        /// native wanted/pursuit behavior while replacing only the record label.
+        /// </summary>
+        private static bool TryConvertNativeStreetOfficerAssault(
+            PlayerCrimeData crimeData,
+            Crime crime,
+            int quantity,
+            out NPC officer)
+        {
+            officer = null;
+            var player = crimeData?.Player;
+            if (player == null || player != Player.Local || crime == null ||
+                !string.Equals(crime.CrimeName, "Assault", StringComparison.OrdinalIgnoreCase) ||
+                Core.ResolveJailTimeTracker().IsInJail(player))
+            {
+                return false;
+            }
+
+            const float officerAssaultRadius = 5f;
+            PoliceOfficer closestOfficer = null;
+            float closestDistance = officerAssaultRadius;
+            foreach (var candidate in Behind_Bars.Helpers.Helpers.FindObjectsOfTypeSafe<PoliceOfficer>())
+            {
+                if (candidate == null || !candidate.gameObject.activeInHierarchy)
+                {
+                    continue;
+                }
+
+                float distance = Vector3.Distance(candidate.transform.position, player.transform.position);
+                if (distance <= closestDistance)
+                {
+                    closestOfficer = candidate;
+                    closestDistance = distance;
+                }
+            }
+
+            if (closestOfficer == null || crimeData.Crimes == null)
+            {
+                return false;
+            }
+
+            int assaultQuantity = Math.Max(1, quantity);
+            if (crimeData.Crimes.ContainsKey(crime))
+            {
+                assaultQuantity = Math.Max(assaultQuantity, crimeData.Crimes[crime]);
+                crimeData.Crimes.Remove(crime);
+            }
+
+            crimeData.Crimes.Add(new AssaultOnOfficer(), assaultQuantity);
+            officer = closestOfficer;
+            return true;
+        }
+
+        private static void TrackPendingCivilianAssault(NPC victim, Player player)
+        {
+            if (victim == null || player == null)
+            {
+                return;
+            }
+
+            _pendingCivilianAssault = new PendingCivilianAssault
+            {
+                PlayerKey = GetPlayerCrimeKey(player),
+                VictimId = victim.ID ?? string.Empty,
+                ExpiresAt = Time.time + PENDING_CIVILIAN_ASSAULT_SECONDS
+            };
+        }
+
+        private static bool TrySuppressImmediateCivilianAssault(PlayerCrimeData crimeData, Crime crime)
+        {
+            var pending = _pendingCivilianAssault;
+            var player = crimeData?.Player;
+            if (pending == null || player == null || player != Player.Local || crime == null ||
+                pending.NativeAddCrimeSuppressed ||
+                Time.time > pending.ExpiresAt ||
+                !string.Equals(pending.PlayerKey, GetPlayerCrimeKey(player), StringComparison.Ordinal) ||
+                !string.Equals(crime.CrimeName, "Assault", StringComparison.OrdinalIgnoreCase))
+            {
+                if (pending != null && Time.time > pending.ExpiresAt)
+                {
+                    _pendingCivilianAssault = null;
+                }
+
+                return false;
+            }
+
+            pending.NativeAddCrimeSuppressed = true;
+            return true;
+        }
+
+        private static bool TryConsumeSuppressedCivilianAssault(PlayerCrimeData crimeData, Crime crime)
+        {
+            var pending = _pendingCivilianAssault;
+            var player = crimeData?.Player;
+            if (pending == null || player == null || crime == null ||
+                !pending.NativeAddCrimeSuppressed ||
+                Time.time > pending.ExpiresAt ||
+                !string.Equals(pending.PlayerKey, GetPlayerCrimeKey(player), StringComparison.Ordinal) ||
+                !string.Equals(crime.CrimeName, "Assault", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            _pendingCivilianAssault = null;
+            return true;
+        }
+
+        private static string GetPlayerCrimeKey(Player player)
+        {
+            if (player == null)
+            {
+                return string.Empty;
+            }
+
+            return !string.IsNullOrEmpty(player.PlayerCode) ? player.PlayerCode : player.name ?? string.Empty;
         }
         
         /// <summary>
@@ -506,11 +940,88 @@ namespace Behind_Bars.Harmony
                 ModLogger.Error($"[ARREST CLIENT] Error starting jail processing: {ex.Message}");
             }
         }
+
+        private static bool TryPersistArrestCrime(
+            RapSheet rapSheet,
+            CrimeInstance crimeInstance,
+            ISet<string> persistedEventKeys,
+            string explicitEventKey = null)
+        {
+            string eventKey = explicitEventKey ?? BuildCrimeEventKey(crimeInstance);
+            if (persistedEventKeys.Contains(eventKey) || !_persistedArrestCrimeEventKeys.Add(eventKey))
+            {
+                ModLogger.Debug($"[RAP SHEET] Skipped duplicate arrest crime event: {crimeInstance.GetCrimeName()}");
+                return false;
+            }
+
+            if (!rapSheet.AddCrime(crimeInstance))
+            {
+                _persistedArrestCrimeEventKeys.Remove(eventKey);
+                return false;
+            }
+
+            persistedEventKeys.Add(eventKey);
+            return true;
+        }
+
+        private static bool IsRepresentedByEnhancedCrime(NativeArrestCrimeSnapshot snapshot, IEnumerable<CrimeInstance> activeCrimes)
+        {
+            if (snapshot?.Crime == null || activeCrimes == null)
+            {
+                return false;
+            }
+
+            string nativeFamily = GetCrimeFamily(snapshot.Crime.GetType().Name, snapshot.Crime.CrimeName);
+            foreach (var activeCrime in activeCrimes)
+            {
+                if (activeCrime == null)
+                {
+                    continue;
+                }
+
+                string activeFamily = GetCrimeFamily(activeCrime.GetCrimeTypeName(), activeCrime.GetCrimeName());
+                if (string.Equals(nativeFamily, activeFamily, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static string GetCrimeFamily(string typeName, string displayName)
+        {
+            string combined = $"{typeName} {displayName}";
+            if (combined.IndexOf("assault", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return "assault";
+            }
+
+            return string.IsNullOrWhiteSpace(typeName) ? displayName ?? string.Empty : typeName;
+        }
+
+        private static string BuildCrimeEventKey(CrimeInstance crimeInstance)
+        {
+            if (crimeInstance == null)
+            {
+                return "null";
+            }
+
+            Vector3 location = crimeInstance.Location;
+            return string.Join("|",
+                crimeInstance.GetCrimeTypeName(),
+                Mathf.Round(crimeInstance.Timestamp * 100f).ToString(),
+                Mathf.Round(location.x * 10f).ToString(),
+                Mathf.Round(location.y * 10f).ToString(),
+                Mathf.Round(location.z * 10f).ToString(),
+                Mathf.Round(crimeInstance.Severity * 100f).ToString(),
+                crimeInstance.CountsTowardWantedLevel ? "wanted" : "custody");
+        }
         
         /// <summary>
         /// Log all crimes to the player's rap sheet on arrest
         /// </summary>
-        public static void LogCrimesToRapSheet(Player player)
+        internal static void LogCrimesToRapSheet(Player player, IEnumerable<NativeArrestCrimeSnapshot> nativeCrimeSnapshots = null)
         {
             if (player == null)
             {
@@ -560,16 +1071,46 @@ namespace Behind_Bars.Harmony
                     }
                 }
 
-                // Add active crimes from CrimeDetectionSystem to rap sheet
+                var persistedEventKeys = new HashSet<string>(
+                    rapSheet.GetAllCrimes().Where(crime => crime != null).Select(BuildCrimeEventKey));
+
+                // A server arrest callback and the local custody coroutine can both reach
+                // this method. Persist each enhanced event once across those callbacks.
                 if (activeCrimes != null && activeCrimes.Count > 0)
                 {
                     ModLogger.Info($"[RAP SHEET] Adding {activeCrimes.Count} active crimes from CrimeDetectionSystem to rap sheet");
                     foreach (var crimeInstance in activeCrimes)
                     {
-                        if (crimeInstance != null)
+                        if (crimeInstance != null && TryPersistArrestCrime(rapSheet, crimeInstance, persistedEventKeys))
                         {
-                            rapSheet.AddCrime(crimeInstance);
                             ModLogger.Info($"[RAP SHEET] Logged crime from CrimeDetectionSystem: {crimeInstance.Description} (Severity: {crimeInstance.Severity})");
+                        }
+                    }
+                }
+
+                // Native CrimeData is cleared during jail entry. Persist its pre-clear
+                // snapshot after enhanced records, skipping only a native event already
+                // represented by the enhanced crime pipeline for this same arrest.
+                if (nativeCrimeSnapshots != null)
+                {
+                    foreach (var snapshot in nativeCrimeSnapshots)
+                    {
+                        if (snapshot?.Crime == null || IsRepresentedByEnhancedCrime(snapshot, activeCrimes))
+                        {
+                            continue;
+                        }
+
+                        for (int occurrence = 0; occurrence < snapshot.Quantity; occurrence++)
+                        {
+                            var nativeCrimeInstance = new CrimeInstance(
+                                snapshot.Crime,
+                                snapshot.Location,
+                                CalculateCrimeSeverity(snapshot.Crime));
+                            string nativeEventKey = $"native:{snapshot.CaptureId}:{snapshot.Crime.GetType().FullName}:{occurrence}";
+                            if (TryPersistArrestCrime(rapSheet, nativeCrimeInstance, persistedEventKeys, nativeEventKey))
+                            {
+                                ModLogger.Info($"[RAP SHEET] Logged captured native crime: {snapshot.Crime.CrimeName}");
+                            }
                         }
                     }
                 }
@@ -785,15 +1326,6 @@ namespace Behind_Bars.Harmony
             return true;
         }
 
-        // LEGACY: Keep the old arrest notice handling as fallback
-        [HarmonyPatch(typeof(ArrestNoticeScreen), "Close")]
-        [HarmonyPostfix]
-        public static void ArrestNoticeScreen_Close_Postfix(ArrestNoticeScreen __instance)
-        {
-            // This is now a fallback - should not normally be reached with new flow
-            ModLogger.Debug("ArrestNoticeScreen closed - using legacy fallback arrest handling");
-        }
-        
         // ====== CRIME DETECTION PATCHES ======
         
         /// <summary>
@@ -832,6 +1364,96 @@ namespace Behind_Bars.Harmony
         }
         
         /// <summary>
+        /// Intercept jail-staff damage before the native NPC health path can create a
+        /// street wanted/pursuit incident. The custody-local lockdown manager owns
+        /// the legal consequence and subdual while the player is already in jail.
+        /// </summary>
+        [HarmonyPatch(typeof(NPCHealth), "TakeDamage")]
+        [HarmonyPrefix]
+        public static bool NPCHealth_TakeDamage_Prefix(NPCHealth __instance, float damage, bool isLethal)
+        {
+            if (_crimeDetectionSystem == null || __instance?.npc == null)
+                return true;
+
+            try
+            {
+                var localPlayer = Player.Local;
+                if (localPlayer == null)
+                    return true;
+
+                var guard = Behind_Bars.Helpers.Helpers.GetComponentSafe<GuardBehavior>(__instance.npc.gameObject);
+                float distanceToPlayer = Vector3.Distance(__instance.npc.transform.position, localPlayer.transform.position);
+                if (Core.ResolveJailTimeTracker().IsInJail(localPlayer) &&
+                    guard != null &&
+                    distanceToPlayer <= 5f &&
+                    TryBeginJailGuardAssault(guard, localPlayer))
+                {
+                    ModLogger.Info($"[LOCKDOWN] Suppressed native damage/wanted path for in-jail assault on {__instance.npc.name}");
+                    return false;
+                }
+
+                // Native police normally submit the generic Assault crime. Own this
+                // narrow player-nearby hit path so street officer assaults retain
+                // ordinary pursuit while their record uses Assault on an LEO.
+                bool isNativePolice = __instance.npc is PoliceOfficer ||
+                    Behind_Bars.Helpers.Helpers.GetComponentSafe<PoliceOfficer>(__instance.npc.gameObject) != null;
+                if (!Core.ResolveJailTimeTracker().IsInJail(localPlayer) &&
+                    isNativePolice &&
+                    distanceToPlayer <= 5f &&
+                    TryRegisterStreetOfficerAssault(__instance.npc, localPlayer))
+                {
+                    return false;
+                }
+
+                // Damage must still reach the victim. Only remember the narrow native
+                // Assault that the game submits for this player-caused civilian hit, then
+                // let the postfix record it and let witnesses decide when police are called.
+                if (!Core.ResolveJailTimeTracker().IsInJail(localPlayer) &&
+                    !isNativePolice &&
+                    !_crimeDetectionSystem.IsModLawEnforcementNpc(__instance.npc) &&
+                    damage > 0f &&
+                    distanceToPlayer <= 5f)
+                {
+                    TrackPendingCivilianAssault(__instance.npc, localPlayer);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Fail open outside the confirmed custody-local path so the game's
+                // ordinary damage behavior remains intact.
+                ModLogger.Warn($"[LOCKDOWN] Could not evaluate pre-damage jail assault routing: {ex.Message}");
+            }
+
+            return true;
+        }
+
+        private static bool TryRegisterStreetOfficerAssault(NPC officer, Player player)
+        {
+            if (_crimeDetectionSystem == null || officer == null || player == null)
+            {
+                return false;
+            }
+
+            string officerKey = officer.ID;
+            float now = Time.time;
+            if (!string.IsNullOrEmpty(officerKey) &&
+                _assaultCooldown.TryGetValue(officerKey, out float lastAssaultTime) &&
+                now - lastAssaultTime < ASSAULT_COOLDOWN_SECONDS)
+            {
+                return true;
+            }
+
+            if (!string.IsNullOrEmpty(officerKey))
+            {
+                _assaultCooldown[officerKey] = now;
+            }
+
+            _crimeDetectionSystem.ProcessOfficerAssault(officer, player, applyWantedLevel: true);
+            ModLogger.Info($"[Crime Tracking] Recorded street officer assault as Assault on an LEO for {player.name}");
+            return true;
+        }
+
+        /// <summary>
         /// Detect assaults on civilian NPCs
         /// </summary>
         [HarmonyPatch(typeof(NPCHealth), "TakeDamage")]
@@ -851,8 +1473,9 @@ namespace Behind_Bars.Harmony
                 if (__instance.npc is PoliceOfficer || Behind_Bars.Helpers.Helpers.GetComponentSafe<PoliceOfficer>(__instance.npc.gameObject) != null)
                     return;
                 
-                // Only process if damage is significant (avoid noise from minor damage)
-                if (damage < 5f)
+                // Unarmed punches can deal less than five damage. Any positive damage
+                // confirmed by HoursSinceAttackedByPlayer is a real assault event.
+                if (damage <= 0f)
                     return;
                 
                 // Check if player is nearby (likely the attacker)
@@ -905,10 +1528,16 @@ namespace Behind_Bars.Harmony
                         _assaultCooldown.Remove(key);
                     }
 
-                    // Mod law-enforcement officers should not be treated as civilians.
-                    // They trigger immediate re-arrest and an additional Assault charge.
+                    // Jail guards use the custody-local lockdown path. This deliberately does
+                    // not alter wanted state; street police retain their normal escalation.
                     if (_crimeDetectionSystem.IsModLawEnforcementNpc(__instance.npc))
                     {
+                        var guard = Behind_Bars.Helpers.Helpers.GetComponentSafe<GuardBehavior>(__instance.npc.gameObject);
+                        if (guard != null && TryBeginJailGuardAssault(guard, localPlayer))
+                        {
+                            return;
+                        }
+
                         ModLogger.Info($"Officer assault detected: Player attacked law enforcement NPC {__instance.npc.name} (damage: {damage:F1}, distance: {distanceToPlayer:F1}m)");
                         _crimeDetectionSystem.ProcessOfficerAssault(__instance.npc, localPlayer);
                         TriggerImmediateOfficerReArrest(localPlayer, __instance.npc.name);

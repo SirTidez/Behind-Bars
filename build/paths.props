@@ -1,8 +1,8 @@
 ﻿<Project>
     <PropertyGroup>
         <!-- Paths and conditions -->
-        <S1MonoDir>C:\Users\SirTidez\SIMM\alternate-beta</S1MonoDir>
-        <S1CPPDir>C:\Users\SirTidez\SIMM\beta</S1CPPDir>
+        <S1MonoDir Condition="'$(S1MonoDir)' == ''">$(USERPROFILE)\SIMM\alternate-beta</S1MonoDir>
+        <S1CPPDir Condition="'$(S1CPPDir)' == ''">$(USERPROFILE)\SIMM\beta</S1CPPDir>
         <CommonDir>D:\Schedule 1 Modding\TestAssemblies</CommonDir>
         <RunPostBuildEvent>OnBuildSuccess</RunPostBuildEvent>
     </PropertyGroup>

@@ -22,7 +22,7 @@ namespace Behind_Bars.Systems.NPCs
     public class JailNPCDialogueController : MonoBehaviour
     {
         [System.Serializable]
-        public class StateDialogue
+        private class StateDialogue
         {
             public string stateName;
             public string greeting;
@@ -34,7 +34,7 @@ namespace Behind_Bars.Systems.NPCs
 #if MONO
         [Header("NPC Dialog Configuration")]
 #endif
-        public List<StateDialogue> stateDialogues = new List<StateDialogue>();
+        private List<StateDialogue> stateDialogues = new List<StateDialogue>();
         public string defaultGreeting = "Hello.";
         public float greetingCooldown = 5f;
 
@@ -515,6 +515,9 @@ namespace Behind_Bars.Systems.NPCs
         /// <param name="interactions">Array of possible interaction messages</param>
         /// <param name="playVO">Whether to play voice over</param>
         /// <param name="voType">Type of voice over to play</param>
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
         public virtual void AddStateDialogue(string stateName, string greeting, string[] interactions, bool playVO = true, EVOLineType voType = EVOLineType.Greeting)
         {
             var stateDialogue = new StateDialogue

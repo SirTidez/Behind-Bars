@@ -12,6 +12,7 @@ using Il2CppScheduleOne.Storage;
 using Il2CppScheduleOne.ItemFramework;
 using Il2CppScheduleOne.PlayerScripts;
 using Il2CppScheduleOne.DevUtilities;
+using Il2CppScheduleOne.UI;
 using Registry = Il2CppScheduleOne.Registry;
 using Il2CppFishNet.Connection;
 using Il2CppFishNet.Object;
@@ -20,6 +21,7 @@ using ScheduleOne.Storage;
 using ScheduleOne.ItemFramework;
 using ScheduleOne.PlayerScripts;
 using ScheduleOne.DevUtilities;
+using ScheduleOne.UI;
 using Registry = ScheduleOne.Registry;
 using FishNet.Connection;
 using FishNet.Object;
@@ -113,14 +115,11 @@ namespace Behind_Bars.Systems.Jail
             }
 
             // Subscribe to onClosed event
-            if (onClosed != null)
-            {
 #if MONO
-                onClosed += HandleStorageClosed;
+            onClosed += HandleStorageClosed;
 #else
-                onClosed += new System.Action(HandleStorageClosed);
+            onClosed += new System.Action(HandleStorageClosed);
 #endif
-            }
 
             ModLogger.Debug($"PrisonStorageEntity initialized with {ItemSlots.Count} slots (local-only mode)");
         }
@@ -171,7 +170,7 @@ namespace Behind_Bars.Systems.Jail
             // Close storage if it's open
             if (IsOpened)
             {
-                Close();
+                Singleton<StorageMenu>.Instance?.Close();
             }
 
             ModLogger.Info("PrisonStorageEntity: Reset complete");

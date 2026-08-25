@@ -37,6 +37,16 @@ namespace Behind_Bars.Systems.CrimeDetection
     }
 
     /// <summary>
+    /// Defines why contraband is being searched. Weapons are a parole-condition
+    /// violation, not a general possession crime for players who are not on parole.
+    /// </summary>
+    public enum ContrabandSearchContext
+    {
+        Arrest,
+        Parole
+    }
+
+    /// <summary>
     /// System for detecting contraband items in player inventory during searches
     /// </summary>
     public class ContrabandDetectionSystem
@@ -52,7 +62,9 @@ namespace Behind_Bars.Systems.CrimeDetection
         /// <summary>
         /// Perform a contraband search on a player and detect illegal items
         /// </summary>
-        public List<CrimeInstance> PerformContrabandSearch(Player player)
+        public List<CrimeInstance> PerformContrabandSearch(
+            Player player,
+            ContrabandSearchContext context = ContrabandSearchContext.Arrest)
         {
             var detectedCrimes = new List<CrimeInstance>();
             
@@ -64,16 +76,16 @@ namespace Behind_Bars.Systems.CrimeDetection
                 return detectedCrimes;
             }
             
-            if (player.Inventory == null)
+            var inventory = player._inventory;
+            if (inventory == null)
             {
-                ModLogger.Debug("Player.Inventory is null!");
+                ModLogger.Debug("Player inventory is null!");
                 return detectedCrimes;
             }
-            
-            ModLogger.Debug($"Player: {player.name}, Inventory exists: {player.Inventory != null}");
-            
-            // Fallback: try to use the player.Inventory array directly since PlayerInventory component isn't accessible
-            var inventory = player.Inventory;
+
+            ModLogger.Debug($"Player: {player.name}, Inventory exists: {inventory != null}");
+
+            // Use the native player inventory collection for this runtime.
             if (inventory != null && inventory.Length > 0)
             {
                 ModLogger.Debug($"Using Player.Inventory array with {inventory.Length} slots");
@@ -82,7 +94,7 @@ namespace Behind_Bars.Systems.CrimeDetection
                 {
                     if (slot != null) inventorySlotsFromArray.Add(slot);
                 }
-                return ProcessInventorySlots(inventorySlotsFromArray, player.transform.position, detectedCrimes);
+                return ProcessInventorySlots(inventorySlotsFromArray, player.transform.position, detectedCrimes, context);
             }
             else
             {
@@ -91,7 +103,11 @@ namespace Behind_Bars.Systems.CrimeDetection
             }
         }
         
-        private List<CrimeInstance> ProcessInventorySlots(List<object> inventorySlots, Vector3 playerPosition, List<CrimeInstance> detectedCrimes)
+        private List<CrimeInstance> ProcessInventorySlots(
+            List<object> inventorySlots,
+            Vector3 playerPosition,
+            List<CrimeInstance> detectedCrimes,
+            ContrabandSearchContext context)
         {
             // Track drug quantities for trafficking detection
             int totalDrugQuantity = 0;
@@ -108,6 +124,20 @@ namespace Behind_Bars.Systems.CrimeDetection
 
                 ModLogger.Debug($"Checking item: {itemInstance?.GetType().Name}");
                 
+                // Weapon possession is enforced only as a parole condition. Do this before
+                // the permissive product-like fallback, which accepts several native item
+                // shapes and would otherwise consume the weapon path.
+                if (context == ContrabandSearchContext.Parole && IsWeapon(itemInstance))
+                {
+                    var crimeInstance = ProcessWeaponItem(itemInstance, playerPosition);
+                    if (crimeInstance != null)
+                    {
+                        detectedCrimes.Add(crimeInstance);
+                    }
+
+                    continue;
+                }
+
                 // Check if it's a product (drug)
                 if (IsProductLikeItem(itemInstance))
                 {
@@ -168,15 +198,6 @@ namespace Behind_Bars.Systems.CrimeDetection
                         
                         ModLogger.Debug($"Added drug possession charge for {itemTypeName}");
                         continue; // Move to next item
-                    }
-                }
-                // Check if it's a weapon
-                else if (IsWeapon(itemInstance))
-                {
-                    var crimeInstance = ProcessWeaponItem(itemInstance, playerPosition);
-                    if (crimeInstance != null)
-                    {
-                        detectedCrimes.Add(crimeInstance);
                     }
                 }
             }
@@ -351,22 +372,41 @@ namespace Behind_Bars.Systems.CrimeDetection
         /// </summary>
         private bool IsWeapon(object itemInstance)
         {
-            var itemDefinition = GetItemDefinitionObject(itemInstance);
-            if (itemDefinition == null)
+            if (itemInstance == null)
+            {
                 return false;
-                
-            var itemName = GetDefinitionName(itemDefinition).ToLower();
-            
-            // Check for weapon keywords
-            return itemName.Contains("gun") || 
-                   itemName.Contains("pistol") || 
-                   itemName.Contains("rifle") || 
-                   itemName.Contains("shotgun") || 
-                   itemName.Contains("knife") || 
-                   itemName.Contains("blade") || 
-                   itemName.Contains("weapon") ||
-                   itemName.Contains("taser") ||
-                   itemName.Contains("baton");
+            }
+
+            // Depending on the native item shape, the usable identifier can live on
+            // the instance type, its definition, or a direct Name field/property.
+            // Search all three without treating every IntegerItemInstance as a weapon;
+            // that would incorrectly classify unrelated stackable items.
+            var itemTypeName = itemInstance.GetType().Name;
+            var definitionName = GetItemDefinitionName(itemInstance);
+            var directName = GetDirectItemName(itemInstance);
+            var identity = $"{itemTypeName} {definitionName} {directName}";
+            bool isWeapon = identity.IndexOf("gun", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   identity.IndexOf("pistol", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   identity.IndexOf("rifle", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   identity.IndexOf("shotgun", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   identity.IndexOf("m1911", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   identity.IndexOf("handgun", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   identity.IndexOf("revolver", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   identity.IndexOf("firearm", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   identity.IndexOf("knife", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   identity.IndexOf("blade", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   identity.IndexOf("machete", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   identity.IndexOf("weapon", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   identity.IndexOf("taser", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   identity.IndexOf("baton", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   identity.IndexOf("nightstick", StringComparison.OrdinalIgnoreCase) >= 0;
+
+            if (isWeapon)
+            {
+                ModLogger.Info($"[PAROLE SEARCH] Weapon identity matched: type='{itemTypeName}', definition='{definitionName}', direct='{directName}'");
+            }
+
+            return isWeapon;
         }
         
         /// <summary>
@@ -413,7 +453,8 @@ namespace Behind_Bars.Systems.CrimeDetection
                 return null;
             }
 
-            var definitionProperty = itemInstance.GetType().GetProperty("Definition");
+            var instanceType = itemInstance.GetType();
+            var definitionProperty = instanceType.GetProperty("Definition");
             if (definitionProperty != null)
             {
                 try
@@ -426,12 +467,59 @@ namespace Behind_Bars.Systems.CrimeDetection
                 }
             }
 
+            var definitionField = instanceType.GetField("Definition");
+            if (definitionField != null)
+            {
+                try
+                {
+                    return definitionField.GetValue(itemInstance);
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Debug($"Failed to read item definition field from {instanceType.Name}: {ex.Message}");
+                }
+            }
+
             return null;
         }
 
         private static string GetItemDefinitionName(object itemInstance)
         {
             return GetDefinitionName(GetItemDefinitionObject(itemInstance));
+        }
+
+        private static string GetDirectItemName(object itemInstance)
+        {
+            if (itemInstance == null)
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                var instanceType = itemInstance.GetType();
+                var nameProperty = instanceType.GetProperty("Name") ?? instanceType.GetProperty("name") ??
+                                   instanceType.GetProperty("ID") ?? instanceType.GetProperty("id");
+                string propertyValue = nameProperty?.GetValue(itemInstance)?.ToString();
+                if (!string.IsNullOrWhiteSpace(propertyValue))
+                {
+                    return propertyValue;
+                }
+
+                var nameField = instanceType.GetField("Name") ?? instanceType.GetField("name") ??
+                                instanceType.GetField("ID") ?? instanceType.GetField("id");
+                string fieldValue = nameField?.GetValue(itemInstance)?.ToString();
+                if (!string.IsNullOrWhiteSpace(fieldValue))
+                {
+                    return fieldValue;
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"Failed to read direct item name from {itemInstance.GetType().Name}: {ex.Message}");
+            }
+
+            return string.Empty;
         }
 
         private static int GetItemAmount(object itemInstance)
@@ -482,20 +570,22 @@ namespace Behind_Bars.Systems.CrimeDetection
 
             try
             {
-                var nameProperty = definitionType.GetProperty("name") ?? definitionType.GetProperty("Name");
+                var nameProperty = definitionType.GetProperty("name") ?? definitionType.GetProperty("Name") ??
+                                   definitionType.GetProperty("ID") ?? definitionType.GetProperty("id");
                 if (nameProperty != null)
                 {
-                    var value = nameProperty.GetValue(definition) as string;
+                    var value = nameProperty.GetValue(definition)?.ToString();
                     if (!string.IsNullOrWhiteSpace(value))
                     {
                         return value;
                     }
                 }
 
-                var nameField = definitionType.GetField("name") ?? definitionType.GetField("Name");
+                var nameField = definitionType.GetField("name") ?? definitionType.GetField("Name") ??
+                                definitionType.GetField("ID") ?? definitionType.GetField("id");
                 if (nameField != null)
                 {
-                    var value = nameField.GetValue(definition) as string;
+                    var value = nameField.GetValue(definition)?.ToString();
                     if (!string.IsNullOrWhiteSpace(value))
                     {
                         return value;

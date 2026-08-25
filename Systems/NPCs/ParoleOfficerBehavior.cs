@@ -133,9 +133,9 @@ namespace Behind_Bars.Systems.NPCs
         private Vector3 lastKnownParoleePosition;
 
         // Compliance constants
-        private const float COMPLIANCE_PERFECT = 2f;      // 0-2m: Perfect compliance
-        private const float COMPLIANCE_WARNING = 3f;      // 2-3m: Warning zone
-        private const float COMPLIANCE_VIOLATION = 5f;    // 3-5m: Active intervention
+        private const float COMPLIANCE_PERFECT = 3f;      // 0-3m: target intake-escort distance
+        private const float COMPLIANCE_WARNING = 3.5f;    // 3-3.5m: warning zone
+        private const float COMPLIANCE_VIOLATION = 5f;    // 3.5-5m: active intervention
         private const float COMPLIANCE_ESCAPE = 8f;       // 5m+: Escape attempt
         private const float PATIENCE_LOSS_RATE = 2f;
         private const float PATIENCE_GAIN_RATE = 3f;
@@ -274,20 +274,9 @@ namespace Behind_Bars.Systems.NPCs
                     stationaryBehavior = BBHelpers.AddComponentSafe<StationaryBehavior>(gameObject);
                 }
 
-            // Set stationary position to police station entrance (first waypoint of PoliceStation route)
-            var policeStationRoute = PresetParoleOfficerRoutes.GetRoute("PoliceStation");
-            if (policeStationRoute != null && policeStationRoute.points != null && policeStationRoute.points.Length > 0)
-            {
-                Vector3 entrancePosition = policeStationRoute.points[0];
-                    stationaryBehavior.SetStationaryPosition(entrancePosition);
-                    ModLogger.Debug($"Supervising Officer {badgeNumber}: Set stationary position to police station entrance: {entrancePosition}");
-                }
-                else
-                {
-                    // Fallback to current position
-                stationaryBehavior.SetStationaryPosition(transform.position);
-                ModLogger.Warn($"Supervising Officer {badgeNumber}: Could not find PoliceStation route, using current position as stationary");
-            }
+                Vector3 stationPosition = PresetParoleOfficerRoutes.GetSupervisingOfficerStation();
+                stationaryBehavior.SetStationaryPosition(stationPosition);
+                ModLogger.Debug($"Supervising Officer {badgeNumber}: Set stationary position to courthouse check-in post: {stationPosition}");
             }
             catch (Exception e)
             {
@@ -948,6 +937,32 @@ namespace Behind_Bars.Systems.NPCs
         public bool IsIntakeProcessingActive()
         {
             return paroleIntakeStateMachine != null && paroleIntakeStateMachine.IsProcessingIntake();
+        }
+
+        /// <summary>
+        /// Marks the supervising officer as escorting the parolee during automatic intake.
+        /// </summary>
+        public void BeginIntakeEscort(Player parolee)
+        {
+            if (role != ParoleOfficerRole.SupervisingOfficer || parolee == null)
+            {
+                return;
+            }
+
+            currentParolee = parolee;
+            ChangeParoleActivity(ParoleOfficerActivity.EscortingParolee);
+        }
+
+        /// <summary>
+        /// Clears the intake escort state once the location explanation completes.
+        /// </summary>
+        public void CompleteIntakeEscort()
+        {
+            currentParolee = null;
+            if (role == ParoleOfficerRole.SupervisingOfficer)
+            {
+                ChangeParoleActivity(ParoleOfficerActivity.MonitoringArea);
+            }
         }
 
         /// <summary>

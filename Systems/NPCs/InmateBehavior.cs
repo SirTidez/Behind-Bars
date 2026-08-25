@@ -43,6 +43,7 @@ namespace Behind_Bars.Systems.NPCs
         private bool isMoving = false;
         private float nextMoveTime = 0f;
         private Vector3 currentDestination;
+        private float nextNavMeshDiagnosticTime = 0f;
 
         // Animation variations
         private float animationVariation = 0f;
@@ -52,9 +53,13 @@ namespace Behind_Bars.Systems.NPCs
         // References
         private NPC npcComponent;
         private PrisonInmate inmateComponent;
+        private Coroutine inmateBehaviorCoroutine;
+        private Coroutine lookAroundCoroutine;
+        private bool isShuttingDown;
 
         void Start()
         {
+            isShuttingDown = false;
             Initialize();
         }
 
@@ -89,6 +94,10 @@ namespace Behind_Bars.Systems.NPCs
             // Initialize cell bounds
             InitializeCellBounds();
 
+            // The native NPC may have been activated immediately before this component was added.
+            // Ensure the agent has completed its placement before the wandering coroutine starts.
+            EnsureAgentOnNavMesh();
+
             // Add some variation to each inmate's behavior
             animationVariation = UnityEngine.Random.Range(0f, 1f);
 
@@ -96,7 +105,7 @@ namespace Behind_Bars.Systems.NPCs
             isPacing = UnityEngine.Random.Range(0f, 1f) > 0.6f; // 40% chance to be a pacer
 
             // Start behavior using MelonCoroutines
-            MelonCoroutines.Start(InmateCellBehavior());
+            inmateBehaviorCoroutine = MelonCoroutines.Start(InmateCellBehavior()) as Coroutine;
         }
 
         void InitializeCellBounds()
@@ -158,11 +167,26 @@ namespace Behind_Bars.Systems.NPCs
         {
             yield return new WaitForSeconds(UnityEngine.Random.Range(0.5f, 2f)); // Initial random delay
 
-            while (enabled)
+            while (!isShuttingDown)
             {
+                // MelonCoroutines are global rather than component-owned. Scene unload
+                // can resume this enumerator after the native inmate has been destroyed.
+                if (isShuttingDown)
+                {
+                    yield break;
+                }
+
                 if (!hasCellBounds || navAgent == null || !navAgent.enabled)
                 {
                     yield return new WaitForSeconds(5f);
+                    continue;
+                }
+
+                if (!EnsureAgentOnNavMesh())
+                {
+                    LogNavMeshDiagnostic("agent is not on a NavMesh after placement recovery");
+                    nextMoveTime = Time.time + 2f;
+                    yield return new WaitForSeconds(2f);
                     continue;
                 }
 
@@ -173,15 +197,15 @@ namespace Behind_Bars.Systems.NPCs
                     Vector3 destination = GetRandomPointInCell();
 
                     // Use NavMeshAgent to move there
-                    if (navAgent.SetDestination(destination))
+                    if (TrySetCellDestination(destination))
                     {
                         isMoving = true;
                         currentDestination = destination;
                     }
                     else
                     {
-                        ModLogger.Warn($"Inmate {gameObject.name} failed to set destination");
-                        nextMoveTime = Time.time + 1f; // Try again in 1 second
+                        LogNavMeshDiagnostic($"could not set a cell destination near {destination}");
+                        nextMoveTime = Time.time + 2f;
                     }
                 }
 
@@ -217,8 +241,67 @@ namespace Behind_Bars.Systems.NPCs
                 return hit.position; // Return the valid NavMesh position
             }
 
-            // If no valid position found, return current position
-            return transform.position;
+            // A cell can be adjacent to, but not itself covered by, the baked NavMesh. In that
+            // case keep the inmate at its verified agent location instead of retrying an off-mesh
+            // transform position every movement tick.
+            return navAgent != null && navAgent.isOnNavMesh
+                ? navAgent.nextPosition
+                : transform.position;
+        }
+
+        private bool EnsureAgentOnNavMesh()
+        {
+            if (navAgent == null)
+            {
+                return false;
+            }
+
+            if (!navAgent.enabled)
+            {
+                navAgent.enabled = true;
+            }
+
+            if (navAgent.isOnNavMesh)
+            {
+                return true;
+            }
+
+            if (NavMesh.SamplePosition(transform.position, out var hit, 8f, NavMesh.AllAreas) &&
+                navAgent.Warp(hit.position) && navAgent.isOnNavMesh)
+            {
+                ModLogger.Debug($"[NPC Spawn] Recovered inmate {gameObject.name} onto NavMesh at {hit.position}");
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool TrySetCellDestination(Vector3 destination)
+        {
+            if (!EnsureAgentOnNavMesh())
+            {
+                return false;
+            }
+
+            if (NavMesh.SamplePosition(destination, out var hit, 2f, NavMesh.AllAreas))
+            {
+                destination = hit.position;
+            }
+
+            return navAgent.SetDestination(destination);
+        }
+
+        private void LogNavMeshDiagnostic(string reason)
+        {
+            if (Time.time < nextNavMeshDiagnosticTime)
+            {
+                return;
+            }
+
+            nextNavMeshDiagnosticTime = Time.time + 5f;
+            ModLogger.Warn(
+                $"[NPC Spawn] Inmate {gameObject.name} {reason}. " +
+                $"Position={transform.position}, AgentEnabled={navAgent?.enabled}, OnNavMesh={navAgent?.isOnNavMesh}, Cell={assignedCellNumber}");
         }
 
         bool IsPointValid(Vector3 point)
@@ -241,10 +324,9 @@ namespace Behind_Bars.Systems.NPCs
 
         void SetDestination(Vector3 destination)
         {
-            if (navAgent != null && navAgent.enabled)
+            if (TrySetCellDestination(destination))
             {
                 currentDestination = destination;
-                navAgent.SetDestination(destination);
                 isMoving = true;
 
                 // Vary movement speed slightly for each movement
@@ -283,12 +365,20 @@ namespace Behind_Bars.Systems.NPCs
 
         void PerformIdleAction()
         {
+            if (isShuttingDown)
+            {
+                return;
+            }
+
             // Random idle actions when stopped
             float rand = UnityEngine.Random.Range(0f, 1f);
             if (rand < 0.3f)
             {
                 // Look around
-                MelonCoroutines.Start(LookAround());
+                if (lookAroundCoroutine == null)
+                {
+                    lookAroundCoroutine = MelonCoroutines.Start(LookAround()) as Coroutine;
+                }
             }
             else if (rand < 0.5f)
             {
@@ -300,6 +390,12 @@ namespace Behind_Bars.Systems.NPCs
 
         IEnumerator LookAround()
         {
+            if (isShuttingDown)
+            {
+                lookAroundCoroutine = null;
+                yield break;
+            }
+
             // Look left and right
             float startRotation = transform.eulerAngles.y;
 
@@ -308,6 +404,11 @@ namespace Behind_Bars.Systems.NPCs
             float elapsedTime = 0f;
             while (elapsedTime < 0.5f)
             {
+                if (isShuttingDown)
+                {
+                    lookAroundCoroutine = null;
+                    yield break;
+                }
                 transform.rotation = Quaternion.Euler(0, Mathf.Lerp(startRotation, targetRotation, elapsedTime / 0.5f), 0);
                 elapsedTime += Time.deltaTime;
                 yield return null;
@@ -320,6 +421,11 @@ namespace Behind_Bars.Systems.NPCs
             elapsedTime = 0f;
             while (elapsedTime < 1f)
             {
+                if (isShuttingDown)
+                {
+                    lookAroundCoroutine = null;
+                    yield break;
+                }
                 float currentY = transform.eulerAngles.y;
                 transform.rotation = Quaternion.Euler(0, Mathf.Lerp(currentY, targetRotation, elapsedTime / 1f), 0);
                 elapsedTime += Time.deltaTime;
@@ -332,11 +438,18 @@ namespace Behind_Bars.Systems.NPCs
             elapsedTime = 0f;
             while (elapsedTime < 0.5f)
             {
+                if (isShuttingDown)
+                {
+                    lookAroundCoroutine = null;
+                    yield break;
+                }
                 float currentY = transform.eulerAngles.y;
                 transform.rotation = Quaternion.Euler(0, Mathf.Lerp(currentY, startRotation, elapsedTime / 0.5f), 0);
                 elapsedTime += Time.deltaTime;
                 yield return null;
             }
+
+            lookAroundCoroutine = null;
         }
 
         void OnDrawGizmosSelected()
@@ -357,8 +470,35 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        void OnDisable()
+        {
+            StopBehaviorCoroutines();
+        }
+
         void OnDestroy()
         {
+            StopBehaviorCoroutines();
+        }
+
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
+        private void StopBehaviorCoroutines()
+        {
+            isShuttingDown = true;
+
+            if (inmateBehaviorCoroutine != null)
+            {
+                MelonCoroutines.Stop(inmateBehaviorCoroutine);
+                inmateBehaviorCoroutine = null;
+            }
+
+            if (lookAroundCoroutine != null)
+            {
+                MelonCoroutines.Stop(lookAroundCoroutine);
+                lookAroundCoroutine = null;
+            }
+
             StopAllCoroutines();
         }
 

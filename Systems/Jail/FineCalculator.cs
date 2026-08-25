@@ -357,7 +357,7 @@ namespace Behind_Bars.Systems.Jail
                 "Assault on Civilian" => "AssaultOnCivilian",
                 "Assault" => "Assault",
                 "Deadly Assault" => "DeadlyAssault",
-                "Assault on Officer" => "AssaultOnOfficer",
+                "Assault on Officer" or "Assault on an LEO" => "AssaultOnOfficer",
                 "Theft" => "Theft",
                 "Vehicle Theft" => "VehicleTheft",
                 "Burglary" => "Burglary",

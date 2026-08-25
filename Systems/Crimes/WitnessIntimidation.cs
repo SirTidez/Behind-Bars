@@ -10,6 +10,10 @@ namespace Behind_Bars.Systems.Crimes
     [Serializable]
     public class WitnessIntimidation : Crime
     {
-        public override string CrimeName { get; set; } = "Witness Intimidation";
+        public override string CrimeName
+        {
+            get;
+            set;
+        } = "Witness Intimidation";
     }
 }

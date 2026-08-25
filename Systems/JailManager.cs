@@ -99,7 +99,7 @@ namespace Behind_Bars.Systems
         /// </summary>
         public System.Collections.IEnumerator RunBookingProcess(Player player, JailSystem.JailSentence sentence, float fallbackWaitSeconds = 5f)
         {
-            if (player == null || sentence == null)
+            if (!Core.IsGameplaySceneActive || player == null || sentence == null)
             {
                 yield break;
             }
@@ -110,9 +110,14 @@ namespace Behind_Bars.Systems
                 ModLogger.Info($"JailManager starting BookingProcess for {player.name} with sentence: {sentence.JailTime}s, Fine: ${sentence.FineAmount}");
                 activeBookingProcess.StartBooking(player, sentence);
 
-                while (activeBookingProcess.IsBookingInProgress())
+                while (Core.IsGameplaySceneActive && activeBookingProcess.IsBookingInProgress())
                 {
                     yield return new WaitForSeconds(1f);
+                }
+
+                if (!Core.IsGameplaySceneActive || player == null)
+                {
+                    yield break;
                 }
 
                 ModLogger.Info($"JailManager observed booking completion for {player.name}");
@@ -121,6 +126,10 @@ namespace Behind_Bars.Systems
 
             ModLogger.Error("JailManager could not resolve a BookingProcess - using fallback wait");
             yield return new WaitForSeconds(fallbackWaitSeconds);
+            if (!Core.IsGameplaySceneActive)
+            {
+                yield break;
+            }
         }
 
         /// <summary>
@@ -283,6 +292,27 @@ namespace Behind_Bars.Systems
         public bool HasPendingReleaseType(Player player)
         {
             return player != null && pendingReleaseTypes.ContainsKey(Core.ResolvePlayerKey(player));
+        }
+
+        /// <summary>
+        /// Determines whether bail can initiate a release without colliding with the active
+        /// intake officer's cell-return workflow.
+        /// </summary>
+        public bool IsBailReleaseReady(Player player)
+        {
+            if (player == null)
+            {
+                return false;
+            }
+
+            if (releaseManager == null && !ReleaseManager.HasRegisteredInstance)
+            {
+                return false;
+            }
+
+            var npcManager = Core.Instance?.NpcManager;
+            var intakeOfficer = npcManager?.GetIntakeOfficer();
+            return intakeOfficer != null && !intakeOfficer.IsProcessingIntake();
         }
 
         /// <summary>
@@ -508,6 +538,12 @@ namespace Behind_Bars.Systems
             ModLogger.Info($"JailManager starting jail time after booking for {player.name} - {sentence.JailTime}s");
 
             yield return jailSystem.WaitForJailSentence(sentence.JailTime, player);
+
+            if (!Core.IsGameplaySceneActive || player == null)
+            {
+                yield break;
+            }
+
             CompletePostSentenceRelease(player);
         }
 

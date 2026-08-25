@@ -81,10 +81,60 @@ namespace Behind_Bars.Systems.NPCs
         // Door mapping - matches the hierarchy structure from the image
         private Dictionary<string, DoorTransition> doorTransitions = new Dictionary<string, DoorTransition>();
 
-        // Events
-        public System.Action<DoorState> OnDoorStateChanged;
-        public System.Action<string> OnDoorOperationComplete;
-        public System.Action<string> OnDoorOperationFailed;
+        // Managed-only callbacks must remain off the IL2CPP-injected type surface.
+        // The public subscription helpers below are hidden from IL2CPP and are only
+        // called by other managed Behind Bars systems.
+        private System.Action<DoorState> onDoorStateChanged;
+        private System.Action<string> onDoorOperationComplete;
+        private System.Action<string> onDoorOperationFailed;
+
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
+        public void AddDoorStateChangedListener(System.Action<DoorState> listener)
+        {
+            onDoorStateChanged += listener;
+        }
+
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
+        public void RemoveDoorStateChangedListener(System.Action<DoorState> listener)
+        {
+            onDoorStateChanged -= listener;
+        }
+
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
+        public void AddDoorOperationCompleteListener(System.Action<string> listener)
+        {
+            onDoorOperationComplete += listener;
+        }
+
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
+        public void RemoveDoorOperationCompleteListener(System.Action<string> listener)
+        {
+            onDoorOperationComplete -= listener;
+        }
+
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
+        public void AddDoorOperationFailedListener(System.Action<string> listener)
+        {
+            onDoorOperationFailed += listener;
+        }
+
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
+        public void RemoveDoorOperationFailedListener(System.Action<string> listener)
+        {
+            onDoorOperationFailed -= listener;
+        }
 
         void Awake()
         {
@@ -315,7 +365,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             if (currentDoorOperation != null)
             {
-                StopCoroutine(currentDoorOperation);
+                MelonCoroutines.Stop(currentDoorOperation);
             }
 
             currentDoorOperation = (Coroutine)MelonCoroutines.Start(ExecuteDoorOperation());
@@ -508,7 +558,7 @@ namespace Behind_Bars.Systems.NPCs
             string doorName = currentTransition?.doorName ?? "Unknown";
             ModLogger.Info($"SecurityDoorBehavior: Completed door operation for {doorName}");
 
-            OnDoorOperationComplete?.Invoke(doorName);
+            onDoorOperationComplete?.Invoke(doorName);
 
             // Reset state
             ChangeState(DoorState.Idle);
@@ -529,7 +579,7 @@ namespace Behind_Bars.Systems.NPCs
             currentState = newState;
             stateStartTime = Time.time;
 
-            OnDoorStateChanged?.Invoke(newState);
+            onDoorStateChanged?.Invoke(newState);
             ModLogger.Debug($"SecurityDoorBehavior: {gameObject.name} door state: {oldState} → {newState}");
         }
 
@@ -567,7 +617,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             if (currentDoorOperation != null)
             {
-                StopCoroutine(currentDoorOperation);
+                MelonCoroutines.Stop(currentDoorOperation);
                 currentDoorOperation = null;
             }
 
@@ -661,7 +711,8 @@ namespace Behind_Bars.Systems.NPCs
         {
             if (currentDoorOperation != null)
             {
-                StopCoroutine(currentDoorOperation);
+                MelonCoroutines.Stop(currentDoorOperation);
+                currentDoorOperation = null;
             }
         }
 

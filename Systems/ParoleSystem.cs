@@ -810,10 +810,23 @@ namespace Behind_Bars.Systems
         /// </summary>
         private IEnumerator MonitorParole(ParoleRuntimeRecord record)
         {
+            if (!HasLiveParolePlayer(record))
+            {
+                yield break;
+            }
+
             ModLogger.Debug($"Monitoring parole for {record.Player.name}");
 
             while (record.Status == ParoleStatus.Active)
             {
+                // The parole record survives scene transitions, but Player is a scene
+                // object. Do not treat a destroyed menu-transition player as a completed
+                // parole term; the runtime record will be reattached after the next load.
+                if (!HasLiveParolePlayer(record))
+                {
+                    yield break;
+                }
+
                 // Update time remaining from ParoleTimeTracker
                 record.TimeRemainingGameMinutes = Core.ResolveParoleManager().GetRemainingTime(record.Player);
 
@@ -872,10 +885,18 @@ namespace Behind_Bars.Systems
             }
 
             // Parole completed or violated
-            if (record.Status == ParoleStatus.Active)
+            if (record.Status == ParoleStatus.Active && HasLiveParolePlayer(record))
             {
                 CompleteParole(record);
             }
+        }
+
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
+        private static bool HasLiveParolePlayer(ParoleRuntimeRecord record)
+        {
+            return record != null && record.Player != null;
         }
 
         /// <summary>
@@ -1213,6 +1234,11 @@ namespace Behind_Bars.Systems
         /// </summary>
         private void CompleteParole(ParoleRuntimeRecord record)
         {
+            if (!HasLiveParolePlayer(record))
+            {
+                return;
+            }
+
             ModLogger.Info($"Parole completed successfully for {record.Player.name}");
 
             record.Status = ParoleStatus.Completed;

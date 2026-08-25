@@ -44,6 +44,11 @@ namespace Behind_Bars.Systems.CrimeTracking
         [SaveableField("description")]
         private string _description;
 
+        // Custody-only violations remain on the prisoner's record, but must never
+        // contribute to the street wanted meter or trigger a new police pursuit.
+        [SaveableField("countsTowardWantedLevel")]
+        private bool _countsTowardWantedLevel = true;
+
         // Properties for safe access
 #if !MONO
         [System.Text.Json.Serialization.JsonIgnore]
@@ -98,6 +103,17 @@ namespace Behind_Bars.Systems.CrimeTracking
             get => _description ?? "";
             set => _description = value ?? "";
         }
+
+        /// <summary>
+        /// Whether this record entry contributes to the on-street wanted display.
+        /// In-custody discipline charges are intentionally recorded without creating
+        /// a new wanted state for a prisoner who is already secured in the jail.
+        /// </summary>
+        public bool CountsTowardWantedLevel
+        {
+            get => _countsTowardWantedLevel;
+            set => _countsTowardWantedLevel = value;
+        }
         
         /// <summary>
         /// Get the crime name safely - prefers Description (user-friendly), falls back to Crime.CrimeName
@@ -140,6 +156,7 @@ namespace Behind_Bars.Systems.CrimeTracking
                     "Murder" or "Murder of a Police Officer" or "Murder of an Employee" => "Murder",
                     "Involuntary Manslaughter" => "Manslaughter",
                     "Assault on Civilian" => "AssaultOnCivilian",
+                    "Assault on an LEO" => "AssaultOnOfficer",
                     "Witness Intimidation" => "WitnessIntimidation",
                     "Drug Possession (Low)" => "DrugPossessionLow",
                     "Drug Possession (Moderate)" => "DrugPossessionModerate",
@@ -192,6 +209,11 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// </summary>
         public float GetWantedContribution()
         {
+            if (!CountsTowardWantedLevel)
+            {
+                return 0f;
+            }
+
             float baseSeverity = Severity;
             
             // Increase severity based on witness count (more witnesses = more heat)

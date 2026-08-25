@@ -57,7 +57,23 @@ namespace Behind_Bars.Systems.Jail
         private bool escortRequested = false;
         private bool escortInProgress = false;
         public bool storageInteractionAllowed = false;
+        private DisciplinaryResumeStage disciplinaryResumeStage = DisciplinaryResumeStage.None;
         private static BookingProcess _instance;
+        private readonly List<Coroutine> sceneCoroutineHandles = new List<Coroutine>();
+
+        /// <summary>
+        /// The next canonical intake destination after a disciplinary hold. This is an
+        /// in-memory checkpoint for the active booking only; the individual completion
+        /// flags remain the source of truth for the completed work.
+        /// </summary>
+        private enum DisciplinaryResumeStage
+        {
+            None,
+            Mugshot,
+            Fingerprint,
+            Storage,
+            CellEscort
+        }
 
         // Events for state machine integration
         public System.Action<Player> OnMugshotCompleted;
@@ -162,6 +178,7 @@ namespace Behind_Bars.Systems.Jail
             escortRequested = false;
             escortInProgress = false;
             prisonGearEventFired = false;
+            disciplinaryResumeStage = DisciplinaryResumeStage.None;
             mugshotImage = null;
             fingerprintData = null;
             confiscatedItems.Clear();
@@ -175,20 +192,16 @@ namespace Behind_Bars.Systems.Jail
             var uiWrapper = Core.ResolveUIManager().GetUIWrapper();
             if (uiWrapper != null)
             {
-                uiWrapper.ResetTimer();
-                ModLogger.Info("Reset jail timer completely - new booking starting");
+                float bookingBailAmount = ResolveBookingBailAmount();
+                uiWrapper.ResetTimer(bookingBailAmount);
+                ModLogger.Info($"Reset jail timer for new booking with immediate bail ${bookingBailAmount:F0}");
             }
 
             // Clear the NEW player's prison items flag (from previous arrest if any)
             var playerHandler = Behind_Bars.Core.GetPlayerHandler(currentPlayer);
-            if (playerHandler != null)
+            if (playerHandler?.RemoveConfiscatedItem("PRISON_ITEMS_RECEIVED") == true)
             {
-                var items = playerHandler.GetConfiscatedItems();
-                if (items != null && items.Contains("PRISON_ITEMS_RECEIVED"))
-                {
-                    items.Remove("PRISON_ITEMS_RECEIVED");
-                    ModLogger.Info("Cleared PRISON_ITEMS_RECEIVED flag for new booking");
-                }
+                ModLogger.Info("Cleared PRISON_ITEMS_RECEIVED flag for new booking");
             }
 
             // NOTE: Do NOT clear persistent storage here - it contains the items we just confiscated!
@@ -264,12 +277,12 @@ namespace Behind_Bars.Systems.Jail
 
             // The OnBookingStarted event triggers IntakeOfficer.HandleBookingStarted which starts the escort
             // We need to verify the officer actually started processing before proceeding
-            MelonCoroutines.Start(VerifyAndMonitorEscort());
+            StartManagedCoroutine(VerifyAndMonitorEscort());
 
             // Update UI with task list
             UpdateTaskListUI();
 
-            MelonCoroutines.Start(MonitorBookingProgress());
+            StartManagedCoroutine(MonitorBookingProgress());
         }
         
         /// <summary>
@@ -295,6 +308,30 @@ namespace Behind_Bars.Systems.Jail
                 );
 
             // Escort is already in progress, no need to request again
+        }
+
+        /// <summary>
+        /// Finalizes an active booking after the canonical intake officer has secured the
+        /// prisoner in their assigned cell. This is required for disciplinary resumes that
+        /// begin directly at the final escort and therefore do not create the legacy escort
+        /// monitor responsible for calling <see cref="FinishBooking"/>.
+        /// </summary>
+        public bool FinishBookingAfterCellEscort(Player player)
+        {
+            if (player == null || !bookingInProgress || currentPlayer != player)
+            {
+                return false;
+            }
+
+            if (!IsBookingComplete())
+            {
+                ModLogger.Error($"Cannot finish booking after cell escort for {player.name}: required booking steps are incomplete");
+                return false;
+            }
+
+            ModLogger.Info($"Final-cell escort secured {player.name}; finishing active booking and starting sentence");
+            FinishBooking();
+            return true;
         }
 
 #if !MONO
@@ -336,25 +373,8 @@ namespace Behind_Bars.Systems.Jail
             {
                 ModLogger.Info("Booking complete - starting UI timer countdown and jail time");
 
-                // Calculate and store bail amount using BailSystem
-                float bailAmount = 0f;
+                float bailAmount = ResolveBookingBailAmount();
                 var bailSystem = Core.ResolveBailSystem();
-                if (bailSystem != null && currentSentence.FineAmount > 0)
-                {
-                    // Calculate bail using BailSystem (which considers player level, etc.)
-                    var bailOffer = bailSystem.CalculateBailAmount(currentPlayer, currentSentence.FineAmount);
-                    bailAmount = bailOffer.Amount;
-                    
-                    // Store the bail amount in the system for later retrieval
-                    bailSystem.StoreBailAmount(currentPlayer, bailAmount);
-                    ModLogger.Info($"[BAIL] Calculated and stored bail amount: ${bailAmount:F0} for {currentPlayer.name} (based on fine: ${currentSentence.FineAmount:F0})");
-                }
-                else if (currentSentence.FineAmount > 0)
-                {
-                    // Fallback to JailSystem calculation if BailSystem not available
-                    bailAmount = jailManager.CalculateBailAmount(currentSentence.FineAmount, currentSentence.Severity);
-                    ModLogger.Warn($"[BAIL] BailSystem not available - using fallback calculation: ${bailAmount:F0}");
-                }
 
                 // Start the UI timer countdown now that booking is complete
                 var uiWrapper = Core.ResolveUIManager().GetUIWrapper();
@@ -385,7 +405,7 @@ namespace Behind_Bars.Systems.Jail
 
                 // CRITICAL: Start the jail sentence coroutine to handle bail key press detection
                 // This coroutine checks for the B key press and processes bail payments
-                MelonCoroutines.Start(jailManager.StartJailTimeAfterBooking(currentPlayer, currentSentence));
+                StartManagedCoroutine(jailManager.StartJailTimeAfterBooking(currentPlayer, currentSentence));
                 ModLogger.Info($"[BAIL] Started jail sentence coroutine for bail key detection");
             }
             else if (currentSentence == null)
@@ -401,6 +421,38 @@ namespace Behind_Bars.Systems.Jail
             
             currentPlayer = null;
             currentSentence = null;
+        }
+
+        /// <summary>
+        /// Resolves bail as soon as booking begins and stores the same value used when the
+        /// sentence timer starts. This keeps the custody panel truthful during intake.
+        /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private float ResolveBookingBailAmount()
+        {
+            if (currentPlayer == null || currentSentence == null || currentSentence.FineAmount <= 0f)
+            {
+                return 0f;
+            }
+
+            var bailSystem = Core.ResolveBailSystem();
+            if (bailSystem != null)
+            {
+                var bailOffer = bailSystem.CalculateBailAmount(currentPlayer, currentSentence.FineAmount);
+                float bailAmount = Mathf.Max(0f, bailOffer.Amount);
+                bailSystem.StoreBailAmount(currentPlayer, bailAmount);
+                ModLogger.Info($"[BAIL] Calculated and stored immediate booking bail: ${bailAmount:F0} for {currentPlayer.name} (fine: ${currentSentence.FineAmount:F0})");
+                return bailAmount;
+            }
+
+            var jailManager = Core.Instance?.JailManager;
+            float fallbackAmount = jailManager != null
+                ? Mathf.Max(0f, jailManager.CalculateBailAmount(currentSentence.FineAmount, currentSentence.Severity))
+                : 0f;
+            ModLogger.Warn($"[BAIL] BailSystem unavailable; immediate booking bail fallback is ${fallbackAmount:F0}");
+            return fallbackAmount;
         }
 
 #if !MONO
@@ -566,6 +618,7 @@ namespace Behind_Bars.Systems.Jail
             escortRequested = false;
             escortInProgress = false;
             prisonGearEventFired = false; // Reset event flag
+            disciplinaryResumeStage = DisciplinaryResumeStage.None;
             mugshotImage = null;
             fingerprintData = null;
             confiscatedItems.Clear();
@@ -574,14 +627,9 @@ namespace Behind_Bars.Systems.Jail
             if (currentPlayer != null)
             {
                 var playerHandler = Behind_Bars.Core.GetPlayerHandler(currentPlayer);
-                if (playerHandler != null)
+                if (playerHandler?.RemoveConfiscatedItem("PRISON_ITEMS_RECEIVED") == true)
                 {
-                    var items = playerHandler.GetConfiscatedItems();
-                    if (items != null && items.Contains("PRISON_ITEMS_RECEIVED"))
-                    {
-                        items.Remove("PRISON_ITEMS_RECEIVED");
-                        ModLogger.Info("Cleared PRISON_ITEMS_RECEIVED flag for repeat arrest");
-                    }
+                    ModLogger.Info("Cleared PRISON_ITEMS_RECEIVED flag for repeat arrest");
                 }
 
                 // CRITICAL: Clear cell assignment from previous arrest to prevent early escort completion
@@ -765,20 +813,20 @@ namespace Behind_Bars.Systems.Jail
                         );
 
                     // Start monitoring escort progress
-                    MelonCoroutines.Start(MonitorEscortProgress());
+                    StartManagedCoroutine(MonitorEscortProgress());
                 }
                 else
                 {
                     // Retry after a short delay
                     ModLogger.Warn("⚠ No guard available for escort - retrying in 2 seconds");
-                    MelonCoroutines.Start(RetryEscortRequest());
+                    StartManagedCoroutine(RetryEscortRequest());
                 }
             }
             else
             {
                 // Fallback to old system
                 ModLogger.Error("NpcManager not available - using fallback escort");
-                MelonCoroutines.Start(StartInventoryPhase());
+                StartManagedCoroutine(StartInventoryPhase());
             }
         }
 
@@ -807,7 +855,7 @@ namespace Behind_Bars.Systems.Jail
                             NotificationType.Progress
                         );
 
-                    MelonCoroutines.Start(MonitorEscortProgress());
+                    StartManagedCoroutine(MonitorEscortProgress());
                 }
                 else
                 {
@@ -820,7 +868,7 @@ namespace Behind_Bars.Systems.Jail
             {
                 // No NPC manager - use fallback
                 ModLogger.Warn("NpcManager not available - using fallback");
-                MelonCoroutines.Start(StartInventoryPhase());
+                StartManagedCoroutine(StartInventoryPhase());
             }
         }
 
@@ -853,7 +901,7 @@ namespace Behind_Bars.Systems.Jail
                                 NotificationType.Progress
                             );
 
-                        MelonCoroutines.Start(MonitorEscortProgress());
+                        StartManagedCoroutine(MonitorEscortProgress());
                         yield break; // Success - exit retry loop
                     }
                     else
@@ -1050,6 +1098,154 @@ namespace Behind_Bars.Systems.Jail
         public Player GetCurrentPlayer()
         {
             return currentPlayer;
+        }
+
+        /// <summary>
+        /// Cancels scene-owned booking work before the Main scene unloads. This deliberately
+        /// does not alter saved sentence data; it only releases volatile escorts, UI, and retries.
+        /// </summary>
+        public void CancelForSceneExit()
+        {
+            foreach (var coroutine in sceneCoroutineHandles)
+            {
+                if (coroutine != null)
+                {
+                    MelonCoroutines.Stop(coroutine);
+                }
+            }
+            sceneCoroutineHandles.Clear();
+
+            bookingInProgress = false;
+            escortRequested = false;
+            escortInProgress = false;
+            storageInteractionAllowed = false;
+            disciplinaryResumeStage = DisciplinaryResumeStage.None;
+            guardEscortTriggered = false;
+
+            var intakeOfficer = Core.Instance?.NpcManager?.GetIntakeOfficer();
+            var intakeStateMachine = intakeOfficer != null
+                ? BBHelpers.GetComponentSafe<IntakeOfficerStateMachine>(intakeOfficer.gameObject)
+                : null;
+            intakeStateMachine?.CancelIntake();
+
+            currentPlayer = null;
+            currentSentence = null;
+            ModLogger.Debug("BookingProcess cancelled for Main-scene exit");
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private Coroutine StartManagedCoroutine(IEnumerator routine)
+        {
+            var coroutine = MelonCoroutines.Start(routine) as Coroutine;
+            if (coroutine != null)
+            {
+                sceneCoroutineHandles.Add(coroutine);
+            }
+            return coroutine;
+        }
+
+        private void OnDestroy()
+        {
+            CancelForSceneExit();
+            if (_instance == this)
+            {
+                _instance = null;
+            }
+        }
+
+        /// <summary>
+        /// Stops the active booking for a disciplinary hold while retaining the completed
+        /// intake checkpoint. The resumed officer route starts at the first unfinished
+        /// canonical station instead of resetting property, clothing, or prior scans.
+        /// </summary>
+        public bool SuspendForDisciplinaryHold(Player player)
+        {
+            if (player == null || currentPlayer != player || currentSentence == null)
+            {
+                return false;
+            }
+
+            disciplinaryResumeStage = ResolveDisciplinaryResumeStage();
+            bookingInProgress = false;
+            escortRequested = false;
+            escortInProgress = false;
+            storageInteractionAllowed = false;
+
+            ModLogger.Warn(
+                $"Suspended booking for {player.name} at disciplinary checkpoint {disciplinaryResumeStage}: " +
+                $"mugshot={mugshotComplete}, fingerprint={fingerprintComplete}, " +
+                $"prisonGear={prisonGearPickupComplete}, inventoryProcessed={inventoryProcessed}");
+            return true;
+        }
+
+        /// <summary>
+        /// Returns the next canonical intake destination for a disciplinary resume.
+        /// Mugshot and fingerprint are deliberately ordered before storage even when a
+        /// previous inventory implementation has already toggled a legacy item flag.
+        /// </summary>
+        private DisciplinaryResumeStage ResolveDisciplinaryResumeStage()
+        {
+            if (!mugshotComplete)
+            {
+                return DisciplinaryResumeStage.Mugshot;
+            }
+
+            if (!fingerprintComplete)
+            {
+                return DisciplinaryResumeStage.Fingerprint;
+            }
+
+            if (!prisonGearPickupComplete)
+            {
+                return DisciplinaryResumeStage.Storage;
+            }
+
+            return DisciplinaryResumeStage.CellEscort;
+        }
+
+        /// <summary>
+        /// Resumes an interrupted intake after a disciplinary holding period. The caller
+        /// uses the existing booking rather than StartBooking, because StartBooking clears
+        /// the very checkpoint this path must preserve.
+        /// </summary>
+        public bool ResumeAfterDisciplinaryHold(Player player, float addedGameMinutes, string holdingCellName)
+        {
+            if (player == null || currentPlayer != player || currentSentence == null)
+            {
+                ModLogger.Error("Cannot resume disciplinary intake: active booking player or sentence was unavailable");
+                return false;
+            }
+
+            var intakeOfficer = Core.Instance?.NpcManager?.GetIntakeOfficer();
+            var intakeStateMachine = intakeOfficer != null
+                ? BBHelpers.GetComponentSafe<IntakeOfficerStateMachine>(intakeOfficer.gameObject)
+                : null;
+            if (intakeStateMachine == null || !intakeStateMachine.PrepareDisciplinaryRepeatIntake(player, holdingCellName))
+            {
+                ModLogger.Error($"Cannot resume disciplinary intake: intake officer could not bind {player.name} to {holdingCellName}");
+                return false;
+            }
+
+            currentSentence.JailTime += Mathf.Max(0f, addedGameMinutes);
+            bookingInProgress = true;
+            escortRequested = false;
+            escortInProgress = false;
+            storageInteractionAllowed = false;
+
+            // The flags and current sentence remain intact. OnBookingStarted re-enters the
+            // canonical officer flow from the punishment holding cell; the state machine
+            // then advances to the checkpoint captured above after the player steps out.
+            OnBookingStarted?.Invoke(player);
+            UpdateTaskListUI();
+            StartManagedCoroutine(MonitorBookingProgress());
+
+            ModLogger.Info(
+                $"Resuming intake for {player.name} after disciplinary hold from {holdingCellName}; " +
+                $"next={disciplinaryResumeStage}, added {addedGameMinutes:F0} game minutes");
+            disciplinaryResumeStage = DisciplinaryResumeStage.None;
+            return true;
         }
 
         /// <summary>

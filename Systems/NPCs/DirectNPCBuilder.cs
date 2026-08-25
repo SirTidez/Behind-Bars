@@ -135,9 +135,16 @@ namespace Behind_Bars.Systems.NPCs
 #else
                 var npcComponent = npcObject.AddComponent<ScheduleOne.NPCs.NPC>();
 #endif
-                npcComponent.FirstName = firstName;
-                npcComponent.LastName = lastName;
-                npcComponent.ID = $"{npcType.ToString().ToLower()}_{System.Guid.NewGuid()}";
+                if (!NPCCompatibility.ConfigureIdentity(
+                        npcComponent,
+                        firstName,
+                        lastName,
+                        $"{npcType.ToString().ToLower()}_{System.Guid.NewGuid()}"))
+                {
+                    ModLogger.Error($"Could not initialize native NPC identity for {npcType}");
+                    UnityEngine.Object.Destroy(npcObject);
+                    return null;
+                }
 
                 // 3. Add physics components FIRST (this fixes floating issues)
                 // TEMPORARILY DISABLED FOR TESTNPC - Rigidbody conflicts with NavMeshAgent
@@ -351,9 +358,8 @@ namespace Behind_Bars.Systems.NPCs
 
                 if (healthComponent != null)
                 {
-                    // Configure the health component
-                    healthComponent.MaxHealth = 100f;
-                    healthComponent.Invincible = true; // Guards and prisoners shouldn't die easily in jail
+                    // Configure health through the native NPC data model.
+                    NPCCompatibility.ConfigureHealth(npc_casted, healthComponent, 100f, true);
                     
                     // Initialize health events if they don't exist
                     if (healthComponent.onDie == null)
@@ -613,16 +619,7 @@ namespace Behind_Bars.Systems.NPCs
 
                 if (npc_casted != null)
                 {
-                    // Set conversation categories
-#if !MONO
-                    npc_casted.ConversationCategories = new Il2CppSystem.Collections.Generic.List<Il2CppScheduleOne.Messaging.EConversationCategory>();
-                    npc_casted.ConversationCategories.Add(Il2CppScheduleOne.Messaging.EConversationCategory.Customer);
-#else
-                    npc_casted.ConversationCategories = new System.Collections.Generic.List<ScheduleOne.Messaging.EConversationCategory>();
-                    npc_casted.ConversationCategories.Add(ScheduleOne.Messaging.EConversationCategory.Customer);
-#endif
-
-                    // Create message conversation
+                    // Message configuration is supplied by the native NPC data object.
 #if !MONO
                     npc_casted.CreateMessageConversation();
 #else
@@ -1268,10 +1265,15 @@ namespace Behind_Bars.Systems.NPCs
             {
 #if !MONO
                 var inventory = npc.AddComponent<Il2CppScheduleOne.NPCs.NPCInventory>();
-                inventory.PickpocketIntObj = npc.AddComponent<Il2CppScheduleOne.Interaction.InteractableObject>();
+                inventory._interactable = npc.AddComponent<Il2CppScheduleOne.Interaction.InteractableObject>();
 #else
                 var inventory = npc.AddComponent<ScheduleOne.NPCs.NPCInventory>();
-                inventory.PickpocketIntObj = npc.AddComponent<ScheduleOne.Interaction.InteractableObject>();
+                var interactable = npc.AddComponent<ScheduleOne.Interaction.InteractableObject>();
+                if (!ReflectionUtils.TrySetFieldOrProperty(inventory, "_interactable", interactable)
+                    && !ReflectionUtils.TrySetFieldOrProperty(inventory, "PickpocketIntObj", interactable))
+                {
+                    ModLogger.Warn("NPCInventory interaction field was not found; pickpocket interaction is unavailable for this NPC");
+                }
 #endif
 
                 ModLogger.Debug("✓ Inventory system added");

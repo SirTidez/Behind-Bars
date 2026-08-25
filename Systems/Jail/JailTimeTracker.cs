@@ -50,6 +50,8 @@ namespace Behind_Bars.Systems.Jail
         private HashSet<string> _inJailStatus = new(); // Track if player is actively in jail (separate from sentence tracking)
         private bool _isSubscribed = false;
         private bool _isSubscribedToReleaseCompleted = false;
+        private bool _sceneTrackingActive;
+        private int _trackingGeneration;
         private Player? _arrestSubscribedPlayer = null;
         private object? _playerArrestSubscriptionCoroutine = null;
 
@@ -62,7 +64,7 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         private readonly Action _playerArrestedListener;
 #else
-        private readonly UnityAction _playerArrestedListener;
+        private readonly System.Action _playerArrestedListener;
 #endif
 
         private JailTimeTracker()
@@ -70,11 +72,59 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
             _playerArrestedListener = new Action(OnPlayerArrested);
 #else
-            _playerArrestedListener = new UnityAction(OnPlayerArrested);
+            _playerArrestedListener = new System.Action(OnPlayerArrested);
 #endif
+        }
+
+        /// <summary>
+        /// Starts the listeners and fallback timer that belong to the current Main-scene
+        /// jail session. The tracker itself is process-lifetime, but it must never retain
+        /// a player or invoke custody callbacks after that player's scene is unloaded.
+        /// </summary>
+        public void BeginGameplaySession()
+        {
+            if (_sceneTrackingActive)
+            {
+                EnsurePlayerArrestSubscription();
+                return;
+            }
+
+            _sceneTrackingActive = true;
+            _trackingGeneration++;
             SubscribeToGameTimeEvents();
             SubscribeToArrestReleaseEvents();
-            StartRealTimeTracking(); // Start real-time fallback tracking
+            StartRealTimeTracking();
+            ModLogger.Debug($"JailTimeTracker started gameplay session {_trackingGeneration}");
+        }
+
+        /// <summary>
+        /// Drops all scene-owned sentence state and detaches the callbacks that can hold
+        /// destroyed player/native scene objects alive after Main transitions to Menu.
+        /// Sentence completion is deliberately not raised during this cancellation.
+        /// </summary>
+        public void EndGameplaySession()
+        {
+            bool hadSceneState = _sceneTrackingActive || _activeSentences.Count > 0 ||
+                                 _inJailStatus.Count > 0 || _realTimeUpdateCoroutine != null ||
+                                 _playerArrestSubscriptionCoroutine != null || _isSubscribed ||
+                                 _isSubscribedToReleaseCompleted;
+
+            _sceneTrackingActive = false;
+            _trackingGeneration++;
+            StopRealTimeTracking();
+            UnsubscribeFromArrestReleaseEvents();
+            UnsubscribeFromGameTimeEvents();
+
+            _activeSentences.Clear();
+            _completedSentences.Clear();
+            _inJailStatus.Clear();
+            _sentenceStartTimes.Clear();
+            _completedSentencesPool.Clear();
+
+            if (hadSceneState)
+            {
+                ModLogger.Info("JailTimeTracker cleared sentence and custody callbacks for Main-scene exit");
+            }
         }
         
         #region Arrest/Release Event Subscriptions
@@ -185,8 +235,13 @@ namespace Behind_Bars.Systems.Jail
 
             try
             {
-                localPlayer.onArrested.RemoveListener(_playerArrestedListener);
-                localPlayer.onArrested.AddListener(_playerArrestedListener);
+#if !MONO
+                localPlayer.remove_onArrested(_playerArrestedListener);
+                localPlayer.add_onArrested(_playerArrestedListener);
+#else
+                localPlayer.onArrested -= _playerArrestedListener;
+                localPlayer.onArrested += _playerArrestedListener;
+#endif
                 _arrestSubscribedPlayer = localPlayer;
                 ModLogger.Info($"JailTimeTracker subscribed to Player.local.onArrested for {localPlayer.name}");
                 return true;
@@ -211,7 +266,11 @@ namespace Behind_Bars.Systems.Jail
 
             try
             {
-                _arrestSubscribedPlayer.onArrested.RemoveListener(_playerArrestedListener);
+#if !MONO
+                _arrestSubscribedPlayer.remove_onArrested(_playerArrestedListener);
+#else
+                _arrestSubscribedPlayer.onArrested -= _playerArrestedListener;
+#endif
                 ModLogger.Debug($"JailTimeTracker unsubscribed from Player.local.onArrested for {_arrestSubscribedPlayer.name}");
             }
             catch (Exception ex)
@@ -239,8 +298,7 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         public void Shutdown()
         {
-            UnsubscribeFromArrestReleaseEvents();
-            UnsubscribeFromGameTimeEvents();
+            EndGameplaySession();
         }
 
         /// <summary>
@@ -249,11 +307,12 @@ namespace Behind_Bars.Systems.Jail
         private IEnumerator WaitForPlayerAndSubscribe()
         {
             ModLogger.Debug("JailTimeTracker waiting for Player.Local to subscribe to onArrested...");
-            
+
+            int generation = _trackingGeneration;
             int attempts = 0;
             const int maxAttempts = 300; // 30 seconds max wait
             
-            while (attempts < maxAttempts)
+            while (_sceneTrackingActive && generation == _trackingGeneration && attempts < maxAttempts)
             {
                 try
                 {
@@ -285,6 +344,11 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         private void OnPlayerArrested()
         {
+            if (!_sceneTrackingActive)
+            {
+                return;
+            }
+
             try
             {
 #if !MONO
@@ -313,6 +377,11 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         private void OnPlayerReleased(Player player, ReleaseManager.ReleaseType releaseType)
         {
+            if (!_sceneTrackingActive)
+            {
+                return;
+            }
+
             try
             {
                 if (player != null)
@@ -371,6 +440,11 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         private void OnGameMinuteChanged(int gameMinute)
         {
+            if (!_sceneTrackingActive)
+            {
+                return;
+            }
+
             // Decrement all active sentences by 1 game minute
             var completedSentences = new List<string>();
 
@@ -416,8 +490,23 @@ namespace Behind_Bars.Systems.Jail
                 return; // Already started
             }
             
-            _realTimeUpdateCoroutine = MelonCoroutines.Start(RealTimeUpdateLoop());
+            _realTimeUpdateCoroutine = MelonCoroutines.Start(RealTimeUpdateLoop(_trackingGeneration));
             ModLogger.Debug("JailTimeTracker real-time tracking fallback started");
+        }
+
+        /// <summary>
+        /// Stops the globally-owned Melon coroutine before its player references can cross
+        /// a scene boundary.
+        /// </summary>
+        private void StopRealTimeTracking()
+        {
+            if (_realTimeUpdateCoroutine == null)
+            {
+                return;
+            }
+
+            MelonCoroutines.Stop(_realTimeUpdateCoroutine);
+            _realTimeUpdateCoroutine = null;
         }
         
         /// <summary>
@@ -429,11 +518,16 @@ namespace Behind_Bars.Systems.Jail
         /// Performance: Reuse pooled list and iterate dictionary directly without ToList()
         /// Eliminates repeated allocations every second
         /// </summary>
-        private IEnumerator RealTimeUpdateLoop()
+        private IEnumerator RealTimeUpdateLoop(int generation)
         {
-            while (true)
+            while (_sceneTrackingActive && generation == _trackingGeneration)
             {
                 yield return new WaitForSeconds(1f); // Update every real second
+
+                if (!_sceneTrackingActive || generation != _trackingGeneration)
+                {
+                    yield break;
+                }
 
                 // Performance: Reuse pooled list instead of allocating new one
                 _completedSentencesPool.Clear();
@@ -512,6 +606,12 @@ namespace Behind_Bars.Systems.Jail
                 return;
             }
 
+            if (!_sceneTrackingActive)
+            {
+                ModLogger.Warn("Cannot start jail sentence tracking outside an active gameplay scene");
+                return;
+            }
+
             string playerKey = GetPlayerRuntimeKey(player);
 
             // Remove any existing sentence for this player
@@ -533,6 +633,27 @@ namespace Behind_Bars.Systems.Jail
             _activeSentences[playerKey] = sentence;
             _sentenceStartTimes[playerKey] = Time.time; // Record start time for real-time tracking
             ModLogger.Info($"Started tracking jail sentence for {player.name}: {sentenceGameMinutes} game minutes ({GameTimeManager.FormatGameTime(sentenceGameMinutes)})");
+        }
+
+        /// <summary>
+        /// Extends an existing active sentence without restarting its elapsed-time accounting.
+        /// </summary>
+        public bool AddPenaltyTime(Player player, float additionalGameMinutes, string reason)
+        {
+            if (player == null || additionalGameMinutes <= 0f)
+            {
+                return false;
+            }
+
+            if (!_activeSentences.TryGetValue(GetPlayerRuntimeKey(player), out var sentence))
+            {
+                return false;
+            }
+
+            sentence.RemainingGameMinutes += additionalGameMinutes;
+            sentence.TotalGameMinutes += additionalGameMinutes;
+            ModLogger.Info($"Extended {player.name}'s active sentence by {additionalGameMinutes:F0} game minutes for {reason}");
+            return true;
         }
 
         /// <summary>

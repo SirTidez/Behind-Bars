@@ -17,7 +17,11 @@ namespace Behind_Bars.Systems.CrimeTracking
         RestrictedAreaViolation,
         CurfewViolation,
         ContactWithKnownCriminals,
-        Other
+        Other,
+
+        // Append-only: violation enum values are persisted as integers. Do not reorder
+        // existing entries or old parole records will deserialize as different violations.
+        IllegalWeaponPossession
     }
 
     /// <summary>

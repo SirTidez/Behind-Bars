@@ -317,19 +317,19 @@ namespace Behind_Bars.UI
 #if !MONO
         [HideFromIl2Cpp]
 #endif
-        public void ResetTimer()
+        public void ResetTimer(float bookingBailAmount = -1f)
         {
             // CRITICAL: Stop updating FIRST to prevent race condition with UpdateLoop
             _isUpdating = false;
 
             // Small delay to ensure UpdateLoop has stopped
-            MelonCoroutines.Start(CompleteTimerReset());
+            MelonCoroutines.Start(CompleteTimerReset(bookingBailAmount));
         }
 
 #if !MONO
         [HideFromIl2Cpp]
 #endif
-        private IEnumerator CompleteTimerReset()
+        private IEnumerator CompleteTimerReset(float bookingBailAmount)
         {
             // Wait one frame to ensure UpdateLoop has exited
             yield return null;
@@ -337,8 +337,9 @@ namespace Behind_Bars.UI
             // Now safe to reset all values
             _remainingJailTime = 0f;
             _originalJailTime = 0f;
-            _currentBailAmount = 0f;
-            _originalBailAmount = 0f;
+            bool hasBookingBail = bookingBailAmount >= 0f;
+            _currentBailAmount = hasBookingBail ? bookingBailAmount : 0f;
+            _originalBailAmount = hasBookingBail ? bookingBailAmount : 0f;
             _earlyReleaseTriggered = false;
 
             // Update UI to show reset state
@@ -348,10 +349,12 @@ namespace Behind_Bars.UI
             }
             if (txtBail != null)
             {
-                txtBail.text = "Calculating...";
+                txtBail.text = hasBookingBail ? $"${bookingBailAmount:F0}" : "Calculating...";
             }
 
-            ModLogger.Info("Timer completely reset for new booking");
+            ModLogger.Info(hasBookingBail
+                ? $"Timer reset for new booking with bail ${bookingBailAmount:F0}"
+                : "Timer completely reset for new booking");
         }
 
         /// <summary>

@@ -31,6 +31,10 @@ namespace Behind_Bars.Systems.CrimeTracking.Datas
         // Severity
         public float severity;
 
+        // Defaults to true so crime records saved before this field existed retain
+        // their existing wanted-level behavior when they are reloaded.
+        public bool countsTowardWantedLevel = true;
+
         /// <summary>
         /// Creates a CrimeInstanceSaveData from a CrimeInstance
         /// </summary>
@@ -63,7 +67,8 @@ namespace Behind_Bars.Systems.CrimeTracking.Datas
                 locationY = crime.Location.y,
                 locationZ = crime.Location.z,
                 witnessIds = crime.WitnessIds != null ? new List<string>(crime.WitnessIds) : new List<string>(),
-                severity = crime.Severity
+                severity = crime.Severity,
+                countsTowardWantedLevel = crime.CountsTowardWantedLevel
             };
         }
 
@@ -82,7 +87,8 @@ namespace Behind_Bars.Systems.CrimeTracking.Datas
                 Location = location,
                 WitnessIds = witnessIds != null ? new List<string>(witnessIds) : new List<string>(),
                 Severity = severity,
-                Description = description ?? crimeName ?? ""
+                Description = description ?? crimeName ?? "",
+                CountsTowardWantedLevel = countsTowardWantedLevel
             };
 
             return crimeInstance;

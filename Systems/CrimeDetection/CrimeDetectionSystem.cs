@@ -171,8 +171,9 @@ namespace Behind_Bars.Systems.CrimeDetection
                 _witnessSystem.NPCWitnessesCrime(witness, crimeInstance, perpetrator);
             }
             
-            // Register assault in mod-managed tracking and suppress mirrored native AddCrime ingestion
-            // for this event so wanted UI does not double count the same assault.
+            // Register the offense immediately, but leave the game's live pursuit state at
+            // None. Civilian witnesses schedule their own police call; that call is the
+            // point at which the native law system should enter investigation/pursuit.
             if (perpetrator.IsOwner)
             {
                 var crimeData = perpetrator.CrimeData;
@@ -180,11 +181,6 @@ namespace Behind_Bars.Systems.CrimeDetection
                 {
                     SuppressNativeCrimeMirror(perpetrator, crime, DefaultNativeMirrorSuppressionSeconds, includeAssaultFamilyAlias: true);
                     crimeData.Crimes.Add(crime, 1);
-                }
-
-                if (crimeData != null && crimeData.CurrentPursuitLevel == PlayerCrimeData.EPursuitLevel.None)
-                {
-                    crimeData.SetPursuitLevel(PlayerCrimeData.EPursuitLevel.Investigating);
                 }
 
                 var policeWitnesses = witnesses.OfType<PoliceOfficer>();
@@ -195,14 +191,20 @@ namespace Behind_Bars.Systems.CrimeDetection
             }
 
             _crimeRecord.AddCrime(crimeInstance);
-            ModLogger.Debug($"Processed civilian assault using mod-managed tracking for {victim.name}");
+            ModLogger.Info($"Processed civilian assault for {victim.name}; native wanted escalation is deferred to witness police calls ({witnesses.Count} witness(es))");
         }
 
         /// <summary>
-        /// Process an assault on law-enforcement NPCs spawned by Behind Bars systems.
-        /// This applies an additional Assault charge and escalates pursuit for immediate arrest flow.
+        /// Process an assault on a law-enforcement NPC. Street incidents retain the game's
+        /// wanted-state escalation, while incidents already inside the jail use the local
+        /// lockdown controller and deliberately leave wanted state unchanged.
         /// </summary>
-        public void ProcessOfficerAssault(NPC victim, Player perpetrator)
+        public void ProcessOfficerAssault(
+            NPC victim,
+            Player perpetrator,
+            bool applyWantedLevel = true,
+            bool persistToRapSheet = false,
+            bool mirrorNativeCrime = true)
         {
             if (victim == null || perpetrator == null)
                 return;
@@ -210,23 +212,37 @@ namespace Behind_Bars.Systems.CrimeDetection
             if (!IsLawEnforcementNpc(victim))
                 return;
 
-            Crime assaultCrime = new Assault();
-            var crimeInstance = new CrimeInstance(assaultCrime, victim.transform.position, 2.0f);
+            Crime assaultCrime = new AssaultOnOfficer();
+            var crimeInstance = new CrimeInstance(assaultCrime, victim.transform.position, 2.0f)
+            {
+                // A prisoner is already in custody, so the disciplinary charge must
+                // remain on their record without altering their street wanted state.
+                CountsTowardWantedLevel = applyWantedLevel
+            };
 
             if (perpetrator.IsOwner && perpetrator.CrimeData != null)
             {
-                // Use direct dictionary insertion (same pattern as civilian assault) to avoid duplicate
-                // AddCrime postfix interactions while still reflecting in native crime data.
-                if (perpetrator.CrimeData.Crimes != null)
+                // Mirror street assaults into the native crime system. Custody-only
+                // assaults deliberately skip this mirror: adding it would reintroduce
+                // the game's wanted/pursuit path after the jail lockdown has taken over.
+                if (applyWantedLevel && mirrorNativeCrime && perpetrator.CrimeData.Crimes != null)
                 {
                     SuppressNativeCrimeMirror(perpetrator, assaultCrime, DefaultNativeMirrorSuppressionSeconds, includeAssaultFamilyAlias: false);
                     perpetrator.CrimeData.Crimes.Add(assaultCrime, 1);
                 }
-                perpetrator.CrimeData.SetPursuitLevel(PlayerCrimeData.EPursuitLevel.Arresting);
+                if (applyWantedLevel)
+                {
+                    perpetrator.CrimeData.SetPursuitLevel(PlayerCrimeData.EPursuitLevel.Arresting);
+                }
             }
 
             _crimeRecord.AddCrime(crimeInstance);
-            ModLogger.Info($"Processed officer assault by {perpetrator.name} on {victim.name}");
+            if (persistToRapSheet)
+            {
+                var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(perpetrator);
+                rapSheet?.AddCrime(crimeInstance);
+            }
+            ModLogger.Info($"Processed Assault on an LEO by {perpetrator.name} on {victim.name}; wanted escalation={applyWantedLevel}");
         }
         
         /// <summary>
@@ -550,6 +566,20 @@ namespace Behind_Bars.Systems.CrimeDetection
         public void ClearAllCrimes()
         {
             _crimeRecord.ClearAllCrimes();
+        }
+
+        /// <summary>
+        /// Clears only volatile per-Main-scene detection state. This record drives the
+        /// live wanted overlay and pending arrest intake; it is not the persisted rap
+        /// sheet and must not leak an unsaved crime into a subsequently loaded save.
+        /// </summary>
+        public void ResetSceneRuntimeState()
+        {
+            int activeCrimeCount = _crimeRecord.TotalCrimeCount;
+            _crimeRecord.ClearAllCrimes();
+            _nativeMirrorSuppressionUntil.Clear();
+            _witnessSystem.ResetSceneRuntimeState();
+            ModLogger.Info($"CrimeDetectionSystem cleared {activeCrimeCount} volatile crime record(s) for Main-scene exit");
         }
         
         /// <summary>

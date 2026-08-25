@@ -446,5 +446,8 @@
         <Reference Include="Assembly-CSharp">
             <HintPath>$(S1Dir)\MelonLoader\Il2CppAssemblies\Assembly-CSharp.dll</HintPath>
         </Reference>
+        <Reference Include="Il2CppScheduleOne.Core">
+            <HintPath>$(S1Dir)\MelonLoader\Il2CppAssemblies\Il2CppScheduleOne.Core.dll</HintPath>
+        </Reference>
     </ItemGroup>
 </Project>

@@ -69,8 +69,19 @@ namespace Behind_Bars
     {
         public static Core? Instance { get; private set; }
 
+        /// <summary>
+        /// True only while the loaded Main scene owns Behind Bars gameplay work.
+        /// Long-running routines use this as their scene-transition cancellation boundary.
+        /// </summary>
+        public static bool IsGameplaySceneActive => Instance?._gameplaySceneActive == true;
+
         // Core systems
         private BehindBarsSystemManager? _systemManager;
+        private Coroutine? _loadModCoroutine;
+        private Coroutine? _playerInitializationCoroutine;
+        private int _gameplaySessionVersion;
+        private bool _gameplaySceneActive;
+        private bool _playerSystemsReady;
 
         // Player management
         private Dictionary<Player, PlayerHandler> _playerHandlers = new();
@@ -507,11 +518,14 @@ namespace Behind_Bars
 
 #if !MONO
         /// <summary>
-        /// Registers all IL2CPP types with ClassInjector. Each registration is wrapped in
-        /// try-catch so a single vtable/registration failure doesn't prevent the mod from loading.
+        /// Registers all IL2CPP types with ClassInjector before any scene code can spawn them.
+        /// Registration failures are accumulated and then abort initialization so a canonical NPC
+        /// flow can never silently fall back to a partial/static implementation.
         /// </summary>
         private static void RegisterIl2CppTypes()
         {
+            var registrationFailures = new List<string>();
+
             void TryRegister<T>(string name) where T : class
             {
                 try
@@ -524,7 +538,9 @@ namespace Behind_Bars
                         var resolvedType = Il2CppInterop.Runtime.Il2CppType.Of<T>();
                         if (resolvedType == null)
                         {
-                            ModLogger.Error($"[IL2CPP] Registered {name} but type pointer resolution returned null");
+                            const string message = "type pointer resolution returned null";
+                            registrationFailures.Add($"{name}: {message}");
+                            ModLogger.Error($"[IL2CPP] Registered {name} but {message}");
                         }
                         else
                         {
@@ -533,11 +549,13 @@ namespace Behind_Bars
                     }
                     catch (Exception resolveEx)
                     {
+                        registrationFailures.Add($"{name}: failed to resolve type pointer ({resolveEx.Message})");
                         ModLogger.Error($"[IL2CPP] Failed to resolve {name} after registration: {resolveEx}");
                     }
                 }
                 catch (Exception ex)
                 {
+                    registrationFailures.Add($"{name}: {ex.Message}");
                     ModLogger.Error($"[IL2CPP] Failed to register {name}: {ex}");
                 }
             }
@@ -553,6 +571,7 @@ namespace Behind_Bars
             TryRegister<JailAreaManager>("JailAreaManager");
             TryRegister<JailDoorController>("JailDoorController");
             TryRegister<JailPatrolManager>("JailPatrolManager");
+            TryRegister<GuardAssaultLockdownManager>("GuardAssaultLockdownManager");
 
             // Prison NPC System Components
             TryRegister<NPCUpdateManager>("NPCUpdateManager");
@@ -611,7 +630,10 @@ namespace Behind_Bars
             TryRegister<InventoryPickupStation>("InventoryPickupStation");
             TryRegister<ExitScannerStation>("ExitScannerStation");
             TryRegister<SimpleExitDoor>("SimpleExitDoor");
-            TryRegister<PrisonStorageEntity>("PrisonStorageEntity");
+            // StorageEntity derives from FishNet.NetworkBehaviour. The current IL2CPP bridge cannot
+            // inject a managed subclass because its inherited RPC surface includes NetworkConnection.
+            // InventoryPickupStation uses its managed direct-transfer path on IL2CPP instead.
+            ModLogger.Warn("[IL2CPP] PrisonStorageEntity is unavailable on this runtime; release inventory uses direct transfer");
 
             // Release System
             TryRegister<ReleaseManager>("ReleaseManager");
@@ -620,6 +642,12 @@ namespace Behind_Bars
 
             // Testing
             TryRegister<Systems.Testing.SaveableTestSystem>("SaveableTestSystem");
+
+            if (registrationFailures.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    $"[IL2CPP] Behind Bars startup blocked because type registration failed: {string.Join(" | ", registrationFailures)}");
+            }
         }
 #endif
 
@@ -722,8 +750,12 @@ namespace Behind_Bars
             {
                 if (sceneName == "Main")
                 {
-                    // Show loading screen and coordinate all loading phases
-                    MelonCoroutines.Start(LoadModWithProgress());
+                    BeginGameplaySceneSession();
+                    // Retain the game's loading surface until the scene-owned Behind Bars
+                    // systems have completed their real startup work. Do not create a second
+                    // overlay after the player has already loaded into the world.
+                    HarmonyPatches.BeginNativeLoadingScreenHold(_gameplaySessionVersion);
+                    _loadModCoroutine = MelonCoroutines.Start(LoadModWithProgress()) as Coroutine;
                 }
             }
             catch (Exception e)
@@ -733,26 +765,23 @@ namespace Behind_Bars
         }
 
         /// <summary>
-        /// Master loading coroutine that shows progress and coordinates all loading phases
+        /// Master loading coroutine that coordinates the scene-owned startup work while the
+        /// game's native loading screen displays the final Behind Bars preparation step.
         /// </summary>
         private IEnumerator LoadModWithProgress()
         {
             var uiManager = ResolveUIManager();
-
-            // Show loading screen immediately
-            uiManager.ShowLoadingScreen("Loading Behind Bars Mod...");
-            uiManager.UpdateLoadingProgress(0f, "Initializing...");
-
-            yield return new WaitForSeconds(0.1f); // Small delay to ensure UI is visible
-
-            // Phase 1: UI System Initialization (0-20%)
-            uiManager.UpdateLoadingProgress(0.05f, "Waiting for UI systems...");
-            yield return new WaitForSeconds(0.2f);
+            HarmonyPatches.SetNativeLoadingScreenStatus(_gameplaySessionVersion, "Preparing Behind Bars...");
 
             // Wait for essential systems to be ready
 #if !MONO
             while (true)
             {
+                if (!IsGameplaySceneActive)
+                {
+                    yield break;
+                }
+
                 try
                 {
                     var instance = PlayerSingleton<AppsCanvas>.Instance;
@@ -768,14 +797,17 @@ namespace Behind_Bars
 #else
             while (PlayerSingleton<AppsCanvas>.Instance == null)
             {
+                if (!IsGameplaySceneActive)
+                {
+                    yield break;
+                }
+
                 yield return null;
             }
 #endif
 
             // Load asset bundle BEFORE initializing UI manager (UI prefab is in the bundle)
-            uiManager.UpdateLoadingProgress(0.10f, "Loading asset bundle...");
-            yield return new WaitForSeconds(0.2f);
-            
+            HarmonyPatches.SetNativeLoadingScreenStatus(_gameplaySessionVersion, "Loading Behind Bars assets...");
             // Load the behind-bars bundle and cache it
             if (CachedJailBundle == null)
             {
@@ -791,9 +823,6 @@ namespace Behind_Bars
                 }
             }
 
-            uiManager.UpdateLoadingProgress(0.15f, "Initializing UI manager...");
-            yield return new WaitForSeconds(0.5f);
-
             try
             {
                 uiManager.InitializeSceneUI();
@@ -804,105 +833,114 @@ namespace Behind_Bars
                 ModLogger.Error($"Error initializing UI system: {e.Message}");
             }
 
-            uiManager.UpdateLoadingProgress(0.20f, "UI system ready");
+            if (!IsGameplaySceneActive)
+            {
+                yield break;
+            }
 
-            // Phase 2: Jail Setup and Asset Spawning (20-70%)
-            uiManager.UpdateLoadingProgress(0.25f, "Setting up jail...");
-            yield return new WaitForSeconds(0.2f);
-
-            // Start jail setup in parallel
+            // Jail setup owns the canonical prison asset and NPC bootstrap sequence.
+            HarmonyPatches.SetNativeLoadingScreenStatus(_gameplaySessionVersion, "Setting up the jail...");
             var setupJailCoroutine = SetupJail();
-            MelonCoroutines.Start(setupJailCoroutine);
-
-            // Track jail setup progress (simulated - actual progress depends on SetupJail implementation)
-            float jailProgress = 0.25f;
             while (setupJailCoroutine.MoveNext())
             {
-                // Increment progress gradually during jail setup
-                jailProgress = Mathf.Min(jailProgress + 0.01f, 0.70f);
-                uiManager.UpdateLoadingProgress(jailProgress, "Spawning jail assets...");
+                if (!IsGameplaySceneActive)
+                {
+                    yield break;
+                }
+
                 yield return setupJailCoroutine.Current;
             }
 
-            uiManager.UpdateLoadingProgress(0.70f, "Jail setup complete");
-
-            // Phase 3: Wait for NPC Spawning (70-90%)
-            uiManager.UpdateLoadingProgress(0.75f, "Spawning NPCs...");
-            yield return new WaitForSeconds(0.5f);
-
-            // Wait for PrisonNPCManager to finish spawning all NPCs
-            uiManager.UpdateLoadingProgress(0.80f, "Spawning guards and inmates...");
-            
-            var npcManager = ResolvePrisonNpcManager();
-            if (npcManager != null)
+            // Do not use fixed, simulated progress to close the native loading screen.
+            // Keep the native loading screen through the complete canonical NPC pass,
+            // including guards, parole setup, and inmates.
+            HarmonyPatches.SetNativeLoadingScreenStatus(_gameplaySessionVersion, "Initializing jail NPCs...");
+            const float npcManagerTimeoutSeconds = 15f;
+            float npcManagerWaitElapsed = 0f;
+            PrisonNPCManager? npcManager = ResolvePrisonNpcManager();
+            while (npcManager == null && npcManagerWaitElapsed < npcManagerTimeoutSeconds)
             {
-                // Wait for NPC spawning to complete
-                float npcProgress = 0.80f;
-                int maxWaitSeconds = 30; // Wait up to 30 seconds for NPC spawning
-                int waitSeconds = 0;
-                
-                while (!npcManager.IsSpawningComplete && waitSeconds < maxWaitSeconds)
+                if (!IsGameplaySceneActive)
                 {
-                    // Increment progress gradually
-                    npcProgress = Mathf.Min(npcProgress + 0.002f, 0.90f);
-                    uiManager.UpdateLoadingProgress(npcProgress, "Spawning NPCs...");
-                    
-                    yield return new WaitForSeconds(0.5f);
-                    waitSeconds++;
+                    yield break;
                 }
-                
-                if (npcManager.IsSpawningComplete)
-                {
-                    ModLogger.Debug("✓ NPC spawning completed");
-                }
-                else
-                {
-                    ModLogger.Warn("NPC spawning timeout - proceeding anyway");
-                }
+
+                yield return null;
+                npcManagerWaitElapsed += Time.unscaledDeltaTime;
+                npcManager = ResolvePrisonNpcManager();
+            }
+
+            if (npcManager == null)
+            {
+                ModLogger.Warn("PrisonNPCManager was unavailable after jail setup; continuing after native loading fail-safe");
             }
             else
             {
-                // NPC Manager not ready yet, wait a bit
-                ModLogger.Warn("PrisonNPCManager not found - waiting for initialization");
-                yield return new WaitForSeconds(3f);
+                HarmonyPatches.SetNativeLoadingScreenStatus(_gameplaySessionVersion, "Spawning guards and inmates...");
+                const float npcSpawnTimeoutSeconds = 75f;
+                float npcSpawnWaitElapsed = 0f;
+                while (!npcManager.IsSpawningComplete && npcSpawnWaitElapsed < npcSpawnTimeoutSeconds)
+                {
+                    if (!IsGameplaySceneActive)
+                    {
+                        yield break;
+                    }
+
+                    yield return null;
+                    npcSpawnWaitElapsed += Time.unscaledDeltaTime;
+                }
+
+                if (npcManager.IsSpawningComplete)
+                {
+                    ModLogger.Debug("✓ Canonical jail NPC spawning completed");
+                }
+                else
+                {
+                    ModLogger.Warn($"NPC spawning did not complete within {npcSpawnTimeoutSeconds:F0}s; releasing native loading screen with startup diagnostics intact");
+                }
             }
 
-            uiManager.UpdateLoadingProgress(0.90f, "NPCs spawned");
-
-            // Phase 4: Player Systems Initialization (90-100%)
-            uiManager.UpdateLoadingProgress(0.92f, "Initializing player systems...");
-            yield return new WaitForSeconds(0.3f);
-
-            // Wait for player to be ready
-            uiManager.UpdateLoadingProgress(0.94f, "Waiting for player...");
-            
-            // Start player systems initialization
-            MelonCoroutines.Start(InitializePlayerSystems());
-            
-            // Simulate progress while player systems initialize
-            float playerProgress = 0.94f;
-            for (int i = 0; i < 20; i++) // Wait up to 2 seconds for player systems
+            HarmonyPatches.SetNativeLoadingScreenStatus(_gameplaySessionVersion, "Finalizing player systems...");
+            // OnSceneWasLoaded also starts this routine. Only start it here if the
+            // other lifecycle callback has not already established the player state.
+            if (!_playerSystemsReady && _playerInitializationCoroutine == null)
             {
-                playerProgress = Mathf.Min(playerProgress + 0.002f, 0.98f);
-                uiManager.UpdateLoadingProgress(playerProgress, "Setting up player systems...");
-                yield return new WaitForSeconds(0.1f);
+                _playerInitializationCoroutine = MelonCoroutines.Start(InitializePlayerSystems()) as Coroutine;
             }
 
-            uiManager.UpdateLoadingProgress(0.98f, "Finalizing...");
-            yield return new WaitForSeconds(0.5f);
+            const float playerSystemsTimeoutSeconds = 30f;
+            float playerSystemsWaitElapsed = 0f;
+            while (!_playerSystemsReady && playerSystemsWaitElapsed < playerSystemsTimeoutSeconds)
+            {
+                if (!IsGameplaySceneActive)
+                {
+                    yield break;
+                }
 
-            // Complete
-            uiManager.UpdateLoadingProgress(1.0f, "Complete!");
-            yield return new WaitForSeconds(1.0f); // Show completion message for 1 second
+                yield return null;
+                playerSystemsWaitElapsed += Time.unscaledDeltaTime;
+            }
 
-            // Hide loading screen
-            uiManager.HideLoadingScreen();
-            ModLogger.Debug("✓ Behind Bars mod loading complete");
+            if (!_playerSystemsReady)
+            {
+                ModLogger.Warn($"Player systems did not complete within {playerSystemsTimeoutSeconds:F0}s; releasing native loading screen with startup diagnostics intact");
+            }
+
+            HarmonyPatches.CompleteNativeLoadingScreenHold(_gameplaySessionVersion);
+            ModLogger.Debug("✓ Behind Bars scene startup complete");
         }
 
         public override void OnSceneWasLoaded(int buildIndex, string sceneName)
         {
             ModLogger.Debug($"Scene loaded: {sceneName}");
+
+            // The game can load Menu without emitting activeSceneChanged for the outgoing
+            // gameplay scene. This callback is the reliable boundary for clearing all
+            // Main-scene UI that has opted into DontDestroyOnLoad.
+            if (sceneName == "Menu")
+            {
+                ShutdownGameplayScene("Menu scene loaded", forceUiCleanup: true);
+            }
             
             // Check for updates when entering Menu scene (always check on first load, ignore cache)
             if (sceneName == "Menu" && _enableUpdateCheckingEntry?.Value == true)
@@ -914,7 +952,15 @@ namespace Behind_Bars
             if (sceneName == "Main")
             {
                 ModLogger.Debug("Main scene loaded, initializing player systems");
-                MelonCoroutines.Start(InitializePlayerSystems());
+                if (!_gameplaySceneActive)
+                {
+                    BeginGameplaySceneSession();
+                }
+                // Build and register the inactive native jail-NPC template on every local
+                // process before managers request a network spawn. This is deliberately
+                // independent from S1API and never uses a live NPC as a donor.
+                MelonCoroutines.Start(BaseNPCSpawner.PrewarmNativeNpcTemplate());
+                _playerInitializationCoroutine = MelonCoroutines.Start(InitializePlayerSystems()) as Coroutine;
             }
             else if (sceneName != "Menu" && sceneName != "Loading")
             {
@@ -931,6 +977,10 @@ namespace Behind_Bars
             // IL2CPP - More robust null checking
             while (true)
             {
+                if (!IsGameplaySceneActive)
+                {
+                    yield break;
+                }
                 try
                 {
                     var instance = PlayerSingleton<AppsCanvas>.Instance;
@@ -946,7 +996,13 @@ namespace Behind_Bars
 #else
             // Mono - Standard Unity null check
             while (PlayerSingleton<AppsCanvas>.Instance == null)
+            {
+                if (!IsGameplaySceneActive)
+                {
+                    yield break;
+                }
                 yield return null;
+            }
 #endif
 
             // Initialize player handler for local player
@@ -957,6 +1013,7 @@ namespace Behind_Bars
                 // Arrest handling is centralized in HarmonyPatches; no direct listener needed here
 
                 ModLogger.Debug("Player systems initialized successfully");
+                _playerSystemsReady = true;
                 
                 // Restore parole tracking if player is on parole
                 MelonCoroutines.Start(RestoreParoleIfActive(Player.Local));
@@ -965,7 +1022,10 @@ namespace Behind_Bars
             {
                 ModLogger.Warn("Player.Local is null, retrying in 2 seconds...");
                 yield return new WaitForSeconds(2f);
-                MelonCoroutines.Start(InitializePlayerSystems());
+                if (IsGameplaySceneActive)
+                {
+                    _playerInitializationCoroutine = MelonCoroutines.Start(InitializePlayerSystems()) as Coroutine;
+                }
             }
         }
 
@@ -1424,6 +1484,14 @@ namespace Behind_Bars
                 else
                 {
                     ModLogger.Debug("✓ BookingProcess component already exists");
+                }
+
+                // A single scene-local owner prevents duplicate guard-damage callbacks from
+                // creating competing lockdowns during the same custody incident.
+                if (BBHelpers.GetComponentSafe<GuardAssaultLockdownManager>(jailGameObject) == null)
+                {
+                    BBHelpers.AddComponentSafe<GuardAssaultLockdownManager>(jailGameObject);
+                    ModLogger.Debug("✓ GuardAssaultLockdownManager added to jail");
                 }
                 
                 // Find and set up booking stations
@@ -2319,25 +2387,102 @@ namespace Behind_Bars
             {
                 ModLogger.Debug($"Scene changed from '{oldScene.name}' to '{newScene.name}'");
 
-                // Clean up UI when leaving the main game scene
-                if (oldScene.name == "Main" || newScene.name == "Menu" || newScene.name == "Loading")
+                // A Main -> Menu/Loading transition destroys scene objects but does not deinitialize
+                // the Melon mod. Cancel the active gameplay session before Unity begins invoking
+                // callbacks against those destroyed objects.
+                if (oldScene.name == "Main" && newScene.name != "Main")
                 {
-                    ModLogger.Debug("Game scene exiting - cleaning up Behind Bars UI");
-                    HideJailInfoUI();
-                    
-                    // Stop any dynamic updates that might be running
-                    var uiManager = ResolveUIManager();
-                    if (uiManager != null)
-                    {
-                        uiManager.DestroyJailInfoUI();
-                    }
-                    
+                    ShutdownGameplayScene($"scene change {oldScene.name} -> {newScene.name}");
                 }
             }
             catch (Exception e)
             {
                 ModLogger.Error($"Error handling scene change: {e.Message}");
             }
+        }
+
+        private void BeginGameplaySceneSession()
+        {
+            _gameplaySessionVersion++;
+            _gameplaySceneActive = true;
+            _playerSystemsReady = false;
+            try { ResolveJailTimeTracker().BeginGameplaySession(); }
+            catch (Exception ex) { ModLogger.Warn($"Jail sentence tracker startup reported an issue: {ex.Message}"); }
+            ModLogger.Debug($"Behind Bars gameplay session {_gameplaySessionVersion} started");
+        }
+
+        /// <summary>
+        /// Cancels scene-bound gameplay owners without tearing down the persistent mod service graph.
+        /// This is intentionally separate from OnDeinitializeMelon so loading another save can bootstrap cleanly.
+        /// </summary>
+        private void ShutdownGameplayScene(string reason, bool forceUiCleanup = false)
+        {
+            var hasActiveGameplaySession = _gameplaySceneActive || _loadModCoroutine != null || _playerInitializationCoroutine != null;
+            if (!hasActiveGameplaySession && !forceUiCleanup)
+            {
+                return;
+            }
+
+            if (hasActiveGameplaySession)
+            {
+                ModLogger.Info($"Behind Bars gameplay session {_gameplaySessionVersion} ending ({reason})");
+                _gameplaySceneActive = false;
+                _playerSystemsReady = false;
+                _gameplaySessionVersion++;
+
+                StopSceneCoroutine(ref _loadModCoroutine);
+                StopSceneCoroutine(ref _playerInitializationCoroutine);
+
+                try { ResolveBookingProcess()?.CancelForSceneExit(); }
+                catch (Exception ex) { ModLogger.Warn($"Booking shutdown reported an issue: {ex.Message}"); }
+
+                try { ResolveJailTimeTracker().EndGameplaySession(); }
+                catch (Exception ex) { ModLogger.Warn($"Jail sentence tracker shutdown reported an issue: {ex.Message}"); }
+
+                try { Core.JailController?.BookingProcessController?.scannerStation?.CancelForSceneExit(); }
+                catch (Exception ex) { ModLogger.Warn($"Scanner shutdown reported an issue: {ex.Message}"); }
+
+                try { Core.JailController?.BookingProcessController?.mugshotStation?.CancelForSceneExit(); }
+                catch (Exception ex) { ModLogger.Warn($"Mugshot shutdown reported an issue: {ex.Message}"); }
+
+                try { ResolvePrisonNpcManager()?.CancelForSceneExit(); }
+                catch (Exception ex) { ModLogger.Warn($"NPC manager shutdown reported an issue: {ex.Message}"); }
+
+                try
+                {
+                    if (ReleaseManager.TryGetRegisteredInstance(out var releaseManager))
+                    {
+                        releaseManager.CancelForSceneExit();
+                    }
+                }
+                catch (Exception ex) { ModLogger.Warn($"Release shutdown reported an issue: {ex.Message}"); }
+
+                try { HarmonyPatches.ResetSceneTransientState(); }
+                catch (Exception ex) { ModLogger.Warn($"Harmony transient-state reset reported an issue: {ex.Message}"); }
+
+                try { ClearRapSheetCache(); }
+                catch (Exception ex) { ModLogger.Warn($"Rap-sheet cache reset reported an issue: {ex.Message}"); }
+            }
+
+            try
+            {
+                // ShutdownSceneUI directly owns the jail overlay. Do not call the public
+                // HideJailInfoUI facade here: it lazily initializes scene UI when absent,
+                // which is the opposite of what a Menu transition needs.
+                ResolveUIManager()?.ShutdownSceneUI();
+            }
+            catch (Exception ex) { ModLogger.Warn($"UI shutdown reported an issue: {ex.Message}"); }
+        }
+
+        private static void StopSceneCoroutine(ref Coroutine? coroutine)
+        {
+            if (coroutine == null)
+            {
+                return;
+            }
+
+            MelonCoroutines.Stop(coroutine);
+            coroutine = null;
         }
 
         /// <summary>
@@ -2348,6 +2493,7 @@ namespace Behind_Bars
             try
             {
                 ModLogger.Debug("Behind Bars shutting down - cleaning up...");
+                ShutdownGameplayScene("mod deinitialization");
 
                 // Unsubscribe from scene events
 #if !MONO

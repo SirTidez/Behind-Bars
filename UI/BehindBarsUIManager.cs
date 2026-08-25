@@ -42,9 +42,11 @@ namespace Behind_Bars.UI
         private GameObject? _activeUI;
         private BehindBarsUIWrapper? _uiWrapper;
         private bool _isInitialized = false;
+        private Coroutine? _jailInfoUpdateCoroutine;
 
         // Performance: Pool canvas to avoid repeated allocation
         private static Canvas? _pooledOverlayCanvas;
+        private const string OverlayCanvasName = "Behind Bars Overlay Canvas";
 
         /// <summary>
         /// Initialize the UI manager and load assets
@@ -53,6 +55,9 @@ namespace Behind_Bars.UI
         {
             if (_isInitialized)
             {
+                // The service persists between scenes, but the WantedLevelUI panel is
+                // parented to the old HUD canvas. Recreate that scene presentation here.
+                InitializeWantedLevelUI();
                 ModLogger.Debug("BehindBarsUIManager already initialized");
                 return;
             }
@@ -297,7 +302,13 @@ namespace Behind_Bars.UI
 
                 // Wait a frame for components to initialize, then update info and start dynamic updates
                 ModLogger.Debug("Starting UI update coroutine");
-                MelonLoader.MelonCoroutines.Start(UpdateUIAfterFrame(crime, timeInfo, bailInfo, jailTimeSeconds, bailAmount));
+                if (_jailInfoUpdateCoroutine != null)
+                {
+                    MelonLoader.MelonCoroutines.Stop(_jailInfoUpdateCoroutine);
+                }
+
+                _jailInfoUpdateCoroutine = MelonLoader.MelonCoroutines.Start(
+                    UpdateUIAfterFrame(crime, timeInfo, bailInfo, jailTimeSeconds, bailAmount)) as Coroutine;
 
                 ModLogger.Debug($"✓ Jail info UI created in overlay canvas '{canvas.name}' with sorting order {canvas.sortingOrder}");
             }
@@ -323,6 +334,12 @@ namespace Behind_Bars.UI
         {
             yield return null; // Wait one frame
 
+            if (!Core.IsGameplaySceneActive)
+            {
+                _jailInfoUpdateCoroutine = null;
+                yield break;
+            }
+
             if (_uiWrapper != null && _uiWrapper.IsInitialized)
             {
                 _uiWrapper.UpdateJailInfo(crime, timeInfo, bailInfo);
@@ -342,6 +359,8 @@ namespace Behind_Bars.UI
             {
                 ModLogger.Warn("UI wrapper not initialized after frame wait");
             }
+
+            _jailInfoUpdateCoroutine = null;
         }
 
         /// <summary>
@@ -360,24 +379,55 @@ namespace Behind_Bars.UI
         /// </summary>
         public void DestroyJailInfoUI()
         {
+            if (_jailInfoUpdateCoroutine != null)
+            {
+                MelonLoader.MelonCoroutines.Stop(_jailInfoUpdateCoroutine);
+                _jailInfoUpdateCoroutine = null;
+            }
+
+            try
+            {
+                _uiWrapper?.StopDynamicUpdates();
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Warn($"Jail info UI dynamic-update cleanup ignored an issue: {ex.Message}");
+            }
+
             if (_activeUI != null)
             {
-                // Get the canvas before destroying the UI
-                var canvas = _activeUI.transform.parent?.GetComponent<Canvas>();
-                
                 // Destroy the UI
                 UnityEngine.Object.DestroyImmediate(_activeUI);
-                _activeUI = null;
-                _uiWrapper = null;
-                
-                // Clean up the overlay canvas if it was created by us
-                if (canvas != null && canvas.name == "Behind Bars Overlay Canvas")
-                {
-                    UnityEngine.Object.DestroyImmediate(canvas.gameObject);
-                    ModLogger.Debug("Destroyed Behind Bars overlay canvas");
-                }
                 
                 ModLogger.Debug("Jail info UI destroyed");
+            }
+
+            _activeUI = null;
+            _uiWrapper = null;
+
+            // This overlay deliberately survives scene loads during active jail play. A menu
+            // transition must remove it even when Unity has already invalidated _activeUI.
+            DestroyPooledOverlayCanvas();
+        }
+
+        private static void DestroyPooledOverlayCanvas()
+        {
+            var pooledCanvas = _pooledOverlayCanvas;
+            _pooledOverlayCanvas = null;
+
+            if (pooledCanvas != null)
+            {
+                UnityEngine.Object.DestroyImmediate(pooledCanvas.gameObject);
+                ModLogger.Debug("Destroyed pooled Behind Bars overlay canvas");
+            }
+
+            // Recover from stale managed bookkeeping after an unload race. This exact name is
+            // owned by Behind Bars, so it cannot affect a game-created menu canvas.
+            var orphanedCanvas = GameObject.Find(OverlayCanvasName);
+            if (orphanedCanvas != null)
+            {
+                UnityEngine.Object.DestroyImmediate(orphanedCanvas);
+                ModLogger.Debug("Destroyed orphaned Behind Bars overlay canvas");
             }
         }
 
@@ -408,7 +458,7 @@ namespace Behind_Bars.UI
             // Create new canvas only if pool is empty
             ModLogger.Debug("Creating new dedicated overlay canvas for Behind Bars UI");
 
-            var canvasGO = new GameObject("Behind Bars Overlay Canvas");
+            var canvasGO = new GameObject(OverlayCanvasName);
             var overlayCanvas = canvasGO.AddComponent<Canvas>();
             overlayCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
             overlayCanvas.sortingOrder = 1000; // Very high sorting order to appear on top of everything
@@ -459,6 +509,8 @@ namespace Behind_Bars.UI
         private GameObject? _paroleStatusManager;
         private ParoleStatusUI? _paroleStatusUI;
         private Coroutine? _paroleStatusUpdateCoroutine;
+        private Coroutine? _arrestSubscriptionCoroutine;
+        private Player? _arrestSubscriptionPlayer;
         private bool _isSubscribedToArrestEvents = false;
         
         // === BAIL UI SYSTEM ===
@@ -958,7 +1010,7 @@ namespace Behind_Bars.UI
             ModLogger.Debug("ParoleStatusUI subscribed to ReleaseManager.OnReleaseCompleted");
             
             // Start coroutine to subscribe to Player.local.onArrested when available
-            MelonLoader.MelonCoroutines.Start(WaitForPlayerAndSubscribeToArrest());
+            _arrestSubscriptionCoroutine = MelonLoader.MelonCoroutines.Start(WaitForPlayerAndSubscribeToArrest()) as Coroutine;
             
             _isSubscribedToArrestEvents = true;
         }
@@ -984,7 +1036,8 @@ namespace Behind_Bars.UI
                     if (localPlayer != null && localPlayer.Pointer != IntPtr.Zero)
                     {
                         // Subscribe to onArrested
-                        localPlayer.onArrested.AddListener(new Action(HandlePlayerArrested));
+                        localPlayer.add_onArrested(new Action(HandlePlayerArrested));
+                        _arrestSubscriptionPlayer = localPlayer;
                         ModLogger.Info($"ParoleStatusUI subscribed to Player.local.onArrested for {localPlayer.name}");
                         yield break;
                     }
@@ -993,7 +1046,8 @@ namespace Behind_Bars.UI
                     if (localPlayer != null)
                     {
                         // Subscribe to onArrested
-                        localPlayer.onArrested.AddListener(HandlePlayerArrested);
+                        localPlayer.onArrested += HandlePlayerArrested;
+                        _arrestSubscriptionPlayer = localPlayer;
                         ModLogger.Info($"ParoleStatusUI subscribed to Player.local.onArrested for {localPlayer.name}");
                         yield break;
                     }
@@ -1342,6 +1396,99 @@ namespace Behind_Bars.UI
             }
         }
 
+        /// <summary>
+        /// Releases transient scene UI and its listeners without destroying the persistent UI service.
+        /// </summary>
+        public void ShutdownSceneUI()
+        {
+            if (_paroleStatusUpdateCoroutine != null)
+            {
+                MelonLoader.MelonCoroutines.Stop(_paroleStatusUpdateCoroutine);
+                _paroleStatusUpdateCoroutine = null;
+            }
+
+            if (_arrestSubscriptionCoroutine != null)
+            {
+                MelonLoader.MelonCoroutines.Stop(_arrestSubscriptionCoroutine);
+                _arrestSubscriptionCoroutine = null;
+            }
+
+            try
+            {
+                HideNotification();
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Warn($"Notification shutdown ignored an issue: {ex.Message}");
+            }
+
+            try
+            {
+                _uiWrapper?.StopDynamicUpdates();
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Warn($"Jail UI update shutdown ignored an issue: {ex.Message}");
+            }
+
+            if (_officerCommandUI != null)
+            {
+                _officerCommandUI.CancelForSceneExit();
+            }
+
+            if (_officerCommandManager != null)
+            {
+                UnityEngine.Object.Destroy(_officerCommandManager);
+            }
+
+            _officerCommandUI = null;
+            _officerCommandManager = null;
+            _currentCommand = null;
+
+            if (_isSubscribedToArrestEvents)
+            {
+                ReleaseManager.OnReleaseCompleted -= HandlePlayerReleased;
+                if (_arrestSubscriptionPlayer != null)
+                {
+#if !MONO
+                    _arrestSubscriptionPlayer.remove_onArrested(new Action(HandlePlayerArrested));
+#else
+                    _arrestSubscriptionPlayer.onArrested -= HandlePlayerArrested;
+#endif
+                }
+
+                _arrestSubscriptionPlayer = null;
+                _isSubscribedToArrestEvents = false;
+            }
+
+            try
+            {
+                PropertyLockerUI.Instance.CloseForSceneTransition();
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Warn($"Property locker scene cleanup ignored an issue: {ex.Message}");
+            }
+            try
+            {
+                DestroyJailInfoUI();
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Warn($"Jail UI artifact cleanup ignored an issue: {ex.Message}");
+            }
+            try
+            {
+                _wantedLevelUI?.ReleaseScenePresentation();
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Warn($"Wanted UI scene cleanup ignored an issue: {ex.Message}");
+            }
+
+            ModLogger.Debug("BehindBarsUIManager released scene UI and event listeners");
+        }
+
         // === BAIL UI SYSTEM ===
 
         /// <summary>
@@ -1568,6 +1715,10 @@ namespace Behind_Bars.UI
                 if (_wantedLevelUI == null)
                 {
                     CreateWantedLevelUI();
+                }
+                else
+                {
+                    _wantedLevelUI.CreateWantedLevelUI();
                 }
 
                 ModLogger.Debug("WantedLevelUI initialized successfully");

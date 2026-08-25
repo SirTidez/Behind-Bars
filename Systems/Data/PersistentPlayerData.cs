@@ -512,22 +512,26 @@ namespace Behind_Bars.Systems.Data
 
             try
             {
-                var getAllSlotsMethod = inventory.GetType().GetMethod("GetAllInventorySlots");
-                if (getAllSlotsMethod != null)
+                if (inventory == null)
                 {
-                    var allSlots = getAllSlotsMethod.Invoke(inventory, null);
-                    if (allSlots is System.Collections.IList slotsList)
+                    return slots;
+                }
+
+                // IL2CPP exposes GetAllInventorySlots as an
+                // Il2CppSystem.Collections.Generic.List<ItemSlot>, which is
+                // not assignable to managed System.Collections.IList. The old
+                // reflection path therefore silently treated every inventory
+                // (including equippable items such as the Golden Skateboard)
+                // as empty. Enumerate the game's native collection directly.
+                foreach (var slot in inventory.GetAllInventorySlots())
+                {
+                    if (slot != null)
                     {
-                        for (int i = 0; i < slotsList.Count; i++)
-                        {
-                            var slot = slotsList[i];
-                            if (slot != null)
-                            {
-                                slots.Add(slot);
-                            }
-                        }
+                        slots.Add(slot);
                     }
                 }
+
+                ModLogger.Debug($"Captured {slots.Count} inventory slots through PlayerInventory.GetAllInventorySlots");
             }
             catch (System.Exception ex)
             {
@@ -1553,8 +1557,11 @@ namespace Behind_Bars.Systems.Data
                     });
                 }
 
-                // Apply the clothing changes
-                playerAvatar.ApplyBodyLayerSettings(settings);
+                // The booking path replaces attire through LoadAvatarSettings.
+                // Use the same full-avatar application path on release: the
+                // lighter body-layer refresh can log success on IL2CPP while
+                // leaving the authored prison outfit rendered in place.
+                playerAvatar.LoadAvatarSettings(settings);
                 ModLogger.Info($"✓ Restored original clothing for {player.name} - changed back from prison attire");
             }
             catch (System.Exception ex)

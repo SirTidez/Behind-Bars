@@ -139,6 +139,7 @@ namespace Behind_Bars.Systems.CrimeTracking
                 "Murder" => 1000f,
                 "Manslaughter" => 300f,
                 "AssaultOnCivilian" => 100f,
+                "AssaultOnOfficer" => 1000f,
                 "WitnessIntimidation" => 150f,
                 
                 // Contraband crimes

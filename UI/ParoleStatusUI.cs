@@ -228,6 +228,9 @@ namespace Behind_Bars.UI
         /// <summary>
         /// Wait for HUD canvas to be available and then create UI
         /// </summary>
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
         private IEnumerator WaitForCanvasAndCreate()
         {
             int attempts = 0;
@@ -254,6 +257,9 @@ namespace Behind_Bars.UI
         /// <summary>
         /// Show parole status UI with data
         /// </summary>
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
         public void Show(ParoleStatusData data)
         {
             if (!_isInitialized)
@@ -315,6 +321,9 @@ namespace Behind_Bars.UI
         /// <summary>
         /// Update status without re-fading
         /// </summary>
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
         public void UpdateStatus(ParoleStatusData data)
         {
             if (!_isInitialized || data == null)
@@ -598,6 +607,9 @@ namespace Behind_Bars.UI
             }
         }
 
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
         private string FormatLSILevel(LSILevel level, int searchPercent)
         {
             string levelName = level switch
@@ -616,6 +628,9 @@ namespace Behind_Bars.UI
         /// <summary>
         /// Fade in animation
         /// </summary>
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
         private IEnumerator FadeIn()
         {
             float fadeTime = 0.3f;
@@ -634,6 +649,9 @@ namespace Behind_Bars.UI
         /// <summary>
         /// Fade out animation
         /// </summary>
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
         private IEnumerator FadeOut()
         {
             float fadeTime = 0.5f;

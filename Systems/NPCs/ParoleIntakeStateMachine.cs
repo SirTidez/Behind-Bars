@@ -32,10 +32,11 @@ namespace Behind_Bars.Systems.NPCs
         {
             Idle,                    // Waiting at police station entrance
             DetectingParolee,        // Monitoring for new parolee arrival
-            GreetingParolee,         // Initial greeting and identification
-            ReviewingConditions,      // Explaining parole conditions
-            IssuingParoleCard,       // Providing parole documentation
-            FinalizingIntake,        // Completing intake process
+            AwaitingReleaseSummary,  // Supervisor has reached the player while the release UI is visible
+            EscortingToCheckIn,      // Showing the player the check-in location
+            ExplainingCheckInLocation,
+            ExplainingCheckInSchedule,
+            FinalizingIntake,
             ReturningToPost          // Back to entrance position
         }
 
@@ -58,6 +59,19 @@ namespace Behind_Bars.Systems.NPCs
         private Vector3 entrancePosition;
         private float stateStartTime;
         private float processingDelay = 2f; // Delay between states for processing
+        private const float ParoleeGreetingDistance = 2.25f;
+        private const float ApproachRepathInterval = 0.35f;
+        private float nextApproachRepathTime;
+        private bool loggedApproachFailure;
+        private bool releaseSummaryAcknowledged;
+        private bool hasPreparedReleaseMeeting;
+        private Vector3 preparedReleaseMeetingPoint;
+        private bool playerFrozenForExplanation;
+        private float nextEscortRepathTime;
+        private float nextEscortReminderTime;
+        private const float EscortFollowDistance = 3f;
+        private const float EscortFollowTolerance = 0.5f;
+        private const float CheckInLocationTolerance = 1.5f;
 
         // Dialogue system
         private JailNPCDialogueController dialogueController;
@@ -108,16 +122,7 @@ namespace Behind_Bars.Systems.NPCs
             }
             else
             {
-                // Fallback to police station route first waypoint
-                var policeStationRoute = PresetParoleOfficerRoutes.GetRoute("PoliceStation");
-                if (policeStationRoute != null && policeStationRoute.points != null && policeStationRoute.points.Length > 0)
-                {
-                    entrancePosition = policeStationRoute.points[0];
-                }
-                else
-                {
-                    entrancePosition = transform.position;
-                }
+                entrancePosition = PresetParoleOfficerRoutes.GetSupervisingOfficerStation();
             }
             ModLogger.Debug($"ParoleIntakeStateMachine: Entrance position set to {entrancePosition}");
         }
@@ -184,9 +189,10 @@ namespace Behind_Bars.Systems.NPCs
             {
                 ParoleIntakeState.Idle => "Idle",
                 ParoleIntakeState.DetectingParolee => "DetectingParolee",
-                ParoleIntakeState.GreetingParolee => "GreetingParolee",
-                ParoleIntakeState.ReviewingConditions => "ReviewingConditions",
-                ParoleIntakeState.IssuingParoleCard => "IssuingParoleCard",
+                ParoleIntakeState.AwaitingReleaseSummary => "Idle",
+                ParoleIntakeState.EscortingToCheckIn => "Escorting",
+                ParoleIntakeState.ExplainingCheckInLocation => "ReviewingConditions",
+                ParoleIntakeState.ExplainingCheckInSchedule => "ReviewingConditions",
                 ParoleIntakeState.FinalizingIntake => "FinalizingIntake",
                 ParoleIntakeState.ReturningToPost => "Idle",
                 _ => "Idle"
@@ -200,44 +206,168 @@ namespace Behind_Bars.Systems.NPCs
             switch (state)
             {
                 case ParoleIntakeState.Idle:
+                    RestorePlayerAfterExplanation();
                     // Stay at entrance position
                     if (stationaryBehavior != null)
                     {
+                        stationaryBehavior.SetMaintainPosition(true);
                         stationaryBehavior.ReturnToPosition();
                     }
                     break;
 
                 case ParoleIntakeState.DetectingParolee:
-                    // Look for nearby parolee
+                    // A supervising officer normally remains at their post. Suspend that
+                    // behavior only while they walk out to start the release intake.
+                    stationaryBehavior?.SetMaintainPosition(false);
+                    nextApproachRepathTime = 0f;
+                    loggedApproachFailure = false;
+                    ModLogger.Info($"ParoleIntakeStateMachine: Supervisor approaching {currentParolee?.name ?? "released parolee"} for post-release intake");
                     break;
 
-                case ParoleIntakeState.GreetingParolee:
-                    // Face the parolee
+                case ParoleIntakeState.AwaitingReleaseSummary:
+                    StopMovement();
+                    break;
+
+                case ParoleIntakeState.EscortingToCheckIn:
                     if (currentParolee != null)
                     {
-                        LookAt(currentParolee.transform.position);
+                        stationaryBehavior?.SetMaintainPosition(false);
+                        paroleOfficer?.BeginIntakeEscort(currentParolee);
+                        nextEscortRepathTime = 0f;
+                        nextEscortReminderTime = 0f;
+                        TrySendNPCMessage("I'm your supervising officer. Follow me to your first parole check-in.", 4f);
                     }
                     break;
 
-                case ParoleIntakeState.ReviewingConditions:
-                    // Continue facing parolee
+                case ParoleIntakeState.ExplainingCheckInLocation:
+                    if (currentParolee != null)
+                    {
+                        StopMovement();
+                        FreezePlayerForExplanation();
+                        MaintainFacingParolee();
+                        TrySendNPCMessage("This is your parole check-in location. Return here whenever you are instructed to report.", 5f);
+                    }
                     break;
 
-                case ParoleIntakeState.IssuingParoleCard:
-                    // Issue documentation
+                case ParoleIntakeState.ExplainingCheckInSchedule:
+                    if (currentParolee != null)
+                    {
+                        MaintainFacingParolee();
+                        TrySendNPCMessage(BuildCheckInScheduleMessage(currentParolee), 6f);
+                    }
                     break;
 
                 case ParoleIntakeState.FinalizingIntake:
-                    // Complete intake
+                    if (currentParolee != null)
+                    {
+                        MaintainFacingParolee();
+                        TrySendNPCMessage("Your initial parole intake is complete. Return to this location for your scheduled check-ins.", 5f);
+                    }
                     break;
 
                 case ParoleIntakeState.ReturningToPost:
-                    // Return to entrance
                     if (stationaryBehavior != null)
                     {
+                        stationaryBehavior.SetMaintainPosition(true);
                         stationaryBehavior.ReturnToPosition();
                     }
                     break;
+            }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private string BuildCheckInScheduleMessage(Player parolee)
+        {
+            var paroleManager = Core.ResolveParoleManager();
+            if (paroleManager != null)
+            {
+                paroleManager.GetDailyCheckInStatus(parolee, out string windowText, applyConsequences: false);
+                if (!string.IsNullOrWhiteSpace(windowText))
+                {
+                    return $"Your next check-in window is between {windowText}. Come back here during that time and speak with me.";
+                }
+            }
+
+            return "Your check-in schedule will be sent to you. Return here during your assigned window and speak with me.";
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void FreezePlayerForExplanation()
+        {
+            if (currentParolee == null || playerFrozenForExplanation)
+            {
+                return;
+            }
+
+            try
+            {
+                Vector3 lookDirection = transform.position - currentParolee.transform.position;
+                lookDirection.y = 0f;
+                if (lookDirection.sqrMagnitude > 0.001f)
+                {
+                    currentParolee.transform.rotation = Quaternion.LookRotation(lookDirection.normalized, Vector3.up);
+                }
+
+#if MONO
+                var playerMovement = ScheduleOne.DevUtilities.PlayerSingleton<ScheduleOne.PlayerScripts.PlayerMovement>.Instance;
+                var playerCamera = ScheduleOne.DevUtilities.PlayerSingleton<ScheduleOne.PlayerScripts.PlayerCamera>.Instance;
+#else
+                var playerMovement = Il2CppScheduleOne.DevUtilities.PlayerSingleton<Il2CppScheduleOne.PlayerScripts.PlayerMovement>.Instance;
+                var playerCamera = Il2CppScheduleOne.DevUtilities.PlayerSingleton<Il2CppScheduleOne.PlayerScripts.PlayerCamera>.Instance;
+#endif
+                if (playerMovement != null)
+                {
+                    playerMovement.CanMove = false;
+                }
+
+                playerCamera?.SetCanLook(false);
+                playerFrozenForExplanation = true;
+                ModLogger.Info($"ParoleIntakeStateMachine: Froze {currentParolee.name} for check-in location explanation");
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"ParoleIntakeStateMachine: Failed to freeze player for explanation: {ex.Message}");
+            }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void RestorePlayerAfterExplanation()
+        {
+            if (!playerFrozenForExplanation)
+            {
+                return;
+            }
+
+            try
+            {
+#if MONO
+                var playerMovement = ScheduleOne.DevUtilities.PlayerSingleton<ScheduleOne.PlayerScripts.PlayerMovement>.Instance;
+                var playerCamera = ScheduleOne.DevUtilities.PlayerSingleton<ScheduleOne.PlayerScripts.PlayerCamera>.Instance;
+#else
+                var playerMovement = Il2CppScheduleOne.DevUtilities.PlayerSingleton<Il2CppScheduleOne.PlayerScripts.PlayerMovement>.Instance;
+                var playerCamera = Il2CppScheduleOne.DevUtilities.PlayerSingleton<Il2CppScheduleOne.PlayerScripts.PlayerCamera>.Instance;
+#endif
+                if (playerMovement != null)
+                {
+                    playerMovement.CanMove = true;
+                }
+
+                playerCamera?.SetCanLook(true);
+                ModLogger.Info("ParoleIntakeStateMachine: Restored player controls after check-in location explanation");
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"ParoleIntakeStateMachine: Failed to restore player controls after explanation: {ex.Message}");
+            }
+            finally
+            {
+                playerFrozenForExplanation = false;
             }
         }
 
@@ -255,6 +385,8 @@ namespace Behind_Bars.Systems.NPCs
 
         protected override void OnDisable()
         {
+            RestorePlayerAfterExplanation();
+            paroleOfficer?.CompleteIntakeEscort();
             base.OnDisable();
         }
 
@@ -281,16 +413,20 @@ namespace Behind_Bars.Systems.NPCs
                     HandleDetectingParoleeState();
                     break;
 
-                case ParoleIntakeState.GreetingParolee:
-                    HandleGreetingParoleeState();
+                case ParoleIntakeState.AwaitingReleaseSummary:
+                    HandleAwaitingReleaseSummaryState();
                     break;
 
-                case ParoleIntakeState.ReviewingConditions:
-                    HandleReviewingConditionsState();
+                case ParoleIntakeState.EscortingToCheckIn:
+                    HandleEscortingToCheckInState();
                     break;
 
-                case ParoleIntakeState.IssuingParoleCard:
-                    HandleIssuingParoleCardState();
+                case ParoleIntakeState.ExplainingCheckInLocation:
+                    HandleExplainingCheckInLocationState();
+                    break;
+
+                case ParoleIntakeState.ExplainingCheckInSchedule:
+                    HandleExplainingCheckInScheduleState();
                     break;
 
                 case ParoleIntakeState.FinalizingIntake:
@@ -315,14 +451,41 @@ namespace Behind_Bars.Systems.NPCs
 
         private void HandleDetectingParoleeState()
         {
-            // Wait a moment, then greet
-            if (Time.time - stateStartTime >= processingDelay)
+            if (currentParolee == null)
             {
-                ChangeIntakeState(ParoleIntakeState.GreetingParolee);
+                ChangeIntakeState(ParoleIntakeState.Idle);
+                return;
+            }
+
+            Vector3 approachPosition = hasPreparedReleaseMeeting
+                ? preparedReleaseMeetingPoint
+                : currentParolee.transform.position;
+            float distance = Vector3.Distance(transform.position, approachPosition);
+            if (distance <= ParoleeGreetingDistance)
+            {
+                ModLogger.Info(hasPreparedReleaseMeeting
+                    ? $"ParoleIntakeStateMachine: Supervisor reached the police-station release point for {currentParolee.name} ({distance:F2}m)"
+                    : $"ParoleIntakeStateMachine: Supervisor reached {currentParolee.name} for post-release intake ({distance:F2}m)");
+                ChangeIntakeState(releaseSummaryAcknowledged
+                    ? ParoleIntakeState.EscortingToCheckIn
+                    : ParoleIntakeState.AwaitingReleaseSummary);
+                return;
+            }
+
+            if (Time.time < nextApproachRepathTime)
+            {
+                return;
+            }
+
+            nextApproachRepathTime = Time.time + ApproachRepathInterval;
+            if (!MoveTo(approachPosition, ParoleeGreetingDistance) && !loggedApproachFailure)
+            {
+                loggedApproachFailure = true;
+                ModLogger.Error($"ParoleIntakeStateMachine: Unable to approach parolee {currentParolee.name} for post-release intake");
             }
         }
 
-        private void HandleGreetingParoleeState()
+        private void HandleAwaitingReleaseSummaryState()
         {
             if (currentParolee == null)
             {
@@ -330,14 +493,68 @@ namespace Behind_Bars.Systems.NPCs
                 return;
             }
 
-            // Wait for greeting to complete, then review conditions
+            if (releaseSummaryAcknowledged)
+            {
+                ChangeIntakeState(ParoleIntakeState.EscortingToCheckIn);
+            }
+        }
+
+        private void HandleEscortingToCheckInState()
+        {
+            if (currentParolee == null)
+            {
+                ChangeIntakeState(ParoleIntakeState.Idle);
+                return;
+            }
+
+            float paroleeDistance = Vector3.Distance(transform.position, currentParolee.transform.position);
+            if (paroleeDistance > EscortFollowDistance + EscortFollowTolerance)
+            {
+                StopMovement();
+                if (Time.time >= nextEscortReminderTime)
+                {
+                    nextEscortReminderTime = Time.time + 4f;
+                    TrySendNPCMessage("Stay within three metres and follow me to the check-in location.", 3f);
+                }
+
+                return;
+            }
+
+            if (Vector3.Distance(transform.position, entrancePosition) <= CheckInLocationTolerance)
+            {
+                StopMovement();
+                ChangeIntakeState(ParoleIntakeState.ExplainingCheckInLocation);
+                return;
+            }
+
+            if (Time.time >= nextEscortRepathTime)
+            {
+                nextEscortRepathTime = Time.time + ApproachRepathInterval;
+                if (!MoveTo(entrancePosition, CheckInLocationTolerance) && !loggedApproachFailure)
+                {
+                    loggedApproachFailure = true;
+                    ModLogger.Error($"ParoleIntakeStateMachine: Unable to escort {currentParolee.name} to the parole check-in location");
+                }
+            }
+        }
+
+        private void HandleExplainingCheckInLocationState()
+        {
+            if (currentParolee == null)
+            {
+                ChangeIntakeState(ParoleIntakeState.Idle);
+                return;
+            }
+
+            MaintainFacingParolee();
+
             if (Time.time - stateStartTime >= processingDelay * 2f)
             {
-                ChangeIntakeState(ParoleIntakeState.ReviewingConditions);
+                ChangeIntakeState(ParoleIntakeState.ExplainingCheckInSchedule);
             }
         }
 
-        private void HandleReviewingConditionsState()
+        private void HandleExplainingCheckInScheduleState()
         {
             if (currentParolee == null)
             {
@@ -345,23 +562,9 @@ namespace Behind_Bars.Systems.NPCs
                 return;
             }
 
-            // Review conditions for a few seconds
+            MaintainFacingParolee();
+
             if (Time.time - stateStartTime >= processingDelay * 3f)
-            {
-                ChangeIntakeState(ParoleIntakeState.IssuingParoleCard);
-            }
-        }
-
-        private void HandleIssuingParoleCardState()
-        {
-            if (currentParolee == null)
-            {
-                ChangeIntakeState(ParoleIntakeState.Idle);
-                return;
-            }
-
-            // Issue parole card/documentation
-            if (Time.time - stateStartTime >= processingDelay * 2f)
             {
                 ChangeIntakeState(ParoleIntakeState.FinalizingIntake);
             }
@@ -375,11 +578,36 @@ namespace Behind_Bars.Systems.NPCs
                 return;
             }
 
-            // Finalize intake
-            if (Time.time - stateStartTime >= processingDelay)
+            MaintainFacingParolee();
+
+            if (Time.time - stateStartTime >= processingDelay * 2f)
             {
                 CompleteIntake();
             }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void MaintainFacingParolee()
+        {
+            if (currentParolee == null)
+            {
+                return;
+            }
+
+            Vector3 directionToParolee = currentParolee.transform.position - transform.position;
+            directionToParolee.y = 0f;
+            if (directionToParolee.sqrMagnitude <= 0.0001f)
+            {
+                return;
+            }
+
+            Quaternion targetRotation = Quaternion.LookRotation(directionToParolee.normalized, Vector3.up);
+            // This state is advanced by the event-driven NPC scheduler rather than a
+            // per-frame Update, so use a high angular rate to converge within one
+            // scheduler tick while still allowing a natural turn in normal frame flow.
+            transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRotation, 2160f * Time.deltaTime);
         }
 
         private void HandleReturningToPostState()
@@ -419,12 +647,60 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             currentParolee = parolee;
+            hasPreparedReleaseMeeting = false;
+            releaseSummaryAcknowledged = false;
 #if MONO
             OnIntakeStarted?.Invoke(parolee);
 #endif
             ChangeIntakeState(ParoleIntakeState.DetectingParolee);
 
             ModLogger.Info($"ParoleIntakeStateMachine: Started intake for {parolee.name}");
+        }
+
+        /// <summary>
+        /// Begins walking to the police-station release point before the released player is
+        /// there. This stays in the canonical intake state machine so normal check-ins still
+        /// approach the live player.
+        /// </summary>
+        internal void PrepareForReleaseMeeting(Player parolee, Vector3 meetingPoint)
+        {
+            if (parolee == null)
+            {
+                return;
+            }
+
+            if (currentParolee != null && currentParolee != parolee && IsProcessingIntake())
+            {
+                ModLogger.Warn("ParoleIntakeStateMachine: Cannot prepare a release meeting while another parolee is being processed");
+                return;
+            }
+
+            currentParolee = parolee;
+            preparedReleaseMeetingPoint = meetingPoint;
+            hasPreparedReleaseMeeting = true;
+            releaseSummaryAcknowledged = false;
+            ChangeIntakeState(ParoleIntakeState.DetectingParolee);
+            ModLogger.Info($"ParoleIntakeStateMachine: Preparing to meet {parolee.name} at police-station release point {meetingPoint}");
+        }
+
+        /// <summary>
+        /// Releases the supervisor from the pre-dismissal wait once the player closes the release summary.
+        /// </summary>
+        public bool NotifyReleaseSummaryDismissed(Player parolee)
+        {
+            if (parolee == null || currentParolee != parolee || !IsProcessingIntake())
+            {
+                return false;
+            }
+
+            releaseSummaryAcknowledged = true;
+            hasPreparedReleaseMeeting = false;
+            if (currentState == ParoleIntakeState.AwaitingReleaseSummary)
+            {
+                ChangeIntakeState(ParoleIntakeState.EscortingToCheckIn);
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -461,6 +737,10 @@ namespace Behind_Bars.Systems.NPCs
             OnIntakeCompleted?.Invoke(currentParolee);
 #endif
             currentParolee = null;
+            releaseSummaryAcknowledged = false;
+            hasPreparedReleaseMeeting = false;
+            RestorePlayerAfterExplanation();
+            paroleOfficer?.CompleteIntakeEscort();
 
             // Return to post
             ChangeIntakeState(ParoleIntakeState.ReturningToPost);
@@ -483,6 +763,10 @@ namespace Behind_Bars.Systems.NPCs
             {
                 ModLogger.Info($"ParoleIntakeStateMachine: Stopping intake process");
                 currentParolee = null;
+                releaseSummaryAcknowledged = false;
+                hasPreparedReleaseMeeting = false;
+                RestorePlayerAfterExplanation();
+                paroleOfficer?.CompleteIntakeEscort();
                 ChangeIntakeState(ParoleIntakeState.ReturningToPost);
             }
         }

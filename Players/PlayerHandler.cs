@@ -43,9 +43,9 @@ namespace Behind_Bars.Players
 
 #if !MONO
             // Subscribe to arrest events
-            player.onArrested.AddListener(new Action(OnArrested));
+            player.add_onArrested(new Action(OnArrested));
 #else
-            player.onArrested.AddListener(OnArrested);
+            player.onArrested += OnArrested;
 #endif
             ModLogger.Debug($"PlayerHandler initialized for {player.name}");
         }
@@ -259,6 +259,27 @@ namespace Behind_Bars.Players
         public List<string> GetConfiscatedItems()
         {
             return new List<string>(ConfiscatedItems);
+        }
+
+        /// <summary>
+        /// Removes one persisted confiscated-item marker. Callers that need to
+        /// mutate the jail state must use this rather than altering the
+        /// defensive copy returned by <see cref="GetConfiscatedItems"/>.
+        /// </summary>
+        public bool RemoveConfiscatedItem(string itemId)
+        {
+            if (string.IsNullOrWhiteSpace(itemId))
+            {
+                return false;
+            }
+
+            bool removed = ConfiscatedItems.Remove(itemId);
+            if (removed)
+            {
+                ModLogger.Info($"Removed confiscated item marker '{itemId}' for {Player?.name}");
+            }
+
+            return removed;
         }
         
         public void ClearConfiscatedItems()

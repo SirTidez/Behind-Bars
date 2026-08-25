@@ -149,8 +149,8 @@ namespace Behind_Bars.Systems.NPCs
             var securityDoor = GetSecurityDoor();
             if (securityDoor != null)
             {
-                securityDoor.OnDoorOperationComplete += HandleSecurityDoorOperationComplete;
-                securityDoor.OnDoorOperationFailed += HandleSecurityDoorOperationFailed;
+                securityDoor.AddDoorOperationCompleteListener(HandleSecurityDoorOperationComplete);
+                securityDoor.AddDoorOperationFailedListener(HandleSecurityDoorOperationFailed);
                 ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Subscribed to SecurityDoor events");
             }
             else
@@ -540,7 +540,9 @@ namespace Behind_Bars.Systems.NPCs
                 try
                 {
 #if !MONO
-                    npcComponent.intObj = interactable;
+                    // Current native NPC initialization owns its interaction reference.
+                    // The release officer keeps the explicit InteractableObject reference above.
+                    ModLogger.Debug($"ReleaseOfficer {badgeNumber}: native NPC interaction is managed by NPCData");
 #else
                     // Use reflection for Mono
                     var intObjField = typeof(NPC).GetField("intObj", 
@@ -1211,6 +1213,15 @@ namespace Behind_Bars.Systems.NPCs
             // If we're close enough to the door, trigger SecurityDoorBehavior
             if (distanceToDoor < DESTINATION_TOLERANCE || (navAgent != null && !navAgent.pathPending && navAgent.remainingDistance < DESTINATION_TOLERANCE))
             {
+                // Emergency lockdown secures every door. The player's assigned cell stays
+                // locked after subdual, but this shared release-route door must be restored
+                // before the security-door sequence can ask the player to cross it.
+                if (prisonDoor.isLocked)
+                {
+                    prisonDoor.UnlockDoor();
+                    ModLogger.Info($"ReleaseOfficer {badgeNumber}: Unlocked prison entry door for release escort");
+                }
+
                 // We've reached the door - trigger SecurityDoorBehavior to handle the operation
                 if (securityDoor != null)
                 {
@@ -1225,14 +1236,20 @@ namespace Behind_Bars.Systems.NPCs
                     }
                     else
                     {
-                        ModLogger.Warn($"ReleaseOfficer {badgeNumber}: SecurityDoor trigger failed - proceeding directly to storage");
-                        ChangeReleaseState(ReleaseState.EscortingToStorage);
+                        ModLogger.Warn($"ReleaseOfficer {badgeNumber}: SecurityDoor trigger failed; attempting verified direct prison-door open");
+                        if (FallbackDirectDoorControl("PrisonEntryDoor"))
+                        {
+                            ChangeReleaseState(ReleaseState.EscortingToStorage);
+                        }
                     }
                 }
                 else
                 {
-                    ModLogger.Warn($"ReleaseOfficer {badgeNumber}: No SecurityDoor component - proceeding directly to storage");
-                    ChangeReleaseState(ReleaseState.EscortingToStorage);
+                    ModLogger.Warn($"ReleaseOfficer {badgeNumber}: No SecurityDoor component; attempting verified direct prison-door open");
+                    if (FallbackDirectDoorControl("PrisonEntryDoor"))
+                    {
+                        ChangeReleaseState(ReleaseState.EscortingToStorage);
+                    }
                 }
             }
             // Otherwise, continue navigating to door (handled by OnStateEnter navigation)
@@ -2377,7 +2394,10 @@ namespace Behind_Bars.Systems.NPCs
             }
             else if (doorName.Contains("Prison") || doorName.Contains("Entry"))
             {
-                FallbackDirectDoorControl("PrisonEntryDoor");
+                if (FallbackDirectDoorControl("PrisonEntryDoor") && currentReleaseState == ReleaseState.MovingToPrisonDoor)
+                {
+                    ChangeReleaseState(ReleaseState.EscortingToStorage);
+                }
             }
         }
 
@@ -2404,30 +2424,49 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Info($"ReleaseOfficer {badgeNumber}: Navigation resumed for state: {currentReleaseState}");
         }
 
-        private void FallbackDirectDoorControl(string doorType)
+        private bool FallbackDirectDoorControl(string doorType)
         {
             // Fallback to direct door control if SecurityDoor is not available
             var jailController = Core.JailController;
-            if (jailController?.doorController == null) return;
+            if (jailController?.doorController == null)
+            {
+                ModLogger.Error($"ReleaseOfficer {badgeNumber}: Cannot directly operate {doorType}; JailDoorController was unavailable");
+                return false;
+            }
 
             if (doorType == "PrisonEntryDoor")
             {
                 bool opened = jailController.doorController.OpenPrisonEntryDoor();
-                if (opened)
+                var prisonDoor = jailController.booking?.prisonEntryDoor;
+                bool openingOrOpen = prisonDoor != null &&
+                    (prisonDoor.currentState == JailDoor.DoorState.Opening || prisonDoor.IsOpen());
+                if (opened && openingOrOpen)
                 {
                     triggeredDoorOperations.Add("PrisonEntryDoor");
                     ModLogger.Info($"ReleaseOfficer {badgeNumber}: Prison entry door opened via fallback");
+                    return true;
                 }
+
+                ModLogger.Error($"ReleaseOfficer {badgeNumber}: Failed to verify prison entry door opening via fallback");
+                return false;
             }
-            else if (doorType == "BookingInnerDoor")
+
+            if (doorType == "BookingInnerDoor")
             {
                 bool opened = jailController.doorController.OpenBookingInnerDoor();
                 if (opened)
                 {
                     triggeredDoorOperations.Add("BookingInnerDoor");
                     ModLogger.Info($"ReleaseOfficer {badgeNumber}: Booking inner door opened via fallback");
+                    return true;
                 }
+
+                ModLogger.Error($"ReleaseOfficer {badgeNumber}: Failed to open booking inner door via fallback");
+                return false;
             }
+
+            ModLogger.Error($"ReleaseOfficer {badgeNumber}: Unknown direct door-control target '{doorType}'");
+            return false;
         }
 
         private void CheckForDoorTriggers()
@@ -2879,8 +2918,8 @@ namespace Behind_Bars.Systems.NPCs
             var securityDoor = GetSecurityDoor();
             if (securityDoor != null)
             {
-                securityDoor.OnDoorOperationComplete -= HandleSecurityDoorOperationComplete;
-                securityDoor.OnDoorOperationFailed -= HandleSecurityDoorOperationFailed;
+                securityDoor.RemoveDoorOperationCompleteListener(HandleSecurityDoorOperationComplete);
+                securityDoor.RemoveDoorOperationFailedListener(HandleSecurityDoorOperationFailed);
             }
 
             // Movement completion is handled via BaseJailNPC.NotifyDestinationReached override.

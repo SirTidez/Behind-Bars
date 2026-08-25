@@ -1,11 +1,13 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.CrimeDetection;
 using Behind_Bars.Systems.CrimeTracking;
+using Behind_Bars.Systems.Crimes;
 using Behind_Bars.Systems;
 using Behind_Bars.UI;
 
@@ -302,13 +304,15 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             var contrabandSystem = new ContrabandDetectionSystem(crimeDetectionSystem);
-            var detectedCrimes = contrabandSystem.PerformContrabandSearch(player);
+            var detectedCrimes = contrabandSystem.PerformContrabandSearch(
+                player,
+                ContrabandSearchContext.Parole);
 
             bool arrestInitiated = false;
             if (detectedCrimes != null && detectedCrimes.Count > 0)
             {
                 // Contraband found!
-                arrestInitiated = HandleContrabandFound(officer, player, detectedCrimes);
+                arrestInitiated = ProcessDetectedParoleContraband(officer, player, detectedCrimes, "random compliance search");
                 officer.ShowSearchResults(true, detectedCrimes.Count);
             }
             else
@@ -375,15 +379,24 @@ namespace Behind_Bars.Systems.NPCs
         /// Handle contraband detection during search
         /// Returns true if arrest was initiated, false otherwise
         /// </summary>
-        private bool HandleContrabandFound(ParoleOfficerBehavior officer, Player player, List<CrimeInstance> crimes)
+        internal bool ProcessDetectedParoleContraband(
+            ParoleOfficerBehavior officer,
+            Player player,
+            List<CrimeInstance> crimes,
+            string searchSource)
         {
+            if (officer == null || player == null || crimes == null || crimes.Count == 0)
+            {
+                return false;
+            }
+
             officer.PlayGuardVoiceCommand(
                 JailNPCAudioController.GuardCommandType.Alert,
                 "Contraband detected! You're in violation of parole!",
                 true
             );
 
-            ModLogger.Info($"Officer {officer.GetBadgeNumber()}: Found {crimes.Count} contraband items on {player.name}");
+            ModLogger.Info($"Officer {officer.GetBadgeNumber()}: Found {crimes.Count} contraband item(s) on {player.name} during {searchSource}");
 
             // Get cached rap sheet
             var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
@@ -397,16 +410,34 @@ namespace Behind_Bars.Systems.NPCs
                 // Add parole violation
                 if (rapSheet.CurrentParoleRecord != null)
                 {
+                    int weaponCount = crimes.Count(IsIllegalWeaponCrime);
+                    bool illegalWeaponFound = weaponCount > 0;
+                    ViolationType violationType = illegalWeaponFound
+                        ? ViolationType.IllegalWeaponPossession
+                        : ViolationType.ContrabandPossession;
+
                     var violation = new ViolationRecord
                     {
-                        ViolationType = ViolationType.ContrabandPossession,
+                        ViolationType = violationType,
                         ViolationTime = DateTime.Now,
-                        Details = $"Found {crimes.Count} contraband items during parole search"
+                        Details = illegalWeaponFound
+                            ? $"Found {weaponCount} illegal weapon{(weaponCount == 1 ? string.Empty : "s")} during {searchSource}"
+                            : $"Found {crimes.Count} contraband item{(crimes.Count == 1 ? string.Empty : "s")} during {searchSource}",
+                        Severity = illegalWeaponFound ? 2.0f : 1.0f
                     };
                     rapSheet.AddParoleViolation(violation); // Use helper method that marks RapSheet as changed
 
+                    ModLogger.Info(illegalWeaponFound
+                        ? $"Officer {officer.GetBadgeNumber()}: Recorded parole violation for illegal weapon possession ({weaponCount} weapon{(weaponCount == 1 ? string.Empty : "s")})"
+                        : $"Officer {officer.GetBadgeNumber()}: Recorded parole contraband violation ({crimes.Count} item{(crimes.Count == 1 ? string.Empty : "s")})");
+
                     // Re-assess LSI level after violation
                     rapSheet.UpdateLSILevel();
+
+                    // The native arrest callback can arrive before the RapSheet's new list
+                    // is observable. Carry the known search cause into custody explicitly so
+                    // JailSystem never replaces it with the generic "New Crime" violation.
+                    Core.Instance?.JailSystem?.RegisterPendingParoleArrestCause(player, violationType);
                 }
                 Core.ResolveRapSheetManager().MarkRapSheetChanged(player);
             }
@@ -476,6 +507,26 @@ namespace Behind_Bars.Systems.NPCs
                     return false;
                 }
             }
+        }
+
+        private static bool IsIllegalWeaponCrime(CrimeInstance crime)
+        {
+            if (crime == null)
+            {
+                return false;
+            }
+
+            if (crime.Crime is WeaponPossession ||
+                string.Equals(crime.GetCrimeTypeName(), "WeaponPossession", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            string identity = $"{crime.GetCrimeName()} {crime.GetCrimeTypeName()} {crime.Description}";
+            return identity.IndexOf("illegal weapon", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   identity.IndexOf("m1911", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   identity.IndexOf("pistol", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   identity.IndexOf("firearm", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         /// <summary>

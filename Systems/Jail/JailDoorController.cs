@@ -396,6 +396,17 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info("🔓 All doors unlocked!");
         }
 
+        /// <summary>
+        /// Clears only the locks introduced by the emergency response on shared booking and
+        /// release routes. Cell and holding-cell locks are normal custody state and must not
+        /// be opened merely because the emergency has ended.
+        /// </summary>
+        public void ClearEmergencyRouteLockdown()
+        {
+            booking.UnlockAllDoors();
+            ModLogger.Info("[LOCKDOWN] Cleared emergency locks from shared booking and release routes; custody cells remain secured.");
+        }
+
         public void OpenAllCells()
         {
             foreach (var cell in cells)
@@ -528,6 +539,9 @@ namespace Behind_Bars.Systems.Jail
         {
             if (booking.prisonEntryDoor != null && booking.prisonEntryDoor.IsInstantiated())
             {
+                // A completed emergency lockdown intentionally leaves the secured cell
+                // locked, but the release route must restore this shared transit door.
+                booking.prisonEntryDoor.UnlockDoor();
                 booking.prisonEntryDoor.OpenDoor();
                 ModLogger.Info("Opened prison entry door");
                 return true;

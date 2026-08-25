@@ -97,7 +97,7 @@ namespace Behind_Bars.Systems.Dialogue
             if (string.IsNullOrEmpty(containerName))
                 return;
             EnsureHandler();
-            Handler?.InitializeDialogue(containerName, enableBehaviour, entryNodeLabel);
+            Handler?.StartDialogue(containerName, enableBehaviour, entryNodeLabel);
         }
 
         /// <summary>
@@ -349,7 +349,7 @@ namespace Behind_Bars.Systems.Dialogue
             }
             if (container == null)
                 return false;
-            Handler.InitializeDialogue(container, enableBehaviour, entryNodeLabel);
+            Handler.StartDialogue(container, enableBehaviour, entryNodeLabel);
             return true;
         }
 
