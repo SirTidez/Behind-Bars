@@ -25,17 +25,11 @@
         <Reference Include="Unity.InputSystem.ForUI">
             <HintPath>$(S1Dir)\Schedule I_Data\Managed\Unity.InputSystem.ForUI.dll</HintPath>
         </Reference>
-        <Reference Include="Unity.InputSystem.RebindingUI">
-            <HintPath>$(S1Dir)\Schedule I_Data\Managed\Unity.InputSystem.RebindingUI.dll</HintPath>
-        </Reference>
         <Reference Include="Unity.Mathematics">
             <HintPath>$(S1Dir)\Schedule I_Data\Managed\Unity.Mathematics.dll</HintPath>
         </Reference>
         <Reference Include="Unity.MemoryProfiler">
             <HintPath>$(S1Dir)\Schedule I_Data\Managed\Unity.MemoryProfiler.dll</HintPath>
-        </Reference>
-        <Reference Include="Unity.Postprocessing.Runtime">
-            <HintPath>$(S1Dir)\Schedule I_Data\Managed\Unity.Postprocessing.Runtime.dll</HintPath>
         </Reference>
         <Reference Include="Unity.ProGrids">
             <HintPath>$(S1Dir)\Schedule I_Data\Managed\Unity.ProGrids.dll</HintPath>
