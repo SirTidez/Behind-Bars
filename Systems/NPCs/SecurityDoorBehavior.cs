@@ -403,7 +403,7 @@ namespace Behind_Bars.Systems.NPCs
             ChangeState(DoorState.OpeningDoor);
             OpenDoor();
             yield return new WaitForSeconds(timingConfig.doorOpenAnimTime);
-            if (currentTransition.door == null || !currentTransition.door.IsOpen())
+            if (!IsDoorReadyForTransit())
             {
                 FailDoorOperation("Door did not open");
                 yield break;
@@ -591,9 +591,53 @@ namespace Behind_Bars.Systems.NPCs
         {
             if (currentTransition?.door != null)
             {
+                // Shared transit doors can legitimately remain locked after a
+                // lockdown or a prior custody transition.  This state machine is
+                // the authorized guard operation, so it must unlock its own door
+                // before requesting the opening animation.
+                if (currentTransition.door.IsLocked())
+                {
+                    currentTransition.door.UnlockDoor();
+                    ModLogger.Debug($"SecurityDoorBehavior: Unlocked door {currentTransition.doorName} for authorized transit");
+                }
+
                 currentTransition.door.OpenDoor();
                 ModLogger.Debug($"SecurityDoorBehavior: Opened door {currentTransition.doorName}");
             }
+        }
+
+        /// <summary>
+        /// The procedural JailDoor animation reports Open only after it has eased all
+        /// the way to its final angle. Security operations intentionally allow a
+        /// short opening lead-in, so a door that is actively animating open with a
+        /// valid hinge is already safe to traverse. Requiring the terminal Open
+        /// state here made every normal operation fall into the fallback path.
+        /// </summary>
+        private bool IsDoorReadyForTransit()
+        {
+            JailDoor door = currentTransition?.door;
+            if (door == null)
+            {
+                return false;
+            }
+
+            if (door.IsOpen())
+            {
+                return true;
+            }
+
+            bool isOpening = door.currentState == JailDoor.DoorState.Opening;
+            bool hasAnimatedHinge = door.doorHinge != null && door.IsAnimating();
+            if (isOpening && hasAnimatedHinge)
+            {
+                ModLogger.Debug($"SecurityDoorBehavior: Door {currentTransition.doorName} is opening and clear for transit");
+                return true;
+            }
+
+            ModLogger.Warn(
+                $"SecurityDoorBehavior: Door {currentTransition.doorName} is not ready for transit " +
+                $"(state={door.currentState}, locked={door.IsLocked()}, animating={door.IsAnimating()}, hinge={(door.doorHinge != null)})");
+            return false;
         }
 
         /// <summary>
