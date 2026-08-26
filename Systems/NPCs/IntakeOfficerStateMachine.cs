@@ -1268,6 +1268,14 @@ namespace Behind_Bars.Systems.NPCs
         {
             ModLogger.Error($"IntakeOfficer: SecurityDoor operation FAILED for {doorName} - attempting fallback");
 
+            // SecurityDoor owns the NavMeshAgent while crossing the threshold.  A
+            // failed operation previously left this flag true after the direct-door
+            // fallback opened the door, so the intake state machine ignored every
+            // subsequent destination update and the officer remained at the entry
+            // point.  Return ownership before resuming the canonical escort route.
+            isSecurityDoorActive = false;
+            lastDoorOperationTime = Time.time;
+
             // If SecurityDoor fails, try fallback direct door control
             if (doorName.Contains("Booking") || doorName.Contains("Inner"))
             {
@@ -1277,6 +1285,13 @@ namespace Behind_Bars.Systems.NPCs
             {
                 FallbackDirectDoorControl("PrisonEntryDoor");
             }
+
+            // The fallback only operates the door; it deliberately does not move
+            // the guard.  Resume the state-owned destination after the door has had
+            // a frame to apply its unlocked/open state to the NavMesh route.
+            StopPendingDelayedNavigationResume();
+            delayedNavigationResumeCoroutine = MelonCoroutines.Start(DelayedNavigationResume());
+            ModLogger.Info($"IntakeOfficer: SecurityDoor fallback complete for {doorName}; scheduling escort route resume");
         }
 
         // Track which SecurityDoor operations have been triggered to prevent re-triggering
