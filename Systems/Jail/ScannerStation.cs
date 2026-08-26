@@ -2000,44 +2000,19 @@ namespace Behind_Bars.Systems.Jail
             }
 
             Plane platen = new Plane(GetScannerSurfaceNormal(), scanTarget.position);
-            float nearestDistance = float.PositiveInfinity;
-            int sampledVertices = 0;
-            foreach (MeshFilter filter in scannerArmSnapshotRoot.GetComponentsInChildren<MeshFilter>())
-            {
-                Mesh mesh = filter != null ? filter.sharedMesh : null;
-                if (mesh == null)
-                {
-                    continue;
-                }
-
-                // The source snapshot retains the original vertex buffer but
-                // rewrites its topology. Sample only vertices actually used
-                // by the right-arm triangles, not the unused torso vertices.
-                Vector3[] vertices = mesh.vertices;
-                int[] triangles = mesh.triangles;
-                var usedVertices = new HashSet<int>();
-                for (int i = 0; i < triangles.Length; i++)
-                {
-                    int index = triangles[i];
-                    if (index >= 0 && index < vertices.Length && usedVertices.Add(index))
-                    {
-                        float distance = platen.GetDistanceToPoint(filter.transform.TransformPoint(vertices[index]));
-                        nearestDistance = Mathf.Min(nearestDistance, distance);
-                        sampledVertices++;
-                    }
-                }
-            }
-
-            if (sampledVertices == 0 || float.IsInfinity(nearestDistance))
-            {
-                ModLogger.Warn("[Fingerprint Scan] Could not sample the rendered arm surface for platen seating");
-                return;
-            }
-
+            // The snapshot contains the full right forearm.  Seating whichever
+            // vertex happens to be nearest to the scanner (often the elbow or
+            // cuff) moves the actual palm a large distance off the printed
+            // guide.  That was the source of a successfully baked arm being
+            // rendered below the camera viewport.  The palm landmark is the
+            // only point the player sees and controls, so it is the only
+            // stable surface-seating reference.
+            Vector3 visiblePalm = scannerArmSnapshotRoot.transform.position + scannerArmPalmOffset;
+            float palmDistance = platen.GetDistanceToPoint(visiblePalm);
             const float palmClearance = 0.004f;
-            scannerArmSurfaceOffset = GetScannerSurfaceNormal() * (palmClearance - nearestDistance);
+            scannerArmSurfaceOffset = GetScannerSurfaceNormal() * (palmClearance - palmDistance);
             scannerArmSnapshotRoot.transform.position += scannerArmSurfaceOffset;
-            ModLogger.Info($"[Fingerprint Scan] Seated rendered arm on platen: nearest={nearestDistance:F3}m, clearance={palmClearance:F3}m, offset={scannerArmSurfaceOffset}");
+            ModLogger.Info($"[Fingerprint Scan] Seated visible palm on platen: palm-distance={palmDistance:F3}m, clearance={palmClearance:F3}m, offset={scannerArmSurfaceOffset}");
         }
 
 #if !MONO
