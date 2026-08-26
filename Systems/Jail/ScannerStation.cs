@@ -1016,6 +1016,16 @@ namespace Behind_Bars.Systems.Jail
 
             scannerArmSnapshotRoot.transform.rotation = capturedSnapshotRotation;
             scannerArmSnapshotRoot.transform.localScale = capturedRendererScale;
+            // The live right-hand landmarks are expressed in the avatar's
+            // bone space, but the IL2CPP BakeMesh output is not guaranteed to
+            // use that same scale/origin.  On the affected avatar the
+            // bone-derived palm anchor was just 3.5cm from the root while the
+            // baked forearm itself was nearly two metres long.  That made the
+            // marker appear correctly in the scanner camera while every
+            // actual arm triangle remained behind it.  Re-anchor from the
+            // rendered hand end of the baked mesh before any placement math
+            // uses the value.
+            CalibrateScannerArmPalmFromRenderedMesh();
             scannerArmArrivalStart = ProjectToScannerSurface(ikTarget.position - GetScannerSurfaceRight() * 0.10f);
             scannerArmSnapshotRoot.transform.position = scannerArmArrivalStart;
             CalibrateScannerArmDisplayOffset();
@@ -1962,6 +1972,116 @@ namespace Behind_Bars.Systems.Jail
         private static float Cross(Vector2 left, Vector2 right)
         {
             return left.x * right.y - left.y * right.x;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void CalibrateScannerArmPalmFromRenderedMesh()
+        {
+            if (scannerArmSnapshotRoot == null)
+            {
+                return;
+            }
+
+            Vector3 surfaceNormal = GetScannerSurfaceNormal();
+            Vector3 away = Vector3.ProjectOnPlane(GetScannerAwayDirection(), surfaceNormal);
+            if (away.sqrMagnitude < 0.0001f)
+            {
+                ModLogger.Warn("[Fingerprint Scan] Could not derive the rendered-palm direction; retaining the bone landmark");
+                return;
+            }
+
+            away.Normalize();
+            float minAlong = float.PositiveInfinity;
+            float maxAlong = float.NegativeInfinity;
+            int sampledVertices = 0;
+            Vector3 rootPosition = scannerArmSnapshotRoot.transform.position;
+
+            // The cloned mesh keeps its complete vertex buffer, so only walk
+            // the vertices referenced by its right-arm topology.  The same
+            // vertex can occur in several triangles; that is harmless here
+            // and keeps this IL2CPP-safe without adding another native mesh
+            // allocation for a compact vertex list.
+            foreach (MeshFilter filter in scannerArmSnapshotRoot.GetComponentsInChildren<MeshFilter>())
+            {
+                Mesh mesh = filter != null ? filter.sharedMesh : null;
+                if (mesh == null)
+                {
+                    continue;
+                }
+
+                Vector3[] vertices = mesh.vertices;
+                int[] triangles = mesh.triangles;
+                for (int triangle = 0; triangle < triangles.Length; triangle++)
+                {
+                    int index = triangles[triangle];
+                    if (index < 0 || index >= vertices.Length)
+                    {
+                        continue;
+                    }
+
+                    Vector3 offset = filter.transform.TransformPoint(vertices[index]) - rootPosition;
+                    float along = Vector3.Dot(offset, away);
+                    minAlong = Mathf.Min(minAlong, along);
+                    maxAlong = Mathf.Max(maxAlong, along);
+                    sampledVertices++;
+                }
+            }
+
+            float span = maxAlong - minAlong;
+            if (sampledVertices == 0 || float.IsInfinity(minAlong) || span < 0.05f)
+            {
+                ModLogger.Warn("[Fingerprint Scan] Could not derive a rendered-palm anchor; retaining the bone landmark");
+                return;
+            }
+
+            // The hand sits at the far end of the posed forearm.  Sampling
+            // its central third (rather than the fingertip extreme) produces
+            // a stable palm center across cosmetic meshes and avoids putting
+            // the guide directly under the fingers.
+            float palmStart = minAlong + span * 0.66f;
+            float palmEnd = minAlong + span * 0.90f;
+            Vector3 accumulatedOffset = Vector3.zero;
+            int palmSamples = 0;
+            foreach (MeshFilter filter in scannerArmSnapshotRoot.GetComponentsInChildren<MeshFilter>())
+            {
+                Mesh mesh = filter != null ? filter.sharedMesh : null;
+                if (mesh == null)
+                {
+                    continue;
+                }
+
+                Vector3[] vertices = mesh.vertices;
+                int[] triangles = mesh.triangles;
+                for (int triangle = 0; triangle < triangles.Length; triangle++)
+                {
+                    int index = triangles[triangle];
+                    if (index < 0 || index >= vertices.Length)
+                    {
+                        continue;
+                    }
+
+                    Vector3 offset = filter.transform.TransformPoint(vertices[index]) - rootPosition;
+                    float along = Vector3.Dot(offset, away);
+                    if (along < palmStart || along > palmEnd)
+                    {
+                        continue;
+                    }
+
+                    accumulatedOffset += offset;
+                    palmSamples++;
+                }
+            }
+
+            if (palmSamples == 0)
+            {
+                ModLogger.Warn("[Fingerprint Scan] Rendered-palm region was empty; retaining the bone landmark");
+                return;
+            }
+
+            scannerArmPalmOffset = accumulatedOffset / palmSamples;
+            ModLogger.Info($"[Fingerprint Scan] Calibrated rendered palm anchor from {palmSamples} mesh samples (span={span:F3}m, offset={scannerArmPalmOffset})");
         }
 
 #if !MONO
