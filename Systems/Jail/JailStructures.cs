@@ -35,6 +35,17 @@ public class JailDoor
     private float currentAngle;
     private bool isAnimating = false;
 
+    /// <summary>
+    /// Raised after this door reaches its fully open position.
+    /// </summary>
+    public event Action<JailDoor> Opened;
+
+    /// <summary>
+    /// Raised after this door reaches its fully closed position, including the
+    /// closed-and-locked state.
+    /// </summary>
+    public event Action<JailDoor> Closed;
+
     public enum DoorType
     {
         CellDoor,
@@ -90,7 +101,7 @@ public class JailDoor
             return;
 
         currentState = DoorState.Opening;
-        targetAngle = reverseDirection ? -openAngle : openAngle;
+        targetAngle = GetEffectiveOpenAngle();
         isAnimating = true;
 
         Debug.Log($"{doorName}: Opening door (direction: {(reverseDirection ? "reversed" : "normal")})");
@@ -157,10 +168,11 @@ public class JailDoor
             isAnimating = false;
 
             // Update state based on final position
-            if (Mathf.Approximately(currentAngle, openAngle))
+            if (Mathf.Approximately(currentAngle, GetEffectiveOpenAngle()))
             {
                 currentState = DoorState.Open;
                 Debug.Log($"{doorName}: Door opened");
+                RaiseDoorEvent(Opened, "opened");
             }
             else if (Mathf.Approximately(currentAngle, closedAngle))
             {
@@ -174,6 +186,33 @@ public class JailDoor
                     currentState = DoorState.Closed;
                     Debug.Log($"{doorName}: Door closed");
                 }
+
+                RaiseDoorEvent(Closed, "closed");
+            }
+        }
+    }
+
+    private float GetEffectiveOpenAngle()
+    {
+        return reverseDirection ? -openAngle : openAngle;
+    }
+
+    private void RaiseDoorEvent(Action<JailDoor> listeners, string completedState)
+    {
+        if (listeners == null)
+        {
+            return;
+        }
+
+        foreach (Delegate listener in listeners.GetInvocationList())
+        {
+            try
+            {
+                ((Action<JailDoor>)listener)?.Invoke(this);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogError($"{doorName}: {completedState} listener failed: {exception}");
             }
         }
     }

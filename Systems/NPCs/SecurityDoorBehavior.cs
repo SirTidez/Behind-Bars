@@ -76,6 +76,14 @@ namespace Behind_Bars.Systems.NPCs
         private Coroutine currentDoorOperation;
         private bool lastDoorPointMoveSucceeded;
         private bool lastEscortWaitSucceeded;
+        private bool lastDoorOpenSucceeded;
+        private bool lastDoorCloseSucceeded;
+        private JailDoor observedDoor;
+
+        // Door operations advance from JailDoor's completed-animation events.
+        // This is only a recovery bound for a malformed or missing animation,
+        // never the normal sequencing mechanism.
+        private const float DoorAnimationWatchdogSeconds = 6f;
 
         // Component references
         private BaseJailNPC npcController;
@@ -369,6 +377,7 @@ namespace Behind_Bars.Systems.NPCs
             if (currentDoorOperation != null)
             {
                 MelonCoroutines.Stop(currentDoorOperation);
+                UnsubscribeFromDoorEvents();
             }
 
             currentDoorOperation = (Coroutine)MelonCoroutines.Start(ExecuteDoorOperation());
@@ -401,9 +410,8 @@ namespace Behind_Bars.Systems.NPCs
 
             // 3. Open door
             ChangeState(DoorState.OpeningDoor);
-            OpenDoor();
-            yield return new WaitForSeconds(timingConfig.doorOpenAnimTime);
-            if (!IsDoorReadyForTransit())
+            yield return OpenDoorAndWaitForEvent();
+            if (!lastDoorOpenSucceeded)
             {
                 FailDoorOperation("Door did not open");
                 yield break;
@@ -439,9 +447,13 @@ namespace Behind_Bars.Systems.NPCs
 
             // 8. Close door after ensuring clearance
             ChangeState(DoorState.ClosingDoor);
-            CloseDoor();
+            yield return CloseDoorAndWaitForEvent();
+            if (!lastDoorCloseSucceeded)
+            {
+                ModLogger.Warn($"SecurityDoorBehavior: Door {currentTransition.doorName} did not report closed before the animation watchdog elapsed");
+            }
 
-            // 8. Complete
+            // 9. Complete
             ChangeState(DoorState.DoorOperationComplete);
             CompleteDoorOperation();
         }
@@ -584,60 +596,81 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        /// <summary>
-        /// Open the door
-        /// </summary>
-        private void OpenDoor()
+        private IEnumerator OpenDoorAndWaitForEvent()
         {
-            if (currentTransition?.door != null)
-            {
-                // Shared transit doors can legitimately remain locked after a
-                // lockdown or a prior custody transition.  This state machine is
-                // the authorized guard operation, so it must unlock its own door
-                // before requesting the opening animation.
-                if (currentTransition.door.IsLocked())
-                {
-                    currentTransition.door.UnlockDoor();
-                    ModLogger.Debug($"SecurityDoorBehavior: Unlocked door {currentTransition.doorName} for authorized transit");
-                }
-
-                currentTransition.door.OpenDoor();
-                ModLogger.Debug($"SecurityDoorBehavior: Opened door {currentTransition.doorName}");
-            }
-        }
-
-        /// <summary>
-        /// The procedural JailDoor animation reports Open only after it has eased all
-        /// the way to its final angle. Security operations intentionally allow a
-        /// short opening lead-in, so a door that is actively animating open with a
-        /// valid hinge is already safe to traverse. Requiring the terminal Open
-        /// state here made every normal operation fall into the fallback path.
-        /// </summary>
-        private bool IsDoorReadyForTransit()
-        {
+            lastDoorOpenSucceeded = false;
             JailDoor door = currentTransition?.door;
             if (door == null)
             {
-                return false;
+                yield break;
             }
 
+            SubscribeToDoorEvents(door);
             if (door.IsOpen())
             {
-                return true;
+                lastDoorOpenSucceeded = true;
+                yield break;
             }
 
-            bool isOpening = door.currentState == JailDoor.DoorState.Opening;
-            bool hasAnimatedHinge = door.doorHinge != null && door.IsAnimating();
-            if (isOpening && hasAnimatedHinge)
+            // Shared transit doors can legitimately remain locked after a
+            // lockdown or a prior custody transition. This state machine is the
+            // authorized guard operation, so it may unlock its own shared door.
+            if (door.IsLocked())
             {
-                ModLogger.Debug($"SecurityDoorBehavior: Door {currentTransition.doorName} is opening and clear for transit");
-                return true;
+                door.UnlockDoor();
+                ModLogger.Debug($"SecurityDoorBehavior: Unlocked door {currentTransition.doorName} for authorized transit");
             }
 
-            ModLogger.Warn(
-                $"SecurityDoorBehavior: Door {currentTransition.doorName} is not ready for transit " +
-                $"(state={door.currentState}, locked={door.IsLocked()}, animating={door.IsAnimating()}, hinge={(door.doorHinge != null)})");
-            return false;
+            door.OpenDoor();
+            ModLogger.Debug($"SecurityDoorBehavior: Requested open for {currentTransition.doorName}; awaiting completed-open event");
+
+            float watchdogAt = Time.time + DoorAnimationWatchdogSeconds;
+            while (!lastDoorOpenSucceeded && Time.time < watchdogAt && observedDoor == door)
+            {
+                yield return null;
+            }
+
+            if (!lastDoorOpenSucceeded)
+            {
+                ModLogger.Warn(
+                    $"SecurityDoorBehavior: Door {currentTransition?.doorName ?? door.doorName} did not raise opened " +
+                    $"before the animation watchdog (state={door.currentState}, locked={door.IsLocked()}, " +
+                    $"animating={door.IsAnimating()}, hinge={(door.doorHinge != null)})");
+            }
+        }
+
+        private IEnumerator CloseDoorAndWaitForEvent()
+        {
+            lastDoorCloseSucceeded = false;
+            JailDoor door = currentTransition?.door;
+            if (door == null)
+            {
+                yield break;
+            }
+
+            SubscribeToDoorEvents(door);
+            if (door.IsClosed())
+            {
+                lastDoorCloseSucceeded = true;
+                yield break;
+            }
+
+            door.CloseDoor();
+            ModLogger.Debug($"SecurityDoorBehavior: Requested close for {currentTransition.doorName}; awaiting completed-closed event");
+
+            float watchdogAt = Time.time + DoorAnimationWatchdogSeconds;
+            while (!lastDoorCloseSucceeded && Time.time < watchdogAt && observedDoor == door)
+            {
+                yield return null;
+            }
+
+            if (!lastDoorCloseSucceeded)
+            {
+                ModLogger.Warn(
+                    $"SecurityDoorBehavior: Door {currentTransition?.doorName ?? door.doorName} did not raise closed " +
+                    $"before the animation watchdog (state={door.currentState}, locked={door.IsLocked()}, " +
+                    $"animating={door.IsAnimating()}, hinge={(door.doorHinge != null)})");
+            }
         }
 
         /// <summary>
@@ -652,6 +685,53 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        private void SubscribeToDoorEvents(JailDoor door)
+        {
+            if (observedDoor == door)
+            {
+                return;
+            }
+
+            UnsubscribeFromDoorEvents();
+            observedDoor = door;
+            observedDoor.Opened += HandleDoorOpened;
+            observedDoor.Closed += HandleDoorClosed;
+        }
+
+        private void UnsubscribeFromDoorEvents()
+        {
+            if (observedDoor == null)
+            {
+                return;
+            }
+
+            observedDoor.Opened -= HandleDoorOpened;
+            observedDoor.Closed -= HandleDoorClosed;
+            observedDoor = null;
+        }
+
+        private void HandleDoorOpened(JailDoor door)
+        {
+            if (door != observedDoor)
+            {
+                return;
+            }
+
+            lastDoorOpenSucceeded = true;
+            ModLogger.Debug($"SecurityDoorBehavior: Received opened event for {currentTransition?.doorName ?? door.doorName}");
+        }
+
+        private void HandleDoorClosed(JailDoor door)
+        {
+            if (door != observedDoor)
+            {
+                return;
+            }
+
+            lastDoorCloseSucceeded = true;
+            ModLogger.Debug($"SecurityDoorBehavior: Received closed event for {currentTransition?.doorName ?? door.doorName}");
+        }
+
         /// <summary>
         /// Complete the door operation and reset state
         /// </summary>
@@ -660,6 +740,7 @@ namespace Behind_Bars.Systems.NPCs
             string doorName = currentTransition?.doorName ?? "Unknown";
             ModLogger.Info($"SecurityDoorBehavior: Completed door operation for {doorName}");
 
+            UnsubscribeFromDoorEvents();
             onDoorOperationComplete?.Invoke(doorName);
 
             // Reset state
@@ -678,6 +759,7 @@ namespace Behind_Bars.Systems.NPCs
             // A failed route must not leave a door open while the owning
             // intake/release state machine regains control.
             CloseDoor();
+            UnsubscribeFromDoorEvents();
             onDoorOperationFailed?.Invoke($"{doorName}: {reason}");
 
             ChangeState(DoorState.Idle);
@@ -739,6 +821,8 @@ namespace Behind_Bars.Systems.NPCs
                 MelonCoroutines.Stop(currentDoorOperation);
                 currentDoorOperation = null;
             }
+
+            UnsubscribeFromDoorEvents();
 
             ChangeState(DoorState.Idle);
             currentTransition = null;
@@ -833,6 +917,8 @@ namespace Behind_Bars.Systems.NPCs
                 MelonCoroutines.Stop(currentDoorOperation);
                 currentDoorOperation = null;
             }
+
+            UnsubscribeFromDoorEvents();
         }
 
         // Debug visualization
