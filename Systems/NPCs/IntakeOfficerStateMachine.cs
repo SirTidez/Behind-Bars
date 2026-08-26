@@ -118,7 +118,6 @@ namespace Behind_Bars.Systems.NPCs
 
         // Destination tracking to prevent duplicate events
         private Dictionary<string, bool> stationDestinationProcessed = new Dictionary<string, bool>();
-        private float lastDoorOperationTime = 0f;
 
         #endregion
 
@@ -1225,12 +1224,11 @@ namespace Behind_Bars.Systems.NPCs
             // SecurityDoor has completed its operation - clear the active flag
             isSecurityDoorActive = false;
 
-            // Record the time of door operation completion to prevent premature destination events
-            lastDoorOperationTime = Time.time;
-
-            // IMPORTANT: Give guard time to move away from door before resuming navigation
-            // SecurityDoor finishes but guard needs to clear the door area first
-            ModLogger.Info("IntakeOfficer: Waiting for guard to clear door area before resuming navigation");
+            // SecurityDoor only raises completion once this officer is already at
+            // the exit point and the door has physically closed. Resume on the
+            // next frame so the event stack can unwind, rather than holding the
+            // escort on a fixed clearance delay.
+            ModLogger.Info("IntakeOfficer: Door closed; scheduling next-frame escort resume");
             StopPendingDelayedNavigationResume();
             delayedNavigationResumeCoroutine = MelonCoroutines.Start(DelayedNavigationResume());
         }
@@ -1240,18 +1238,20 @@ namespace Behind_Bars.Systems.NPCs
 #endif
         private IEnumerator DelayedNavigationResume()
         {
-            // Wait for guard to move away from door area
-            yield return new WaitForSeconds(1.5f);
+            // Let the completed-door event return before transferring NavMesh
+            // ownership back to the intake state machine. This is a frame-order
+            // handoff, not a timed gameplay delay.
+            yield return null;
 
-            // Now safely resume navigation to the original target
+            // Resume navigation to the state-owned destination.
             if (currentState == IntakeState.EscortToStorage || currentState == IntakeState.WaitingForStorage)
             {
-                ModLogger.Info("IntakeOfficer: Resuming navigation to Storage after door clearance delay");
+                ModLogger.Info("IntakeOfficer: Resuming navigation to Storage after door completion");
                 NavigateToStation("Storage");
             }
             else if (currentState == IntakeState.EscortToCell)
             {
-                ModLogger.Info("IntakeOfficer: Resuming navigation to Cell after door clearance delay");
+                ModLogger.Info("IntakeOfficer: Resuming navigation to Cell after door completion");
                 NavigateToAssignedCell();
             }
             else if (currentState == IntakeState.OpeningCellDoor)
@@ -1274,7 +1274,6 @@ namespace Behind_Bars.Systems.NPCs
             // subsequent destination update and the officer remained at the entry
             // point.  Return ownership before resuming the canonical escort route.
             isSecurityDoorActive = false;
-            lastDoorOperationTime = Time.time;
 
             // If SecurityDoor fails, try fallback direct door control
             if (doorName.Contains("Booking") || doorName.Contains("Inner"))
@@ -1410,15 +1409,6 @@ namespace Behind_Bars.Systems.NPCs
             if (isSecurityDoorActive)
             {
                 return; // No logging - SecurityDoor is handling movement
-            }
-
-            // IMPORTANT: Ignore all destination events during door clearance delay period
-            // This prevents premature destination triggers when guard is temporarily at wrong location
-            float timeSinceLastDoorOperation = Time.time - lastDoorOperationTime;
-            if (timeSinceLastDoorOperation < 3.0f) // Within 3 seconds of door operation
-            {
-                ModLogger.Debug($"IntakeOfficer: Ignoring destination reached - within door clearance delay period ({timeSinceLastDoorOperation:F1}s ago)");
-                return;
             }
 
             // Ignore if we're already in a waiting state (already processed this destination)

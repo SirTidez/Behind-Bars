@@ -42,7 +42,6 @@ namespace Behind_Bars.Systems.NPCs
         {
             public float approachSpeed = 3.0f;          // Faster movement
             public float doorPointWaitTime = 0.3f;      // Quick security check at door point
-            public float doorOpenAnimTime = 0.3f;       // Quick door opening - walk right through
             public float escortWaitTime = 4.0f;         // Reduced wait time for inmate
             public float doorCloseDelay = 0.5f;         // Quick close after passing through
             public float positionTolerance = 0.8f;      // How close to get to door points
