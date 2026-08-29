@@ -13,12 +13,14 @@ using Il2CppFishNet.Managing.Object;
 using Il2CppFishNet.Object;
 using Il2CppScheduleOne.Employees;
 using Il2CppScheduleOne.NPCs;
+using Il2CppScheduleOne.NPCs.Schedules;
 #else
 using FishNet;
 using FishNet.Managing.Object;
 using FishNet.Object;
 using ScheduleOne.Employees;
 using ScheduleOne.NPCs;
+using ScheduleOne.NPCs.Schedules;
 #endif
 
 namespace Behind_Bars.Systems.NPCs
@@ -31,6 +33,7 @@ namespace Behind_Bars.Systems.NPCs
     {
         private const string TemplateRootName = "@BehindBars_NpcTemplates";
         private const string TemplateName = "BehindBars_NativeNpcTemplate";
+        internal const string CourthouseHomeScheduleActionName = "BehindBars_CourthouseHome";
 
         private static GameObject templateRoot;
         private static GameObject preparedTemplate;
@@ -331,6 +334,16 @@ namespace Behind_Bars.Systems.NPCs
                     return false;
                 }
 
+                // The native building action is provisioned on the inactive network prefab.
+                // It must exist before FishNet registration; adding it later would change the
+                // networked component surface of a live NPC.
+                if (!EnsureCourthouseHomeScheduleSurface(template, nativeNpc))
+                {
+                    UnityEngine.Object.Destroy(template);
+                    template = null;
+                    return false;
+                }
+
                 RegisterTemplate(spawnables, networkObject);
                 OrganizeTemplate(template);
                 preparedTemplate = template;
@@ -346,6 +359,56 @@ namespace Behind_Bars.Systems.NPCs
                     UnityEngine.Object.Destroy(template);
                     template = null;
                 }
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Pre-creates one native StayInBuilding action on the shared NPC template.  Only
+        /// parole roster management enables it at runtime, but provisioning it here keeps
+        /// its network component index stable for every spawned NPC.
+        /// </summary>
+        private static bool EnsureCourthouseHomeScheduleSurface(GameObject template, NPC nativeNpc)
+        {
+            try
+            {
+                var scheduleManager = template.GetComponentInChildren<NPCScheduleManager>(true);
+                if (scheduleManager == null)
+                {
+                    var scheduleObject = new GameObject("BehindBars_NpcSchedule");
+                    scheduleObject.transform.SetParent(template.transform, false);
+                    scheduleManager = scheduleObject.AddComponent<NPCScheduleManager>();
+                }
+
+                var actions = scheduleManager.GetComponentsInChildren<NPCEvent_StayInBuilding>(true);
+                NPCEvent_StayInBuilding courthouseHomeAction = null;
+                foreach (var action in actions)
+                {
+                    if (action != null && action.gameObject != null &&
+                        string.Equals(action.gameObject.name, CourthouseHomeScheduleActionName, StringComparison.Ordinal))
+                    {
+                        courthouseHomeAction = action;
+                        break;
+                    }
+                }
+
+                if (courthouseHomeAction == null)
+                {
+                    var actionObject = new GameObject(CourthouseHomeScheduleActionName);
+                    actionObject.transform.SetParent(scheduleManager.transform, false);
+                    courthouseHomeAction = actionObject.AddComponent<NPCEvent_StayInBuilding>();
+                    actionObject.SetActive(false);
+                }
+
+                ReflectionUtils.TrySetFieldOrProperty(courthouseHomeAction, "npc", nativeNpc);
+                ReflectionUtils.TrySetFieldOrProperty(courthouseHomeAction, "schedule", scheduleManager);
+                courthouseHomeAction.enabled = false;
+                courthouseHomeAction.gameObject.SetActive(false);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"[NPC Spawn] Failed to pre-create courthouse home schedule action: {ex.Message}");
                 return false;
             }
         }

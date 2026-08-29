@@ -160,8 +160,13 @@ public class JailDoor
         // Apply rotation to hinge (on Z axis for your doors)
         doorHinge.localEulerAngles = new Vector3(0, 0, currentAngle);
 
-        // Check if animation is complete
-        if (Mathf.Abs(Mathf.DeltaAngle(currentAngle, targetAngle)) < 0.1f)
+        // Lerp approaches its target asymptotically.  Waiting for the last tenth of a
+        // degree on a closing door leaves a visibly closed doorway in its Closing state
+        // for an extra beat, which unnecessarily stalls the officer waiting on Closed.
+        // Snap that imperceptible tail shut so the Closed event represents the point at
+        // which an escort can safely resume, while retaining the tighter opening finish.
+        float completionTolerance = currentState == DoorState.Closing ? 2f : 0.1f;
+        if (Mathf.Abs(Mathf.DeltaAngle(currentAngle, targetAngle)) < completionTolerance)
         {
             currentAngle = targetAngle;
             doorHinge.localEulerAngles = new Vector3(0, 0, currentAngle);
@@ -296,7 +301,17 @@ public class CellDetail
     public Transform cellBedTop;
     public JailBed bedBottomComponent;
     public JailBed bedTopComponent;
-    
+
+    // Runtime ownership surfaces for the current progressive-bed component.
+    // Both player and NPC bunks use this same authored surface; an NPC claim
+    // completes it and disables interaction rather than using a display clone.
+    // Never persist Unity object references in the cell save model.
+    [System.NonSerialized]
+    public PrisonBedInteractable preparedBottomBunk;
+
+    [System.NonSerialized]
+    public PrisonBedInteractable preparedTopBunk;
+
     // Spawn points for arrested players
     public List<Transform> spawnPoints = new List<Transform>();
     

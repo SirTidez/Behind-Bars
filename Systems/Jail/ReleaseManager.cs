@@ -633,8 +633,16 @@ namespace Behind_Bars.Systems.Jail
 
             // Start the supervising officer's walk from the courthouse now, in parallel
             // with the release officer's trip to the cell. The officer waits at the
-            // police-station exit until the player dismisses the conditions summary.
-            DynamicParoleOfficerManager.Instance?.PrepareSupervisingOfficerForRelease(request.player, request.exitPosition);
+            // bottom of the police-station steps until the player dismisses the
+            // conditions summary. Keeping them just ahead of the spawn prevents the
+            // player from having to wait for a late approach after release.
+            // This is deliberately part of release initiation (bail and time served), not
+            // exit-scanner completion. Ensure the dynamic manager exists first, because
+            // it owns the supervisor rather than the prison NPC manager.
+            Core.Instance?.NpcManager?.EnsureDynamicParoleOfficerManager();
+            Core.ResolveDynamicParoleOfficerManager()?.PrepareSupervisingOfficerForRelease(
+                request.player,
+                GetSupervisingOfficerReleaseMeetingPoint(request.exitPosition));
 
             // Start the escort sequence
             if (request.assignedOfficer != null)
@@ -661,41 +669,11 @@ namespace Behind_Bars.Systems.Jail
 
 #if !MONO
             float il2cppStartTime = Time.time;
-            bool sawNonIdleState = false;
             while (request.status != ReleaseStatus.Completed && request.status != ReleaseStatus.Failed)
             {
                 if (request.assignedOfficer == null)
                 {
                     FailRelease(request, "Assigned release officer became null");
-                    yield break;
-                }
-
-                var officerState = request.assignedOfficer.GetCurrentState();
-
-                if (officerState != ActiveReleaseOfficerBehavior.ReleaseState.Idle)
-                {
-                    sawNonIdleState = true;
-                }
-
-                request.status = officerState switch
-                {
-                    ActiveReleaseOfficerBehavior.ReleaseState.EscortingToStorage => ReleaseStatus.EscortingToStorage,
-                    ActiveReleaseOfficerBehavior.ReleaseState.WaitingAtStorage => ReleaseStatus.InventoryProcessing,
-                    ActiveReleaseOfficerBehavior.ReleaseState.EscortingToExitScanner => ReleaseStatus.EscortingToExit,
-                    ActiveReleaseOfficerBehavior.ReleaseState.WaitingForExitScan => ReleaseStatus.EscortingToExit,
-                    ActiveReleaseOfficerBehavior.ReleaseState.ProcessingExit => ReleaseStatus.EscortingToExit,
-                    _ => request.status
-                };
-
-                if (officerState == ActiveReleaseOfficerBehavior.ReleaseState.ProcessingExit)
-                {
-                    CompleteRelease(request);
-                    yield break;
-                }
-
-                if (sawNonIdleState && officerState == ActiveReleaseOfficerBehavior.ReleaseState.Idle && Time.time - il2cppStartTime > 10f)
-                {
-                    FailRelease(request, "Release officer returned to idle before completion");
                     yield break;
                 }
 
@@ -705,11 +683,14 @@ namespace Behind_Bars.Systems.Jail
                     yield break;
                 }
 
-                yield return new WaitForSeconds(0.5f);
+                // IL2CPP state changes are delivered directly by the canonical
+                // release officer. This loop is only a lifetime/timeout watchdog;
+                // it deliberately does not inspect officer state on a timer.
+                yield return null;
             }
 
             yield break;
-#endif
+#else
 
             // Wait for the Release Officer to complete the entire process
             // The Release Officer will call OnEscortCompleted when done
@@ -727,6 +708,7 @@ namespace Behind_Bars.Systems.Jail
             }
 
             ModLogger.Debug($"Release process coroutine completed with status: {request.status}");
+#endif
         }
 
 #if !MONO
@@ -964,6 +946,17 @@ namespace Behind_Bars.Systems.Jail
         {
             // Use specific prison exit coordinates
             return new Vector3(13.7402f, 1.4857f, 38.1558f);
+        }
+
+        /// <summary>
+        /// The supervising officer waits at the foot of the police-station steps rather
+        /// than on top of the player's release spawn.  It is derived from the release
+        /// orientation so the staging point remains coupled to the authored exit.
+        /// </summary>
+        private Vector3 GetSupervisingOfficerReleaseMeetingPoint(Vector3 exitPosition)
+        {
+            Vector3 forward = Quaternion.Euler(GetPlayerExitRotation()) * Vector3.forward;
+            return exitPosition + forward * 1.6f;
         }
 
         private static string GetPlayerRuntimeKey(Player player)
@@ -2595,6 +2588,67 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+#if !MONO
+        /// <summary>
+        /// Receives canonical release-officer state transitions without exposing
+        /// delegate callbacks on the injected IL2CPP behavior surface.
+        /// </summary>
+        [HideFromIl2Cpp]
+        internal void NotifyOfficerStateUpdate(ActiveReleaseOfficerBehavior officer, Player player, ActiveReleaseOfficerBehavior.ReleaseState officerState)
+        {
+            if (officer == null || player == null)
+            {
+                return;
+            }
+
+            string playerKey = GetPlayerRuntimeKey(player);
+            if (!activeReleases.TryGetValue(playerKey, out var request) || request.assignedOfficer != officer)
+            {
+                return;
+            }
+
+            HandleStatusUpdate(request, player, officerState);
+
+            // ProcessingExit is the same authoritative completion point that the
+            // old IL2CPP polling loop observed. Claim the request immediately so
+            // a later scanner callback cannot complete it a second time.
+            if (officerState == ActiveReleaseOfficerBehavior.ReleaseState.ProcessingExit)
+            {
+                CompleteRelease(request);
+            }
+        }
+
+        [HideFromIl2Cpp]
+        internal void NotifyOfficerEscortCompleted(ActiveReleaseOfficerBehavior officer, Player player)
+        {
+            if (officer == null || player == null)
+            {
+                return;
+            }
+
+            string playerKey = GetPlayerRuntimeKey(player);
+            if (activeReleases.TryGetValue(playerKey, out var request) && request.assignedOfficer == officer)
+            {
+                HandleEscortCompleted(request, player);
+            }
+        }
+
+        [HideFromIl2Cpp]
+        internal void NotifyOfficerEscortFailed(ActiveReleaseOfficerBehavior officer, Player player, string reason)
+        {
+            if (officer == null || player == null)
+            {
+                return;
+            }
+
+            string playerKey = GetPlayerRuntimeKey(player);
+            if (activeReleases.TryGetValue(playerKey, out var request) && request.assignedOfficer == officer)
+            {
+                HandleEscortFailed(request, player, reason);
+            }
+        }
+#endif
+
         private bool HasQueuedRelease(string playerKey)
         {
             foreach (var request in releaseQueue)
@@ -2743,8 +2797,13 @@ namespace Behind_Bars.Systems.Jail
 #endif
         private IEnumerator HandOffReleaseSummaryToCanonicalIntake(Player player)
         {
-            const float handoffTimeoutSeconds = 8f;
+            // The supervisor has been walking since the release request was created. In
+            // the rare case scene-local spawn/navigation took longer than the release
+            // escort, keep the player at the conditions handoff until the officer is
+            // physically waiting at the police-station door.
+            const float handoffTimeoutSeconds = 30f;
             float deadline = Time.realtimeSinceStartup + handoffTimeoutSeconds;
+            float nextWaitingLogTime = Time.realtimeSinceStartup + 3f;
 
             while (Time.realtimeSinceStartup < deadline)
             {
@@ -2753,7 +2812,8 @@ namespace Behind_Bars.Systems.Jail
                     yield break;
                 }
 
-                var supervisingOfficer = Core.Instance?.NpcManager?.GetSupervisingOfficer();
+                var supervisingOfficer = Core.ResolveDynamicParoleOfficerManager()?.GetActiveSupervisingOfficer()
+                                        ?? Core.Instance?.NpcManager?.GetSupervisingOfficer();
                 var intakeStateMachine = supervisingOfficer != null
                     ? BBHelpers.GetComponentSafe<ParoleIntakeStateMachine>(supervisingOfficer.gameObject)
                     : null;
@@ -2769,6 +2829,12 @@ namespace Behind_Bars.Systems.Jail
                         UnfreezePlayer(player);
                         ModLogger.Info($"ReleaseManager: Handed post-release flow to the canonical supervising officer intake escort for {player.name}");
                         yield break;
+                    }
+
+                    if (Time.realtimeSinceStartup >= nextWaitingLogTime)
+                    {
+                        ModLogger.Info($"ReleaseManager: Waiting for supervising officer to reach the police-station release door for {player.name}");
+                        nextWaitingLogTime = Time.realtimeSinceStartup + 3f;
                     }
                 }
 
@@ -2796,7 +2862,8 @@ namespace Behind_Bars.Systems.Jail
                     yield break;
                 }
 
-                var supervisingOfficer = Core.Instance?.NpcManager?.GetSupervisingOfficer();
+                var supervisingOfficer = Core.ResolveDynamicParoleOfficerManager()?.GetActiveSupervisingOfficer()
+                                        ?? Core.Instance?.NpcManager?.GetSupervisingOfficer();
                 var intakeStateMachine = supervisingOfficer != null
                     ? BBHelpers.GetComponentSafe<ParoleIntakeStateMachine>(supervisingOfficer.gameObject)
                     : null;

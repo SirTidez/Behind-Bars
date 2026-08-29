@@ -33,6 +33,7 @@ namespace Behind_Bars.Systems.CrimeDetection
         private CrimeRecord _crimeRecord;
         public WitnessSystem _witnessSystem;
         private ContrabandDetectionSystem _contrabandDetectionSystem;
+        private readonly CrimeIncidentLedger _incidentLedger = new CrimeIncidentLedger();
         private readonly Dictionary<string, float> _nativeMirrorSuppressionUntil = new Dictionary<string, float>();
         
         // Detection settings
@@ -215,10 +216,19 @@ namespace Behind_Bars.Systems.CrimeDetection
             Crime assaultCrime = new AssaultOnOfficer();
             var crimeInstance = new CrimeInstance(assaultCrime, victim.transform.position, 2.0f)
             {
+                IncidentId = Guid.NewGuid().ToString("N"),
+                Source = "BehindBars",
+                // The native type remains AssaultOnOfficer for the existing sentence
+                // configuration, while the player-facing charge uses the same base
+                // Assault label as the native street path plus its enhancement.
+                Description = "Assault",
                 // A prisoner is already in custody, so the disciplinary charge must
                 // remain on their record without altering their street wanted state.
                 CountsTowardWantedLevel = applyWantedLevel
             };
+            crimeInstance.AddEnhancement(new CrimeEnhancement(
+                CrimeEnhancementKind.LawEnforcementVictim,
+                victim.ID ?? string.Empty));
 
             if (perpetrator.IsOwner && perpetrator.CrimeData != null)
             {
@@ -242,7 +252,7 @@ namespace Behind_Bars.Systems.CrimeDetection
                 var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(perpetrator);
                 rapSheet?.AddCrime(crimeInstance);
             }
-            ModLogger.Info($"Processed Assault on an LEO by {perpetrator.name} on {victim.name}; wanted escalation={applyWantedLevel}");
+            ModLogger.Info($"[Charge Pipeline] Processed custody incident={crimeInstance.IncidentId} base=AssaultOnOfficer enhancement=LawEnforcementVictim wanted escalation={applyWantedLevel}");
         }
         
         /// <summary>
@@ -578,6 +588,7 @@ namespace Behind_Bars.Systems.CrimeDetection
             int activeCrimeCount = _crimeRecord.TotalCrimeCount;
             _crimeRecord.ClearAllCrimes();
             _nativeMirrorSuppressionUntil.Clear();
+            _incidentLedger.Clear();
             _witnessSystem.ResetSceneRuntimeState();
             ModLogger.Info($"CrimeDetectionSystem cleared {activeCrimeCount} volatile crime record(s) for Main-scene exit");
         }
@@ -601,6 +612,30 @@ namespace Behind_Bars.Systems.CrimeDetection
         public List<CrimeInstance> GetAllActiveCrimes()
         {
             return _crimeRecord.GetActiveCrimes();
+        }
+
+        /// <summary>
+        /// Records one native game crime at the AddCrime seam. The generated incident ID
+        /// correlates later arrest capture with contextual enhancements.
+        /// </summary>
+        public CrimeInstance RecordNativeCrimeEvent(Player player, Crime crime, Vector3 location, float severity, CrimeEnhancement enhancement = null)
+        {
+            var incident = _incidentLedger.RecordNativeCrime(player, crime, location, severity, enhancement);
+            if (incident != null)
+            {
+                _crimeRecord.AddCrime(incident);
+            }
+
+            return incident;
+        }
+
+        /// <summary>
+        /// Resolves native crimes found at custody entry to the same incident records that
+        /// were created when the game emitted AddCrime.
+        /// </summary>
+        public List<CrimeInstance> ResolveNativeArrestCrimes(Player player, Crime crime, int quantity, Vector3 location, float severity)
+        {
+            return _incidentLedger.ResolveArrestCharges(player, crime, quantity, location, severity);
         }
 
         /// <summary>

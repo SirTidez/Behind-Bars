@@ -152,6 +152,7 @@ namespace Behind_Bars.Systems.Data
             public object crimeData; // Serialized crime data
             public bool isActive; // Whether this data is still relevant
             public List<ClothingLayer> originalClothing = new List<ClothingLayer>(); // Player's civilian clothing
+            public List<ClothingAccessory> originalAccessories = new List<ClothingAccessory>(); // Civilian accessories, shoes, hair, and headwear
 
             public PlayerInventorySnapshot(string id, string name, string arrestGuid)
             {
@@ -178,6 +179,28 @@ namespace Behind_Bars.Systems.Data
             public Color GetColor()
             {
                 return new Color(colorRGBA[0], colorRGBA[1], colorRGBA[2], colorRGBA[3]);
+            }
+        }
+
+        [System.Serializable]
+        public class ClothingAccessory
+        {
+            public string path;
+            public float[] colorRGBA;
+
+            public ClothingAccessory(string accessoryPath, Color color)
+            {
+                path = accessoryPath;
+                colorRGBA = new[] { color.r, color.g, color.b, color.a };
+            }
+
+            public Color GetColor()
+            {
+                return new Color(
+                    colorRGBA != null && colorRGBA.Length > 0 ? colorRGBA[0] : 1f,
+                    colorRGBA != null && colorRGBA.Length > 1 ? colorRGBA[1] : 1f,
+                    colorRGBA != null && colorRGBA.Length > 2 ? colorRGBA[2] : 1f,
+                    colorRGBA != null && colorRGBA.Length > 3 ? colorRGBA[3] : 1f);
             }
         }
 
@@ -269,8 +292,51 @@ namespace Behind_Bars.Systems.Data
 
             try
             {
-                string arrestId = Guid.NewGuid().ToString();
                 string playerId = GetPlayerUniqueId(player);
+                var existingSnapshot = GetActiveSnapshotByPlayerId(playerId);
+                // Capture before deciding whether an existing arrest callback was the first
+                // useful snapshot.  The native server/RPC callbacks can arrive while the
+                // inventory collection is still empty on IL2CPP; blindly reusing that empty
+                // snapshot permanently loses equippables such as a skateboard.
+                var capturedItems = CapturePlayerInventory(player);
+                var capturedClothing = CapturePlayerClothing(player);
+                var capturedAccessories = CapturePlayerAccessories(player);
+                if (existingSnapshot != null)
+                {
+                    bool upgradedAppearance = false;
+                    if (existingSnapshot.items != null && existingSnapshot.items.Count > 0)
+                    {
+                        ModLogger.Debug($"Reusing captured personal property from active snapshot {existingSnapshot.arrestId} for {player.name}");
+                    }
+                    else if (capturedItems.Count > 0)
+                    {
+                        existingSnapshot.items ??= new List<StoredItem>();
+                        existingSnapshot.items.AddRange(capturedItems);
+                        ModLogger.Info($"Upgraded initially empty inventory snapshot {existingSnapshot.arrestId} with {capturedItems.Count} captured item(s)");
+                    }
+
+                    if ((existingSnapshot.originalClothing == null || existingSnapshot.originalClothing.Count == 0) && capturedClothing.Count > 0)
+                    {
+                        existingSnapshot.originalClothing = new List<ClothingLayer>(capturedClothing);
+                        upgradedAppearance = true;
+                    }
+
+                    if ((existingSnapshot.originalAccessories == null || existingSnapshot.originalAccessories.Count == 0) && capturedAccessories.Count > 0)
+                    {
+                        existingSnapshot.originalAccessories = new List<ClothingAccessory>(capturedAccessories);
+                        upgradedAppearance = true;
+                    }
+
+                    if (upgradedAppearance)
+                    {
+                        ModLogger.Info($"Upgraded active snapshot {existingSnapshot.arrestId} with {existingSnapshot.originalClothing?.Count ?? 0} civilian layers and {existingSnapshot.originalAccessories?.Count ?? 0} accessories");
+                    }
+
+                    SaveData();
+                    return existingSnapshot.arrestId;
+                }
+
+                string arrestId = Guid.NewGuid().ToString();
                 var legacySnapshotLookupKeys = GetLegacySnapshotLookupKeys(player, playerId);
 
                 var snapshot = new PlayerInventorySnapshot(playerId, player.name, arrestId)
@@ -280,13 +346,12 @@ namespace Behind_Bars.Systems.Data
                 };
 
                 // Capture all inventory items
-                var items = CapturePlayerInventory(player);
-                snapshot.items.AddRange(items);
+                snapshot.items.AddRange(capturedItems);
 
                 // Capture player's original clothing
-                var clothing = CapturePlayerClothing(player);
-                snapshot.originalClothing.AddRange(clothing);
-                ModLogger.Info($"Captured {clothing.Count} clothing layers for {player.name}");
+                snapshot.originalClothing.AddRange(capturedClothing);
+                snapshot.originalAccessories.AddRange(capturedAccessories);
+                ModLogger.Info($"Captured {capturedClothing.Count} clothing layers and {capturedAccessories.Count} accessories for {player.name}");
 
                 // Remove any existing active snapshots for this player
                 gameData.playerSnapshots.RemoveAll(s => s.isActive &&
@@ -295,7 +360,7 @@ namespace Behind_Bars.Systems.Data
                 // Add new snapshot
                 gameData.playerSnapshots.Add(snapshot);
 
-                ModLogger.Info($"Created inventory snapshot for {player.name} with {items.Count} items (ID: {arrestId})");
+                ModLogger.Info($"Created inventory snapshot for {player.name} with {capturedItems.Count} items (ID: {arrestId})");
 
                 // Save immediately
                 SaveData();
@@ -506,9 +571,9 @@ namespace Behind_Bars.Systems.Data
             return items;
         }
 
-        private List<object> GetAllInventorySlots(PlayerInventory inventory)
+        private List<ItemSlot> GetAllInventorySlots(PlayerInventory inventory)
         {
-            var slots = new List<object>();
+            var slots = new List<ItemSlot>();
 
             try
             {
@@ -541,6 +606,16 @@ namespace Behind_Bars.Systems.Data
             return slots;
         }
 
+        private StoredItem ProcessInventorySlot(ItemSlot slot)
+        {
+            if (slot == null || slot.ItemInstance == null)
+            {
+                return null;
+            }
+
+            return ProcessItemInstance(slot.ItemInstance);
+        }
+
         private StoredItem ProcessInventorySlot(object slot)
         {
             try
@@ -562,9 +637,19 @@ namespace Behind_Bars.Systems.Data
                     return null;
                 }
 
-                ModLogger.Debug($"ProcessInventorySlot: Got ItemInstance of type {itemInstance.GetType().Name}");
+                return ProcessItemInstance(itemInstance);
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Debug($"Error processing inventory slot: {ex.Message}");
+                return null;
+            }
+        }
 
-                // Get item details
+        private StoredItem ProcessItemInstance(object itemInstance)
+        {
+            try
+            {
                 string itemId = GetItemId(itemInstance);
                 string itemName = GetItemDisplayName(itemInstance);
                 int stackCount = GetItemStackCount(itemInstance);
@@ -573,34 +658,35 @@ namespace Behind_Bars.Systems.Data
 
                 ModLogger.Info($"ProcessInventorySlot: Extracted - Name: '{itemName}', ID: '{itemId}', Stack: {stackCount}, Type: {itemType}");
 
-                // Skip cash entirely - don't confiscate money
+                // Cash stays with the player; all other property is represented by the
+                // snapshot and physically secured by InventoryProcessor after arrest.
                 if (itemType == "CashInstance" || itemName.Contains("Cash", StringComparison.OrdinalIgnoreCase))
                 {
-                    ModLogger.Info($"Skipping cash - money is not confiscated during arrest");
-                    return null; // Don't store cash
+                    ModLogger.Info("Skipping cash - money is not confiscated during arrest");
+                    return null;
                 }
 
-                // Special handling for weapons and ammo
                 if (IsWeaponItem(itemName, itemType))
                 {
-                    // Weapons are returned but emptied (no ammo)
-                    var weaponItem = new StoredItem(itemId, itemName, stackCount, isContraband, itemType);
-                    weaponItem.specialHandling = "empty_weapon"; // Mark for special processing
+                    var weaponItem = new StoredItem(itemId, itemName, stackCount, isContraband, itemType)
+                    {
+                        specialHandling = "empty_weapon"
+                    };
                     ModLogger.Info($"Captured weapon: {itemName} - will be returned empty");
                     return weaponItem;
                 }
-                else if (IsAmmoItem(itemName, itemType))
+
+                if (IsAmmoItem(itemName, itemType))
                 {
-                    // Ammo is permanently confiscated
                     ModLogger.Info($"Confiscating ammo permanently: {itemName} (x{stackCount})");
-                    return null; // Don't store ammo - it's lost forever
+                    return null;
                 }
 
                 return new StoredItem(itemId, itemName, stackCount, isContraband, itemType);
             }
             catch (System.Exception ex)
             {
-                ModLogger.Debug($"Error processing inventory slot: {ex.Message}");
+                ModLogger.Debug($"Error processing item instance: {ex.Message}");
                 return null;
             }
         }
@@ -1506,19 +1592,55 @@ namespace Behind_Bars.Systems.Data
             return clothingLayers;
         }
 
+        private List<ClothingAccessory> CapturePlayerAccessories(Player player)
+        {
+            var accessories = new List<ClothingAccessory>();
+
+            try
+            {
+#if !MONO
+                var playerAvatar = player.GetComponentInChildren<Il2CppScheduleOne.AvatarFramework.Avatar>();
+#else
+                var playerAvatar = player.GetComponentInChildren<ScheduleOne.AvatarFramework.Avatar>();
+#endif
+                var settings = playerAvatar?.CurrentSettings;
+                if (settings?.AccessorySettings == null)
+                {
+                    ModLogger.Warn("Player avatar accessory settings are null");
+                    return accessories;
+                }
+
+                foreach (var accessory in settings.AccessorySettings)
+                {
+                    if (accessory != null && !string.IsNullOrWhiteSpace(accessory.path))
+                    {
+                        accessories.Add(new ClothingAccessory(accessory.path, accessory.color));
+                    }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error capturing player accessories: {ex.Message}");
+            }
+
+            return accessories;
+        }
+
         public void RestorePlayerClothing(Player player)
         {
             try
             {
                 // Find the player's active snapshot using stable key with legacy-name fallback
                 var snapshot = GetActiveSnapshotForPlayer(player);
-                if (snapshot == null || snapshot.originalClothing == null || snapshot.originalClothing.Count == 0)
+                if (snapshot == null ||
+                    ((snapshot.originalClothing == null || snapshot.originalClothing.Count == 0) &&
+                     (snapshot.originalAccessories == null || snapshot.originalAccessories.Count == 0)))
                 {
                     ModLogger.Warn("No clothing data saved for player");
                     return;
                 }
 
-                ModLogger.Info($"Restoring {snapshot.originalClothing.Count} clothing layers for {player.name}");
+                ModLogger.Info($"Restoring {snapshot.originalClothing?.Count ?? 0} clothing layers and {snapshot.originalAccessories?.Count ?? 0} accessories for {player.name}");
 
 #if !MONO
                 var playerAvatar = player.GetComponentInChildren<Il2CppScheduleOne.AvatarFramework.Avatar>();
@@ -1539,11 +1661,13 @@ namespace Behind_Bars.Systems.Data
                     return;
                 }
 
-                // Clear prison clothing
+                // Match the booking attire handoff: replace the complete avatar surface,
+                // including accessories, then commit once through LoadAvatarSettings.
                 settings.BodyLayerSettings.Clear();
+                settings.AccessorySettings.Clear();
 
                 // Restore original clothing layers
-                foreach (var clothingLayer in snapshot.originalClothing)
+                foreach (var clothingLayer in snapshot.originalClothing ?? new List<ClothingLayer>())
                 {
                     settings.BodyLayerSettings.Add(new
 #if !MONO
@@ -1557,17 +1681,59 @@ namespace Behind_Bars.Systems.Data
                     });
                 }
 
+                foreach (var accessory in snapshot.originalAccessories ?? new List<ClothingAccessory>())
+                {
+                    if (accessory == null || string.IsNullOrWhiteSpace(accessory.path))
+                    {
+                        continue;
+                    }
+
+                    settings.AccessorySettings.Add(new
+#if !MONO
+                        Il2CppScheduleOne.AvatarFramework.AvatarSettings.AccessorySetting
+#else
+                        ScheduleOne.AvatarFramework.AvatarSettings.AccessorySetting
+#endif
+                    {
+                        path = accessory.path,
+                        color = accessory.GetColor()
+                    });
+                }
+
                 // The booking path replaces attire through LoadAvatarSettings.
                 // Use the same full-avatar application path on release: the
                 // lighter body-layer refresh can log success on IL2CPP while
                 // leaving the authored prison outfit rendered in place.
                 playerAvatar.LoadAvatarSettings(settings);
+                player.SetVisibleToLocalPlayer(false);
                 ModLogger.Info($"✓ Restored original clothing for {player.name} - changed back from prison attire");
             }
             catch (System.Exception ex)
             {
                 ModLogger.Error($"Error restoring player clothing: {ex.Message}");
             }
+        }
+
+        /// <summary>Returns a detached view of the civilian clothing saved for the active custody record.</summary>
+        public List<ClothingLayer> GetOriginalClothingForPlayer(Player player)
+        {
+            var snapshot = GetActiveSnapshotForPlayer(player);
+            var appearance = snapshot?.originalClothing != null
+                ? new List<ClothingLayer>(snapshot.originalClothing)
+                : new List<ClothingLayer>();
+
+            if (snapshot?.originalAccessories != null)
+            {
+                foreach (var accessory in snapshot.originalAccessories)
+                {
+                    if (accessory != null && !string.IsNullOrWhiteSpace(accessory.path))
+                    {
+                        appearance.Add(new ClothingLayer(accessory.path, accessory.GetColor()));
+                    }
+                }
+            }
+
+            return appearance;
         }
 
         #endregion

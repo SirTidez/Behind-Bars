@@ -9,8 +9,10 @@ using BBHelpers = Behind_Bars.Helpers.Helpers;
 using Il2CppInterop.Runtime.Attributes;
 using Il2CppInterop.Runtime;
 using Il2CppScheduleOne.PlayerScripts;
+using Il2CppScheduleOne.Interaction;
 #else
 using ScheduleOne.PlayerScripts;
+using ScheduleOne.Interaction;
 #endif
 
 namespace Behind_Bars.Systems.Jail
@@ -26,6 +28,17 @@ namespace Behind_Bars.Systems.Jail
 #endif
         public List<CellDetail> cells = new List<CellDetail>();
         public List<CellDetail> holdingCells = new List<CellDetail>();
+
+        // IL2CPP can return a null wrapper from a same-frame GetComponent call
+        // immediately after adding an injected component, even though
+        // AddComponentSafe successfully created it. Keep the canonical component
+        // reference supplied by the add call so inmate bed claims do not race
+        // Unity's wrapper materialization.
+        private static readonly Dictionary<int, PrisonBedInteractable> preparedBedComponents = new Dictionary<int, PrisonBedInteractable>();
+        private readonly Dictionary<int, string> pendingNpcBunkClaims = new Dictionary<int, string>();
+        private float nextPendingBunkClaimRetry;
+        private int lastPendingBunkDiagnosticCount = -1;
+
 
         [System.Serializable]
         public class HoldingCellSpawnPoint
@@ -44,12 +57,60 @@ namespace Behind_Bars.Systems.Jail
 
         public void Initialize(Transform jailRoot)
         {
+            preparedBedComponents.Clear();
+            RemoveLegacyNpcBunkVisuals(jailRoot);
             DiscoverCells(jailRoot);
             DiscoverHoldingCells(jailRoot);
             SetupCellBeds();
             InitializeHoldingCellSpawnPoints();
+            RetryPendingNpcBunkClaims();
 
             ModLogger.Debug($"✓ Cell Manager initialized: {cells.Count} prison cells, {holdingCells.Count} holding cells");
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private static void RemoveLegacyNpcBunkVisuals(Transform root)
+        {
+            if (root == null)
+            {
+                return;
+            }
+
+            // A previous runtime fallback synthesized bunk anchors from cell
+            // bounds.  Those bounds are not an authoring coordinate system and
+            // could put a whole bed in a doorway.  Remove only objects created
+            // by that fallback; real prefab beds and player-owned buildables
+            // are deliberately left alone.
+            for (int i = root.childCount - 1; i >= 0; i--)
+            {
+                Transform child = root.GetChild(i);
+                if (child == null)
+                {
+                    continue;
+                }
+
+                RemoveLegacyNpcBunkVisuals(child);
+
+                string childName = child.name;
+                if (childName.StartsWith("BehindBars_Npc", System.StringComparison.Ordinal) ||
+                    childName.StartsWith("BehindBars_RuntimeCellBed", System.StringComparison.Ordinal))
+                {
+                    UnityEngine.Object.Destroy(child.gameObject);
+                }
+            }
+        }
+
+        private void Update()
+        {
+            if (pendingNpcBunkClaims.Count == 0 || Time.unscaledTime < nextPendingBunkClaimRetry)
+            {
+                return;
+            }
+
+            nextPendingBunkClaimRetry = Time.unscaledTime + 0.5f;
+            RetryPendingNpcBunkClaims();
         }
 
         void DiscoverCells(Transform jailRoot)
@@ -90,6 +151,8 @@ namespace Behind_Bars.Systems.Jail
                 cell.cellBedBottom = FindChildContaining(cellTransform, "CellBedBottom");
                 cell.cellBedTop = FindChildContaining(cellTransform, "CellBedTop");
                 cell.spawnPoints = FindAllChildrenContaining(cellTransform, "Spawn");
+
+                ValidateAuthoredBedMarkers(cell);
 
                 ModLogger.Debug($"Cell setup: DoorHolder={cell.cellDoor.doorHolder != null}, Bounds={cell.cellBounds != null}, Beds={cell.cellBedBottom != null}/{cell.cellBedTop != null}, SpawnPoints={cell.spawnPoints.Count}");
 
@@ -267,6 +330,43 @@ namespace Behind_Bars.Systems.Jail
             return null;
         }
 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private static void ValidateAuthoredBedMarkers(CellDetail cell)
+        {
+            if (cell == null)
+            {
+                return;
+            }
+
+            // CellBedBottom and CellBedTop are authored directly on the bunk
+            // surfaces in the jail prefab.  Their position, rotation, and
+            // scale are part of the bed prefab's layout contract: overwriting
+            // them from a cell-bound estimate moves the completed bedding off
+            // the metal bunk.  Keep these anchors read-only at runtime.
+            ValidateAuthoredBedMarker(cell.cellBedBottom, cell.cellName, "bottom");
+            ValidateAuthoredBedMarker(cell.cellBedTop, cell.cellName, "top");
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private static void ValidateAuthoredBedMarker(Transform marker, string cellName, string bunkType)
+        {
+            if (marker == null)
+            {
+                return;
+            }
+
+            if (marker.lossyScale.sqrMagnitude < 0.0001f)
+            {
+                ModLogger.Warn(
+                    $"[JAIL LIFECYCLE] Authored {bunkType} bunk marker in {cellName} has a near-zero scale; " +
+                    "leaving it unchanged so the authored layout can be repaired in the asset bundle.");
+            }
+        }
+
         List<Transform> FindAllChildrenContaining(Transform parent, string namePart)
         {
             List<Transform> foundChildren = new List<Transform>();
@@ -298,9 +398,15 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         void SetupCellBed(Transform bedTransform, string bedType, CellDetail cell)
         {
-            if (bedTransform == null) return;
+            if (bedTransform == null || cell == null)
+            {
+                return;
+            }
 
             // Remove any existing JailBed component (for backwards compatibility)
             JailBed existingBed = BBHelpers.GetComponentSafe<JailBed>(bedTransform.gameObject);
@@ -310,55 +416,373 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Debug($"Removed existing JailBed component from {bedTransform.name}");
             }
 
-            // 1. Instantiate the PrisonBedInteractable prefab for visuals
-            GameObject instantiatedPrefab = InstantiatePrisonBedPrefab(bedTransform);
+            // These are the real progressive player-bed interaction surfaces.
+            // An NPC claim completes and invalidates this same component; do
+            // not replace it with a display-only clone or the player's
+            // bedroll/sheets can no longer resolve a valid placement target.
+            //
+            // The complete staged hierarchy is serialized under each anchor
+            // in Jail.prefab. Do not create it dynamically here: IL2CPP can
+            // materialize nested prefab transforms differently after bundle
+            // loading, which detached the NPC mattress/sheets/pillow from the
+            // metal bunk even though the player path later looked correct.
+            GameObject instantiatedPrefab = FindExistingPrisonBedPrefab(bedTransform);
+            if (instantiatedPrefab == null)
+            {
+                ModLogger.Error(
+                    $"Missing serialized PrisonBedInteractable under {cell.cellName}/{bedTransform.name}. " +
+                    "The loaded jail asset bundle is stale or was built without authored bunk surfaces.");
+                return;
+            }
 
-            // 2. Add PrisonBedInteractable script component to the bed for interaction logic
-            PrisonBedInteractable bedInteractable = BBHelpers.GetComponentSafe<PrisonBedInteractable>(bedTransform.gameObject);
+            // Keep the player and NPC paths on the same authored bed prefab.
+            // Its local transform is part of the staged placement contract; only
+            // repair material bindings here, not its authored geometry transform.
+            JailMaterialCompatibility.RepairForScheduleOne(instantiatedPrefab);
+
+            PrisonBedInteractable bedInteractable = GetPreparedBed(bedTransform);
             if (bedInteractable == null)
             {
                 bedInteractable = BBHelpers.AddComponentSafe<PrisonBedInteractable>(bedTransform.gameObject);
-                ModLogger.Debug($"Added PrisonBedInteractable component to {bedTransform.name}");
+                if (bedInteractable != null)
+                {
+                    preparedBedComponents[bedTransform.GetInstanceID()] = bedInteractable;
+                }
             }
 
-            // Configure bed settings
+            if (bedInteractable == null)
+            {
+                ModLogger.Warn($"Could not add PrisonBedInteractable to {bedTransform.name}");
+                return;
+            }
+
             bedInteractable.isTopBunk = bedType.Equals("Top", System.StringComparison.OrdinalIgnoreCase);
             bedInteractable.cellName = cell.cellName;
+            BindBedDressing(bedTransform, bedInteractable, cell.cellName, bedType);
 
-            // 3. Find bed component transforms from the instantiated prefab
-            if (instantiatedPrefab != null)
+            SetPreparedBed(cell, bedType, bedInteractable);
+            ModLogger.Debug($"✓ Setup {bedType} prison bed interaction: {bedTransform.name} in {cell.cellName}");
+        }
+
+        /// <summary>
+        /// Completes and reserves one bunk for a spawned inmate.  Cell
+        /// assignment remains the source of truth; this only represents that
+        /// assignment visibly and prevents a player from using the bunk.
+        /// </summary>
+        public void ClaimBedForNpc(int cellIndex, string inmateName)
+        {
+            if (cellIndex >= 0 && !string.IsNullOrWhiteSpace(inmateName))
             {
-                Transform prisonBedContainer = instantiatedPrefab.transform.Find("PrisonBed");
-                if (prisonBedContainer != null)
-                {
-                    bedInteractable.bedMat = prisonBedContainer.Find("BedMat");
-                    bedInteractable.whiteSheet = prisonBedContainer.Find("WhiteSheet");
-                    bedInteractable.bedSheet = prisonBedContainer.Find("BedSheet");
-                    bedInteractable.pillow = prisonBedContainer.Find("Pillow");
+                pendingNpcBunkClaims[cellIndex] = inmateName;
+            }
 
-                    ModLogger.Debug($"✓ Found bed components in PrisonBed container");
-                }
-                else
-                {
-                    ModLogger.Warn($"Could not find PrisonBed container in instantiated prefab");
-                }
+            CellDetail cell = GetCellByIndex(cellIndex);
+            if (cell == null)
+            {
+                ModLogger.Warn($"Could not claim a bunk for NPC {inmateName}: cell {cellIndex} was unavailable");
+                return;
+            }
+
+            // Pick one of the two finished bunks per inmate.  A stable hash
+            // avoids reassigning a visibly different bunk every scene restore,
+            // while still distributing inmates between upper and lower beds.
+            bool preferTop = SelectTopBunk(cellIndex, inmateName);
+            string bunkType = preferTop ? "top" : "bottom";
+            PrisonBedInteractable bunk = GetOrPrepareBed(cell, preferTop);
+
+            if (bunk == null)
+            {
+                preferTop = !preferTop;
+                bunkType = preferTop ? "top" : "bottom";
+                bunk = GetOrPrepareBed(cell, preferTop);
+            }
+
+            if (bunk == null)
+            {
+                LogPendingBunkClaim(cell, cellIndex, inmateName);
+                return;
+            }
+
+            // Rebind immediately before the claim. This guarantees that a
+            // late IL2CPP materialization cannot leave an NPC with a
+            // partial/detached visual while the player uses the complete
+            // authored bed hierarchy.
+            Transform bunkAnchor = preferTop ? cell.cellBedTop : cell.cellBedBottom;
+            if (!BindBedDressing(bunkAnchor, bunk, cell.cellName, bunkType))
+            {
+                ModLogger.Warn(
+                    $"[JAIL LIFECYCLE] Could not finalize {bunkType} bunk dressing in cell {cellIndex} for NPC {inmateName}; retrying when the authored bed hierarchy is ready.");
+                return;
+            }
+
+            // NPCs now complete the exact same authored visual hierarchy as a
+            // player. The existing hierarchy is the only one proven to honor
+            // the prison-bed prefab's nested scale/rotation contract; creating
+            // a second visual root produces an offset, incomplete bed.
+            bunk.ClaimForNpc(inmateName);
+            pendingNpcBunkClaims.Remove(cellIndex);
+            ModLogger.Info(
+                $"[JAIL LIFECYCLE] Claimed completed {bunkType ?? "assigned"} bunk in cell {cellIndex} for NPC {inmateName}: " +
+                $"mat={bunk.bedMat != null}, whiteSheet={bunk.whiteSheet != null}, bedSheet={bunk.bedSheet != null}, pillow={bunk.pillow != null}");
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void RetryPendingNpcBunkClaims()
+        {
+            if (pendingNpcBunkClaims.Count == 0)
+            {
+                return;
+            }
+
+            var pending = pendingNpcBunkClaims.ToArray();
+            foreach (var claim in pending)
+            {
+                // The jail prefab finishes materializing its nested marker
+                // hierarchy over several frames on IL2CPP.  The original
+                // retry only attempted to reuse the null references captured
+                // during DiscoverCells, so it could never recover when the
+                // authored CellBedBottom/CellBedTop transforms became
+                // available shortly after the inmate spawned.
+                CellDetail cell = GetCellByIndex(claim.Key);
+                RefreshCellBedAnchors(cell);
+                ClaimBedForNpc(claim.Key, claim.Value);
+            }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void RefreshCellBedAnchors(CellDetail cell)
+        {
+            if (cell?.cellTransform == null)
+            {
+                return;
+            }
+
+            bool resolvedBottom = false;
+            bool resolvedTop = false;
+
+            if (cell.cellBedBottom == null)
+            {
+                cell.cellBedBottom = FindChildContaining(cell.cellTransform, "CellBedBottom");
+                resolvedBottom = cell.cellBedBottom != null;
+            }
+
+            if (cell.cellBedTop == null)
+            {
+                cell.cellBedTop = FindChildContaining(cell.cellTransform, "CellBedTop");
+                resolvedTop = cell.cellBedTop != null;
+            }
+
+            if (!resolvedBottom && !resolvedTop)
+            {
+                return;
+            }
+
+            // In IL2CPP the authored bunk markers can materialize after the
+            // initial cell discovery pass.  Validate the late markers, but do
+            // not rewrite their authored transforms: those transforms are the
+            // coordinate system for the completed player and NPC bed layout.
+            ValidateAuthoredBedMarkers(cell);
+
+            ModLogger.Info(
+                $"[JAIL LIFECYCLE] Resolved authored bunk anchor(s) for {cell.cellName}: " +
+                $"bottom={resolvedBottom}, top={resolvedTop}");
+
+            if (resolvedBottom)
+            {
+                SetupCellBed(cell.cellBedBottom, "Bottom", cell);
+            }
+
+            if (resolvedTop)
+            {
+                SetupCellBed(cell.cellBedTop, "Top", cell);
+            }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void LogPendingBunkClaim(CellDetail cell, int cellIndex, string inmateName)
+        {
+            if (lastPendingBunkDiagnosticCount == pendingNpcBunkClaims.Count)
+            {
+                return;
+            }
+
+            lastPendingBunkDiagnosticCount = pendingNpcBunkClaims.Count;
+            ModLogger.Warn(
+                $"[JAIL LIFECYCLE] Bunk claim pending for NPC {inmateName} in cell {cellIndex}: " +
+                $"bottomAnchor={cell.cellBedBottom != null}, topAnchor={cell.cellBedTop != null}, " +
+                $"bundleReady={Behind_Bars.Core.CachedJailBundle != null}. Retrying once the cell visuals are available.");
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private PrisonBedInteractable GetPreparedBed(Transform bedTransform)
+        {
+            if (bedTransform == null)
+            {
+                return null;
+            }
+
+            int instanceId = bedTransform.GetInstanceID();
+            if (preparedBedComponents.TryGetValue(instanceId, out PrisonBedInteractable prepared) && prepared != null)
+            {
+                return prepared;
+            }
+
+            PrisonBedInteractable resolved = BBHelpers.GetComponentSafe<PrisonBedInteractable>(bedTransform.gameObject);
+            if (resolved != null)
+            {
+                preparedBedComponents[instanceId] = resolved;
+            }
+
+            return resolved;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private PrisonBedInteractable GetPreparedBed(CellDetail cell, string bedType)
+        {
+            if (cell == null)
+            {
+                return null;
+            }
+
+            bool isTop = bedType.Equals("Top", System.StringComparison.OrdinalIgnoreCase);
+            PrisonBedInteractable prepared = isTop ? cell.preparedTopBunk : cell.preparedBottomBunk;
+            if (prepared != null)
+            {
+                return prepared;
+            }
+
+            Transform anchor = isTop ? cell.cellBedTop : cell.cellBedBottom;
+            if (anchor == null)
+            {
+                return null;
+            }
+
+            prepared = GetPreparedBed(anchor);
+            if (prepared != null)
+            {
+                SetPreparedBed(cell, bedType, prepared);
+            }
+
+            return prepared;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private PrisonBedInteractable GetOrPrepareBed(CellDetail cell, bool isTop)
+        {
+            string bedType = isTop ? "Top" : "Bottom";
+            PrisonBedInteractable prepared = GetPreparedBed(cell, bedType);
+            if (prepared != null)
+            {
+                return prepared;
+            }
+
+            Transform anchor = isTop ? cell.cellBedTop : cell.cellBedBottom;
+            if (anchor == null)
+            {
+                return null;
+            }
+
+            SetupCellBed(anchor, bedType, cell);
+            return GetPreparedBed(cell, bedType);
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private static void SetPreparedBed(CellDetail cell, string bedType, PrisonBedInteractable bed)
+        {
+            if (bedType.Equals("Top", System.StringComparison.OrdinalIgnoreCase))
+            {
+                cell.preparedTopBunk = bed;
             }
             else
             {
-                ModLogger.Warn($"Failed to instantiate PrisonBedInteractable prefab for {bedTransform.name}");
+                cell.preparedBottomBunk = bed;
+            }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private static bool SelectTopBunk(int cellIndex, string inmateName)
+        {
+            unchecked
+            {
+                int hash = cellIndex * 397;
+                if (!string.IsNullOrEmpty(inmateName))
+                {
+                    for (int i = 0; i < inmateName.Length; i++)
+                    {
+                        hash = (hash * 31) + inmateName[i];
+                    }
+                }
+
+                return (hash & 1) != 0;
+            }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private static GameObject FindExistingPrisonBedPrefab(Transform bedAnchor)
+        {
+            if (bedAnchor == null)
+            {
+                return null;
             }
 
-            // Update the cell's bed component references
-            if (bedType.Equals("Bottom", System.StringComparison.OrdinalIgnoreCase))
+            for (int i = 0; i < bedAnchor.childCount; i++)
             {
-                cell.bedBottomComponent = null;
-            }
-            else if (bedType.Equals("Top", System.StringComparison.OrdinalIgnoreCase))
-            {
-                cell.bedTopComponent = null;
+                Transform child = bedAnchor.GetChild(i);
+                if (child != null && child.name == "PrisonBedInteractable")
+                {
+                    return child.gameObject;
+                }
             }
 
-            ModLogger.Debug($"✓ Setup {bedType} bed with PrisonBedInteractable: {bedTransform.name} in {cell.cellName}");
+            return null;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private static bool BindBedDressing(Transform bedAnchor, PrisonBedInteractable bed, string cellName, string bedType)
+        {
+            if (bedAnchor == null || bed == null)
+            {
+                return false;
+            }
+
+            GameObject bedPrefab = FindExistingPrisonBedPrefab(bedAnchor);
+            Transform prisonBedContainer = bedPrefab != null ? bedPrefab.transform.Find("PrisonBed") : null;
+            if (prisonBedContainer == null)
+            {
+                ModLogger.Warn($"Prison bed dressing was unavailable for {bedType} bunk in {cellName}");
+                return false;
+            }
+
+            // These authored children contain the exact local positions,
+            // rotations, and scales used by the verified player-bed path.
+            // Do not apply transform compensation here.
+            bed.bedMat = prisonBedContainer.Find("BedMat");
+            bed.whiteSheet = prisonBedContainer.Find("WhiteSheet");
+            bed.bedSheet = prisonBedContainer.Find("BedSheet");
+            bed.pillow = prisonBedContainer.Find("Pillow");
+
+            return bed.bedMat != null && bed.whiteSheet != null &&
+                   bed.bedSheet != null && bed.pillow != null;
         }
 
         GameObject InstantiatePrisonBedPrefab(Transform bedTransform)
@@ -377,10 +801,15 @@ namespace Behind_Bars.Systems.Jail
                 if (prefab != null)
                 {
                     GameObject instance = UnityEngine.Object.Instantiate(prefab, bedTransform);
+                    // Preserve the original prefab name.  SetupCellBed is
+                    // intentionally idempotent and recognizes this child on a
+                    // subsequent initialization instead of spawning a second
+                    // player bed at the same authored anchor.
                     instance.name = "PrisonBedInteractable";
                     instance.transform.localPosition = Vector3.zero;
                     instance.transform.localRotation = Quaternion.identity;
                     instance.transform.localScale = Vector3.one;
+                    JailMaterialCompatibility.RepairForScheduleOne(instance);
 
                     ModLogger.Debug($"✓ Instantiated PrisonBedInteractable prefab");
                     return instance;
@@ -673,6 +1102,47 @@ namespace Behind_Bars.Systems.Jail
         /// <returns>True if player is outside the holding cell bounds</returns>
         public bool HasPlayerExitedHoldingCell(Player player, int holdingCellIndex)
         {
+            if (player == null || holdingCellIndex < 0 || holdingCellIndex >= holdingCells.Count)
+            {
+                return false;
+            }
+
+            var holdingCell = holdingCells[holdingCellIndex];
+            var boundsCollider = holdingCell?.cellBounds != null
+                ? holdingCell.cellBounds.GetComponent<BoxCollider>()
+                : null;
+            // doorPoint is an authored guard-operation point and can sit well out in the
+            // corridor.  It is not the physical threshold.  Use the actual door holder
+            // first so the handoff occurs as the player clears the doorway.
+            Transform doorway = holdingCell?.cellDoor?.doorHolder ?? holdingCell?.cellDoor?.doorPoint;
+
+            // HoldingCellBounds is intentionally generous in the authored prefab.  Using it
+            // alone means the prisoner has to walk down the corridor before we recognize the
+            // exit.  Treat a short crossing beyond the actual door plane as the primary exit
+            // signal, while keeping the bounds check as a safe fallback for incomplete assets.
+            if (boundsCollider != null && doorway != null)
+            {
+                Vector3 cellCenter = boundsCollider.transform.TransformPoint(boundsCollider.center);
+                Vector3 outward = doorway.position - cellCenter;
+                outward.y = 0f;
+
+                if (outward.sqrMagnitude > 0.01f)
+                {
+                    outward.Normalize();
+                    Vector3 playerFromDoor = player.transform.position - doorway.position;
+                    playerFromDoor.y = 0f;
+
+                    // A small positive clearance prevents a player standing in the door
+                    // jamb from advancing the escort, without making them walk down the
+                    // corridor to the old guard-operation point.
+                    const float doorClearance = 0.05f;
+                    if (Vector3.Dot(playerFromDoor, outward) >= doorClearance)
+                    {
+                        return true;
+                    }
+                }
+            }
+
             return !IsPlayerInHoldingCellBounds(player, holdingCellIndex);
         }
 

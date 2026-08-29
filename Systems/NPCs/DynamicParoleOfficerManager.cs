@@ -7,13 +7,20 @@ using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.CrimeTracking;
 using Behind_Bars.Systems;
+using Behind_Bars.Utils;
 using static Behind_Bars.Systems.NPCs.ParoleOfficerBehavior;
 using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
+using Il2CppScheduleOne.Map;
+using Il2CppScheduleOne.NPCs;
+using Il2CppScheduleOne.NPCs.Schedules;
 using Il2CppScheduleOne.PlayerScripts;
 using Il2CppInterop.Runtime.Attributes;
 #else
+using ScheduleOne.Map;
+using ScheduleOne.NPCs;
+using ScheduleOne.NPCs.Schedules;
 using ScheduleOne.PlayerScripts;
 #endif
 
@@ -67,6 +74,15 @@ namespace Behind_Bars.Systems.NPCs
         private HashSet<ParoleOfficerAssignment> spawnedAssignments;
 
         /// <summary>
+        /// Officers currently owned by the native courthouse StayInBuilding action.  This
+        /// state prevents the roster pump from resetting an in-progress doorway transition.
+        /// </summary>
+        private HashSet<ParoleOfficerAssignment> officersAtCourthouse;
+
+        private NPCEnterableBuilding courthouseHomeBuilding;
+        private bool loggedCourthouseHomeLookupFailure;
+
+        /// <summary>
         /// Current tracked player
         /// </summary>
         private Player currentPlayer;
@@ -108,7 +124,10 @@ namespace Behind_Bars.Systems.NPCs
         // police-station release point instead of appearing after the summary closes.
         private Player preparedReleaseParolee;
         private Vector3 preparedReleaseMeetingPoint;
-        private Coroutine preparedReleaseMeetingCoroutine;
+        // MelonCoroutines returns an opaque handle on IL2CPP.  Treating it as a
+        // Unity Coroutine made the cast return null, so overlapping release-prep
+        // coroutines could be started and the supervisor was not reliably staged.
+        private object preparedReleaseMeetingCoroutine;
         private Coroutine retryInitializeCoroutine;
         private Coroutine delayedIntakeNotificationCoroutine;
 
@@ -196,6 +215,7 @@ namespace Behind_Bars.Systems.NPCs
                 // Initialize state
                 activeOfficers = new Dictionary<ParoleOfficerAssignment, ParoleOfficerBehavior>();
                 spawnedAssignments = new HashSet<ParoleOfficerAssignment>();
+                officersAtCourthouse = new HashSet<ParoleOfficerAssignment>();
                 lastUpdateTime = Time.time;
 
                 // Get references
@@ -265,6 +285,14 @@ namespace Behind_Bars.Systems.NPCs
 
                 // Run an immediate spawn pass once initialization succeeds.
                 UpdateOfficerSpawning();
+
+                // Do not lose a release request that arrived while this component was
+                // waiting for scene-local manager/player references.
+                if (HasPreparedReleaseMeeting() && preparedReleaseMeetingCoroutine == null)
+                {
+                    preparedReleaseMeetingCoroutine = MelonCoroutines.Start(PrepareSupervisingOfficerForReleaseCoroutine());
+                    ModLogger.Info("DynamicParoleOfficerManager: Starting queued supervising-officer release meeting after initialization");
+                }
             }
             catch (Exception ex)
             {
@@ -511,6 +539,16 @@ namespace Behind_Bars.Systems.NPCs
             // This will ensure supervising officer is spawned via EnsureSupervisingOfficer()
             UpdateOfficerSpawning();
 
+            // A release can have already dispatched this supervisor from the courthouse
+            // before the parole record becomes active. Keep that pre-positioning intact;
+            // a second generic intake request would otherwise replace the police-station
+            // meeting point with the player's current location.
+            if (HasPreparedReleaseMeetingFor(player))
+            {
+                ModLogger.Info($"DynamicParoleOfficerManager: Retaining prepared police-station meeting for {player.name} after parole activation");
+                return;
+            }
+
             // Queue the initial intake handoff exactly once.
             TryQueueInitialIntakeStart(player);
         }
@@ -534,6 +572,12 @@ namespace Behind_Bars.Systems.NPCs
                 ModLogger.Debug($"DynamicParoleOfficerManager: Initial intake already queued for {player.name}");
                 return false;
             }
+
+            // The manager normally keeps the supervisor inside the courthouse.  Initial
+            // intake is an explicit exception: recall/spawn them before the delayed handoff
+            // begins so the canonical state machine has an officer to own the interaction.
+            EnsureSupervisingOfficer();
+            RecallOfficerFromCourthouse(ParoleOfficerAssignment.PoliceStationSupervisor, GetActiveSupervisingOfficer(), returnToAssignedPost: true);
 
             if (delayedIntakeNotificationCoroutine == null)
             {
@@ -561,7 +605,7 @@ namespace Behind_Bars.Systems.NPCs
                     yield return new WaitForSeconds(retryIntervalSeconds);
                     elapsed += retryIntervalSeconds;
 
-                    var supervisingOfficer = npcManager?.GetSupervisingOfficer();
+                    var supervisingOfficer = GetActiveSupervisingOfficer();
                     if (supervisingOfficer == null)
                     {
                         ModLogger.Debug($"DynamicParoleOfficerManager: Supervising officer not available for intake yet ({player.name})");
@@ -696,11 +740,48 @@ namespace Behind_Bars.Systems.NPCs
                 return;
             }
 
-            // Ensure supervising officer is spawned
-            EnsureSupervisingOfficer();
+            UpdateSupervisingOfficerRoster();
 
-            // Update patrol officers based on distance
+            // Update patrol officers according to the small rotating field roster.
             UpdatePatrolOfficers();
+        }
+
+        /// <summary>
+        /// Keeps the supervisor inside the courthouse unless the release bridge, an active
+        /// supervising interaction, a queued initial intake, or a parolee approaching the
+        /// valid report point requires a visible officer at the existing front-apron station.
+        /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void UpdateSupervisingOfficerRoster()
+        {
+            var supervisingOfficer = GetActiveSupervisingOfficer();
+            bool requiresExteriorPresence = HasPreparedReleaseMeeting() ||
+                                            supervisingOfficerInteractionCoordinator.HasPendingIntake(currentPlayer) ||
+                                            supervisingOfficerInteractionCoordinator.HasActiveSession(currentPlayer) ||
+                                            IsPlayerApproachingCheckIn(currentPlayer);
+
+            if (supervisingOfficer != null && supervisingOfficer.IsProcessingIntake())
+            {
+                requiresExteriorPresence = true;
+            }
+
+            if (requiresExteriorPresence)
+            {
+                EnsureSupervisingOfficer();
+                supervisingOfficer = GetActiveSupervisingOfficer();
+                RecallOfficerFromCourthouse(
+                    ParoleOfficerAssignment.PoliceStationSupervisor,
+                    supervisingOfficer,
+                    returnToAssignedPost: !HasPreparedReleaseMeeting());
+                return;
+            }
+
+            if (supervisingOfficer != null)
+            {
+                SendOfficerToCourthouse(ParoleOfficerAssignment.PoliceStationSupervisor, supervisingOfficer);
+            }
         }
 
         /// <summary>
@@ -738,22 +819,50 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         internal void PrepareSupervisingOfficerForRelease(Player player, Vector3 meetingPoint)
         {
-            if (!isInitialized || player == null)
+            if (player == null)
             {
-                ModLogger.Warn("DynamicParoleOfficerManager: Cannot pre-position supervising officer before initialization");
                 return;
             }
 
             preparedReleaseParolee = player;
             preparedReleaseMeetingPoint = meetingPoint;
+
+            // Release requests may arrive while this scene component is still completing
+            // its first-frame initialization. Persist the request so Initialize can begin
+            // the walk immediately instead of dropping the only early-dispatch signal.
+            if (!isInitialized)
+            {
+                ModLogger.Info($"DynamicParoleOfficerManager: Queued supervising-officer release meeting for {player.name} until initialization completes");
+                return;
+            }
+
             EnsureSupervisingOfficer();
 
             if (preparedReleaseMeetingCoroutine == null)
             {
-                preparedReleaseMeetingCoroutine = MelonCoroutines.Start(PrepareSupervisingOfficerForReleaseCoroutine()) as Coroutine;
+                preparedReleaseMeetingCoroutine = MelonCoroutines.Start(PrepareSupervisingOfficerForReleaseCoroutine());
             }
 
             ModLogger.Info($"DynamicParoleOfficerManager: Preparing supervising officer to meet {player.name} at release point {meetingPoint}");
+        }
+
+        /// <summary>
+        /// Resolves the supervisor owned by this dynamic manager. The legacy prison-NPC
+        /// manager does not own dynamically spawned parole staff.
+        /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        internal ParoleOfficerBehavior GetActiveSupervisingOfficer()
+        {
+            if (activeOfficers != null &&
+                activeOfficers.TryGetValue(ParoleOfficerAssignment.PoliceStationSupervisor, out var supervisingOfficer) &&
+                supervisingOfficer != null)
+            {
+                return supervisingOfficer;
+            }
+
+            return FindExistingSupervisingOfficer();
         }
 
         internal void CancelPreparedSupervisingOfficerForRelease(Player player)
@@ -794,7 +903,11 @@ namespace Behind_Bars.Systems.NPCs
 
                     if (activeOfficers.TryGetValue(ParoleOfficerAssignment.PoliceStationSupervisor, out var supervisingOfficer) && supervisingOfficer != null)
                     {
-                        var intakeStateMachine = BBHelpers.GetComponentSafe<ParoleIntakeStateMachine>(supervisingOfficer.gameObject);
+                        // Release staging occurs before a parole record exists, so the
+                        // state machine has not necessarily been lazily created by a
+                        // normal check-in yet.  Ask the canonical officer behavior to
+                        // create/own it rather than silently polling a missing component.
+                        var intakeStateMachine = supervisingOfficer.EnsureParoleIntakeStateMachine();
                         if (intakeStateMachine != null)
                         {
                             intakeStateMachine.PrepareForReleaseMeeting(preparedReleaseParolee, preparedReleaseMeetingPoint);
@@ -820,6 +933,14 @@ namespace Behind_Bars.Systems.NPCs
         private bool HasPreparedReleaseMeeting()
         {
             return preparedReleaseParolee != null && preparedReleaseParolee.gameObject != null;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private bool HasPreparedReleaseMeetingFor(Player player)
+        {
+            return player != null && preparedReleaseParolee == player && HasPreparedReleaseMeeting();
         }
 
 #if !MONO
@@ -934,20 +1055,253 @@ namespace Behind_Bars.Systems.NPCs
             {
                 bool isSpawned = spawnedAssignments.Contains(assignment);
                 float distance = GetDistanceToRoute(assignment, playerPosition);
+                bool isRosterActive = ParoleOfficerRosterSchedule.IsPatrolActive(assignment);
 
-                if (!isSpawned && distance < SPAWN_DISTANCE_THRESHOLD)
+                if (isRosterActive && !isSpawned && distance < SPAWN_DISTANCE_THRESHOLD)
                 {
-                    // Should spawn
-                    ModLogger.Debug($"DynamicParoleOfficerManager: Spawning {assignment} (distance: {distance:F1}m)");
+                    ModLogger.Debug($"DynamicParoleOfficerManager: Spawning roster patrol {assignment} for {ParoleOfficerRosterSchedule.GetCurrentShiftLabel()} (distance: {distance:F1}m)");
                     SpawnOfficer(assignment);
                 }
-                else if (isSpawned && distance > DESPAWN_DISTANCE_THRESHOLD)
+                else if (isRosterActive && isSpawned)
                 {
-                    // Should despawn
-                    ModLogger.Debug($"DynamicParoleOfficerManager: Despawning {assignment} (distance: {distance:F1}m)");
-                    DespawnOfficer(assignment);
+                    if (activeOfficers.TryGetValue(assignment, out var officer) && officer != null)
+                    {
+                        RecallOfficerFromCourthouse(assignment, officer, returnToAssignedPost: false);
+                        officer.ResumeScheduledPatrol();
+                    }
+                }
+                else if (!isRosterActive && isSpawned)
+                {
+                    if (activeOfficers.TryGetValue(assignment, out var officer) && officer != null)
+                    {
+                        SendOfficerToCourthouse(assignment, officer);
+                    }
                 }
             }
+        }
+
+        /// <summary>
+        /// Puts an otherwise idle officer inside the native courthouse building event.
+        /// The action is pre-created on the registered NPC template and is never added to
+        /// a live network object.
+        /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void SendOfficerToCourthouse(ParoleOfficerAssignment assignment, ParoleOfficerBehavior officer)
+        {
+            if (officer == null || officer.IsProcessingIntake())
+            {
+                return;
+            }
+
+            if (officersAtCourthouse.Contains(assignment))
+            {
+                // Keep the officer fully live while resident. NPCEnterableBuilding owns
+                // courthouse occupancy and player knock/entry access; disabling either the
+                // native root or this injected behavior makes that interaction graph flaky.
+                return;
+            }
+
+            if (!TryResolveCourthouseHomeAction(officer, out var scheduleManager, out var homeAction))
+            {
+                return;
+            }
+
+            try
+            {
+                homeAction.SetStartTime(0);
+                homeAction.Duration = 1439;
+                ReflectionUtils.TrySetFieldOrProperty(homeAction, "EndTime", 2359);
+                ReflectionUtils.TrySetFieldOrProperty(homeAction, "Building", courthouseHomeBuilding);
+                ReflectionUtils.TrySetFieldOrProperty(homeAction, "Door", null);
+                homeAction.gameObject.SetActive(true);
+                homeAction.enabled = true;
+                scheduleManager.InitializeActions();
+                scheduleManager.EnableSchedule();
+                // EnforceState is the native public schedule transition. NPCEvent_StayInBuilding
+                // does not expose a callable Begin method in the current game build.
+                scheduleManager.EnforceState(true);
+                officer.BeginCourthouseHomeStay();
+                officersAtCourthouse.Add(assignment);
+                ModLogger.Info($"DynamicParoleOfficerManager: {assignment} is returning inside the courthouse home base");
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"DynamicParoleOfficerManager: Failed to send {assignment} to courthouse home base: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Ends the native home event before this officer resumes an exterior task.
+        /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void RecallOfficerFromCourthouse(ParoleOfficerAssignment assignment, ParoleOfficerBehavior officer, bool returnToAssignedPost)
+        {
+            if (officer == null)
+            {
+                return;
+            }
+
+            bool wasAtCourthouse = officersAtCourthouse.Contains(assignment);
+
+            if (wasAtCourthouse &&
+                TryResolveCourthouseHomeAction(officer, out var scheduleManager, out var homeAction))
+            {
+                try
+                {
+                    homeAction.End();
+                    homeAction.enabled = false;
+                    homeAction.gameObject.SetActive(false);
+                    scheduleManager.InitializeActions();
+                    officersAtCourthouse.Remove(assignment);
+                    ModLogger.Info($"DynamicParoleOfficerManager: {assignment} is leaving the courthouse home base");
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Error($"DynamicParoleOfficerManager: Failed to recall {assignment} from courthouse home base: {ex.Message}");
+                    return;
+                }
+            }
+
+            officer.SetOnDuty(true);
+            // Avoid continuously resetting a supervisor that is already outside: a
+            // check-in dialogue or release handoff owns its current movement target.
+            if (returnToAssignedPost && wasAtCourthouse && !officer.IsProcessingIntake())
+            {
+                officer.ReturnToAssignedPost(PresetParoleOfficerRoutes.GetSupervisingOfficerStation());
+            }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private bool TryResolveCourthouseHomeAction(
+            ParoleOfficerBehavior officer,
+            out NPCScheduleManager scheduleManager,
+            out NPCEvent_StayInBuilding homeAction)
+        {
+            scheduleManager = null;
+            homeAction = null;
+            if (officer == null || officer.gameObject == null)
+            {
+                return false;
+            }
+
+            if (!TryResolveCourthouseHomeBuilding(out var building))
+            {
+                return false;
+            }
+
+            scheduleManager = officer.GetComponentInChildren<NPCScheduleManager>(true);
+            if (scheduleManager == null)
+            {
+                ModLogger.Error($"DynamicParoleOfficerManager: {officer.name} is missing the pre-registered native NPCScheduleManager");
+                return false;
+            }
+
+            var actions = scheduleManager.GetComponentsInChildren<NPCEvent_StayInBuilding>(true);
+            foreach (var candidate in actions)
+            {
+                if (candidate != null && candidate.gameObject != null &&
+                    string.Equals(candidate.gameObject.name, JailNpcPrefabLifecycle.CourthouseHomeScheduleActionName, StringComparison.Ordinal))
+                {
+                    homeAction = candidate;
+                    break;
+                }
+            }
+
+            if (homeAction == null)
+            {
+                ModLogger.Error($"DynamicParoleOfficerManager: {officer.name} is missing the pre-registered courthouse home action");
+                return false;
+            }
+
+            var nativeNpc = officer.GetComponentInChildren<NPC>(true);
+            if (nativeNpc == null)
+            {
+                ModLogger.Error($"DynamicParoleOfficerManager: {officer.name} has no native NPC surface for courthouse schedule");
+                return false;
+            }
+
+            ReflectionUtils.TrySetFieldOrProperty(homeAction, "npc", nativeNpc);
+            ReflectionUtils.TrySetFieldOrProperty(homeAction, "schedule", scheduleManager);
+            courthouseHomeBuilding = building;
+            return true;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private bool TryResolveCourthouseHomeBuilding(out NPCEnterableBuilding building)
+        {
+            building = courthouseHomeBuilding;
+            if (building != null && building.gameObject != null)
+            {
+                return true;
+            }
+
+            var buildings = BBHelpers.FindObjectsOfTypeSafe<NPCEnterableBuilding>();
+            if (buildings != null)
+            {
+                foreach (var candidate in buildings)
+                {
+                    if (candidate?.gameObject != null &&
+                        candidate.gameObject.name.IndexOf("Courthouse", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        building = candidate;
+                        courthouseHomeBuilding = candidate;
+                        loggedCourthouseHomeLookupFailure = false;
+                        ModLogger.Info($"DynamicParoleOfficerManager: Resolved native courthouse home base at {candidate.transform.position}");
+                        return true;
+                    }
+                }
+            }
+
+            if (!loggedCourthouseHomeLookupFailure)
+            {
+                loggedCourthouseHomeLookupFailure = true;
+                ModLogger.Error("DynamicParoleOfficerManager: Native Courthouse NPCEnterableBuilding was not found; parole officers will remain at their current exterior locations");
+            }
+
+            return false;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private bool IsCheckInWindowOpen(Player player)
+        {
+            if (player == null)
+            {
+                return false;
+            }
+
+            var paroleManager = Core.ResolveParoleManager();
+            return paroleManager != null &&
+                   paroleManager.GetDailyCheckInStatus(player, out _, applyConsequences: false) == ParoleManager.CheckInStatus.Allowed;
+        }
+
+        /// <summary>
+        /// A scheduled check-in makes the supervisor available only when the parolee is
+        /// actually approaching the report point.  Keeping an officer outside for the
+        /// entire window defeated the courthouse home schedule and added needless NPC cost.
+        /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private bool IsPlayerApproachingCheckIn(Player player)
+        {
+            if (!IsCheckInWindowOpen(player))
+            {
+                return false;
+            }
+
+            const float checkInRecallDistance = 22f;
+            Vector3 reportPoint = PresetParoleOfficerRoutes.GetSupervisingOfficerStation();
+            return Vector3.Distance(player.transform.position, reportPoint) <= checkInRecallDistance;
         }
 
         /// <summary>
@@ -1032,6 +1386,7 @@ namespace Behind_Bars.Systems.NPCs
                 // Clean up tracking
                 activeOfficers.Remove(assignment);
                 spawnedAssignments.Remove(assignment);
+                officersAtCourthouse?.Remove(assignment);
             }
             catch (Exception ex)
             {
@@ -1174,7 +1529,8 @@ namespace Behind_Bars.Systems.NPCs
 #endif
         private Vector3 GetSpawnPositionForAssignment(ParoleOfficerAssignment assignment)
         {
-            // The supervising officer is permanently posted at the courthouse.
+            // The supervisor is spawned at the validated exterior meeting point before
+            // transitioning into the courthouse home schedule when off duty.
             if (assignment == ParoleOfficerAssignment.PoliceStationSupervisor)
             {
                 return PresetParoleOfficerRoutes.GetSupervisingOfficerStation();
@@ -1242,6 +1598,7 @@ namespace Behind_Bars.Systems.NPCs
             UnsubscribeFromEvents();
             CancelPreparedSupervisingOfficerForRelease(preparedReleaseParolee);
             DespawnAllOfficers();
+            officersAtCourthouse?.Clear();
             isInitialized = false;
             isInitializing = false;
 
@@ -1346,6 +1703,63 @@ namespace Behind_Bars.Systems.NPCs
         internal void CompleteSupervisingOfficerCheckIn(Player parolee, ParoleOfficerBehavior officer)
         {
             supervisingOfficerInteractionCoordinator.CompleteCheckIn(parolee, officer);
+            ReturnSupervisingOfficerToCourthouse(officer, "check-in");
+        }
+
+        /// <summary>
+        /// Completes the release/intake handoff and returns the supervisor to the native
+        /// courthouse home action.  This is intentionally separate from a daily check-in:
+        /// the initial location explanation is not itself a reporting appointment.
+        /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        internal void CompleteSupervisingOfficerIntake(Player parolee, ParoleOfficerBehavior officer)
+        {
+            supervisingOfficerInteractionCoordinator.CancelIntake(parolee, officer);
+            CompletePreparedSupervisingOfficerReleaseMeeting(parolee);
+            ReturnSupervisingOfficerToCourthouse(officer, "initial intake");
+        }
+
+        /// <summary>
+        /// Marks the release-door staging request as consumed once its canonical intake
+        /// handoff completes.  This is intentionally not the cancellation path: cancelling
+        /// here would ask the intake state machine to stop while it is completing and can
+        /// leave the supervisor at the exterior meeting point.
+        /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void CompletePreparedSupervisingOfficerReleaseMeeting(Player parolee)
+        {
+            if (!HasPreparedReleaseMeetingFor(parolee))
+            {
+                return;
+            }
+
+            if (preparedReleaseMeetingCoroutine != null)
+            {
+                MelonCoroutines.Stop(preparedReleaseMeetingCoroutine);
+                preparedReleaseMeetingCoroutine = null;
+            }
+
+            preparedReleaseParolee = null;
+            ModLogger.Info("DynamicParoleOfficerManager: Consumed supervising-officer release meeting after initial intake");
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void ReturnSupervisingOfficerToCourthouse(ParoleOfficerBehavior officer, string completedWorkflow)
+        {
+            if (officer == null ||
+                officer.GetAssignment() != ParoleOfficerAssignment.PoliceStationSupervisor)
+            {
+                return;
+            }
+
+            SendOfficerToCourthouse(ParoleOfficerAssignment.PoliceStationSupervisor, officer);
+            ModLogger.Info($"DynamicParoleOfficerManager: Supervisor returning to courthouse after {completedWorkflow}");
         }
 
         /// <summary>

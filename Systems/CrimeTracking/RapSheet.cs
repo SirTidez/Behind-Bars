@@ -470,7 +470,7 @@ namespace Behind_Bars.Systems.CrimeTracking
 
             _crimesCommited.Add(crimeInstance);
             MarkChanged();
-            ModLogger.Info($"Added crime to rap sheet: {crimeInstance.Description} (Severity: {crimeInstance.Severity})");
+            ModLogger.Info($"Added crime to rap sheet: {crimeInstance.GetCrimeName()} (Severity: {crimeInstance.Severity})");
 
             // Always calculate and update LSI when crimes are added
             // This ensures LSI is current and ready for parole assessment

@@ -48,7 +48,7 @@ namespace Behind_Bars.Systems.NPCs
 
         public enum ParoleOfficerAssignment
         {
-            PoliceStationSupervisor, // Police station supervising officer (stationary)
+            PoliceStationSupervisor, // Supervisor; exterior only for release, intake, and check-in work
             PoliceStationPatrol,     // Police station patrol route officer
             UptownPatrol,            // Patrols uptown area
             WestsidePatrol,          // Patrols westside area
@@ -870,6 +870,25 @@ namespace Behind_Bars.Systems.NPCs
 
         private ParoleIntakeStateMachine paroleIntakeStateMachine;
 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        internal ParoleIntakeStateMachine EnsureParoleIntakeStateMachine()
+        {
+            if (paroleIntakeStateMachine == null)
+            {
+                paroleIntakeStateMachine = BBHelpers.GetComponentSafe<ParoleIntakeStateMachine>(gameObject)
+                    ?? BBHelpers.AddComponentSafe<ParoleIntakeStateMachine>(gameObject);
+
+                if (paroleIntakeStateMachine != null)
+                {
+                    ModLogger.Info($"Supervising Officer {badgeNumber}: Parole intake state machine is ready");
+                }
+            }
+
+            return paroleIntakeStateMachine;
+        }
+
         /// <summary>
         /// Start parole intake process for a parolee
         /// </summary>
@@ -887,15 +906,9 @@ namespace Behind_Bars.Systems.NPCs
                 return;
             }
 
-            // Initialize parole intake state machine if not already present
-            if (paroleIntakeStateMachine == null)
-            {
-                paroleIntakeStateMachine = BBHelpers.GetComponentSafe<ParoleIntakeStateMachine>(gameObject);
-                if (paroleIntakeStateMachine == null)
-                {
-                    paroleIntakeStateMachine = BBHelpers.AddComponentSafe<ParoleIntakeStateMachine>(gameObject);
-                }
-            }
+            // The supervising officer owns this state machine.  It must also be
+            // available for release staging before an active parole record exists.
+            EnsureParoleIntakeStateMachine();
 
             if (paroleIntakeStateMachine != null && paroleIntakeStateMachine.IsProcessingIntake())
             {
@@ -1671,6 +1684,55 @@ namespace Behind_Bars.Systems.NPCs
                 StopMovement();
                 ChangeParoleActivity(ParoleOfficerActivity.Idle);
             }
+        }
+
+        /// <summary>
+        /// Resumes this officer's configured patrol after an off-duty courthouse stay.
+        /// The patrol index is retained so a returning officer continues the assigned route
+        /// instead of visibly restarting every roster change.
+        /// </summary>
+        public void ResumeScheduledPatrol()
+        {
+            if (role != ParoleOfficerRole.PatrolOfficer || IsProcessingIntake())
+            {
+                return;
+            }
+
+            isOnDuty = true;
+
+            if (!patrolInitialized)
+            {
+                InitializePatrolPoints();
+            }
+
+            if (availablePatrolPoints.Count == 0)
+            {
+                ModLogger.Warn($"ParoleOfficer {badgeNumber}: cannot resume scheduled patrol because no patrol points are available");
+                return;
+            }
+
+            if (currentActivity == ParoleOfficerActivity.Patrolling)
+            {
+                return;
+            }
+
+            ChangeParoleActivity(ParoleOfficerActivity.Patrolling);
+            MoveToNextPatrolPoint();
+            ModLogger.Info($"ParoleOfficer {badgeNumber}: resumed scheduled patrol for {assignment}");
+        }
+
+        /// <summary>
+        /// Marks this officer off duty while the native schedule action moves them inside
+        /// the courthouse.  The native action owns the actual building transition.
+        /// </summary>
+        public void BeginCourthouseHomeStay()
+        {
+            if (IsProcessingIntake())
+            {
+                return;
+            }
+
+            SetOnDuty(false);
         }
 
         public void AssignToRole(ParoleOfficerRole newRole)

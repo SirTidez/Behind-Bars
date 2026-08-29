@@ -162,6 +162,14 @@ namespace Behind_Bars.Systems
         /// </summary>
         public ParoleOfficerBehavior? GetSupervisingOfficer()
         {
+            // Parole supervision is dynamically owned. The prison manager's historical
+            // field is only a fallback for scenes that still provide that legacy officer.
+            var dynamicSupervisor = DynamicParoleOfficerManager?.GetActiveSupervisingOfficer();
+            if (dynamicSupervisor != null)
+            {
+                return dynamicSupervisor;
+            }
+
             var prisonNpcManager = GetPrisonNpcManager();
             return prisonNpcManager?.GetSupervisingOfficer();
         }

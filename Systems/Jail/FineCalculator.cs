@@ -107,7 +107,7 @@ namespace Behind_Bars.Systems.Jail
                     var crimesByType = new Dictionary<Type, List<CrimeInstance>>();
                     foreach (var crimeInstance in rapSheetCrimes)
                     {
-                        if (crimeInstance?.Crime == null)
+                        if (crimeInstance == null)
                         {
                             ModLogger.Warn("[FINE CALC] Found null crime instance in RapSheet - skipping");
                             continue;
@@ -129,13 +129,11 @@ namespace Behind_Bars.Systems.Jail
                             string typeName = crimeInstance.GetCrimeTypeName();
                             ModLogger.Debug($"CrimeInstance has no Crime object, using inferred type: {typeName}");
                             // Calculate fine directly using inferred type name
-                            float fine = 25f; // Default fine
-                            if (_baseFines.TryGetValue(typeName, out float baseFine))
-                            {
-                                fine = baseFine;
-                            }
+                            float fine = GetBaseFine(typeName);
+                            float enhancementFine = CrimeEnhancementPenaltyCalculator.GetFineSurcharge(crimeInstance, typeName);
+                            fine += enhancementFine;
                             totalFine += fine * crimeInstance.Severity;
-                            ModLogger.Info($"[FINE CALC] Processed crime without Crime object: {typeName} = ${fine * crimeInstance.Severity:F2}");
+                            ModLogger.Info($"[FINE CALC] Processed persisted crime: {typeName} = ${fine * crimeInstance.Severity:F2} (enhancement=${enhancementFine:F2})");
                         }
                     }
 
@@ -186,10 +184,15 @@ namespace Behind_Bars.Systems.Jail
                         // Get base fine for this crime
                         if (_baseFines.TryGetValue(crimeName, out float baseFine))
                         {
-                            float crimeFine = baseFine * count;
+                            float crimeFine = 0f;
+                            for (int index = 0; index < crimeInstances.Count; index++)
+                            {
+                                var instanceFine = baseFine + CrimeEnhancementPenaltyCalculator.GetFineSurcharge(crimeInstances[index], crimeName);
+                                crimeFine += instanceFine;
+                            }
                             totalFine += crimeFine;
                             crimeCounts[crimeName] = (crimeCounts.ContainsKey(crimeName) ? crimeCounts[crimeName] : 0) + count;
-                            ModLogger.Info($"[FINE CALC]   {crimeName}: ${baseFine} x {count} = ${crimeFine:F2}");
+                            ModLogger.Info($"[FINE CALC]   {crimeName}: ${crimeFine:F2} from {count} charge(s), including contextual enhancements");
                         }
                         else
                         {

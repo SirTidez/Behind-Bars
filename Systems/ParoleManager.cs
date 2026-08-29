@@ -29,6 +29,10 @@ namespace Behind_Bars.Systems
         private const int CheckInStartHour24 = 10;
         private const int CheckInEndHour24 = 20;
         private const int GameMinutesPerDay = 1440;
+        // The first regular appointment is deliberately separated from the mandatory
+        // release explanation.  The latter introduces the report location; it must not
+        // immediately turn into a second check-in obligation.
+        private const float FirstCheckInMinimumDelayGameMinutes = 4f * 60f;
 
         private sealed class DailyCheckInRequirement
         {
@@ -248,10 +252,12 @@ namespace Behind_Bars.Systems
             }
 
             float windowMinutes = GetDailyCheckInWindowMinutes(player);
-            if (!TryBuildDailyCheckInWindow(currentMinuteOfDay, windowMinutes, out int windowStartMinuteOfDay, out int windowEndMinuteOfDay))
+            int earliestWindowStartMinute = GetEarliestCheckInStartMinute(player, currentMinuteOfDay);
+            if (earliestWindowStartMinute >= GameMinutesPerDay ||
+                !TryBuildDailyCheckInWindow(earliestWindowStartMinute, windowMinutes, out int windowStartMinuteOfDay, out int windowEndMinuteOfDay))
             {
                 dailyCheckInScheduledDay[playerKey] = currentDayIndex;
-                ModLogger.Warn($"ParoleManager: Could not schedule check-in window for {player.name} on day index {currentDayIndex} within 10:00-20:00");
+                ModLogger.Info($"ParoleManager: Deferring {player.name}'s first regular check-in beyond day index {currentDayIndex}; it cannot begin until four game-hours after release");
                 return;
             }
 
@@ -595,6 +601,32 @@ namespace Behind_Bars.Systems
             windowStartMinuteOfDay = UnityEngine.Random.Range(minStart, latestStart + 1);
             windowEndMinuteOfDay = windowStartMinuteOfDay + windowLengthMinutes;
             return true;
+        }
+
+        /// <summary>
+        /// Keeps the first regular check-in at least four game-hours after the parole term
+        /// begins.  Parole starts only after the release conditions are acknowledged, so
+        /// this persists cleanly across a save/load without a separate transient timer.
+        /// </summary>
+        private int GetEarliestCheckInStartMinute(Player player, int currentMinuteOfDay)
+        {
+            var paroleRecord = Core.ResolveRapSheetManager().GetRapSheet(player)?.CurrentParoleRecord;
+            if (paroleRecord == null || paroleRecord.GetCheckInCount() > 0)
+            {
+                return currentMinuteOfDay;
+            }
+
+            float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
+            float earliestGameTime = paroleRecord.GetParoleStartTime() + FirstCheckInMinimumDelayGameMinutes;
+            int remainingDelayMinutes = Mathf.CeilToInt(earliestGameTime - currentGameTime);
+            if (remainingDelayMinutes <= 0)
+            {
+                return currentMinuteOfDay;
+            }
+
+            int earliestMinute = currentMinuteOfDay + remainingDelayMinutes;
+            ModLogger.Info($"ParoleManager: First regular check-in for {player.name} is held until at least {remainingDelayMinutes} more game minutes after release");
+            return earliestMinute;
         }
 
         private void SendDailyCheckInInstructionText(Player player, int windowStartMinuteOfDay, int windowEndMinuteOfDay)

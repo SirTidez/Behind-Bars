@@ -146,9 +146,11 @@ namespace Behind_Bars.Systems.Jail
 
             if (isDuringRelease)
             {
-                ModLogger.Info($"JailInventoryPickupStation: Release mode interaction for {currentPlayer.name}");
-                // During release: Process item exchange (remove prison items, give back personal items)
-                MelonCoroutines.Start(ProcessReleaseItemExchange(currentPlayer));
+                // Release property is exclusively owned by InventoryPickupStation and its
+                // interactive PropertyLockerUI.  This legacy starter-kit station used to
+                // restore clothing/property directly and then clear the same snapshot,
+                // leaving the locker empty and non-interactive.
+                ModLogger.Warn($"JailInventoryPickupStation ignored release interaction for {currentPlayer.name}; InventoryPickupStation owns the property locker session");
                 return;
             }
 

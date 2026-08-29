@@ -255,6 +255,60 @@ namespace Behind_Bars.Utils
         }
 
         /// <summary>
+        /// Loads a single audio clip from a dedicated embedded bundle.  This
+        /// follows the same IL2CPP-safe non-generic asset surface as the
+        /// scanner animation loader while keeping audio assets independent of
+        /// the jail geometry bundle.
+        /// </summary>
+        public static AudioClip LoadAudioClipFromBundle(string bundleFileName, string assetName)
+        {
+            RuntimeAssetBundle bundle = LoadAssetBundle(bundleFileName);
+            if (bundle == null)
+            {
+                return null;
+            }
+
+#if MONO
+            AudioClip clip = bundle.LoadAsset<AudioClip>(assetName);
+#else
+            AudioClip clip = bundle.LoadAsset(assetName, Il2CppInterop.Runtime.Il2CppType.Of<AudioClip>())?.TryCast<AudioClip>();
+#endif
+            if (clip != null)
+            {
+                return clip;
+            }
+
+            var assetNames = bundle.GetAllAssetNames();
+            var readableNames = new List<string>();
+            if (assetNames != null)
+            {
+                for (int index = 0; index < assetNames.Length; index++)
+                {
+                    string candidateName = assetNames[index]?.ToString() ?? string.Empty;
+                    readableNames.Add(candidateName);
+                    if (string.IsNullOrWhiteSpace(candidateName))
+                    {
+                        continue;
+                    }
+
+#if MONO
+                    clip = bundle.LoadAsset<AudioClip>(candidateName);
+#else
+                    clip = bundle.LoadAsset(candidateName, Il2CppInterop.Runtime.Il2CppType.Of<AudioClip>())?.TryCast<AudioClip>();
+#endif
+                    if (clip != null)
+                    {
+                        ModLogger.Warn($"Resolved audio clip '{candidateName}' from '{bundleFileName}' after exact path '{assetName}' was unavailable");
+                        return clip;
+                    }
+                }
+            }
+
+            ModLogger.Error($"AssetBundle '{bundleFileName}' did not provide AudioClip '{assetName}'. Available assets: {string.Join(", ", readableNames)}");
+            return null;
+        }
+
+        /// <summary>
         /// Clear the asset bundle cache (call when unloading bundles)
         /// </summary>
         /// <param name="bundleFileName">Optional: Clear specific bundle, or null to clear all</param>

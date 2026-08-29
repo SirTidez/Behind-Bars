@@ -515,7 +515,10 @@ namespace Behind_Bars.Systems.NPCs
 
 
         /// <summary>
-        /// Wait for escorted inmate to follow through the door - no timeout, only position checks
+        /// Wait for the escorted prisoner to cross the physical doorway.
+        /// The authored exit point may be a navigation waypoint farther down the corridor, so it
+        /// must not be used as the clearance boundary: doing so makes the officer wait until the
+        /// player reaches the far wall instead of merely passing through the open door.
         /// </summary>
         private IEnumerator WaitForEscortedInmate()
         {
@@ -524,6 +527,25 @@ namespace Behind_Bars.Systems.NPCs
             {
                 yield break;
             }
+
+            // Keep the architectural holder in the diagnostic only. In the jail
+            // prefab its origin is offset from the actual passage, so it cannot be
+            // the player-clearance plane.
+            Transform doorwayFrame = currentTransition.door.doorHolder
+                ?? currentTransition.door.doorInstance?.transform;
+            string doorwaySource = doorwayFrame == currentTransition.door.doorHolder
+                ? "door holder diagnostic"
+                : doorwayFrame != null
+                    ? "door instance fallback"
+                    : "entry/exit midpoint";
+            const string clearanceSource = "fixed entry/exit midpoint plane";
+
+            ModLogger.Info(
+                $"SecurityDoor: Awaiting escorted prisoner at {currentTransition.doorName} doorway " +
+                $"(frame={doorwaySource}, entry={currentTransition.entryPoint.position}, " +
+                $"exit={currentTransition.exitPoint.position}, framePosition=" +
+                $"{(doorwayFrame != null ? doorwayFrame.position.ToString() : "<none>")}, " +
+                $"clearance={clearanceSource})");
 
             float lastReminderTime = Time.time;
             float timeoutAt = Time.time + Mathf.Max(10f, timingConfig.escortWaitTime);
@@ -539,39 +561,19 @@ namespace Behind_Bars.Systems.NPCs
             // wait and surface a recoverable failure to the owning escort.
             while (Time.time < timeoutAt)
             {
-                // Check if prisoner is close to the exit point (not just close to guard)
-                float distanceToExitPoint = Vector3.Distance(currentTransition.exitPoint.position, escortedInmate.transform.position);
-                float guardDistanceToExit = Vector3.Distance(currentTransition.exitPoint.position, transform.position);
+                bool crossedDoorway = HasEscortedInmateCrossedDoorway(
+                    out float signedDoorwayDistance,
+                    out float lateralDoorwayDistance);
 
-                // Also check if player is behind/to the side of the exit point (indicating they've passed through)
-                Vector3 exitToPlayer = escortedInmate.transform.position - currentTransition.exitPoint.position;
-                Vector3 exitDirection = currentTransition.exitPoint.forward; // Direction the exit point faces
-                float exitDotProduct = Vector3.Dot(exitToPlayer.normalized, exitDirection.normalized);
+                ModLogger.Debug(
+                    $"SecurityDoor: Doorway clearance for {currentTransition.doorName}: " +
+                    $"signed={signedDoorwayDistance:F2}m, lateral={lateralDoorwayDistance:F2}m, crossed={crossedDoorway}");
 
-                // If dot product is <= 0, player is behind or to the side of exit point (within 180 degrees)
-                bool playerBehindExit = exitDotProduct <= 0f;
-
-                // ADDITIONAL: Check dot product relative to the actual door transform
-                Vector3 doorToPlayer = escortedInmate.transform.position - currentTransition.door.doorInstance.transform.position;
-                Vector3 doorDirection = currentTransition.door.doorInstance.transform.forward; // Direction the door faces
-                float doorDotProduct = Vector3.Dot(doorToPlayer.normalized, doorDirection.normalized);
-                bool playerBehindDoor = doorDotProduct <= 0f;
-
-                ModLogger.Debug($"SecurityDoor: Distance to exit: {distanceToExitPoint:F2}m");
-                ModLogger.Debug($"SecurityDoor: Exit point - Dot product: {exitDotProduct:F2}, Behind exit: {playerBehindExit}");
-                ModLogger.Debug($"SecurityDoor: Door transform - Dot product: {doorDotProduct:F2}, Behind door: {playerBehindDoor}");
-
-                // Guard should be through first, then prisoner follows closely
-                // Current logic: (distance OR behind exit point)
-                // Alternative: Could use door transform dot product for more accurate detection
-                bool passedThroughCondition = distanceToExitPoint <= 1.0f || playerBehindExit;
-                // TODO: Consider using door transform instead: distanceToExitPoint <= 1.0f || playerBehindDoor
-
-                if (passedThroughCondition)
+                if (crossedDoorway)
                 {
-                    ModLogger.Debug($"SecurityDoor: Prisoner through door - distance: {distanceToExitPoint:F2}m, behind exit: {playerBehindExit}, behind door: {playerBehindDoor}");
-                    // Both have passed through, wait a bit more for safety then close
-                    yield return new WaitForSeconds(timingConfig.doorCloseDelay);
+                    ModLogger.Info(
+                        $"SecurityDoor: Prisoner crossed {currentTransition.doorName} doorway " +
+                        $"(signed={signedDoorwayDistance:F2}m); continuing escort transit");
                     lastEscortWaitSucceeded = true;
                     break;
                 }
@@ -593,6 +595,69 @@ namespace Behind_Bars.Systems.NPCs
             {
                 ModLogger.Warn("SecurityDoorBehavior: Escort wait timed out before the prisoner cleared the door");
             }
+        }
+
+        /// <summary>
+        /// Determines whether the escorted player has crossed from this transition's entry side
+        /// to its exit side at the physical door, independent of distant navigation waypoints.
+        /// </summary>
+        private bool HasEscortedInmateCrossedDoorway(out float signedDoorwayDistance, out float lateralDoorwayDistance)
+        {
+            signedDoorwayDistance = 0f;
+            lateralDoorwayDistance = float.MaxValue;
+
+            if (escortedInmate == null || currentTransition?.entryPoint == null || currentTransition.exitPoint == null)
+            {
+                return false;
+            }
+
+            // The apparent "side" trigger colliders in the jail prefab are children
+            // of the animated door, so they move with the door swing and cannot
+            // represent a stable clearance boundary. The authored entry/exit pair
+            // straddles the actual opening and is static, so its midpoint defines
+            // the physical doorway plane without waiting for a distant nav waypoint.
+            Vector3 doorwayMidpoint = (currentTransition.entryPoint.position + currentTransition.exitPoint.position) * 0.5f;
+            return HasCrossedDoorwayPlane(doorwayMidpoint, out signedDoorwayDistance, out lateralDoorwayDistance);
+        }
+
+        private bool HasCrossedDoorwayPlane(
+            Vector3 doorwayPosition,
+            out float signedDoorwayDistance,
+            out float lateralDoorwayDistance)
+        {
+            signedDoorwayDistance = 0f;
+            lateralDoorwayDistance = float.MaxValue;
+
+            // Direction belongs to the authored transition, not the moving visual door.
+            // It remains correct even when the exit navigation point is farther down the
+            // corridor than the physical threshold.
+            Vector3 routeToExit = currentTransition.exitPoint.position - currentTransition.entryPoint.position;
+            routeToExit.y = 0f;
+            if (routeToExit.sqrMagnitude < 0.01f)
+            {
+                routeToExit = currentTransition.exitPoint.position - doorwayPosition;
+                routeToExit.y = 0f;
+            }
+
+            if (routeToExit.sqrMagnitude < 0.01f)
+            {
+                return false;
+            }
+
+            routeToExit.Normalize();
+
+            Vector3 doorwayToPrisoner = escortedInmate.transform.position - doorwayPosition;
+            doorwayToPrisoner.y = 0f;
+            signedDoorwayDistance = Vector3.Dot(doorwayToPrisoner, routeToExit);
+            lateralDoorwayDistance = (doorwayToPrisoner - routeToExit * signedDoorwayDistance).magnitude;
+
+            // Cross the plane by a small margin so a player standing in the doorway never lets
+            // the guard close it on them.  The generous lateral width reflects the physical
+            // door opening plus controller movement variance, not the full corridor.
+            const float clearancePastDoorwayMeters = 0.10f;
+            const float maximumDoorwayLateralMeters = 2.25f;
+            return signedDoorwayDistance >= clearancePastDoorwayMeters &&
+                   lateralDoorwayDistance <= maximumDoorwayLateralMeters;
         }
 
         private IEnumerator OpenDoorAndWaitForEvent()

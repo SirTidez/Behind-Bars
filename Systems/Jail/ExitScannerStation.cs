@@ -4,6 +4,7 @@ using UnityEngine.UI;
 using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.UI;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -76,6 +77,9 @@ namespace Behind_Bars.Systems.Jail
         private Vector3 dragStartWorldPos;
         private Vector3 mouseStartPos;
         private GameObject punchContainer;
+        private ExitReleaseTriggerRelay exitTriggerRelay;
+        private bool exitTriggerReached;
+        private object exitTriggerMonitorCoroutine;
 
         // IK System
         private AvatarIKController ikController;
@@ -618,12 +622,17 @@ namespace Behind_Bars.Systems.Jail
                 );
             }
 
-            // Open exit door after successful scan
-            OpenExitDoor();
-
             // Mark as completed
             isCompleted = true;
             isScanning = false;
+
+            // Bind the release trigger before opening the door.  Previously this was
+            // delayed by two seconds, allowing the player to pass the exit volume before
+            // its callback existed.
+            StartExitTriggerMonitoring();
+
+            // Open exit door after successful scan
+            OpenExitDoor();
 
             // Reset camera
             ResetCamera();
@@ -635,8 +644,13 @@ namespace Behind_Bars.Systems.Jail
                 interactableObject.SetInteractableState(InteractableObject.EInteractableState.Label);
             }
 
-            // Release the player after a short delay
-            MelonCoroutines.Start(ReleasePlayerAfterDelay());
+            if (currentPlayer != null)
+            {
+                ModLogger.Info($"ExitScannerStation: Player {currentPlayer.name} ready for exit trigger");
+                Core.ResolveUIManager()?.ShowNotification(
+                    "Scan complete - walk through the exit to be released!",
+                    NotificationType.Instruction);
+            }
         }
 
         private void FailPalmScan()
@@ -674,25 +688,15 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
-        private IEnumerator ReleasePlayerAfterDelay()
+        private void StartExitTriggerMonitoring()
         {
-            yield return new WaitForSeconds(2f);
-
-            // Set up exit trigger monitoring
-            MelonCoroutines.Start(MonitorExitTrigger());
-            if (currentPlayer != null)
+            if (exitTriggerMonitorCoroutine != null)
             {
-                ModLogger.Info($"ExitScannerStation: Player {currentPlayer.name} ready for exit trigger");
-
-                // Show notification to walk through exit
-                if (Core.ResolveUIManager() != null)
-                {
-                    Core.ResolveUIManager().ShowNotification(
-                        "Scan complete - walk through the exit to be released!",
-                        NotificationType.Instruction
-                    );
-                }
+                MelonCoroutines.Stop(exitTriggerMonitorCoroutine);
+                exitTriggerMonitorCoroutine = null;
             }
+
+            exitTriggerMonitorCoroutine = MelonCoroutines.Start(MonitorExitTrigger());
         }
 
         /// <summary>
@@ -713,7 +717,7 @@ namespace Behind_Bars.Systems.Jail
                 yield break;
             }
 
-            Collider exitCollider = exitTrigger.GetComponent<Collider>();
+            Collider exitCollider = BBHelpers.GetComponentSafe<Collider>(exitTrigger.gameObject);
             if (exitCollider == null || !exitCollider.isTrigger)
             {
                 ModLogger.Warn("Exit trigger has no trigger collider - using fallback");
@@ -722,7 +726,23 @@ namespace Behind_Bars.Systems.Jail
                 yield break;
             }
 
-            ModLogger.Info($"Monitoring exit trigger: {exitTrigger.name}");
+            exitTriggerRelay = BBHelpers.GetComponentSafe<ExitReleaseTriggerRelay>(exitTrigger.gameObject);
+            if (exitTriggerRelay == null)
+            {
+                exitTriggerRelay = BBHelpers.AddComponentSafe<ExitReleaseTriggerRelay>(exitTrigger.gameObject);
+            }
+
+            if (exitTriggerRelay == null)
+            {
+                ModLogger.Warn("Could not attach exit trigger relay - using fallback teleport");
+                yield return new WaitForSeconds(3f);
+                TeleportPlayerToRelease();
+                yield break;
+            }
+
+            exitTriggerReached = false;
+            exitTriggerRelay.Configure(this);
+            ModLogger.Info($"Listening for exit trigger entry: {exitTrigger.name}");
 
             // Monitor for up to 30 seconds
             float timeout = 30f;
@@ -730,10 +750,10 @@ namespace Behind_Bars.Systems.Jail
 
             while (elapsed < timeout && currentPlayer != null && isCompleted)
             {
-                // Check if player is within exit trigger bounds
-                if (exitCollider.bounds.Contains(currentPlayer.transform.position))
+                if (exitTriggerReached || IsPlayerInsideExitTrigger(exitCollider))
                 {
                     ModLogger.Info($"Player {currentPlayer.name} entered exit trigger - teleporting to release");
+                    exitTriggerMonitorCoroutine = null;
                     TeleportPlayerToRelease();
                     yield break;
                 }
@@ -746,7 +766,43 @@ namespace Behind_Bars.Systems.Jail
             if (currentPlayer != null)
             {
                 ModLogger.Info("Exit trigger timeout - teleporting player to release");
+                exitTriggerMonitorCoroutine = null;
                 TeleportPlayerToRelease();
+            }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private bool IsPlayerInsideExitTrigger(Collider exitCollider)
+        {
+            if (exitCollider == null || currentPlayer == null)
+            {
+                return false;
+            }
+
+            Vector3 playerPosition = currentPlayer.transform.position;
+            Vector3 closestPoint = exitCollider.ClosestPoint(playerPosition);
+            return (closestPoint - playerPosition).sqrMagnitude <= 0.0004f;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        internal void HandleExitTriggerEntered(Collider other)
+        {
+            if (!isCompleted || currentPlayer == null || other == null)
+            {
+                return;
+            }
+
+            Transform playerTransform = currentPlayer.transform;
+            Transform enteredTransform = other.transform;
+            if (enteredTransform == playerTransform ||
+                enteredTransform.IsChildOf(playerTransform) ||
+                playerTransform.IsChildOf(enteredTransform))
+            {
+                exitTriggerReached = true;
             }
         }
 

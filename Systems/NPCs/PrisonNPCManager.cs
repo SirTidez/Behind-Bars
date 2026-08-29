@@ -608,6 +608,15 @@ namespace Behind_Bars.Systems.NPCs
                         }
 
                         ModLogger.Debug($"Added InmateBehavior to {inmateId} for cell {assignedCell}");
+
+                        // The lifecycle manager may have started before the
+                        // staged inmate roster completed. Notify it through
+                        // the canonical spawn seam so this inmate immediately
+                        // receives the currently active recreation/count order.
+                        var lifecycleManager = Core.JailController != null
+                            ? BBHelpers.GetComponentSafe<JailLifecycleManager>(Core.JailController.gameObject)
+                            : null;
+                        lifecycleManager?.NotifyInmateRosterChanged();
                     }
 
                     ModLogger.Debug($"✓ Spawned inmate {inmateId} ({crimeType}) in cell {assignedCell}");

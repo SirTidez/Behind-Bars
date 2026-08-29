@@ -461,7 +461,9 @@ namespace Behind_Bars.UI
             var canvasGO = new GameObject(OverlayCanvasName);
             var overlayCanvas = canvasGO.AddComponent<Canvas>();
             overlayCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
-            overlayCanvas.sortingOrder = 1000; // Very high sorting order to appear on top of everything
+            // Jail HUD should render over ordinary gameplay but below the game's pause/menu
+            // layer. A high overlay order left custody information interactive above pause.
+            overlayCanvas.sortingOrder = 100;
 
             // Add CanvasScaler for proper scaling
             var scaler = canvasGO.AddComponent<UnityEngine.UI.CanvasScaler>();
@@ -469,8 +471,11 @@ namespace Behind_Bars.UI
             scaler.referenceResolution = new Vector2(1920, 1080);
             scaler.matchWidthOrHeight = 0.5f; // Balance between width and height matching
 
-            // Add GraphicRaycaster for UI interaction
-            canvasGO.AddComponent<UnityEngine.UI.GraphicRaycaster>();
+            // This canvas is display-only. Leaving a GraphicRaycaster active lets the
+            // custody HUD compete with native pause/menu controls even when the game
+            // renders its menu above us.
+            var raycaster = canvasGO.AddComponent<UnityEngine.UI.GraphicRaycaster>();
+            raycaster.enabled = false;
 
             // Don't destroy on load so it persists across scenes
             UnityEngine.Object.DontDestroyOnLoad(canvasGO);
@@ -478,7 +483,7 @@ namespace Behind_Bars.UI
             // Cache in pool for reuse
             _pooledOverlayCanvas = overlayCanvas;
 
-            ModLogger.Debug("Created and pooled overlay canvas with sorting order 1000");
+            ModLogger.Debug("Created and pooled overlay canvas with sorting order 100 (below game pause UI)");
             return overlayCanvas;
         }
 

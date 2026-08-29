@@ -233,6 +233,15 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
+        /// Returns true while an initial-intake request is queued but has not yet been
+        /// accepted by the supervising officer.
+        /// </summary>
+        public bool HasPendingIntake(Player parolee)
+        {
+            return parolee != null && pendingIntakeRequests.Contains(parolee);
+        }
+
+        /// <summary>
         /// Returns true when the supplied officer currently owns a supervising-officer interaction session.
         /// </summary>
         public bool HasActiveSession(ParoleOfficerBehavior officer)

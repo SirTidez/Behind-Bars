@@ -35,6 +35,11 @@ namespace Behind_Bars.Systems.CrimeTracking.Datas
         // their existing wanted-level behavior when they are reloaded.
         public bool countsTowardWantedLevel = true;
 
+        // Correlates one persisted charge to one original native or mod-created incident.
+        public string incidentId = "";
+        public string source = "";
+        public List<CrimeEnhancement> enhancements = new List<CrimeEnhancement>();
+
         /// <summary>
         /// Creates a CrimeInstanceSaveData from a CrimeInstance
         /// </summary>
@@ -54,7 +59,11 @@ namespace Behind_Bars.Systems.CrimeTracking.Datas
             else
             {
                 // Fallback to description-based type name
-                crimeTypeName = crime.GetCrimeTypeName();
+                crimeTypeName = crime.StoredCrimeTypeName;
+                if (string.IsNullOrWhiteSpace(crimeTypeName))
+                {
+                    crimeTypeName = crime.GetCrimeTypeName();
+                }
             }
 
             return new CrimeInstanceSaveData
@@ -68,7 +77,10 @@ namespace Behind_Bars.Systems.CrimeTracking.Datas
                 locationZ = crime.Location.z,
                 witnessIds = crime.WitnessIds != null ? new List<string>(crime.WitnessIds) : new List<string>(),
                 severity = crime.Severity,
-                countsTowardWantedLevel = crime.CountsTowardWantedLevel
+                countsTowardWantedLevel = crime.CountsTowardWantedLevel,
+                incidentId = crime.IncidentId,
+                source = crime.Source,
+                enhancements = crime.Enhancements != null ? new List<CrimeEnhancement>(crime.Enhancements) : new List<CrimeEnhancement>()
             };
         }
 
@@ -88,7 +100,11 @@ namespace Behind_Bars.Systems.CrimeTracking.Datas
                 WitnessIds = witnessIds != null ? new List<string>(witnessIds) : new List<string>(),
                 Severity = severity,
                 Description = description ?? crimeName ?? "",
-                CountsTowardWantedLevel = countsTowardWantedLevel
+                StoredCrimeTypeName = crimeTypeName ?? "",
+                CountsTowardWantedLevel = countsTowardWantedLevel,
+                IncidentId = incidentId ?? "",
+                Source = source ?? "",
+                Enhancements = enhancements != null ? new List<CrimeEnhancement>(enhancements) : new List<CrimeEnhancement>()
             };
 
             return crimeInstance;

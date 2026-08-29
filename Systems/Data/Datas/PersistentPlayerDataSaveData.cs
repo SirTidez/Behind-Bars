@@ -79,6 +79,37 @@ namespace Behind_Bars.Systems.Data.Datas
         }
     }
 
+    /// <summary>Serializable representation of a player-avatar accessory.</summary>
+    [Serializable]
+    public class ClothingAccessorySaveData
+    {
+        public string path;
+        public float[] colorRGBA = new float[4];
+
+        public static ClothingAccessorySaveData FromClothingAccessory(PersistentPlayerData.ClothingAccessory accessory)
+        {
+            if (accessory == null)
+                return null;
+
+            var color = accessory.GetColor();
+            return new ClothingAccessorySaveData
+            {
+                path = accessory.path ?? "",
+                colorRGBA = new[] { color.r, color.g, color.b, color.a }
+            };
+        }
+
+        public PersistentPlayerData.ClothingAccessory ToClothingAccessory()
+        {
+            var color = new Color(
+                colorRGBA != null && colorRGBA.Length > 0 ? colorRGBA[0] : 1f,
+                colorRGBA != null && colorRGBA.Length > 1 ? colorRGBA[1] : 1f,
+                colorRGBA != null && colorRGBA.Length > 2 ? colorRGBA[2] : 1f,
+                colorRGBA != null && colorRGBA.Length > 3 ? colorRGBA[3] : 1f);
+            return new PersistentPlayerData.ClothingAccessory(path, color);
+        }
+    }
+
     /// <summary>
     /// Serializable representation of a stored item
     /// </summary>
@@ -144,6 +175,7 @@ namespace Behind_Bars.Systems.Data.Datas
         public string crimeData;                // Serialized crime data (as string)
         public bool isActive;
         public List<ClothingLayerSaveData> originalClothing = new List<ClothingLayerSaveData>();
+        public List<ClothingAccessorySaveData> originalAccessories = new List<ClothingAccessorySaveData>();
 
         public static PlayerInventorySnapshotSaveData FromSnapshot(PersistentPlayerData.PlayerInventorySnapshot snapshot)
         {
@@ -195,6 +227,18 @@ namespace Behind_Bars.Systems.Data.Datas
                 }
             }
 
+            if (snapshot.originalAccessories != null)
+            {
+                foreach (var accessory in snapshot.originalAccessories)
+                {
+                    var accessorySaveData = ClothingAccessorySaveData.FromClothingAccessory(accessory);
+                    if (accessorySaveData != null)
+                    {
+                        saveData.originalAccessories.Add(accessorySaveData);
+                    }
+                }
+            }
+
             return saveData;
         }
 
@@ -240,6 +284,18 @@ namespace Behind_Bars.Systems.Data.Datas
                     if (clothing != null)
                     {
                         snapshot.originalClothing.Add(clothing);
+                    }
+                }
+            }
+
+            if (originalAccessories != null)
+            {
+                foreach (var accessorySaveData in originalAccessories)
+                {
+                    var accessory = accessorySaveData?.ToClothingAccessory();
+                    if (accessory != null)
+                    {
+                        snapshot.originalAccessories.Add(accessory);
                     }
                 }
             }

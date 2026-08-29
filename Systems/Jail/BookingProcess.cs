@@ -380,9 +380,14 @@ namespace Behind_Bars.Systems.Jail
         void FinishBooking()
         {
             ModLogger.Info($"Booking process finished for {currentPlayer?.name}");
+
+            // Keep a stable reference until the managed lifecycle signal has been
+            // published. FinishBooking clears currentPlayer at the end of the method.
+            Player finalizedPlayer = currentPlayer;
             
             // Clear booking state
             bookingInProgress = false;
+            bool sentenceStartRequested = false;
             
             // Notify jail system that booking is complete and start jail time
             var jailManager = Core.Instance?.JailManager;
@@ -424,6 +429,7 @@ namespace Behind_Bars.Systems.Jail
                 // This coroutine checks for the B key press and processes bail payments
                 StartManagedCoroutine(jailManager.StartJailTimeAfterBooking(currentPlayer, currentSentence));
                 ModLogger.Info($"[BAIL] Started jail sentence coroutine for bail key detection");
+                sentenceStartRequested = true;
             }
             else if (currentSentence == null)
             {
@@ -435,6 +441,18 @@ namespace Behind_Bars.Systems.Jail
                     "Processing complete", 
                     NotificationType.Progress
                 );
+
+            // This is deliberately later than OnBookingCompleted: that event means
+            // the intake tasks are done, while this point means the final-cell
+            // escort completed and the sentence/UI countdown were started.
+            if (sentenceStartRequested)
+            {
+                BookingLifecycleCoordinator.PublishFinalized(finalizedPlayer);
+            }
+            else
+            {
+                ModLogger.Warn($"Booking for {finalizedPlayer?.name ?? "unknown player"} ended before its sentence start could be requested");
+            }
             
             currentPlayer = null;
             currentSentence = null;
@@ -975,6 +993,18 @@ namespace Behind_Bars.Systems.Jail
         private void CompleteEscortProcess()
         {
             escortInProgress = false;
+
+            // The canonical IntakeOfficerStateMachine owns the final-cell handoff and
+            // calls FinishBookingAfterCellEscort as soon as the cell door is secured.
+            // This legacy monitor can wake on its next two-second poll after that
+            // finalization has already cleared currentPlayer.  Treat that as a
+            // completed handoff, not as a second failed cell assignment.
+            if (!bookingInProgress || currentPlayer == null)
+            {
+                ModLogger.Debug("BookingProcess: Ignoring stale legacy escort completion after canonical booking finalization");
+                return;
+            }
+
             inventoryProcessed = true;
             
             ModLogger.Info($"Escort process completed for {currentPlayer?.name}");

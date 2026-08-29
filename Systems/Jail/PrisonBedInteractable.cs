@@ -52,6 +52,12 @@ namespace Behind_Bars.Systems.Jail
         // State tracking
         private bool isProcessing = false;
         private bool isComplete = false;
+        private bool isClaimedByNpc = false;
+        // The complete staged dressing hierarchy is serialized under the
+        // anchor's authored PrisonBedInteractable prefab. JailCellManager
+        // binds that hierarchy and this component only controls ownership and
+        // player interaction state.
+        private string npcOwnerName = string.Empty;
         
         // Stage descriptions
         private readonly string[] stageActions = {
@@ -80,8 +86,15 @@ namespace Behind_Bars.Systems.Jail
             // Set up interaction component
             SetupInteractableComponent();
             
-            // Initialize bed state (all components hidden initially)
-            SetupStage = 0;
+            // Preserve a claim made during staged NPC spawning. The owning
+            // cell can reserve this bunk before Unity invokes Start on the
+            // newly attached interactable.
+            SetupStage = isClaimedByNpc ? 4 : 0;
+            if (isClaimedByNpc)
+            {
+                isProcessing = false;
+                isComplete = true;
+            }
             
             // Force initial visual update to ensure everything starts hidden
             UpdateBedVisuals();
@@ -89,6 +102,9 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Debug($"Prison bed setup initialized at stage {setupStage}");
         }
                 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private GameObject[] GetChildGameObjects(Transform parent)
         {
             if (parent == null) return null;
@@ -161,10 +177,10 @@ namespace Behind_Bars.Systems.Jail
             bool showPillow = setupStage >= 4;
             
             // Enable/disable the bed component GameObjects
-            if (bedMat != null) bedMat.gameObject.SetActive(showMat);
-            if (whiteSheet != null) whiteSheet.gameObject.SetActive(showWhiteSheet);
-            if (bedSheet != null) bedSheet.gameObject.SetActive(showBedSheet);
-            if (pillow != null) pillow.gameObject.SetActive(showPillow);
+            SetDressingVisible(bedMat, showMat);
+            SetDressingVisible(whiteSheet, showWhiteSheet);
+            SetDressingVisible(bedSheet, showBedSheet);
+            SetDressingVisible(pillow, showPillow);
             
             ModLogger.Debug($"Updated bed visuals for stage {setupStage} - Mat: {showMat}, WhiteSheet: {showWhiteSheet}, BedSheet: {showBedSheet}, Pillow: {showPillow}");
         }
@@ -180,6 +196,13 @@ namespace Behind_Bars.Systems.Jail
         private void UpdateInteractionState()
         {
             if (interactableObject == null) return;
+
+            if (isClaimedByNpc)
+            {
+                interactableObject.SetMessage($"{npcOwnerName}'s assigned bunk");
+                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                return;
+            }
             
             if (isComplete)
             {
@@ -212,7 +235,7 @@ namespace Behind_Bars.Systems.Jail
         
         private void OnInteractStart()
         {
-            if (isProcessing) return;
+            if (isProcessing || isClaimedByNpc) return;
             
             if (isComplete)
             {
@@ -246,6 +269,31 @@ namespace Behind_Bars.Systems.Jail
             
             // Start next setup stage
             MelonCoroutines.Start(ProcessBedSetupStage());
+        }
+
+        /// <summary>
+        /// Marks this bed as an occupied inmate's completed bunk.  NPC beds
+        /// are visual-only and deliberately cannot be claimed by the player.
+        /// </summary>
+        public void ClaimForNpc(string ownerName)
+        {
+            isClaimedByNpc = true;
+            npcOwnerName = string.IsNullOrWhiteSpace(ownerName) ? "Inmate" : ownerName;
+            isProcessing = false;
+            isComplete = true;
+            SetupStage = 4;
+            ModLogger.Debug($"Claimed prison bunk in {cellName} for NPC {npcOwnerName}");
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private static void SetDressingVisible(Transform dressing, bool visible)
+        {
+            if (dressing != null)
+            {
+                dressing.gameObject.SetActive(visible);
+            }
         }
 
 #if !MONO

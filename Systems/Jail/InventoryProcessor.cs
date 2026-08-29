@@ -887,6 +887,59 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
+        /// Moves all non-cash property out of the live inventory after the arrest snapshot
+        /// and contraband inspection have completed. The snapshot remains the sole release
+        /// authority; cash is deliberately left untouched.
+        /// </summary>
+        public static int SecureArrestProperty(PlayerInventory inventory)
+        {
+            if (inventory == null)
+            {
+                return 0;
+            }
+
+            int secured = 0;
+            try
+            {
+                foreach (var slot in inventory.GetAllInventorySlots())
+                {
+                    if (slot == null || slot.ItemInstance == null)
+                    {
+                        continue;
+                    }
+
+                    var itemInstance = slot.ItemInstance;
+                    string typeName = itemInstance.GetType().Name ?? string.Empty;
+                    string itemName = itemInstance.GetType().GetProperty("Name")?.GetValue(itemInstance)?.ToString() ?? string.Empty;
+                    if (typeName.Contains("CashInstance", StringComparison.OrdinalIgnoreCase) ||
+                        itemName.Contains("Cash", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    var clearMethod = slot.GetType().GetMethod("ClearStoredInstance");
+                    if (clearMethod == null)
+                    {
+                        ModLogger.Warn($"[INVENTORY] Could not secure '{itemName}': ItemSlot.ClearStoredInstance was unavailable");
+                        continue;
+                    }
+
+                    var parameters = clearMethod.GetParameters();
+                    clearMethod.Invoke(slot, parameters.Length == 1 ? new object[] { true } : null);
+                    secured++;
+                    ModLogger.Info($"[INVENTORY] Secured arrest property: {itemName}");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"[INVENTORY] Error securing arrest property: {ex.Message}");
+            }
+
+            ModLogger.Info($"[INVENTORY] Secured {secured} non-cash item stack(s) for the property locker");
+            return secured;
+        }
+
+        /// <summary>
         /// Empty a weapon's loaded ammo
         /// IntegerItemInstance uses the "Value" field to store loaded ammo count
         /// </summary>

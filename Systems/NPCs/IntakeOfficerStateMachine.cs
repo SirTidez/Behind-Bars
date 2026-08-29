@@ -115,6 +115,7 @@ namespace Behind_Bars.Systems.NPCs
         private object delayedDoorCloseCoroutine;
         private object delayedNavigationResumeCoroutine;
         private object retryIntakeCoroutine;
+        private object fallbackDoorCloseCoroutine;
 
         // Destination tracking to prevent duplicate events
         private Dictionary<string, bool> stationDestinationProcessed = new Dictionary<string, bool>();
@@ -732,10 +733,13 @@ namespace Behind_Bars.Systems.NPCs
                     if (jailController.HasPlayerExitedHoldingCell(currentPrisoner, currentHoldingCellIndex))
                     {
                         playerExitDetected = true;
-                        ModLogger.Info($"IntakeOfficer: Player has exited holding cell {currentHoldingCellIndex}");
-                        // Add a 2-second delay before closing door to ensure player is fully clear
-                        StopPendingDelayedDoorClose();
-                        delayedDoorCloseCoroutine = MelonCoroutines.Start(DelayedDoorClose());
+                        doorCloseInitiated = true;
+                        ModLogger.Info($"IntakeOfficer: Player cleared holding cell {currentHoldingCellIndex} doorway");
+
+                        // The doorway detector already requires the player to be beyond the
+                        // door plane.  The old fixed two-second wait made the officer visibly
+                        // idle after the player had cleared the threshold.
+                        ChangeIntakeState(IntakeState.ClosingHoldingDoor);
                     }
                 }
             }
@@ -1113,23 +1117,6 @@ namespace Behind_Bars.Systems.NPCs
 
         #endregion
 
-        #region Door Timing
-
-#if !MONO
-        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
-#endif
-        private IEnumerator DelayedDoorClose()
-        {
-            if (doorCloseInitiated) yield break; // Prevent multiple coroutines
-            doorCloseInitiated = true;
-
-            yield return new WaitForSeconds(2f); // Give player time to fully exit
-            delayedDoorCloseCoroutine = null;
-            ChangeIntakeState(IntakeState.ClosingHoldingDoor);
-        }
-
-        #endregion
-
         #region Door Management
 
         /// <summary>
@@ -1169,11 +1156,10 @@ namespace Behind_Bars.Systems.NPCs
                 jailController.doorController.CloseHoldingCellDoor(currentHoldingCellIndex);
             }
 
-            // Close and lock the jail cell door if one was assigned
-            if (assignedCellNumber >= 0)
-            {
-                jailController.doorController.CloseJailCellDoor(assignedCellNumber);
-            }
+            // The daily lifecycle owns final cell-door state. In particular,
+            // do not immediately undo an active recreation tier after the
+            // player has just been assigned and escorted into one of its cells.
+            CloseAssignedCellDoorIfRecreationIsInactive(jailController);
 
             ModLogger.Info("IntakeOfficer: All intake doors secured");
         }
@@ -1276,13 +1262,22 @@ namespace Behind_Bars.Systems.NPCs
             isSecurityDoorActive = false;
 
             // If SecurityDoor fails, try fallback direct door control
+            string fallbackDoorType = null;
             if (doorName.Contains("Booking") || doorName.Contains("Inner"))
             {
-                FallbackDirectDoorControl("BookingInnerDoor");
+                fallbackDoorType = "BookingInnerDoor";
             }
             else if (doorName.Contains("Prison") || doorName.Contains("Enter"))
             {
-                FallbackDirectDoorControl("PrisonEntryDoor");
+                fallbackDoorType = "PrisonEntryDoor";
+            }
+
+            if (fallbackDoorType != null && FallbackDirectDoorControl(fallbackDoorType))
+            {
+                // This is a recovery-only path.  The canonical SecurityDoor path
+                // closes through the door's event; a direct fallback has no such
+                // callback, so secure it once both members of the escort clear it.
+                ScheduleFallbackDoorClosure(fallbackDoorType);
             }
 
             // The fallback only operates the door; it deliberately does not move
@@ -1369,11 +1364,11 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        private void FallbackDirectDoorControl(string doorType)
+        private bool FallbackDirectDoorControl(string doorType)
         {
             // Fallback to direct door control if SecurityDoor is not available
             var jailController = Core.JailController;
-            if (jailController?.doorController == null) return;
+            if (jailController?.doorController == null) return false;
 
             if (doorType == "BookingInnerDoor")
             {
@@ -1383,6 +1378,7 @@ namespace Behind_Bars.Systems.NPCs
                     triggeredDoorOperations.Add("BookingInnerDoor");
                     ModLogger.Info("IntakeOfficer: Booking inner door opened via fallback direct control");
                 }
+                return opened;
             }
             else if (doorType == "PrisonEntryDoor")
             {
@@ -1392,9 +1388,56 @@ namespace Behind_Bars.Systems.NPCs
                     triggeredDoorOperations.Add("PrisonEntryDoor");
                     ModLogger.Info("IntakeOfficer: Prison entry door opened via fallback direct control");
                 }
+                return opened;
             }
+
+            return false;
         }
 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void ScheduleFallbackDoorClosure(string doorType)
+        {
+            StopPendingFallbackDoorClosure();
+            fallbackDoorCloseCoroutine = MelonCoroutines.Start(CloseFallbackDoorAfterEscortClears(doorType, transform.position));
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private IEnumerator CloseFallbackDoorAfterEscortClears(string doorType, Vector3 fallbackStartPosition)
+        {
+            const float clearanceMeters = 1.15f;
+            const float timeoutSeconds = 8f;
+            float deadline = Time.time + timeoutSeconds;
+
+            try
+            {
+                while (Time.time < deadline)
+                {
+                    bool officerClear = Vector3.Distance(transform.position, fallbackStartPosition) >= clearanceMeters;
+                    bool prisonerClear = currentPrisoner == null ||
+                                         Vector3.Distance(currentPrisoner.transform.position, fallbackStartPosition) >= clearanceMeters;
+                    if (officerClear && prisonerClear)
+                    {
+                        break;
+                    }
+
+                    yield return null;
+                }
+
+                var doorController = Core.JailController?.doorController;
+                bool closed = doorType == "BookingInnerDoor"
+                    ? doorController?.CloseBookingInnerDoor() ?? false
+                    : doorType == "PrisonEntryDoor" && (doorController?.ClosePrisonEntryDoor() ?? false);
+                ModLogger.Info($"IntakeOfficer: Fallback {doorType} secured after escort clearance (closed={closed})");
+            }
+            finally
+            {
+                fallbackDoorCloseCoroutine = null;
+            }
+        }
         private void ResetDoorTracking()
         {
             // Clear triggered door operations when starting new intake process
@@ -1861,6 +1904,12 @@ namespace Behind_Bars.Systems.NPCs
             var jailController = Core.JailController;
             if (jailController?.doorController != null)
             {
+                if (IsAssignedCellInActiveRecreation(jailController))
+                {
+                    ModLogger.Info($"IntakeOfficer: Leaving jail cell {assignedCellNumber} open because its tier currently has recreation");
+                    return;
+                }
+
                 bool doorClosed = jailController.doorController.CloseJailCellDoor(assignedCellNumber);
                 if (doorClosed)
                 {
@@ -1875,6 +1924,39 @@ namespace Behind_Bars.Systems.NPCs
             {
                 ModLogger.Error("IntakeOfficer: No door controller available for closing jail cell door");
             }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void CloseAssignedCellDoorIfRecreationIsInactive(JailController jailController)
+        {
+            if (assignedCellNumber < 0)
+            {
+                return;
+            }
+
+            if (IsAssignedCellInActiveRecreation(jailController))
+            {
+                ModLogger.Info($"IntakeOfficer: Preserved recreation access for assigned cell {assignedCellNumber}");
+                return;
+            }
+
+            jailController?.doorController?.CloseJailCellDoor(assignedCellNumber);
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private bool IsAssignedCellInActiveRecreation(JailController jailController)
+        {
+            if (jailController == null || assignedCellNumber < 0)
+            {
+                return false;
+            }
+
+            JailLifecycleManager lifecycle = BBHelpers.GetComponentSafe<JailLifecycleManager>(jailController.gameObject);
+            return lifecycle != null && lifecycle.IsCellInActiveRecreation(assignedCellNumber);
         }
 
         private void OpenJailCellDoor()
@@ -1974,6 +2056,17 @@ namespace Behind_Bars.Systems.NPCs
             retryIntakeCoroutine = null;
         }
 
+        private void StopPendingFallbackDoorClosure()
+        {
+            if (fallbackDoorCloseCoroutine == null)
+            {
+                return;
+            }
+
+            MelonCoroutines.Stop(fallbackDoorCloseCoroutine);
+            fallbackDoorCloseCoroutine = null;
+        }
+
         /// <summary>
         /// Tears down all actions owned by the interrupted intake session. State fields alone
         /// are not enough: Melon coroutines and an active NavMesh path can continue to issue
@@ -1986,6 +2079,7 @@ namespace Behind_Bars.Systems.NPCs
             StopPendingDelayedDoorClose();
             StopPendingDelayedNavigationResume();
             StopPendingRetryIntake();
+            StopPendingFallbackDoorClosure();
             StopContinuousPlayerLooking();
 
             // SecurityDoor owns a separate escort coroutine.  Merely clearing the local

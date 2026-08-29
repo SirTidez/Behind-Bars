@@ -108,19 +108,47 @@ namespace Behind_Bars.Systems
             if (activeBookingProcess != null)
             {
                 ModLogger.Info($"JailManager starting BookingProcess for {player.name} with sentence: {sentence.JailTime}s, Fine: ${sentence.FineAmount}");
-                activeBookingProcess.StartBooking(player, sentence);
-
-                while (Core.IsGameplaySceneActive && activeBookingProcess.IsBookingInProgress())
+                bool bookingFinalized = false;
+                Action<Player> finalizedHandler = finalizedPlayer =>
                 {
-                    yield return new WaitForSeconds(1f);
+                    if (finalizedPlayer == player)
+                    {
+                        bookingFinalized = true;
+                    }
+                };
+
+                BookingLifecycleCoordinator.BookingFinalized += finalizedHandler;
+                try
+                {
+                    activeBookingProcess.StartBooking(player, sentence);
+
+                    // Canonical completion is event driven. The process-state check
+                    // remains only as an interruption guard for scene unloads or a
+                    // cancelled booking; it is not used to detect normal completion.
+                    while (Core.IsGameplaySceneActive && !bookingFinalized && activeBookingProcess.IsBookingInProgress())
+                    {
+                        yield return null;
+                    }
+
+                    if (!Core.IsGameplaySceneActive || player == null)
+                    {
+                        yield break;
+                    }
+
+                    if (bookingFinalized)
+                    {
+                        ModLogger.Info($"JailManager received final booking completion for {player.name}");
+                    }
+                    else
+                    {
+                        ModLogger.Warn($"JailManager booking for {player.name} ended without a finalization signal");
+                    }
+                }
+                finally
+                {
+                    BookingLifecycleCoordinator.BookingFinalized -= finalizedHandler;
                 }
 
-                if (!Core.IsGameplaySceneActive || player == null)
-                {
-                    yield break;
-                }
-
-                ModLogger.Info($"JailManager observed booking completion for {player.name}");
                 yield break;
             }
 

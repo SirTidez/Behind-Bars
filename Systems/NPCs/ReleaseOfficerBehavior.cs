@@ -95,7 +95,7 @@ namespace Behind_Bars.Systems.NPCs
         // Door management
         private HashSet<string> triggeredDoorOperations = new HashSet<string>();
         private bool isSecurityDoorActive = false;
-        private float lastDoorOperationTime = 0f;
+        private Coroutine delayedNavigationResumeCoroutine;
 
         // Destination tracking to prevent duplicate events
         private Dictionary<string, bool> stationDestinationProcessed = new Dictionary<string, bool>();
@@ -710,14 +710,6 @@ namespace Behind_Bars.Systems.NPCs
                 return; // No logging - SecurityDoor is handling movement
             }
 
-            // IMPORTANT: Ignore all destination events during door clearance delay period
-            float timeSinceLastDoorOperation = Time.time - lastDoorOperationTime;
-            if (timeSinceLastDoorOperation < 3.0f) // Within 3 seconds of door operation
-            {
-                ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Ignoring destination reached - within door clearance delay period ({timeSinceLastDoorOperation:F1}s ago)");
-                return;
-            }
-
             ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Destination reached at {destination} during state {currentReleaseState}");
 
             // Handle state transitions based on current state
@@ -884,6 +876,11 @@ namespace Behind_Bars.Systems.NPCs
             {
 #if MONO
                 OnStatusUpdate?.Invoke(currentReleasee, newState);
+#else
+                if (ReleaseManager.TryGetRegisteredInstance(out var releaseManager))
+                {
+                    releaseManager.NotifyOfficerStateUpdate(this, currentReleasee, newState);
+                }
 #endif
                 ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Notified ReleaseManager of status update: {newState}");
             }
@@ -904,7 +901,8 @@ namespace Behind_Bars.Systems.NPCs
             return state == ReleaseState.EscortingToStorage ||
                    state == ReleaseState.WaitingAtStorage ||
                    state == ReleaseState.EscortingToExitScanner ||
-                   state == ReleaseState.WaitingForExitScan;
+                   state == ReleaseState.WaitingForExitScan ||
+                   state == ReleaseState.ProcessingExit;
         }
 
         private void UpdateDialogueForState(ReleaseState state)
@@ -1579,19 +1577,10 @@ namespace Behind_Bars.Systems.NPCs
                 return;
             }
 
-            // Use doorPoint (OUTSIDE position), not doorInstance position
-            Vector3 cellDoorPointPos;
-            if (cell.cellDoor.doorPoint != null)
-            {
-                cellDoorPointPos = cell.cellDoor.doorPoint.position;
-                ModLogger.Info($"ReleaseOfficer {badgeNumber}: Using cell {cellNumber} doorPoint (OUTSIDE position) at {cellDoorPointPos}");
-            }
-            else if (cell.cellDoor.doorInstance != null)
-            {
-                cellDoorPointPos = cell.cellDoor.doorInstance.transform.position;
-                ModLogger.Warn($"ReleaseOfficer {badgeNumber}: doorPoint not available, using doorInstance position at {cellDoorPointPos}");
-            }
-            else
+            // Some authored cell door points are inside the cell. Derive the waiting side
+            // from the cell bounds and physical doorway so release staff never enter a
+            // prisoner's cell just to retrieve them.
+            if (!TryGetExteriorCellDoorPosition(cell, out Vector3 cellDoorPointPos))
             {
                 ModLogger.Error($"ReleaseOfficer {badgeNumber}: No valid door position found for cell {cellNumber}");
                 ChangeReleaseState(ReleaseState.ReturningToPost);
@@ -1606,6 +1595,55 @@ namespace Behind_Bars.Systems.NPCs
             {
                 ModLogger.Error($"ReleaseOfficer {badgeNumber}: MoveTo cell door failed");
             }
+        }
+
+        private bool TryGetExteriorCellDoorPosition(CellDetail cell, out Vector3 exteriorDoorPosition)
+        {
+            exteriorDoorPosition = Vector3.zero;
+            Transform doorway = cell?.cellDoor?.doorHolder
+                ?? cell?.cellDoor?.doorInstance?.transform
+                ?? cell?.cellDoor?.doorPoint;
+            if (doorway == null)
+            {
+                return false;
+            }
+
+            Transform cellBoundsTransform = cell.cellBounds ?? cell.cellTransform;
+            BoxCollider boundsCollider = cellBoundsTransform != null
+                ? cellBoundsTransform.GetComponent<BoxCollider>()
+                : null;
+            if (boundsCollider == null)
+            {
+                exteriorDoorPosition = cell.cellDoor.doorPoint != null
+                    ? cell.cellDoor.doorPoint.position
+                    : doorway.position;
+                ModLogger.Warn($"ReleaseOfficer {badgeNumber}: Cell bounds unavailable; falling back to authored door point at {exteriorDoorPosition}");
+                return true;
+            }
+
+            Vector3 cellCenter = boundsCollider.bounds.center;
+            Vector3 outward = doorway.position - cellCenter;
+            outward.y = 0f;
+            if (outward.sqrMagnitude < 0.01f)
+            {
+                Vector3 authoredPoint = cell.cellDoor.doorPoint != null
+                    ? cell.cellDoor.doorPoint.position
+                    : doorway.position + doorway.forward;
+                outward = authoredPoint - cellCenter;
+                outward.y = 0f;
+            }
+
+            if (outward.sqrMagnitude < 0.01f)
+            {
+                outward = doorway.forward;
+                outward.y = 0f;
+            }
+
+            outward.Normalize();
+            exteriorDoorPosition = doorway.position + (outward * 0.85f);
+            exteriorDoorPosition.y = doorway.position.y;
+            ModLogger.Info($"ReleaseOfficer {badgeNumber}: Derived exterior cell-door wait point at {exteriorDoorPosition} from doorway {doorway.position}");
+            return true;
         }
 
         private void NavigateToPrisonDoor()
@@ -1633,6 +1671,11 @@ namespace Behind_Bars.Systems.NPCs
                 ModLogger.Error($"ReleaseOfficer {badgeNumber}: Could not find storage location");
 #if MONO
                 OnEscortFailed?.Invoke(currentReleasee, "Could not find storage location");
+#else
+                if (currentReleasee != null && ReleaseManager.TryGetRegisteredInstance(out var releaseManager))
+                {
+                    releaseManager.NotifyOfficerEscortFailed(this, currentReleasee, "Could not find storage location");
+                }
 #endif
                 ChangeReleaseState(ReleaseState.ReturningToPost);
                 return;
@@ -2206,7 +2249,10 @@ namespace Behind_Bars.Systems.NPCs
                     if (doorOpened)
                     {
                         ModLogger.Info($"ReleaseOfficer {badgeNumber}: Opened cell {cellNumber} for {player.name}");
-                        yield return new WaitForSeconds(2f); // Wait for door to fully open
+                        // Door animation completion is owned by JailDoor. Do not add a
+                        // simulated delay here: the next state waits for the player to
+                        // leave the cell, and the native door has already reported open.
+                        yield return null;
                     }
                     else
                     {
@@ -2369,9 +2415,6 @@ namespace Behind_Bars.Systems.NPCs
             // SecurityDoor has completed its operation - clear the active flag
             isSecurityDoorActive = false;
 
-            // Record the time of door operation completion to prevent premature destination events
-            lastDoorOperationTime = Time.time;
-
             // If we're in MovingToPrisonDoor state, transition to EscortingToStorage
             if (currentReleaseState == ReleaseState.MovingToPrisonDoor)
             {
@@ -2380,14 +2423,21 @@ namespace Behind_Bars.Systems.NPCs
                 return;
             }
 
-            // Give guard time to move away from door before resuming navigation
-            ModLogger.Info($"ReleaseOfficer {badgeNumber}: Waiting for guard to clear door area before resuming navigation");
-            MelonCoroutines.Start(DelayedNavigationResume());
+            // SecurityDoor reports completion only after the officer has traversed
+            // the threshold and the physical close animation finished. Resume on the
+            // next frame so its event stack can unwind; this is not a gameplay delay.
+            ModLogger.Info($"ReleaseOfficer {badgeNumber}: Door complete; scheduling next-frame navigation resume");
+            StopPendingDelayedNavigationResume();
+            delayedNavigationResumeCoroutine = MelonCoroutines.Start(DelayedNavigationResume()) as Coroutine;
         }
 
         private void HandleSecurityDoorOperationFailed(string doorName)
         {
             ModLogger.Error($"ReleaseOfficer {badgeNumber}: SecurityDoor operation FAILED for {doorName} - attempting fallback");
+
+            // The direct fallback only changes the door. Return NavMesh ownership
+            // to this state machine before resuming the escort route.
+            isSecurityDoorActive = false;
 
             // If SecurityDoor fails, try fallback direct door control
             if (doorName.Contains("Booking") || doorName.Contains("Inner"))
@@ -2401,6 +2451,9 @@ namespace Behind_Bars.Systems.NPCs
                     ChangeReleaseState(ReleaseState.EscortingToStorage);
                 }
             }
+
+            StopPendingDelayedNavigationResume();
+            delayedNavigationResumeCoroutine = MelonCoroutines.Start(DelayedNavigationResume()) as Coroutine;
         }
 
 #if !MONO
@@ -2408,8 +2461,10 @@ namespace Behind_Bars.Systems.NPCs
 #endif
         private IEnumerator DelayedNavigationResume()
         {
-            // Brief delay to clear door threshold without noticeable pause
-            yield return new WaitForSeconds(0.3f);
+            // Allow the completed-door callback to return before the release state
+            // machine owns navigation again. This avoids re-entering the native
+            // agent while SecurityDoor is still unwinding its operation.
+            yield return null;
 
             // Now safely resume navigation to the original target
             if (currentReleaseState == ReleaseState.EscortingToStorage || currentReleaseState == ReleaseState.WaitingAtStorage)
@@ -2424,6 +2479,18 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             ModLogger.Info($"ReleaseOfficer {badgeNumber}: Navigation resumed for state: {currentReleaseState}");
+            delayedNavigationResumeCoroutine = null;
+        }
+
+        private void StopPendingDelayedNavigationResume()
+        {
+            if (delayedNavigationResumeCoroutine == null)
+            {
+                return;
+            }
+
+            MelonCoroutines.Stop(delayedNavigationResumeCoroutine);
+            delayedNavigationResumeCoroutine = null;
         }
 
         private bool FallbackDirectDoorControl(string doorType)
@@ -2588,7 +2655,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             triggeredDoorOperations.Clear();
             isSecurityDoorActive = false;
-            lastDoorOperationTime = 0f;
+            StopPendingDelayedNavigationResume();
             stationDestinationProcessed.Clear();
             playerDoorClearDetected = false;
             ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Door tracking reset for new release");
@@ -2771,6 +2838,11 @@ namespace Behind_Bars.Systems.NPCs
             {
 #if MONO
                 OnEscortCompleted?.Invoke(currentReleasee);
+#else
+                if (ReleaseManager.TryGetRegisteredInstance(out var releaseManager))
+                {
+                    releaseManager.NotifyOfficerEscortCompleted(this, currentReleasee);
+                }
 #endif
                 ModLogger.Info($"ReleaseOfficer {badgeNumber}: Release process completed for {currentReleasee.name}");
             }
@@ -2905,6 +2977,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             // Stop any active continuous looking
             StopContinuousPlayerLooking();
+            StopPendingDelayedNavigationResume();
 
             // Ensure any pending ready-to-leave choice listener is detached before teardown.
             DialogueChoiceListener.Unregister(dialogueHandler);

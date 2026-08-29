@@ -17,9 +17,9 @@ using ScheduleOne.NPCs;
 namespace Behind_Bars.Systems.NPCs
 {
     /// <summary>
-    /// Provides temporary jail-wide wandering for inmates until the daily
-    /// schedule system supplies explicit activity destinations. An assigned
-    /// cell remains the inmate's home/spawn reference, not a movement cage.
+    /// Drives inmate movement.  The jail lifecycle selects either the inmate's
+    /// assigned tier for recreation or their assigned cell for count/bedtime;
+    /// temporary wandering remains only as a startup-safe fallback.
     /// </summary>
     public class InmateBehavior : MonoBehaviour
     {
@@ -47,6 +47,17 @@ namespace Behind_Bars.Systems.NPCs
         private float nextMoveTime = 0f;
         private Vector3 currentDestination;
         private float nextNavMeshDiagnosticTime = 0f;
+
+        private enum ScheduledActivity
+        {
+            TemporaryWander,
+            Recreation,
+            ReturningToCell,
+            Confined
+        }
+
+        private ScheduledActivity scheduledActivity = ScheduledActivity.TemporaryWander;
+        private readonly List<Transform> scheduledRecreationAnchors = new List<Transform>();
 
         // Animation variations
         private float animationVariation = 0f;
@@ -196,18 +207,52 @@ namespace Behind_Bars.Systems.NPCs
                     continue;
                 }
 
-                // Check if it's time to move
-                if (Time.time >= nextMoveTime && !isMoving)
+                if (scheduledActivity == ScheduledActivity.ReturningToCell)
                 {
-                    if (TryGetTemporaryJailWanderDestination(out Vector3 destination) &&
-                        TrySetWanderDestination(destination))
+                    if (!isMoving && TryGetCellReturnDestination(out Vector3 returnDestination) &&
+                        TrySetWanderDestination(returnDestination))
+                    {
+                        isMoving = true;
+                        currentDestination = returnDestination;
+                    }
+                    else if (!isMoving)
+                    {
+                        LogNavMeshDiagnostic("could not find a complete path back to the assigned cell");
+                        nextMoveTime = Time.time + 2f;
+                    }
+                }
+                else if (scheduledActivity == ScheduledActivity.Confined)
+                {
+                    if (isMoving)
+                    {
+                        navAgent.ResetPath();
+                        isMoving = false;
+                    }
+                }
+                // Check if it's time to move
+                else if (Time.time >= nextMoveTime && !isMoving)
+                {
+                    Vector3 destination;
+                    bool foundDestination;
+                    if (scheduledActivity == ScheduledActivity.Recreation)
+                    {
+                        foundDestination = TryGetScheduledRecreationDestination(out destination);
+                    }
+                    else
+                    {
+                        foundDestination = TryGetTemporaryJailWanderDestination(out destination);
+                    }
+
+                    if (foundDestination && TrySetWanderDestination(destination))
                     {
                         isMoving = true;
                         currentDestination = destination;
                     }
                     else
                     {
-                        LogNavMeshDiagnostic("could not find a complete path to a temporary jail wander destination");
+                        LogNavMeshDiagnostic(scheduledActivity == ScheduledActivity.Recreation
+                            ? "could not find a complete path to a scheduled recreation destination"
+                            : "could not find a complete path to a temporary jail wander destination");
                         nextMoveTime = Time.time + 2f;
                     }
                 }
@@ -279,6 +324,84 @@ namespace Behind_Bars.Systems.NPCs
                 }
 
                 if (Vector3.Distance(navAgent.nextPosition, hit.position) < minMoveDistance ||
+                    !HasCompletePathTo(hit.position))
+                {
+                    continue;
+                }
+
+                destination = hit.position;
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool TryGetScheduledRecreationDestination(out Vector3 destination)
+        {
+            destination = Vector3.zero;
+            if (scheduledRecreationAnchors.Count == 0 || navAgent == null || !navAgent.isOnNavMesh)
+            {
+                return false;
+            }
+
+            const int attempts = 12;
+            for (int attempt = 0; attempt < attempts; attempt++)
+            {
+                Transform anchor = scheduledRecreationAnchors[UnityEngine.Random.Range(0, scheduledRecreationAnchors.Count)];
+                if (anchor == null)
+                {
+                    continue;
+                }
+
+                Vector2 offset = UnityEngine.Random.insideUnitCircle * UnityEngine.Random.Range(0.35f, 2.0f);
+                Vector3 requestedPoint = anchor.position + new Vector3(offset.x, 0f, offset.y);
+                if (!NavMesh.SamplePosition(requestedPoint, out NavMeshHit hit, 2.5f, NavMesh.AllAreas) ||
+                    Vector3.Distance(navAgent.nextPosition, hit.position) < minMoveDistance ||
+                    !HasCompletePathTo(hit.position))
+                {
+                    continue;
+                }
+
+                destination = hit.position;
+                return true;
+            }
+
+            return false;
+        }
+
+        private bool TryGetCellReturnDestination(out Vector3 destination)
+        {
+            destination = Vector3.zero;
+            var cell = Core.JailController?.GetCellByIndex(assignedCellNumber);
+            if (cell == null)
+            {
+                return false;
+            }
+
+            var candidates = new List<Vector3>();
+            if (cell.spawnPoints != null)
+            {
+                for (int index = 0; index < cell.spawnPoints.Count; index++)
+                {
+                    if (cell.spawnPoints[index] != null)
+                    {
+                        candidates.Add(cell.spawnPoints[index].position);
+                    }
+                }
+            }
+
+            if (cell.cellBounds != null)
+            {
+                candidates.Add(cell.cellBounds.position);
+            }
+            if (cell.cellTransform != null)
+            {
+                candidates.Add(cell.cellTransform.position);
+            }
+
+            for (int index = 0; index < candidates.Count; index++)
+            {
+                if (!NavMesh.SamplePosition(candidates[index], out NavMeshHit hit, 4f, NavMesh.AllAreas) ||
                     !HasCompletePathTo(hit.position))
                 {
                     continue;
@@ -387,6 +510,13 @@ namespace Behind_Bars.Systems.NPCs
         void OnReachedDestination()
         {
             isMoving = false;
+
+            if (scheduledActivity == ScheduledActivity.ReturningToCell)
+            {
+                scheduledActivity = ScheduledActivity.Confined;
+                nextMoveTime = float.PositiveInfinity;
+                return;
+            }
 
             // Perform random idle action
             PerformIdleAction();
@@ -570,6 +700,61 @@ namespace Behind_Bars.Systems.NPCs
             {
                 navAgent.speed = moveSpeed;
             }
+        }
+
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
+        public void BeginScheduledRecreation(List<Transform> recreationAnchors)
+        {
+            scheduledRecreationAnchors.Clear();
+            if (recreationAnchors != null)
+            {
+                for (int index = 0; index < recreationAnchors.Count; index++)
+                {
+                    if (recreationAnchors[index] != null)
+                    {
+                        scheduledRecreationAnchors.Add(recreationAnchors[index]);
+                    }
+                }
+            }
+
+            scheduledActivity = ScheduledActivity.Recreation;
+            if (navAgent != null && navAgent.enabled && navAgent.isOnNavMesh)
+            {
+                navAgent.ResetPath();
+            }
+            isMoving = false;
+            nextMoveTime = Time.time + UnityEngine.Random.Range(0.2f, 1.5f);
+        }
+
+        public void ReturnToAssignedCell()
+        {
+            scheduledActivity = ScheduledActivity.ReturningToCell;
+            scheduledRecreationAnchors.Clear();
+            if (navAgent != null && navAgent.enabled && navAgent.isOnNavMesh)
+            {
+                navAgent.ResetPath();
+            }
+            isMoving = false;
+            nextMoveTime = Time.time;
+        }
+
+        public int GetAssignedCellNumber()
+        {
+            return assignedCellNumber;
+        }
+
+        public bool IsConfinedToAssignedCell()
+        {
+            if (scheduledActivity != ScheduledActivity.Confined)
+            {
+                return false;
+            }
+
+            var cell = Core.JailController?.GetCellByIndex(assignedCellNumber);
+            Transform home = cell?.cellBounds ?? cell?.cellTransform;
+            return home != null && Vector3.Distance(transform.position, home.position) <= 3.5f;
         }
     }
 }

@@ -165,6 +165,7 @@ namespace Behind_Bars.Systems.Jail
             if (AssignOccupantToCell(cellNumber, npcId, $"NPC: {npcName}"))
             {
                 npcCellAssignments[npcId] = cellNumber;
+                Core.JailController?.cellManager?.ClaimBedForNpc(cellNumber, npcName);
                 ModLogger.Debug($"✓ Assigned NPC {npcName} to cell {cellNumber}");
                 return cellNumber;
             }
@@ -283,15 +284,17 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Find an available cell for NPCs (can use cells 0-35, preferring empty cells)
+        /// Find an available cell for NPCs. Reserve the player-facing lower
+        /// block (0-11) unless the dedicated inmate block is completely full.
         /// </summary>
         private int FindAvailableNPCCell()
         {
             var availableCells = new List<int>();
             var emptyCells = new List<int>();
 
-            // Check all available cells (0-35)
-            for (int i = 0; i < totalCells; i++)
+            // Prefer dedicated NPC cells (12+) so every routine inmate owns
+            // a private, claimed bunk without consuming player accommodation.
+            for (int i = MAX_PLAYER_CELLS; i < totalCells; i++)
             {
                 if (cellOccupancy.ContainsKey(i) && cellOccupancy[i].HasSpace())
                 {
@@ -301,6 +304,24 @@ namespace Behind_Bars.Systems.Jail
                     if (cellOccupancy[i].IsEmpty())
                     {
                         emptyCells.Add(i);
+                    }
+                }
+            }
+
+            // A tiny or legacy jail can expose fewer dedicated NPC cells.
+            // Retain the old all-cell fallback only after the preferred range
+            // has genuinely been exhausted.
+            if (availableCells.Count == 0)
+            {
+                for (int i = 0; i < Math.Min(MAX_PLAYER_CELLS, totalCells); i++)
+                {
+                    if (cellOccupancy.ContainsKey(i) && cellOccupancy[i].HasSpace())
+                    {
+                        availableCells.Add(i);
+                        if (cellOccupancy[i].IsEmpty())
+                        {
+                            emptyCells.Add(i);
+                        }
                     }
                 }
             }

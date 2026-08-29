@@ -522,6 +522,11 @@ namespace Behind_Bars
         private static MelonPreferences_Entry<bool>? _enableDeveloperShortcutsEntry;
         public static bool EnableDeveloperShortcuts => _enableDeveloperShortcutsEntry?.Value ?? false;
 
+        // Retains native-event correlation metadata long enough for an arrest that occurs
+        // well after the crime, while ensuring stale incidents cannot bleed into a later run.
+        private static MelonPreferences_Entry<float>? _crimeIncidentRetentionSecondsEntry;
+        public static float CrimeIncidentRetentionSeconds => _crimeIncidentRetentionSecondsEntry?.Value ?? 900f;
+
 #if !MONO
         /// <summary>
         /// Registers all IL2CPP types with ClassInjector before any scene code can spawn them.
@@ -578,6 +583,7 @@ namespace Behind_Bars
             TryRegister<JailDoorController>("JailDoorController");
             TryRegister<JailPatrolManager>("JailPatrolManager");
             TryRegister<GuardAssaultLockdownManager>("GuardAssaultLockdownManager");
+            TryRegister<JailLifecycleManager>("JailLifecycleManager");
 
             // Prison NPC System Components
             TryRegister<NPCUpdateManager>("NPCUpdateManager");
@@ -635,6 +641,7 @@ namespace Behind_Bars
             TryRegister<JailInventoryPickupStation>("JailInventoryPickupStation");
             TryRegister<InventoryPickupStation>("InventoryPickupStation");
             TryRegister<ExitScannerStation>("ExitScannerStation");
+            TryRegister<ExitReleaseTriggerRelay>("ExitReleaseTriggerRelay");
             TryRegister<SimpleExitDoor>("SimpleExitDoor");
             // StorageEntity derives from FishNet.NetworkBehaviour. The current IL2CPP bridge cannot
             // inject a managed subclass because its inherited RPC surface includes NetworkConnection.
@@ -708,6 +715,13 @@ namespace Behind_Bars
                 "Enable developer jail shortcuts",
                 "Enables destructive Alt-key jail and door test shortcuts. Keep disabled during normal gameplay."
             );
+
+            _crimeIncidentRetentionSecondsEntry = _prefsCategory.CreateEntry<float>(
+                "CrimeIncidentRetentionSeconds",
+                900f,
+                "Crime incident retention (real seconds)",
+                "How long Behind Bars retains native crime-to-enhancement correlations before arrest. Increase this if police take longer to arrest the player."
+            );
             
             // Initialize UpdateChecker with preferences
             Utils.UpdateChecker.InitializePreferences(
@@ -718,6 +732,7 @@ namespace Behind_Bars
             ModLogger.Debug("Update checking preferences initialized");
             ModLogger.Info($"Debug logging: {(EnableDebugLogging ? "ENABLED" : "DISABLED")} (default: disabled)");
             ModLogger.Info($"Developer jail shortcuts: {(EnableDeveloperShortcuts ? "ENABLED" : "DISABLED")} (default: disabled)");
+            ModLogger.Info($"Crime incident retention: {CrimeIncidentRetentionSeconds:F0} real seconds");
 
             // Initialize core systems
             HarmonyPatches.Initialize(this);
@@ -1341,6 +1356,12 @@ namespace Behind_Bars
             var jail = Object.Instantiate(jailPrefab, new Vector3(66.5362f, 8.5001f, -220.6056f), Quaternion.identity);
             jail.name = "[Prefab] JailHouseBlues";
 
+            // The clean authoring project deliberately does not embed the
+            // full Schedule I shader library. Rebind the material references
+            // to the game's loaded URP shaders immediately after instantiation
+            // so editor-local shader variants can never render the jail magenta.
+            Utils.JailMaterialCompatibility.RepairForScheduleOne(jail);
+
             ModLogger.Debug($"Jail spawned successfully at {jail.transform.position}");
 
             // Attach NavMesh data from asset bundle (asset bundles don't preserve NavMesh data)
@@ -1436,6 +1457,9 @@ namespace Behind_Bars
                 // Add CellAssignmentManager for cell tracking
                 var cellManager = BBHelpers.AddComponentSafe<CellAssignmentManager>(JailController.gameObject);
                 ModLogger.Debug("✓ CellAssignmentManager added to JailController");
+
+                var lifecycleManager = BBHelpers.AddComponentSafe<JailLifecycleManager>(JailController.gameObject);
+                ModLogger.Debug("✓ JailLifecycleManager added to JailController");
             }
             else
             {
@@ -2083,6 +2107,13 @@ namespace Behind_Bars
         {
             try
             {
+                // The property locker is a native uGUI modal.  Keep the game's first-person
+                // camera from reclaiming the mouse while it owns the interaction.
+                if (PropertyLockerUI.IsPresentationOpen)
+                {
+                    PropertyLockerUI.MaintainOpenPresentation();
+                }
+
                 // Home key - Teleport to jail for testing
                 if (Input.GetKeyDown(KeyCode.Home))
                 {
@@ -2412,6 +2443,19 @@ namespace Behind_Bars
             catch (Exception e)
             {
                 ModLogger.Error($"Error handling scene change: {e.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Schedule I reclaims first-person input after normal update work. Reassert the
+        /// locker modal after that pass so its cursor is the final UI owner for the frame.
+        /// The panel's native exit listener consumes the first menu/back action.
+        /// </summary>
+        public override void OnLateUpdate()
+        {
+            if (PropertyLockerUI.IsPresentationOpen)
+            {
+                PropertyLockerUI.MaintainOpenPresentation();
             }
         }
 

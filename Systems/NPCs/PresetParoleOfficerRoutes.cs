@@ -12,9 +12,13 @@ namespace Behind_Bars.Systems.NPCs
 {
     public static class PresetParoleOfficerRoutes
     {
-        // Authored scene marker: "Next to the courthouse" in Main.unity.  Keep this
-        // independent of S1API so the supervising officer owns a stable native-map post.
-        private static readonly Vector3 SupervisingOfficerStation = new Vector3(71.705f, 1.065f, 24.632f);
+        // Main.unity's Courthouse access point resolves to approximately
+        // (78.50, 17.69). Its exterior/public approach is south of that doorway.
+        // Keep the supervising officer on the front apron rather than either
+        // side/rear bus-stop marker, so the check-in location is visibly in front
+        // of the courthouse as the player walks past it from the police station.
+        // This remains independent of S1API and is placed on the native-map surface.
+        private static readonly Vector3 SupervisingOfficerStation = new Vector3(78.500f, 1.065f, 14.200f);
 
         private static Dictionary<string, PatrolRoute> AllRoutes = new Dictionary<string, PatrolRoute>();
         public static PatrolRoute PoliceStation;

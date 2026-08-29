@@ -693,6 +693,14 @@ namespace Behind_Bars.Systems.NPCs
                 return false;
             }
 
+            // Do not release the player into the world while a pre-dispatched supervisor
+            // is still walking from the courthouse. The release handoff retries this once
+            // the officer has actually reached the police-station door.
+            if (hasPreparedReleaseMeeting && currentState != ParoleIntakeState.AwaitingReleaseSummary)
+            {
+                return false;
+            }
+
             releaseSummaryAcknowledged = true;
             hasPreparedReleaseMeeting = false;
             if (currentState == ParoleIntakeState.AwaitingReleaseSummary)
@@ -724,23 +732,36 @@ namespace Behind_Bars.Systems.NPCs
                 return;
             }
 
-            ModLogger.Info($"ParoleIntakeStateMachine: Completed intake for {currentParolee.name}");
+            Player completedParolee = currentParolee;
+            ModLogger.Info($"ParoleIntakeStateMachine: Completed intake for {completedParolee.name}");
 
             // Record interaction
-            var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(currentParolee);
+            var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(completedParolee);
             if (rapSheet?.CurrentParoleRecord != null)
             {
                 rapSheet.CurrentParoleRecord.RecordInteraction();
             }
 
 #if MONO
-            OnIntakeCompleted?.Invoke(currentParolee);
+            OnIntakeCompleted?.Invoke(completedParolee);
 #endif
             currentParolee = null;
             releaseSummaryAcknowledged = false;
             hasPreparedReleaseMeeting = false;
             RestorePlayerAfterExplanation();
             paroleOfficer?.CompleteIntakeEscort();
+
+            // The supervising officer's normal post is the courthouse interior, not the
+            // exterior report point.  Finish this state machine before handing the native
+            // home action back to the roster manager; otherwise IsProcessingIntake blocks
+            // the building transition and leaves the officer standing outside indefinitely.
+            if (paroleOfficer != null &&
+                paroleOfficer.GetAssignment() == ParoleOfficerBehavior.ParoleOfficerAssignment.PoliceStationSupervisor)
+            {
+                ChangeIntakeState(ParoleIntakeState.Idle);
+                Core.ResolveDynamicParoleOfficerManager()?.CompleteSupervisingOfficerIntake(completedParolee, paroleOfficer);
+                return;
+            }
 
             // Return to post
             ChangeIntakeState(ParoleIntakeState.ReturningToPost);

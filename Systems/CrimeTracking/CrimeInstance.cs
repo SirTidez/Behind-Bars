@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using Behind_Bars.Utils.Saveable;
 using Behind_Bars.Systems;
@@ -43,6 +44,17 @@ namespace Behind_Bars.Systems.CrimeTracking
 
         [SaveableField("description")]
         private string _description;
+
+        // Assigned at the native AddCrime seam (or when Behind Bars invents a charge).
+        // This survives save/load and is the only identifier used for arrest deduplication.
+        [SaveableField("incidentId")]
+        private string _incidentId = "";
+
+        [SaveableField("source")]
+        private string _source = "";
+
+        [SaveableField("enhancements")]
+        private List<CrimeEnhancement> _enhancements = new List<CrimeEnhancement>();
 
         // Custody-only violations remain on the prisoner's record, but must never
         // contribute to the street wanted meter or trigger a new police pursuit.
@@ -105,6 +117,54 @@ namespace Behind_Bars.Systems.CrimeTracking
         }
 
         /// <summary>
+        /// The native class name captured at the crime event seam.  Saved rap-sheet
+        /// entries do not retain the native object, so this value must remain the
+        /// calculator authority after a save/load cycle.
+        /// </summary>
+        public string StoredCrimeTypeName
+        {
+            get => _crimeTypeName ?? "";
+            set => _crimeTypeName = value ?? "";
+        }
+
+        public string IncidentId
+        {
+            get => _incidentId ?? "";
+            set => _incidentId = value ?? "";
+        }
+
+        /// <summary>
+        /// Native, BehindBars, or LegacyMigrated. This is intentionally a string so
+        /// older saves remain compatible without an enum-deserialization dependency.
+        /// </summary>
+        public string Source
+        {
+            get => _source ?? "";
+            set => _source = value ?? "";
+        }
+
+        public List<CrimeEnhancement> Enhancements
+        {
+            get => _enhancements ??= new List<CrimeEnhancement>();
+            set => _enhancements = value ?? new List<CrimeEnhancement>();
+        }
+
+        public bool HasEnhancement(CrimeEnhancementKind kind)
+        {
+            return Enhancements.Exists(enhancement => enhancement != null && enhancement.Kind == kind);
+        }
+
+        public void AddEnhancement(CrimeEnhancement enhancement)
+        {
+            if (enhancement == null || enhancement.Kind == CrimeEnhancementKind.None || HasEnhancement(enhancement.Kind))
+            {
+                return;
+            }
+
+            Enhancements.Add(enhancement);
+        }
+
+        /// <summary>
         /// Whether this record entry contributes to the on-street wanted display.
         /// In-custody discipline charges are intentionally recorded without creating
         /// a new wanted state for a prisoner who is already secured in the jail.
@@ -121,20 +181,27 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// </summary>
         public string GetCrimeName()
         {
+            string baseName;
             // Prefer Description as it's the user-friendly display name
             if (!string.IsNullOrEmpty(Description))
             {
-                return Description;
+                baseName = Description;
             }
-            
-            // Fall back to Crime.CrimeName if Description is empty
-            if (Crime != null && !string.IsNullOrEmpty(Crime.CrimeName))
+            else if (Crime != null && !string.IsNullOrEmpty(Crime.CrimeName))
             {
-                return Crime.CrimeName;
+                baseName = Crime.CrimeName;
             }
-            
-            // Last resort fallback
-            return "Unknown Crime";
+            else
+            {
+                baseName = "Unknown Crime";
+            }
+
+            var labels = Enhancements
+                .Where(enhancement => enhancement != null)
+                .Select(enhancement => enhancement.GetDisplayLabel())
+                .Where(label => !string.IsNullOrWhiteSpace(label))
+                .ToList();
+            return labels.Count == 0 ? baseName : $"{baseName} — {string.Join(", ", labels)}";
         }
         
         /// <summary>
@@ -142,9 +209,14 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// </summary>
         public string GetCrimeTypeName()
         {
-            if (Crime != null)
+            if (Crime != null && !string.Equals(Crime.GetType().Name, "Crime", StringComparison.Ordinal))
             {
                 return Crime.GetType().Name;
+            }
+
+            if (!string.IsNullOrWhiteSpace(_crimeTypeName) && !string.Equals(_crimeTypeName, "Crime", StringComparison.Ordinal))
+            {
+                return _crimeTypeName;
             }
             
             // If no Crime object, try to infer from Description
@@ -155,6 +227,7 @@ namespace Behind_Bars.Systems.CrimeTracking
                 {
                     "Murder" or "Murder of a Police Officer" or "Murder of an Employee" => "Murder",
                     "Involuntary Manslaughter" => "Manslaughter",
+                    "Assault" => "Assault",
                     "Assault on Civilian" => "AssaultOnCivilian",
                     "Assault on an LEO" => "AssaultOnOfficer",
                     "Witness Intimidation" => "WitnessIntimidation",
@@ -174,6 +247,7 @@ namespace Behind_Bars.Systems.CrimeTracking
         {
             _witnessIds = new List<string>();
             _description = "";
+            _enhancements = new List<CrimeEnhancement>();
         }
         
         public CrimeInstance(Crime crime, Vector3 location, float severity = 1.0f)
@@ -184,6 +258,7 @@ namespace Behind_Bars.Systems.CrimeTracking
             _location = location;
             _severity = severity;
             _witnessIds = new List<string>();
+            _enhancements = new List<CrimeEnhancement>();
             // Set Description to the user-friendly CrimeName from the Crime object
             _description = crime != null ? crime.CrimeName : "";
         }

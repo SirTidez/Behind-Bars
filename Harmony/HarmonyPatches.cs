@@ -53,7 +53,9 @@ namespace Behind_Bars.Harmony
         private static Dictionary<string, float> _assaultCooldown = new Dictionary<string, float>();
         private const float ASSAULT_COOLDOWN_SECONDS = 3f; // Prevent duplicate processing within 3 seconds
         private const float PENDING_CIVILIAN_ASSAULT_SECONDS = 1.5f;
+        private const float PENDING_NATIVE_OFFICER_ASSAULT_SECONDS = 1.5f;
         private static PendingCivilianAssault? _pendingCivilianAssault;
+        private static PendingOfficerAssault? _pendingOfficerAssault;
         private static readonly HashSet<string> _persistedArrestCrimeEventKeys = new HashSet<string>();
         private static int _nativeArrestCaptureSequence;
 
@@ -84,6 +86,18 @@ namespace Behind_Bars.Harmony
             public string VictimId = string.Empty;
             public float ExpiresAt;
             public bool NativeAddCrimeSuppressed;
+        }
+
+        /// <summary>
+        /// Correlates an exact native police-health damage callback with the generic
+        /// native Assault that follows. This context becomes an enhancement only; it
+        /// never creates or replaces a native crime.
+        /// </summary>
+        private sealed class PendingOfficerAssault
+        {
+            public string PlayerKey = string.Empty;
+            public NPC Officer = null!;
+            public float ExpiresAt;
         }
         
         public static void Initialize(Core core)
@@ -199,6 +213,7 @@ namespace Behind_Bars.Harmony
             CancelNativeLoadingScreenHold();
             _assaultCooldown.Clear();
             _pendingCivilianAssault = null;
+            _pendingOfficerAssault = null;
             _persistedArrestCrimeEventKeys.Clear();
             _nativeArrestCaptureSequence = 0;
             _crimeDetectionSystem?.ResetSceneRuntimeState();
@@ -538,7 +553,10 @@ namespace Behind_Bars.Harmony
             try
             {
                 ModLogger.Info($"[RAP SHEET] Logging arrest to rap sheet for {__instance.name}");
-                LogCrimesToRapSheet(__instance);
+                // Capture the authoritative native charges at the server arrest seam,
+                // before any custody code clears CrimeData. The incident ledger will
+                // resolve this snapshot back to the exact AddCrime occurrence.
+                LogCrimesToRapSheet(__instance, CaptureNativeCrimesForArrest(__instance));
             }
             catch (Exception ex)
             {
@@ -614,35 +632,34 @@ namespace Behind_Bars.Harmony
                 var cds = CrimeDetectionSystem.Instance;
                 if (cds != null && crime != null)
                 {
-                    // The base game submits generic Assault after a street officer is hit.
-                    // Convert that authoritative native-crime event here instead of relying
-                    // on the NPC health callback, which does not fire for every police hit
-                    // path on current IL2CPP builds.
-                    if (TryConvertNativeStreetOfficerAssault(__instance, crime, quantity, out var officer))
-                    {
-                        cds.ProcessOfficerAssault(
-                            officer,
-                            __instance.Player,
-                            applyWantedLevel: true,
-                            persistToRapSheet: false,
-                            mirrorNativeCrime: false);
-                        ModLogger.Info($"[Crime Tracking] Converted native street Assault to Assault on an LEO for {__instance.Player.name}");
-                        return;
-                    }
-
                     if (!cds.ShouldMirrorNativeCrime(__instance.Player, crime))
                     {
                         ModLogger.Debug($"[Crime Tracking] Skipping mirrored native crime {crime.CrimeName} (mod-managed event already recorded)");
                         return;
                     }
 
-                    var crimeInstance = new CrimeInstance(
-                        crime: crime,
-                        location: __instance.Player.transform.position,
-                        severity: CalculateCrimeSeverity(crime)
-                        );
-                    cds.CrimeRecord.AddCrime(crimeInstance);
-                    ModLogger.Debug($"[Crime Tracking] Added {crime.CrimeName} to players record");
+                    CrimeEnhancement enhancement = null;
+                    if (TryDetectNativeStreetOfficerAssault(__instance, crime, quantity, out var officer))
+                    {
+                        enhancement = new CrimeEnhancement(
+                            CrimeEnhancementKind.LawEnforcementVictim,
+                            officer?.ID ?? string.Empty);
+                    }
+
+                    int occurrences = Math.Max(1, quantity);
+                    for (int occurrence = 0; occurrence < occurrences; occurrence++)
+                    {
+                        var crimeInstance = cds.RecordNativeCrimeEvent(
+                            __instance.Player,
+                            crime,
+                            __instance.Player.transform.position,
+                            CalculateCrimeSeverity(crime),
+                            enhancement);
+                        if (crimeInstance != null)
+                        {
+                            ModLogger.Info($"[Charge Pipeline] native incident={crimeInstance.IncidentId} base={crime.CrimeName} enhancement={enhancement?.Kind ?? CrimeEnhancementKind.None}");
+                        }
+                    }
                 }
             }
             catch (Exception ex)
@@ -652,11 +669,11 @@ namespace Behind_Bars.Harmony
         }
 
         /// <summary>
-        /// Reclassifies the generic native Assault emitted for a player striking a nearby
-        /// police officer.  This runs after the game's AddCrime call, so it preserves the
-        /// native wanted/pursuit behavior while replacing only the record label.
+        /// Detects contextual officer involvement for the native Assault event without
+        /// replacing or mutating the game's crime data. The enhancement is attached to
+        /// the exact local ledger incident created by the AddCrime listener.
         /// </summary>
-        private static bool TryConvertNativeStreetOfficerAssault(
+        private static bool TryDetectNativeStreetOfficerAssault(
             PlayerCrimeData crimeData,
             Crime crime,
             int quantity,
@@ -669,6 +686,12 @@ namespace Behind_Bars.Harmony
                 Core.ResolveJailTimeTracker().IsInJail(player))
             {
                 return false;
+            }
+
+            if (TryConsumePendingOfficerAssault(crimeData, crime, out officer))
+            {
+                ModLogger.Debug($"[Charge Pipeline] Matched native Assault to exact police damage callback for {officer?.name}");
+                return true;
             }
 
             const float officerAssaultRadius = 5f;
@@ -689,20 +712,56 @@ namespace Behind_Bars.Harmony
                 }
             }
 
-            if (closestOfficer == null || crimeData.Crimes == null)
+            if (closestOfficer == null)
             {
                 return false;
             }
 
-            int assaultQuantity = Math.Max(1, quantity);
-            if (crimeData.Crimes.ContainsKey(crime))
+            officer = closestOfficer;
+            ModLogger.Warn($"[Charge Pipeline] Native Assault had no matching police damage callback; using nearby officer fallback for {officer.name}");
+            return true;
+        }
+
+        private static void TrackPendingOfficerAssault(NPC officer, Player player)
+        {
+            if (officer == null || player == null)
             {
-                assaultQuantity = Math.Max(assaultQuantity, crimeData.Crimes[crime]);
-                crimeData.Crimes.Remove(crime);
+                return;
             }
 
-            crimeData.Crimes.Add(new AssaultOnOfficer(), assaultQuantity);
-            officer = closestOfficer;
+            _pendingOfficerAssault = new PendingOfficerAssault
+            {
+                PlayerKey = GetPlayerCrimeKey(player),
+                Officer = officer,
+                ExpiresAt = Time.time + PENDING_NATIVE_OFFICER_ASSAULT_SECONDS
+            };
+        }
+
+        private static bool TryConsumePendingOfficerAssault(PlayerCrimeData crimeData, Crime crime, out NPC officer)
+        {
+            officer = null;
+            var pending = _pendingOfficerAssault;
+            var player = crimeData?.Player;
+            if (pending == null || player == null || crime == null ||
+                Time.time > pending.ExpiresAt ||
+                !string.Equals(pending.PlayerKey, GetPlayerCrimeKey(player), StringComparison.Ordinal) ||
+                !string.Equals(crime.CrimeName, "Assault", StringComparison.OrdinalIgnoreCase))
+            {
+                if (pending != null && Time.time > pending.ExpiresAt)
+                {
+                    _pendingOfficerAssault = null;
+                }
+
+                return false;
+            }
+
+            _pendingOfficerAssault = null;
+            if (pending.Officer == null || !pending.Officer.gameObject.activeInHierarchy)
+            {
+                return false;
+            }
+
+            officer = pending.Officer;
             return true;
         }
 
@@ -769,7 +828,71 @@ namespace Behind_Bars.Harmony
 
             return !string.IsNullOrEmpty(player.PlayerCode) ? player.PlayerCode : player.name ?? string.Empty;
         }
+
+        /// <summary>
+        /// IL2CPP may expose separate managed wrappers for the same native Player.  Compare
+        /// stable native/player identity as well as the wrapper so the local arrest capture
+        /// cannot be skipped merely because the callback arrived through a different wrapper.
+        /// </summary>
+        private static bool IsLocalArrestTarget(Player candidate)
+        {
+            Player localPlayer = Player.Local;
+            if (candidate == null || localPlayer == null)
+            {
+                return false;
+            }
+
+            if (candidate == localPlayer || candidate.transform == localPlayer.transform)
+            {
+                return true;
+            }
+
+            return !string.IsNullOrEmpty(candidate.PlayerCode) &&
+                   string.Equals(candidate.PlayerCode, localPlayer.PlayerCode, StringComparison.Ordinal);
+        }
+
+        private static void CapturePreArrestProperty(Player arrestTarget, string callbackName)
+        {
+            if (_core == null || !IsLocalArrestTarget(arrestTarget))
+            {
+                return;
+            }
+
+            try
+            {
+                string snapshotId = Core.ResolvePersistentPlayerData()?.CreateInventorySnapshot(Player.Local);
+                ModLogger.Info($"[ARREST PROPERTY] {callbackName} captured local property before native mutation: {snapshotId}");
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"[ARREST PROPERTY] {callbackName} pre-arrest property capture failed: {ex.Message}");
+            }
+        }
         
+        /// <summary>
+        /// Capture property before Schedule I's arrest wrapper is allowed to mutate the
+        /// live inventory.  The later server/RPC callbacks remain responsible for
+        /// contraband processing and physical lock-down, but never replace this snapshot.
+        /// </summary>
+        [HarmonyPatch(typeof(Player), "Arrest_Server")]
+        [HarmonyPrefix]
+        public static void Player_ArrestServer_PreCaptureInventory(Player __instance)
+        {
+            CapturePreArrestProperty(__instance, "Arrest_Server");
+        }
+
+        /// <summary>
+        /// Client arrest callbacks can be the first local seam in an IL2CPP single-player
+        /// session. Capture here too; CreateInventorySnapshot is idempotent for an active
+        /// arrest snapshot and will not overwrite an earlier non-empty capture.
+        /// </summary>
+        [HarmonyPatch(typeof(Player), "Arrest_Client")]
+        [HarmonyPrefix]
+        public static void Player_ArrestClient_PreCaptureInventory(Player __instance)
+        {
+            CapturePreArrestProperty(__instance, "Arrest_Client");
+        }
+
         /// <summary>
         /// SERVER-SIDE ARREST WRAPPER PATCH: Intercepts Arrest_Server() method
         /// This is the actual method the game calls, which then triggers the RPC handler
@@ -786,7 +909,7 @@ namespace Behind_Bars.Harmony
 
             // Only handle local player arrests for now
             // TODO: For multiplayer support, also check __instance.IsOwner instead of just Player.Local
-            if (__instance != Player.Local)
+            if (!IsLocalArrestTarget(__instance))
                 return;
                 
             ModLogger.Info($"[ARREST SERVER] Player {__instance.name} arrested - processing authoritative game logic");
@@ -863,6 +986,20 @@ namespace Behind_Bars.Harmony
                     ModLogger.Error("[CONTRABAND] Crime detection system is null during arrest!");
                 }
 
+                // The snapshot records property for release, but locking the inventory alone
+                // leaves skateboards/equippables physically present through booking. Secure
+                // them only after the contraband pass has inspected the live slots.
+                try
+                {
+                    var playerInventory = __instance.GetComponent<PlayerInventory>() ?? PlayerInventory.Instance;
+                    int secured = InventoryProcessor.SecureArrestProperty(playerInventory);
+                    ModLogger.Info($"[ARREST SERVER] Secured {secured} personal property stack(s) after inventory capture");
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Error($"[ARREST SERVER] Error securing personal property: {ex.Message}");
+                }
+
             
 
             // Set flag to prevent default teleportation in Player.Free()
@@ -887,7 +1024,7 @@ namespace Behind_Bars.Harmony
             
             // Only handle local player arrests for now
             // TODO: For multiplayer support, also check __instance.IsOwner instead of just Player.Local
-            if (__instance != Player.Local)
+            if (!IsLocalArrestTarget(__instance))
                 return;
                 
             ModLogger.Info($"[ARREST CLIENT] Player {__instance.name} arrested - handling UI and visual feedback");
@@ -1024,6 +1161,11 @@ namespace Behind_Bars.Harmony
                 return "null";
             }
 
+            if (!string.IsNullOrWhiteSpace(crimeInstance.IncidentId))
+            {
+                return $"incident:{crimeInstance.IncidentId}";
+            }
+
             Vector3 location = crimeInstance.Location;
             return string.Join("|",
                 crimeInstance.GetCrimeTypeName(),
@@ -1048,6 +1190,12 @@ namespace Behind_Bars.Harmony
 
             try
             {
+                // Most callers supply a pre-clear snapshot. Keep the no-argument
+                // route safe as well: arrest handling must never silently discard
+                // authoritative native crimes just because this method is reached
+                // through a different network callback.
+                nativeCrimeSnapshots ??= CaptureNativeCrimesForArrest(player);
+
                 // Get active crimes from CrimeDetectionSystem
                 List<CrimeInstance> activeCrimes = null;
                 
@@ -1104,12 +1252,17 @@ namespace Behind_Bars.Harmony
                 var persistedEventKeys = new HashSet<string>(
                     rapSheet.GetAllCrimes().Where(crime => crime != null).Select(BuildCrimeEventKey));
 
-                // A server arrest callback and the local custody coroutine can both reach
-                // this method. Persist each enhanced event once across those callbacks.
+                // Persist only mod-originated active charges here. Native charges are
+                // resolved from the arrest snapshot below through their incident IDs;
+                // persisting both paths is what previously produced duplicate LEO assaults.
                 if (activeCrimes != null && activeCrimes.Count > 0)
                 {
-                    ModLogger.Info($"[RAP SHEET] Adding {activeCrimes.Count} active crimes from CrimeDetectionSystem to rap sheet");
-                    foreach (var crimeInstance in activeCrimes)
+                    var modCharges = activeCrimes
+                        .Where(crimeInstance => crimeInstance != null &&
+                                                !string.Equals(crimeInstance.Source, "Native", StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                    ModLogger.Info($"[RAP SHEET] Adding {modCharges.Count} mod-originated active crimes from CrimeDetectionSystem to rap sheet");
+                    foreach (var crimeInstance in modCharges)
                     {
                         if (crimeInstance != null && TryPersistArrestCrime(rapSheet, crimeInstance, persistedEventKeys))
                         {
@@ -1118,30 +1271,35 @@ namespace Behind_Bars.Harmony
                     }
                 }
 
-                // Native CrimeData is cleared during jail entry. Persist its pre-clear
-                // snapshot after enhanced records, skipping only a native event already
-                // represented by the enhanced crime pipeline for this same arrest.
+                // Native CrimeData is cleared during jail entry. Resolve every captured
+                // native occurrence against the local incident ledger. The ledger carries
+                // contextual enhancements and has one unique ID per occurrence, so a
+                // native Assault plus LEO context becomes one persisted charge.
                 if (nativeCrimeSnapshots != null)
                 {
                     foreach (var snapshot in nativeCrimeSnapshots)
                     {
                         if (snapshot?.Crime == null ||
-                            IsRepresentedByEnhancedCrime(snapshot, activeCrimes) ||
                             (hasExplicitParoleArrestCause && IsNativeWarrantCarrier(snapshot.Crime)))
                         {
                             continue;
                         }
 
-                        for (int occurrence = 0; occurrence < snapshot.Quantity; occurrence++)
+                        var capturedCharges = _crimeDetectionSystem?.ResolveNativeArrestCrimes(
+                            player,
+                            snapshot.Crime,
+                            snapshot.Quantity,
+                            snapshot.Location,
+                            CalculateCrimeSeverity(snapshot.Crime)) ?? new List<CrimeInstance>();
+
+                        foreach (var nativeCrimeInstance in capturedCharges)
                         {
-                            var nativeCrimeInstance = new CrimeInstance(
-                                snapshot.Crime,
-                                snapshot.Location,
-                                CalculateCrimeSeverity(snapshot.Crime));
-                            string nativeEventKey = $"native:{snapshot.CaptureId}:{snapshot.Crime.GetType().FullName}:{occurrence}";
+                            string nativeEventKey = !string.IsNullOrWhiteSpace(nativeCrimeInstance.IncidentId)
+                                ? $"incident:{nativeCrimeInstance.IncidentId}"
+                                : $"native:{snapshot.CaptureId}:{snapshot.Crime.GetType().FullName}:{Guid.NewGuid():N}";
                             if (TryPersistArrestCrime(rapSheet, nativeCrimeInstance, persistedEventKeys, nativeEventKey))
                             {
-                                ModLogger.Info($"[RAP SHEET] Logged captured native crime: {snapshot.Crime.CrimeName}");
+                                ModLogger.Info($"[RAP SHEET] Logged native charge incident={nativeCrimeInstance.IncidentId} charge={nativeCrimeInstance.GetCrimeName()}");
                             }
                         }
                     }
@@ -1424,17 +1582,17 @@ namespace Behind_Bars.Harmony
                     return false;
                 }
 
-                // Native police normally submit the generic Assault crime. Own this
-                // narrow player-nearby hit path so street officer assaults retain
-                // ordinary pursuit while their record uses Assault on an LEO.
+                // Native police submit the authoritative generic Assault crime. Leave
+                // both damage and native crime creation untouched; the AddCrime listener
+                // attaches the LEO enhancement to that exact native event.
                 bool isNativePolice = __instance.npc is PoliceOfficer ||
                     Behind_Bars.Helpers.Helpers.GetComponentSafe<PoliceOfficer>(__instance.npc.gameObject) != null;
                 if (!Core.ResolveJailTimeTracker().IsInJail(localPlayer) &&
                     isNativePolice &&
-                    distanceToPlayer <= 5f &&
-                    TryRegisterStreetOfficerAssault(__instance.npc, localPlayer))
+                    distanceToPlayer <= 5f)
                 {
-                    return false;
+                    TrackPendingOfficerAssault(__instance.npc, localPlayer);
+                    ModLogger.Debug($"[Charge Pipeline] Native officer assault damage observed for {__instance.npc.name}; awaiting PlayerCrimeData.AddCrime");
                 }
 
                 // Damage must still reach the victim. Only remember the narrow native
@@ -1456,32 +1614,6 @@ namespace Behind_Bars.Harmony
                 ModLogger.Warn($"[LOCKDOWN] Could not evaluate pre-damage jail assault routing: {ex.Message}");
             }
 
-            return true;
-        }
-
-        private static bool TryRegisterStreetOfficerAssault(NPC officer, Player player)
-        {
-            if (_crimeDetectionSystem == null || officer == null || player == null)
-            {
-                return false;
-            }
-
-            string officerKey = officer.ID;
-            float now = Time.time;
-            if (!string.IsNullOrEmpty(officerKey) &&
-                _assaultCooldown.TryGetValue(officerKey, out float lastAssaultTime) &&
-                now - lastAssaultTime < ASSAULT_COOLDOWN_SECONDS)
-            {
-                return true;
-            }
-
-            if (!string.IsNullOrEmpty(officerKey))
-            {
-                _assaultCooldown[officerKey] = now;
-            }
-
-            _crimeDetectionSystem.ProcessOfficerAssault(officer, player, applyWantedLevel: true);
-            ModLogger.Info($"[Crime Tracking] Recorded street officer assault as Assault on an LEO for {player.name}");
             return true;
         }
 
