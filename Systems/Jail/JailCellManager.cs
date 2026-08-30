@@ -7,7 +7,6 @@ using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppInterop.Runtime.Attributes;
-using Il2CppInterop.Runtime;
 using Il2CppScheduleOne.PlayerScripts;
 using Il2CppScheduleOne.Interaction;
 #else
@@ -784,49 +783,6 @@ namespace Behind_Bars.Systems.Jail
             return bed.bedMat != null && bed.whiteSheet != null &&
                    bed.bedSheet != null && bed.pillow != null;
         }
-
-        GameObject InstantiatePrisonBedPrefab(Transform bedTransform)
-        {
-            // Try to load the PrisonBedInteractable prefab from asset bundle
-            if (Behind_Bars.Core.CachedJailBundle != null)
-            {
-                GameObject prefab = null;
-
-#if MONO
-                prefab = Behind_Bars.Core.CachedJailBundle.LoadAsset<GameObject>("PrisonBedInteractable");
-#else
-                prefab = Behind_Bars.Core.CachedJailBundle.LoadAsset("PrisonBedInteractable", Il2CppType.Of<GameObject>())?.TryCast<GameObject>();
-#endif
-
-                if (prefab != null)
-                {
-                    GameObject instance = UnityEngine.Object.Instantiate(prefab, bedTransform);
-                    // Preserve the original prefab name.  SetupCellBed is
-                    // intentionally idempotent and recognizes this child on a
-                    // subsequent initialization instead of spawning a second
-                    // player bed at the same authored anchor.
-                    instance.name = "PrisonBedInteractable";
-                    instance.transform.localPosition = Vector3.zero;
-                    instance.transform.localRotation = Quaternion.identity;
-                    instance.transform.localScale = Vector3.one;
-                    JailMaterialCompatibility.RepairForScheduleOne(instance);
-
-                    ModLogger.Debug($"✓ Instantiated PrisonBedInteractable prefab");
-                    return instance;
-                }
-                else
-                {
-                    ModLogger.Error($"Could not load PrisonBedInteractable prefab from asset bundle");
-                }
-            }
-            else
-            {
-                ModLogger.Error($"Asset bundle not available for PrisonBedInteractable prefab");
-            }
-
-            return null;
-        }
-
 
         void InitializeHoldingCellSpawnPoints()
         {
