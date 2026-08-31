@@ -17,13 +17,21 @@ namespace Behind_Bars.Systems.Dialogue
     /// </summary>
     public sealed class DialogueContainerBuilder
     {
+        // Labels are case-insensitive for lookup, while each node/choice receives a
+        // stable GUID for the lifetime of this builder so links can target exact data.
         private readonly Dictionary<string, NodeSpec> _nodes = new Dictionary<string, NodeSpec>(StringComparer.OrdinalIgnoreCase);
+        // Links retain labels until Build, when they are resolved to native GUIDs. This
+        // lets callers declare a target before that target node is added.
         private readonly List<LinkSpec> _links = new List<LinkSpec>();
         private bool _allowExit = true;
 
         /// <summary>
         /// Adds a dialogue node by label with the text shown in the bubble/UI.
         /// </summary>
+        /// <param name="nodeLabel">Case-insensitive node key.</param>
+        /// <param name="text">Dialogue text; null becomes an empty string.</param>
+        /// <param name="choices">Optional callback used to add choices to the node.</param>
+        /// <returns>This builder for fluent configuration.</returns>
         public DialogueContainerBuilder AddNode(string nodeLabel, string text, Action<ChoiceList> choices = null)
         {
             if (string.IsNullOrEmpty(nodeLabel))
@@ -40,6 +48,8 @@ namespace Behind_Bars.Systems.Dialogue
 
             if (choices != null)
             {
+                // ChoiceList's constructor is private by design. Reflection keeps the
+                // public API fluent while preserving the NodeSpec ownership invariant.
                 var list = (ChoiceList)typeof(ChoiceList)
                     .GetConstructor(System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance, null, new Type[]{ typeof(NodeSpec) }, null)
                     .Invoke(new object[]{ node });
@@ -51,6 +61,8 @@ namespace Behind_Bars.Systems.Dialogue
         /// <summary>
         /// Sets whether the player can exit while this container is active.
         /// </summary>
+        /// <param name="allow">Whether the native container should permit exit.</param>
+        /// <returns>This builder for fluent configuration.</returns>
         public DialogueContainerBuilder SetAllowExit(bool allow)
         {
             _allowExit = allow;
@@ -60,12 +72,15 @@ namespace Behind_Bars.Systems.Dialogue
         /// <summary>
         /// Builds a ScriptableObject DialogueContainer.
         /// </summary>
+        /// <param name="containerName">Name assigned to the created Unity object.</param>
+        /// <returns>A newly created container populated from the builder's current graph.</returns>
         public DialogueContainer Build(string containerName)
         {
             var container = ScriptableObject.CreateInstance<DialogueContainer>();
             container.name = string.IsNullOrEmpty(containerName) ? "CustomContainer" : containerName;
 
-            // Build node data
+            // Build node data first so every label has a native node GUID available for
+            // the link pass. Missing link endpoints are intentionally skipped below.
             var nodeData = new List<DialogueNodeData>();
             foreach (var kvp in _nodes)
             {
@@ -82,7 +97,9 @@ namespace Behind_Bars.Systems.Dialogue
             }
             container.DialogueNodeData = ToIl2CppList(nodeData);
 
-            // Build links
+            // Resolve label-based links to native GUIDs. A missing node or choice is a
+            // configuration omission, not a build failure; the resulting graph simply
+            // has no link for that declaration.
             var links = new List<NodeLinkData>();
             foreach (var link in _links)
             {
@@ -103,7 +120,8 @@ namespace Behind_Bars.Systems.Dialogue
             }
             container.NodeLinks = ToIl2CppList(links);
 
-            // AllowExit flag
+            // Copy the exit policy after graph data is assigned so the native container
+            // receives a complete, internally consistent graph.
             container.SetAllowExit(_allowExit);
 
             return container;
@@ -111,6 +129,8 @@ namespace Behind_Bars.Systems.Dialogue
 
         private static DialogueChoiceData[] BuildChoices(NodeSpec node)
         {
+            // Choices are copied into a plain array because DialogueNodeData exposes the
+            // native game's array shape. Each ChoiceSpec GUID is retained for links.
             var result = new List<DialogueChoiceData>();
             foreach (var c in node.Choices)
             {
@@ -136,6 +156,10 @@ namespace Behind_Bars.Systems.Dialogue
             /// <summary>
             /// Adds a choice with a label and shown text and links it to a target node label.
             /// </summary>
+            /// <param name="choiceLabel">Case-insensitive choice key.</param>
+            /// <param name="shownText">Text shown to the player; null becomes empty.</param>
+            /// <param name="targetNodeLabel">Optional target node label resolved during Build.</param>
+            /// <returns>This list for fluent choice configuration.</returns>
             public ChoiceList Add(string choiceLabel, string shownText, string targetNodeLabel = null)
             {
                 if (string.IsNullOrEmpty(choiceLabel))
@@ -151,6 +175,8 @@ namespace Behind_Bars.Systems.Dialogue
 
         private sealed class NodeSpec
         {
+            // GUIDs are generated once when the spec is created and are the identity used
+            // by native NodeLinkData; labels remain the caller-facing lookup keys.
             internal readonly string Guid = System.Guid.NewGuid().ToString();
             internal readonly DialogueContainerBuilder Builder;
             internal readonly List<ChoiceSpec> Choices = new List<ChoiceSpec>();
@@ -176,6 +202,8 @@ namespace Behind_Bars.Systems.Dialogue
 
         private sealed class ChoiceSpec
         {
+            // Choice identity is likewise GUID-based even though link declarations use
+            // labels until Build resolves them.
             internal readonly string Guid = System.Guid.NewGuid().ToString();
             internal readonly string Label;
             internal readonly string Text;
@@ -202,6 +230,8 @@ namespace Behind_Bars.Systems.Dialogue
 #if !MONO
         private static Il2CppSystem.Collections.Generic.List<T> ToIl2CppList<T>(System.Collections.Generic.List<T> source)
         {
+            // IL2CPP native fields require an Il2CppSystem list, so copy managed values
+            // element-by-element rather than passing the incompatible managed list.
             var list = new Il2CppSystem.Collections.Generic.List<T>();
             if (source == null)
                 return list;
@@ -212,6 +242,8 @@ namespace Behind_Bars.Systems.Dialogue
 #else
         private static System.Collections.Generic.List<T> ToIl2CppList<T>(System.Collections.Generic.List<T> source)
         {
+            // Mono accepts the managed list directly; the shared helper name keeps the
+            // graph-building code runtime-neutral.
             return source;
         }
 #endif

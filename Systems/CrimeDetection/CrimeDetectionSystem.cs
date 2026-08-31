@@ -31,22 +31,42 @@ namespace Behind_Bars.Systems.CrimeDetection
     public class CrimeDetectionSystem
     {
         private CrimeRecord _crimeRecord;
+
+        /// <summary>
+        /// Tracks witnesses for the current gameplay scene and owns delayed civilian
+        /// police-call work. This state is volatile and is reset at the scene boundary.
+        /// </summary>
         public WitnessSystem _witnessSystem;
         private ContrabandDetectionSystem _contrabandDetectionSystem;
         private readonly CrimeIncidentLedger _incidentLedger = new CrimeIncidentLedger();
         private readonly Dictionary<string, float> _nativeMirrorSuppressionUntil = new Dictionary<string, float>();
         
-        // Detection settings
+        /// <summary>Maximum radius used when looking for witnesses to a murder or manslaughter.</summary>
         public float MurderDetectionRadius = 50f;
+
+        /// <summary>Maximum radius used when looking for witnesses to an assault.</summary>
         public float AssaultDetectionRadius = 30f;
+
+        /// <summary>Maximum radius reserved for weapon-detection callers.</summary>
         public float WeaponDetectionRadius = 65f;
+
+        // These are Unity real-time seconds because the mirror callback is a short-lived
+        // duplicate-suppression window, not a gameplay-time crime timer.
         private const float DefaultNativeMirrorSuppressionSeconds = 4f;
         
+        /// <summary>Gets the volatile crime record used by the wanted overlay.</summary>
         public CrimeRecord CrimeRecord => _crimeRecord;
+
+        /// <summary>Gets the contraband classifier owned by this detection system.</summary>
         public ContrabandDetectionSystem ContrabandDetection => _contrabandDetectionSystem;
 
+        /// <summary>Gets the process-wide detection system instance created by the constructor.</summary>
         public static CrimeDetectionSystem Instance { get; private set; }
         
+        /// <summary>
+        /// Creates the local crime, witness, and contraband services and publishes this
+        /// instance for callers that need to coordinate native and Behind Bars paths.
+        /// </summary>
         public CrimeDetectionSystem()
         {
             _crimeRecord = new CrimeRecord();
@@ -58,8 +78,12 @@ namespace Behind_Bars.Systems.CrimeDetection
         }
         
         /// <summary>
-        /// Process an NPC death and determine if it's a crime
+        /// Processes an NPC death, creates the corresponding crime, and routes witness
+        /// and native response handling.
         /// </summary>
+        /// <param name="victim">NPC who died.</param>
+        /// <param name="perpetrator">Player attributed with the death.</param>
+        /// <param name="wasIntentional">Whether to classify the death as murder rather than manslaughter.</param>
         public void ProcessNPCDeath(NPC victim, Player perpetrator, bool wasIntentional = true)
         {
             if (victim == null || perpetrator == null)
@@ -146,8 +170,11 @@ namespace Behind_Bars.Systems.CrimeDetection
         }
         
         /// <summary>
-        /// Process an assault on a civilian NPC
+        /// Processes an assault on a civilian NPC and records witness-driven response state.
         /// </summary>
+        /// <param name="victim">Civilian NPC who was assaulted.</param>
+        /// <param name="perpetrator">Player attributed with the assault.</param>
+        /// <param name="isLethal">Whether to use the lethal severity tier.</param>
         public void ProcessCivilianAssault(NPC victim, Player perpetrator, bool isLethal = false)
         {
             if (victim == null || perpetrator == null)
@@ -200,6 +227,11 @@ namespace Behind_Bars.Systems.CrimeDetection
         /// wanted-state escalation, while incidents already inside the jail use the local
         /// lockdown controller and deliberately leave wanted state unchanged.
         /// </summary>
+        /// <param name="victim">Law-enforcement NPC who was assaulted.</param>
+        /// <param name="perpetrator">Player attributed with the assault.</param>
+        /// <param name="applyWantedLevel">Whether the street path should escalate native wanted state.</param>
+        /// <param name="persistToRapSheet">Whether the charge should be copied to the persisted rap sheet.</param>
+        /// <param name="mirrorNativeCrime">Whether the incident should be sent through native CrimeData.</param>
         public void ProcessOfficerAssault(
             NPC victim,
             Player perpetrator,
@@ -256,8 +288,10 @@ namespace Behind_Bars.Systems.CrimeDetection
         }
         
         /// <summary>
-        /// Process witness intimidation (attacking someone who witnessed a crime)
+        /// Processes witness intimidation and reduces the target witness's future call likelihood.
         /// </summary>
+        /// <param name="witness">Witness NPC being intimidated.</param>
+        /// <param name="perpetrator">Player attributed with the intimidation.</param>
         public void ProcessWitnessIntimidation(NPC witness, Player perpetrator)
         {
             if (witness == null || perpetrator == null)
@@ -346,7 +380,10 @@ namespace Behind_Bars.Systems.CrimeDetection
             Vector3 direction = (crimePos - witnessPos).normalized;
             float distance = Vector3.Distance(witnessPos, crimePos);
             
-            // Adjust heights for better LOS check
+            // Current behavior computes direction and distance before these local height
+            // offsets. The offsets therefore do not change the already-computed ray in
+            // this implementation; preserve that fact in the documentation rather than
+            // implying that this pass changes the LOS algorithm.
             witnessPos.y += 1.7f; // Eye height
             crimePos.y += 1.0f;   // Center height
             
@@ -394,6 +431,8 @@ namespace Behind_Bars.Systems.CrimeDetection
         /// <summary>
         /// True when NPC is a native police officer or a mod officer role.
         /// </summary>
+        /// <param name="npc">NPC whose role should be classified.</param>
+        /// <returns>True for native PoliceOfficer instances or recognized mod officer roles.</returns>
         public bool IsLawEnforcementNpc(NPC npc)
         {
             if (npc == null)
@@ -408,6 +447,8 @@ namespace Behind_Bars.Systems.CrimeDetection
         /// <summary>
         /// True for Behind Bars officer roles that are not native PoliceOfficer.
         /// </summary>
+        /// <param name="npc">NPC whose mod officer role should be classified.</param>
+        /// <returns>True for recognized mod officer components/name prefixes.</returns>
         public bool IsModLawEnforcementNpc(NPC npc)
         {
             if (npc == null)
@@ -418,6 +459,9 @@ namespace Behind_Bars.Systems.CrimeDetection
                 return false;
 
             // Keep native police out of mod-officer handling paths.
+            // Component checks are authoritative for injected roles; name prefixes are a
+            // compatibility fallback for officer objects that do not expose a registered
+            // behavior component yet.
             if (npc is PoliceOfficer || BBHelpers.GetComponentSafe<PoliceOfficer>(npcObject) != null)
                 return false;
 
@@ -447,6 +491,14 @@ namespace Behind_Bars.Systems.CrimeDetection
                    || npcName.StartsWith("Station Officer ", StringComparison.OrdinalIgnoreCase);
         }
 
+        /// <summary>
+        /// Determines whether a native crime callback should be mirrored into the local
+        /// charge pipeline. A null input is permissive; otherwise active type, display-name,
+        /// and assault-family suppression keys are consulted.
+        /// </summary>
+        /// <param name="player">Player whose native crime data may emit the callback.</param>
+        /// <param name="crime">Native crime candidate being evaluated.</param>
+        /// <returns>False only while a matching short-lived suppression entry is active.</returns>
         public bool ShouldMirrorNativeCrime(Player player, Crime crime)
         {
             if (player == null || crime == null)
@@ -476,6 +528,10 @@ namespace Behind_Bars.Systems.CrimeDetection
 
         private void SuppressNativeCrimeMirror(Player player, Crime crime, float durationSeconds, bool includeAssaultFamilyAlias)
         {
+            // Suppression is written under every key that a later native callback can expose:
+            // CLR/native type name, display name, and optionally the shared assault-family alias.
+            // This prevents one Behind Bars event from being counted again when the game
+            // reports the same offense through a different native representation.
             if (player == null || crime == null)
             {
                 return;
@@ -494,6 +550,8 @@ namespace Behind_Bars.Systems.CrimeDetection
 
         private void SetNativeMirrorSuppression(Player player, string crimeKey, float expiresAt)
         {
+            // The player prefix keeps identical crime keys from different players from
+            // sharing a suppression window. expiresAt is in Unity real-time seconds.
             if (player == null || string.IsNullOrEmpty(crimeKey))
             {
                 return;
@@ -504,6 +562,8 @@ namespace Behind_Bars.Systems.CrimeDetection
 
         private bool IsNativeMirrorSuppressed(Player player, string crimeKey)
         {
+            // Expired entries are removed on read as well as by the periodic cleanup so a
+            // stale key cannot suppress a later event indefinitely.
             if (player == null || string.IsNullOrEmpty(crimeKey))
             {
                 return false;
@@ -525,6 +585,8 @@ namespace Behind_Bars.Systems.CrimeDetection
 
         private string BuildNativeMirrorKey(Player player, string crimeKey)
         {
+            // PlayerCode is preferred for network-stable identity; the scene object name is
+            // retained as the compatibility fallback used by older/native player objects.
             string playerKey = string.IsNullOrEmpty(player.PlayerCode) ? player.name : player.PlayerCode;
             if (string.IsNullOrEmpty(playerKey))
             {
@@ -536,6 +598,8 @@ namespace Behind_Bars.Systems.CrimeDetection
 
         private void CleanupNativeMirrorSuppressions()
         {
+            // Cleanup is deliberately opportunistic: callers invoke it before evaluating a
+            // native event, so this short-lived dictionary needs no separate Update loop.
             if (_nativeMirrorSuppressionUntil.Count == 0)
             {
                 return;
@@ -555,6 +619,8 @@ namespace Behind_Bars.Systems.CrimeDetection
 
         private bool IsAssaultFamilyCrime(Crime crime)
         {
+            // Native street and mod-generated officer assaults may use different types or
+            // display labels. Matching either string lets the alias suppress both forms.
             if (crime == null)
             {
                 return false;
@@ -571,7 +637,7 @@ namespace Behind_Bars.Systems.CrimeDetection
         }
         
         /// <summary>
-        /// Clear all accumulated crimes (called when player serves sentence)
+        /// Clears volatile accumulated crimes, normally after sentence resolution.
         /// </summary>
         public void ClearAllCrimes()
         {
@@ -594,21 +660,27 @@ namespace Behind_Bars.Systems.CrimeDetection
         }
         
         /// <summary>
-        /// Get current wanted level
+        /// Gets the current volatile wanted level.
         /// </summary>
+        /// <returns>The wanted aggregate maintained by the local crime record.</returns>
         public float GetWantedLevel()
         {
             return _crimeRecord.CurrentWantedLevel;
         }
         
         /// <summary>
-        /// Get summary of all crimes for UI display
+        /// Gets a display-name count summary of volatile crimes.
         /// </summary>
+        /// <returns>A new summary dictionary.</returns>
         public Dictionary<string, int> GetCrimeSummary()
         {
             return _crimeRecord.GetCrimeSummary();
         }
 
+        /// <summary>
+        /// Gets a copy of the currently active local crime instances after expiration cleanup.
+        /// These are volatile detection records, not the persisted rap sheet.
+        /// </summary>
         public List<CrimeInstance> GetAllActiveCrimes()
         {
             return _crimeRecord.GetActiveCrimes();
@@ -618,6 +690,12 @@ namespace Behind_Bars.Systems.CrimeDetection
         /// Records one native game crime at the AddCrime seam. The generated incident ID
         /// correlates later arrest capture with contextual enhancements.
         /// </summary>
+        /// <param name="player">Player whose native crime event was observed.</param>
+        /// <param name="crime">Native crime object at the AddCrime seam.</param>
+        /// <param name="location">World location captured for the local charge.</param>
+        /// <param name="severity">Severity used by wanted/fine calculations.</param>
+        /// <param name="enhancement">Optional contextual enhancement.</param>
+        /// <returns>The local correlated charge, or null when required inputs are absent.</returns>
         public CrimeInstance RecordNativeCrimeEvent(Player player, Crime crime, Vector3 location, float severity, CrimeEnhancement enhancement = null)
         {
             var incident = _incidentLedger.RecordNativeCrime(player, crime, location, severity, enhancement);
@@ -633,22 +711,31 @@ namespace Behind_Bars.Systems.CrimeDetection
         /// Resolves native crimes found at custody entry to the same incident records that
         /// were created when the game emitted AddCrime.
         /// </summary>
+        /// <param name="player">Player entering custody.</param>
+        /// <param name="crime">Native crime object reported at custody entry.</param>
+        /// <param name="quantity">Number of native charges to resolve.</param>
+        /// <param name="location">Fallback charge location.</param>
+        /// <param name="severity">Fallback charge severity.</param>
+        /// <returns>Resolved or fallback charges, bounded by the requested quantity.</returns>
         public List<CrimeInstance> ResolveNativeArrestCrimes(Player player, Crime crime, int quantity, Vector3 location, float severity)
         {
             return _incidentLedger.ResolveArrestCharges(player, crime, quantity, location, severity);
         }
 
         /// <summary>
-        /// Calculate total fine amount for all accumulated crimes
+        /// Calculates total fines for all retained volatile crimes.
         /// </summary>
+        /// <returns>Severity-weighted total fine.</returns>
         public float CalculateTotalFines()
         {
             return _crimeRecord.CalculateTotalFines();
         }
         
         /// <summary>
-        /// Process a contraband search on a player (called when police search player)
+        /// Processes a contraband search on a player, adding resulting charges to the local
+        /// record and owner-authoritative native CrimeData.
         /// </summary>
+        /// <param name="player">Player searched by the game/police flow.</param>
         public void ProcessContrabandSearch(Player player)
         {
             if (player == null)

@@ -22,6 +22,11 @@ namespace Behind_Bars.Systems.Jail
     public class JailTimeTracker
     {
         private static JailTimeTracker? _instance;
+
+        /// <summary>
+        /// Gets the process-lifetime sentence tracker. Scene-owned subscriptions and
+        /// player references are still established and cleared per gameplay session.
+        /// </summary>
         public static JailTimeTracker Instance => _instance ??= new JailTimeTracker();
 
         /// <summary>
@@ -45,9 +50,15 @@ namespace Behind_Bars.Systems.Jail
             public float TimeServed { get; set; }
         }
 
+        // Active and completed records are keyed by the stable player runtime key. An
+        // active record owns the callback/player reference until completion or stop;
+        // completed records retain only the summary needed by release reporting.
         private Dictionary<string, ActiveSentence> _activeSentences = new();
         private Dictionary<string, CompletedSentence> _completedSentences = new(); // Store sentence data for completed/stopped sentences
         private HashSet<string> _inJailStatus = new(); // Track if player is actively in jail (separate from sentence tracking)
+
+        // These flags make event subscription idempotent across repeated initialization
+        // attempts. They are reset only by the matching unsubscribe/session teardown.
         private bool _isSubscribed = false;
         private bool _isSubscribedToReleaseCompleted = false;
         private bool _sceneTrackingActive;
@@ -55,7 +66,9 @@ namespace Behind_Bars.Systems.Jail
         private Player? _arrestSubscribedPlayer = null;
         private object? _playerArrestSubscriptionCoroutine = null;
 
-        // Real-time tracking fallback (in case game time events don't fire)
+        // Real-time tracking fallback (in case game time events don't fire). This is
+        // sentence accounting state and intentionally remains distinct from the jail
+        // recreation UI's wall-clock countdown conversion.
         private Dictionary<string, float> _sentenceStartTimes = new(); // Real-time when sentence started
         private object? _realTimeUpdateCoroutine = null;
 
@@ -436,8 +449,11 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Called when a game minute passes
+        /// Decrements each active sentence once when the native game-minute event fires.
+        /// The event value is informational; the tracker treats each callback as one
+        /// game minute and separately reconciles against its real-time fallback.
         /// </summary>
+        /// <param name="gameMinute">Native minute value associated with the event.</param>
         private void OnGameMinuteChanged(int gameMinute)
         {
             if (!_sceneTrackingActive)
@@ -510,13 +526,10 @@ namespace Behind_Bars.Systems.Jail
         }
         
         /// <summary>
-        /// Real-time update loop that decrements sentences every real second
-        /// This is a fallback in case game time events don't fire correctly
-        /// 1 real second = 1 game minute
-        /// </summary>
-        /// <summary>
-        /// Performance: Reuse pooled list and iterate dictionary directly without ToList()
-        /// Eliminates repeated allocations every second
+        /// Reconciles active sentence records once per real second when game-minute events
+        /// are missing or lagging. The fallback treats one real second as one game minute,
+        /// never increases remaining time, and uses a generation token to stop after a
+        /// scene transition. The pooled completion list avoids a per-tick allocation.
         /// </summary>
         private IEnumerator RealTimeUpdateLoop(int generation)
         {
@@ -593,7 +606,9 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Start tracking a jail sentence for a player
+        /// Starts tracking a sentence in game-minute units for the active gameplay session.
+        /// Starting a second sentence for the same player replaces the active record but
+        /// keeps the session-level event and fallback subscriptions unchanged.
         /// </summary>
         /// <param name="player">The player serving the sentence</param>
         /// <param name="sentenceGameMinutes">Sentence duration in game minutes</param>
@@ -636,8 +651,14 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Extends an existing active sentence without restarting its elapsed-time accounting.
+        /// Extends an existing active sentence in game-minute units without restarting its
+        /// elapsed-time accounting. Returns false when the player has no active record or
+        /// the requested penalty is not positive.
         /// </summary>
+        /// <param name="player">Player whose active sentence should be extended.</param>
+        /// <param name="additionalGameMinutes">Additional sentence duration.</param>
+        /// <param name="reason">Human-readable reason included in diagnostics.</param>
+        /// <returns>True when the active record was extended.</returns>
         public bool AddPenaltyTime(Player player, float additionalGameMinutes, string reason)
         {
             if (player == null || additionalGameMinutes <= 0f)
@@ -657,8 +678,11 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Stop tracking a sentence for a player (e.g., early release)
+        /// Stops tracking a player, records the original sentence and time served for
+        /// release reporting, and removes the real-time start marker. This does not invoke
+        /// the completion callback; the release flow owns any early-release notification.
         /// </summary>
+        /// <param name="player">Player whose active sentence should be stopped.</param>
         public void StopTracking(Player player)
         {
             if (player == null)
@@ -786,7 +810,8 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Get remaining sentence time for a player in game minutes
+        /// Gets the active sentence time remaining in game-minute units. A player without
+        /// an active record returns zero; completed records are intentionally excluded.
         /// </summary>
         public float GetRemainingTime(Player player)
         {

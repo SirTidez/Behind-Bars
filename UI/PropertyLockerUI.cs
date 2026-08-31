@@ -38,6 +38,8 @@ namespace Behind_Bars.UI
         // emergency direct-transfer path instead of showing the interactive locker.
         private const string PrefabAssetPath = "assets/behindbars/propertylocker/behindbarspropertylockerui.prefab";
 
+        // One service owns the authored presentation and its listener identities. The root is
+        // scene-owned even though this service is retained by the persistent UI manager.
         private static PropertyLockerUI instance;
         internal static PropertyLockerUI Instance => instance ??= new PropertyLockerUI();
 
@@ -46,6 +48,8 @@ namespace Behind_Bars.UI
 #else
         private Il2CppAssetBundle bundle;
 #endif
+        // Asset/presentation references are invalidated together by scene-transition cleanup;
+        // a later open rebinds the same authored hierarchy against the current scene objects.
         private GameObject prefab;
         private GameObject root;
         private Transform itemGrid;
@@ -60,8 +64,12 @@ namespace Behind_Bars.UI
         private Canvas presentationCanvas;
         private GraphicRaycaster presentationRaycaster;
 
+        // Each rebuild disposes cardBindings before instantiating new cards. remainingItems is a
+        // presentation snapshot; InventoryPickupStation remains the transfer authority.
         private readonly List<ItemCardBinding> cardBindings = new();
         private readonly List<PersistentPlayerData.StoredItem> remainingItems = new();
+        // owner/player identify the active release flow. transferInProgress serializes the
+        // asynchronous Take All operation, while exitListenerRegistered gates native input hooks.
         private InventoryPickupStation owner;
         private Player player;
         private bool transferInProgress;
@@ -73,6 +81,7 @@ namespace Behind_Bars.UI
 #else
         private GameInput.ExitDelegate exitListener;
 #endif
+        // Keep stable button delegate instances so RemoveListener works on both runtimes.
         private ClickHandler takeAllClickHandler;
         private ClickHandler closeClickHandler;
 
@@ -92,6 +101,11 @@ namespace Behind_Bars.UI
         /// <summary>
         /// Opens the locker. The owner retains every item-transfer and release-flow decision.
         /// </summary>
+        /// <param name="storageOwner">Station that owns the release/return transaction.</param>
+        /// <param name="targetPlayer">Player whose retained property is being presented.</param>
+        /// <param name="items">Snapshot of returnable stored items.</param>
+        /// <param name="confiscatedCount">Number of retained contraband items for status text.</param>
+        /// <returns><c>true</c> when the authored presentation was opened.</returns>
         internal bool TryShow(
             InventoryPickupStation storageOwner,
             Player targetPlayer,
@@ -141,6 +155,11 @@ namespace Behind_Bars.UI
             return true;
         }
 
+        /// <summary>
+        /// Closes the presentation without restoring gameplay input, then clears scene-owned
+        /// owner/player/item state. It is safe to call when already closed and is the cleanup path
+        /// used before the current HUD scene is destroyed.
+        /// </summary>
         internal void CloseForSceneTransition()
         {
             if (!IsOpen)
@@ -158,6 +177,11 @@ namespace Behind_Bars.UI
             ModLogger.Debug("PropertyLockerUI released scene presentation");
         }
 
+        /// <summary>
+        /// Loads the property-locker bundle, instantiates the authored root, binds its required
+        /// hierarchy, and leaves it inactive until <see cref="TryShow"/> has supplied session data.
+        /// </summary>
+        /// <returns><c>true</c> when the current presentation is ready for use.</returns>
         private bool EnsurePresentation()
         {
             if (root != null)
@@ -207,6 +231,11 @@ namespace Behind_Bars.UI
             }
         }
 
+        /// <summary>
+        /// Binds the strict authored prefab paths and installs stable button listeners. The
+        /// modal canvas intentionally sits above gameplay but below native pause/menu layers.
+        /// </summary>
+        /// <param name="presentationRoot">Instantiated root of the authored locker prefab.</param>
         private void BindPresentation(Transform presentationRoot)
         {
             titleText = FindRequired<Text>(presentationRoot, "Blocker/Card/Header/TitleText");
@@ -238,6 +267,10 @@ namespace Behind_Bars.UI
             closeButton.onClick.AddListener(closeClickHandler);
         }
 
+        /// <summary>
+        /// Disposes prior item-card bindings, refreshes counts/state, and rebuilds one card per
+        /// currently returnable item. The template remains in the grid and is never destroyed.
+        /// </summary>
         private void RebuildItemCards()
         {
             ReleaseItemCardBindings();
@@ -258,6 +291,10 @@ namespace Behind_Bars.UI
             }
         }
 
+        /// <summary>
+        /// Creates the clothing-restoration summary from the owner snapshot, reducing each layer
+        /// path to a display name and omitting duplicate or malformed entries.
+        /// </summary>
         private string BuildClothingSummary()
         {
             var clothing = owner?.GetStoredClothing(player);
@@ -293,6 +330,7 @@ namespace Behind_Bars.UI
                 : "CLOTHING TO RESTORE\n" + string.Join("  •  ", names);
         }
 
+        /// <summary>Starts the serialized Take All transfer when an active locker session permits it.</summary>
         private void HandleTakeAllClicked()
         {
             if (transferInProgress || remainingItems.Count == 0 || owner == null)
@@ -303,6 +341,10 @@ namespace Behind_Bars.UI
             MelonCoroutines.Start(ReturnAllItems());
         }
 
+        /// <summary>
+        /// Returns items sequentially through the station authority, rebuilding the card list
+        /// after each result and yielding in real time to avoid a burst of inventory mutations.
+        /// </summary>
         private System.Collections.IEnumerator ReturnAllItems()
         {
             transferInProgress = true;
@@ -332,6 +374,8 @@ namespace Behind_Bars.UI
             }
         }
 
+        /// <summary>Attempts one guarded item transfer and rebuilds the presentation on success.</summary>
+        /// <param name="item">Stored item represented by the clicked card.</param>
         private void HandleItemClicked(PersistentPlayerData.StoredItem item)
         {
             if (transferInProgress || item == null || !remainingItems.Contains(item))
@@ -354,6 +398,9 @@ namespace Behind_Bars.UI
             }
         }
 
+        /// <summary>Delegates a return operation to the active station and fails closed without session state.</summary>
+        /// <param name="item">Stored item to return to the player inventory.</param>
+        /// <returns><c>true</c> when the station accepted the transfer.</returns>
         private bool TryReturnItem(PersistentPlayerData.StoredItem item)
         {
             if (owner == null || player == null)
@@ -364,6 +411,10 @@ namespace Behind_Bars.UI
             return owner.TryReturnPropertyItem(player, item);
         }
 
+        /// <summary>
+        /// Completes the locker flow only after all retained items have been returned, then
+        /// restores gameplay input and notifies the station owner.
+        /// </summary>
         private void HandleCloseClicked()
         {
             if (transferInProgress)
@@ -383,6 +434,11 @@ namespace Behind_Bars.UI
             activeOwner?.CompletePropertyLockerRetrieval(activePlayer);
         }
 
+        /// <summary>
+        /// Removes exit/card bindings and deactivates the modal. Gameplay input is restored only
+        /// for a user-driven close, not for scene-transition cleanup.
+        /// </summary>
+        /// <param name="restoreGameplayInput">Whether this close returns control to first person.</param>
         private void ClosePresentation(bool restoreGameplayInput)
         {
             DeregisterExitListener();
@@ -398,6 +454,11 @@ namespace Behind_Bars.UI
             }
         }
 
+        /// <summary>
+        /// Handles the native back/menu action while the locker is open. The first action is
+        /// consumed by this contextual modal; subsequent actions remain native game behavior.
+        /// </summary>
+        /// <param name="action">Native exit action currently being dispatched.</param>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -415,6 +476,7 @@ namespace Behind_Bars.UI
             DismissThroughExitInput();
         }
 
+        /// <summary>Dismisses through native exit input and suspends the owner's locker session.</summary>
         private void DismissThroughExitInput()
         {
             if (transferInProgress || !IsOpen)
@@ -429,6 +491,10 @@ namespace Behind_Bars.UI
             ModLogger.Info("PropertyLockerUI dismissed through the native exit action");
         }
 
+        /// <summary>
+        /// Registers the stable runtime-specific exit delegate once, giving the locker priority
+        /// over ordinary gameplay input while its modal is open.
+        /// </summary>
         private void RegisterExitListener()
         {
             if (exitListenerRegistered)
@@ -446,6 +512,7 @@ namespace Behind_Bars.UI
             exitListenerRegistered = true;
         }
 
+        /// <summary>Removes the exact exit delegate previously registered, if registration succeeded.</summary>
         private void DeregisterExitListener()
         {
             if (!exitListenerRegistered)
@@ -467,6 +534,10 @@ namespace Behind_Bars.UI
             exitListenerRegistered = false;
         }
 
+        /// <summary>
+        /// Removes persistent button listeners and item-card bindings without destroying the
+        /// authored template or bundle assets.
+        /// </summary>
         private void ReleaseBindings()
         {
             ReleaseItemCardBindings();
@@ -483,6 +554,10 @@ namespace Behind_Bars.UI
             closeClickHandler = null;
         }
 
+        /// <summary>
+        /// Disposes each card binding, removes its listener, and destroys generated cards while
+        /// preserving the authored item-card template for the next rebuild.
+        /// </summary>
         private void ReleaseItemCardBindings()
         {
             for (int index = 0; index < cardBindings.Count; index++)
@@ -506,6 +581,10 @@ namespace Behind_Bars.UI
             }
         }
 
+        /// <summary>
+        /// Transfers cursor ownership from first-person gameplay to the locker modal and starts
+        /// one next-frame reassertion for camera systems that reclaim it during the same frame.
+        /// </summary>
         private void ReleaseMouseForLocker()
         {
             try
@@ -522,6 +601,10 @@ namespace Behind_Bars.UI
             }
         }
 
+        /// <summary>
+        /// Reasserts unlocked, visible-cursor modal input while the locker remains open. This is
+        /// called from the core late-update hook after native first-person input has run.
+        /// </summary>
         private void MaintainLockerInput()
         {
             if (!IsOpen)
@@ -542,6 +625,7 @@ namespace Behind_Bars.UI
             }
         }
 
+        /// <summary>Reasserts locker cursor ownership once after opening if the native camera wins the first frame.</summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -559,6 +643,7 @@ namespace Behind_Bars.UI
             Cursor.visible = true;
         }
 
+        /// <summary>Returns cursor, camera, and crosshair ownership to normal first-person gameplay.</summary>
         private void RestoreGameplayInput()
         {
             try
@@ -574,6 +659,14 @@ namespace Behind_Bars.UI
             }
         }
 
+        /// <summary>
+        /// Resolves a required authored child component and throws with its path when the bundle
+        /// contract is incomplete, preventing a partially-bound interactive modal.
+        /// </summary>
+        /// <typeparam name="T">Component type required at the authored path.</typeparam>
+        /// <param name="parent">Root under which the relative path is resolved.</param>
+        /// <param name="path">Exact authored hierarchy path.</param>
+        /// <returns>The required component.</returns>
         private static T FindRequired<T>(Transform parent, string path) where T : Component
         {
             Transform child = parent.Find(path);
@@ -593,12 +686,18 @@ namespace Behind_Bars.UI
 
         private sealed class ItemCardBinding : IDisposable
         {
+            // A binding owns one generated card and its exact click delegate. Disposal must
+            // remove that delegate before the card is destroyed to avoid stale callbacks.
             private readonly PropertyLockerUI ui;
             private readonly PersistentPlayerData.StoredItem item;
             private readonly Button button;
             private readonly ClickHandler clickHandler;
             private readonly GameObject card;
 
+            /// <summary>Creates a card binding and installs its stable item-click listener.</summary>
+            /// <param name="ui">Locker service that receives the click.</param>
+            /// <param name="card">Generated card instance owned by this binding.</param>
+            /// <param name="item">Stored item represented by the card.</param>
             internal ItemCardBinding(PropertyLockerUI ui, GameObject card, PersistentPlayerData.StoredItem item)
             {
                 this.ui = ui;
@@ -612,6 +711,7 @@ namespace Behind_Bars.UI
                 button.onClick.AddListener(clickHandler);
             }
 
+            /// <summary>Removes the item listener and destroys the generated card idempotently.</summary>
             public void Dispose()
             {
                 if (button != null && clickHandler != null)
@@ -625,6 +725,7 @@ namespace Behind_Bars.UI
                 }
             }
 
+            /// <summary>Forwards the card action to the parent locker with its captured item.</summary>
             private void OnClick()
             {
                 ui.HandleItemClicked(item);

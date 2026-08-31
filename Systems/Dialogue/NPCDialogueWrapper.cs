@@ -31,6 +31,7 @@ namespace Behind_Bars.Systems.Dialogue
         /// <summary>
         /// Creates a new NPCDialogueWrapper for the given GameObject.
         /// </summary>
+        /// <param name="npcGameObject">Root NPC object used for handler lookup.</param>
         public NPCDialogueWrapper(GameObject npcGameObject)
         {
             if (npcGameObject == null)
@@ -47,6 +48,9 @@ namespace Behind_Bars.Systems.Dialogue
         /// Register a callback to run when a choice with the given label is selected.
         /// Label must match the DialogueChoiceData.ChoiceLabel in your container.
         /// </summary>
+        /// <param name="choiceLabel">Case-insensitive choice label to observe.</param>
+        /// <param name="callback">Callback to retain and invoke for each matching event.</param>
+        /// <returns>This wrapper for fluent registration.</returns>
         public NPCDialogueWrapper OnChoiceSelected(string choiceLabel, Action callback)
         {
             if (string.IsNullOrEmpty(choiceLabel) || callback == null)
@@ -65,6 +69,9 @@ namespace Behind_Bars.Systems.Dialogue
         /// <summary>
         /// Register a callback to run when a dialogue node with the given label is displayed.
         /// </summary>
+        /// <param name="nodeLabel">Case-insensitive node label to observe.</param>
+        /// <param name="callback">Callback to retain and invoke for each matching event.</param>
+        /// <returns>This wrapper for fluent registration.</returns>
         public NPCDialogueWrapper OnNodeDisplayed(string nodeLabel, Action callback)
         {
             if (string.IsNullOrEmpty(nodeLabel) || callback == null)
@@ -83,6 +90,10 @@ namespace Behind_Bars.Systems.Dialogue
         /// <summary>
         /// Removes all registered dialogue callbacks for this NPC.
         /// </summary>
+        /// <remarks>
+        /// This clears callback dictionaries only. Native event listeners remain attached
+        /// until Dispose, so the wrapper can be reused without rebuilding its hooks.
+        /// </remarks>
         public void ClearCallbacks()
         {
             _choiceCallbacks.Clear();
@@ -118,6 +129,9 @@ namespace Behind_Bars.Systems.Dialogue
         /// <summary>
         /// Starts a dialogue by container name present on the NPC's handler.
         /// </summary>
+        /// <param name="containerName">Name of the registered container to start.</param>
+        /// <param name="enableBehaviour">Whether native dialogue behavior should be enabled.</param>
+        /// <param name="entryNodeLabel">Entry node label passed to the native handler.</param>
         public void Start(string containerName, bool enableBehaviour = true, string entryNodeLabel = "ENTRY")
         {
             if (string.IsNullOrEmpty(containerName))
@@ -137,6 +151,8 @@ namespace Behind_Bars.Systems.Dialogue
         /// <summary>
         /// Shows worldspace dialogue text at the NPC for a duration.
         /// </summary>
+        /// <param name="text">Text to display.</param>
+        /// <param name="durationSeconds">Native worldspace display duration in seconds.</param>
         public void ShowWorldText(string text, float durationSeconds)
         {
             if (string.IsNullOrEmpty(text))
@@ -148,6 +164,9 @@ namespace Behind_Bars.Systems.Dialogue
         /// <summary>
         /// Plays a reaction by key. If duration is -1 the underlying system decides duration.
         /// </summary>
+        /// <param name="key">Native reaction key; null/empty hides current worldspace text.</param>
+        /// <param name="durationSeconds">Duration override, or -1 for native selection.</param>
+        /// <param name="network">Whether to use the native networked reaction path.</param>
         public void PlayReaction(string key, float durationSeconds = -1f, bool network = false)
         {
             if (string.IsNullOrEmpty(key))
@@ -163,6 +182,7 @@ namespace Behind_Bars.Systems.Dialogue
         /// Overrides the shown dialogue text (e.g., for temporary notifications).
         /// You generally won't want to use this
         /// </summary>
+        /// <param name="text">Replacement text supplied to the native handler.</param>
         public void OverrideText(string text)
         {
             EnsureHandler();
@@ -207,7 +227,13 @@ namespace Behind_Bars.Systems.Dialogue
         {
             if (Handler == null || _eventsHooked)
                 return;
+            // Capture the exact handler used for subscription. Handler is a component
+            // lookup and could later resolve a different child; removing from the stored
+            // instance is what keeps Dispose balanced with AddListener.
             _eventHandler = Handler;
+            // The current guard is set before the two AddListener calls and assumes the
+            // EventHelper/native event surface succeeds; an exception leaves the wrapper
+            // marked hooked until the caller disposes/recreates it.
             _eventsHooked = true;
             // Handler events are invoked from DialogueHandler.ChoiceCallback and DialogueCallback
             // These are UnityEvent<string>, so we use AddListener<string>
@@ -219,6 +245,8 @@ namespace Behind_Bars.Systems.Dialogue
         /// Builds a DialogueContainer with choice-based flow and registers it by name.
         /// Use this to define custom conversations for this NPC entirely from code.
         /// </summary>
+        /// <param name="containerName">Name used for replacement/lookup in the handler.</param>
+        /// <param name="configure">Builder callback that defines nodes, choices, and links.</param>
         public void BuildAndRegisterContainer(string containerName, Action<DialogueContainerBuilder> configure)
         {
             if (string.IsNullOrEmpty(containerName) || configure == null)
@@ -238,6 +266,8 @@ namespace Behind_Bars.Systems.Dialogue
 #endif
             if (list != null)
             {
+                // Replace an existing same-name container in place; otherwise append it.
+                // This prevents repeated setup calls from creating ambiguous duplicates.
                 int idx = -1;
                 for (int i = 0; i < list.Count; i++)
                 {
@@ -259,6 +289,8 @@ namespace Behind_Bars.Systems.Dialogue
         /// When the player interacts with this NPC, force using the named container for the next dialogue.
         /// Returns true if the container was found and applied.
         /// </summary>
+        /// <param name="containerName">Registered container name to use as an override.</param>
+        /// <returns>True when the container and DialogueController were found and updated.</returns>
         public bool UseContainerOnInteract(string containerName)
         {
             if (string.IsNullOrEmpty(containerName))
@@ -301,6 +333,8 @@ namespace Behind_Bars.Systems.Dialogue
         /// After the conversation begins, the override is automatically cleared so subsequent interactions use normal flow.
         /// Returns true if the container was found and applied.
         /// </summary>
+        /// <param name="containerName">Registered container name to use once.</param>
+        /// <returns>True when the container and DialogueController were found and updated.</returns>
         public bool UseContainerOnInteractOnce(string containerName)
         {
             if (string.IsNullOrEmpty(containerName))
@@ -337,6 +371,7 @@ namespace Behind_Bars.Systems.Dialogue
 
             // Clear the override as soon as the conversation actually starts. Keep a stable
             // listener reference so a scene transition can remove it if dialogue never opens.
+            // The list owns every pending listener so Dispose can detach all of them.
             Action clearOnce = null;
             clearOnce = () =>
             {
@@ -359,6 +394,10 @@ namespace Behind_Bars.Systems.Dialogue
         /// Immediately navigates this NPC's dialogue to a specific container and entry node.
         /// Returns true on success.
         /// </summary>
+        /// <param name="containerName">Registered container name.</param>
+        /// <param name="entryNodeLabel">Node label to enter.</param>
+        /// <param name="enableBehaviour">Whether native dialogue behavior should be enabled.</param>
+        /// <returns>True when the container was found and the native handler started it.</returns>
         public bool JumpTo(string containerName, string entryNodeLabel, bool enableBehaviour = false)
         {
             if (string.IsNullOrEmpty(containerName) || string.IsNullOrEmpty(entryNodeLabel))
@@ -393,6 +432,10 @@ namespace Behind_Bars.Systems.Dialogue
         {
             if (string.IsNullOrEmpty(choiceLabel))
                 return;
+            // Callback lists are retained registrations, not one-shot listeners. Copying
+            // is intentionally avoided in the current implementation; callers should not
+            // mutate registration state from inside a callback unless they accept list
+            // iteration semantics.
             if (_choiceCallbacks.TryGetValue(choiceLabel, out var list))
             {
                 for (int i = 0; i < list.Count; i++)
@@ -406,6 +449,9 @@ namespace Behind_Bars.Systems.Dialogue
         {
             if (string.IsNullOrEmpty(nodeLabel))
                 return;
+            // Node callbacks follow the same case-insensitive retained-list semantics as
+            // choices. Callback exceptions are contained so one subscriber cannot block
+            // the remaining callbacks or native event flow.
             if (_nodeCallbacks.TryGetValue(nodeLabel, out var list))
             {
                 for (int i = 0; i < list.Count; i++)
@@ -416,13 +462,19 @@ namespace Behind_Bars.Systems.Dialogue
         }
 
 #if MONO
+        // Mono exposes the handler collection as a private field; IL2CPP exposes the
+        // corresponding collection directly as a property (see Build/Use/Jump methods).
         private static FieldInfo dialogueContainersField = typeof(DialogueHandler).GetField("dialogueContainers", BindingFlags.NonPublic | BindingFlags.Instance);
 #else
         // In IL2CPP, dialogueContainers is a property, not a field
 #endif
+        // Labels are case-insensitive and each list remains attached until ClearCallbacks
+        // or Dispose; registration APIs intentionally support multiple callbacks/label.
         private readonly Dictionary<string, List<Action>> _choiceCallbacks = new Dictionary<string, List<Action>>(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, List<Action>> _nodeCallbacks = new Dictionary<string, List<Action>>(StringComparer.OrdinalIgnoreCase);
+        // Own pending one-shot override-clear delegates so they can be removed reliably.
         private readonly List<Action> _oneShotConversationStartListeners = new List<Action>();
+        // Stored subscription target and guard used to balance event hookup/teardown.
         private DialogueHandler _eventHandler;
         private bool _eventsHooked;
     }

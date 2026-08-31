@@ -16,6 +16,11 @@ namespace Behind_Bars.Systems.Jail
     public class FineCalculator
     {
         private static FineCalculator? _instance;
+
+        /// <summary>
+        /// Lazily created process-local fine calculator.
+        /// </summary>
+        /// <remarks>The instance and its configured table are not persisted or synchronized across multiplayer peers.</remarks>
         public static FineCalculator Instance => _instance ??= new FineCalculator();
 
         // Base fine amounts (reduced to prevent excessive scaling)
@@ -76,6 +81,10 @@ namespace Behind_Bars.Systems.Jail
         /// Prioritizes RapSheet as the source of truth (crimes are moved there after arrest)
         /// Falls back to CrimeData if RapSheet doesn't have crimes yet
         /// </summary>
+        /// <param name="player">The player to calculate fines for.</param>
+        /// <param name="rapSheet">The player's rap sheet, or <c>null</c> to resolve it from the current manager.</param>
+        /// <returns>The final fine in currency units, capped at <c>$50,000</c>, or zero when no usable crimes exist.</returns>
+        /// <remarks>RapSheet is preferred when non-empty; CrimeData is only used as a fallback. Repeat-offender scaling applies whenever a rap sheet object is available.</remarks>
         public float CalculateTotalFine(Player player, RapSheet? rapSheet = null)
         {
             if (player == null)
@@ -336,6 +345,9 @@ namespace Behind_Bars.Systems.Jail
         /// <summary>
         /// Get base fine for a crime type (without multipliers)
         /// </summary>
+        /// <param name="crimeClassName">Crime class/type name used as the lookup key.</param>
+        /// <param name="victimType">Optional murder victim category.</param>
+        /// <returns>The configured base fine, murder-specific fine, or the $25 unknown-crime fallback.</returns>
         public float GetBaseFine(string crimeClassName, string? victimType = null)
         {
             // Handle Murder crimes

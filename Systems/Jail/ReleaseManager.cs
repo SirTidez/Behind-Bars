@@ -148,6 +148,10 @@ namespace Behind_Bars.Systems.Jail
             return true;
         }
 
+        /// <summary>
+        /// Gets the registered release manager, adopting or bootstrapping a compatible instance
+        /// when no manager has been registered yet.
+        /// </summary>
         public static ReleaseManager Instance
         {
             get
@@ -166,6 +170,10 @@ namespace Behind_Bars.Systems.Jail
 
         #region Release Types
 
+        /// <summary>
+        /// Release pathways supported by the manager.  The type controls summary/bail handling;
+        /// all normal pathways still pass through the officer escort state machine.
+        /// </summary>
         public enum ReleaseType
         {
             TimeServed,
@@ -174,6 +182,9 @@ namespace Behind_Bars.Systems.Jail
             Emergency
         }
 
+        /// <summary>
+        /// Coarse manager status mirrored from the release-officer/canonical scanner callbacks.
+        /// </summary>
         public enum ReleaseStatus
         {
             NotStarted,
@@ -189,14 +200,23 @@ namespace Behind_Bars.Systems.Jail
 
         #region Release Data
 
+        /// <summary>
+        /// Volatile state for one player's release attempt.  The request is keyed by the resolved
+        /// runtime player key and is removed from <c>activeReleases</c> on completion or failure.
+        /// Mono callback delegates are non-serialized; IL2CPP uses the internal notification bridge
+        /// instead.
+        /// </summary>
         [System.Serializable]
         public class ReleaseRequest
         {
+            // Identity and lifecycle state used by the active-release dictionary and queue.
             public string playerKey;
             public Player player;
             public ReleaseType releaseType;
             public ReleaseStatus status;
             public DateTime releaseTime;
+
+            // Release summary and inventory handoff data captured when the request is created.
             public float bailAmount;
             public string releaseReason;
             public Vector3 exitPosition;
@@ -204,11 +224,15 @@ namespace Behind_Bars.Systems.Jail
             public List<string> itemsToReturn = new List<string>();
             public ActiveReleaseOfficerBehavior assignedOfficer;
 #if MONO
+            // Mono-only event delegates are kept on the request so they can be detached by identity.
             [System.NonSerialized] public System.Action<Player> escortCompletedCallback;
             [System.NonSerialized] public System.Action<Player, string> escortFailedCallback;
             [System.NonSerialized] public System.Action<Player, ActiveReleaseOfficerBehavior.ReleaseState> statusUpdateCallback;
 #endif
 
+            /// <summary>
+            /// Create a not-started request and derive its stable runtime key from the player.
+            /// </summary>
             public ReleaseRequest(Player player, ReleaseType type, string reason = "")
             {
                 this.player = player;
@@ -225,18 +249,25 @@ namespace Behind_Bars.Systems.Jail
 
         #region Fields
 
+        // Authored exit reference and watchdog duration.  The exit transform is currently resolved
+        // to fixed coordinates by GetPlayerExitPosition; releaseProcessTimeout is measured in real
+        // Unity seconds by the release-process watchdog.
         public Transform prisonExitPoint; // Set in inspector or found automatically
         public float releaseProcessTimeout = 300f; // 5 minutes max
         private float _nextQueueProcessTime;
 
-        // Active releases being processed
+        // Active requests are keyed by playerKey. CompleteRelease verifies and removes the matching
+        // object before invoking completion callbacks; FailRelease removes during its cleanup path,
+        // so callers must avoid sending duplicate failure notifications.
         private Dictionary<string, ReleaseRequest> activeReleases = new Dictionary<string, ReleaseRequest>();
 
-        // Queue for releases when guards are busy
+        // Requests without an officer wait here. ProcessQueuedReleases starts at most one eligible
+        // request per invocation and requeues it when officers remain unavailable.
         private Queue<ReleaseRequest> releaseQueue = new Queue<ReleaseRequest>();
         private readonly List<Coroutine> sceneCoroutineHandles = new List<Coroutine>();
 
-        // Available release officers
+        // Snapshot of officers supplied by the NPC manager; availability is refreshed before each
+        // assignment attempt rather than being a permanently authoritative registry.
         private List<ActiveReleaseOfficerBehavior> availableOfficers = new List<ActiveReleaseOfficerBehavior>();
 
 
@@ -252,8 +283,9 @@ namespace Behind_Bars.Systems.Jail
 
         #region Events
 
-        // Keep Mono's public integration surface, but do not export managed delegate
-        // fields from the IL2CPP-injected release manager type.
+        // Keep Mono's public integration surface, but do not export managed delegate fields from
+        // the IL2CPP-injected release manager type.  Each event fires only after the corresponding
+        // request transition has been accepted by this manager.
 #if MONO
         public static System.Action<Player, ReleaseType> OnReleaseStarted;
         public static System.Action<Player, ReleaseType> OnReleaseCompleted;
@@ -464,7 +496,9 @@ namespace Behind_Bars.Systems.Jail
         #region Public Release Methods
 
         /// <summary>
-        /// Start the release process for a player
+        /// Start or queue a release process for a player.  Duplicate active/queued requests are
+        /// treated as already accepted, while stale requests may be failed and cleaned up before a
+        /// new request is assigned.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -550,7 +584,8 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Emergency release (skips normal process)
+        /// Complete an emergency release by teleporting directly to the fixed exit and restoring
+        /// player release systems without the normal officer escort sequence.
         /// </summary>
         public void EmergencyRelease(Player player)
         {
@@ -575,6 +610,11 @@ namespace Behind_Bars.Systems.Jail
 
         #region Release Process Management
 
+        /// <summary>
+        /// Refresh the officer pool and attach the request callbacks to the first available officer.
+        /// If the pool is empty, this may create one officer on demand; a false result leaves the
+        /// request unassigned for queueing.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -623,6 +663,10 @@ namespace Behind_Bars.Systems.Jail
             return false;
         }
 
+        /// <summary>
+        /// Mark a request as dispatched, prepare the supervising officer, and start the assigned
+        /// release officer's coroutine.  A missing assignment fails the request immediately.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -655,6 +699,11 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Start the canonical release-officer state machine and wait for completion or failure.
+        /// On IL2CPP this coroutine is only a lifetime/timeout watchdog because state transitions
+        /// arrive through the notification bridge; Mono waits on the same request status directly.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -711,6 +760,10 @@ namespace Behind_Bars.Systems.Jail
 #endif
         }
 
+        /// <summary>
+        /// Wait for inventory processing to report completion, then force the flag after the fixed
+        /// timeout so the release flow cannot remain blocked indefinitely.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -731,6 +784,11 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Wait until the player moves beyond the storage exit distance, or until the fixed timeout
+        /// expires.  The assigned officer remains in a storage-waiting state during this window,
+        /// and timeout proceeds rather than failing the release.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -774,6 +832,11 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info($"Storage exit wait complete for {request.player.name}");
         }
 
+        /// <summary>
+        /// Claim an active request for exactly-once completion, then perform teleport, escort cleanup,
+        /// player restoration, parole setup, queued-request processing, and the completion event.
+        /// Stale or duplicate completion signals are ignored before external side effects run.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -866,6 +929,11 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Debug($"Release completed for {request.player.name} - all escorts cleared");
         }
 
+        /// <summary>
+        /// Mark a request failed, cancel prepared supervision, release the assigned officer, remove
+        /// the active entry, process the queue, and notify listeners/player.  An officer-idle cleanup
+        /// is intentionally quiet to avoid surfacing a false failure notification.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -908,6 +976,11 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Discard stale queued requests and attempt to start one eligible request.  If no officer
+        /// can be assigned, the dequeued request is restored to the tail and processing stops for
+        /// this invocation.
+        /// </summary>
         private void ProcessQueuedReleases()
         {
             while (releaseQueue.Count > 0)
@@ -942,6 +1015,11 @@ namespace Behind_Bars.Systems.Jail
 
         #region Utility Methods
 
+        /// <summary>
+        /// Return the authored prison exit position currently used for every player.  The player
+        /// argument is retained for the call-site contract but is not consulted by this fixed-point
+        /// implementation.
+        /// </summary>
         private Vector3 GetPlayerExitPosition(Player player)
         {
             // Use specific prison exit coordinates
@@ -959,6 +1037,10 @@ namespace Behind_Bars.Systems.Jail
             return exitPosition + forward * 1.6f;
         }
 
+        /// <summary>
+        /// Resolve the stable runtime key used to correlate a player across active and queued
+        /// release requests; null players produce an empty key.
+        /// </summary>
         private static string GetPlayerRuntimeKey(Player player)
         {
             if (player == null)
@@ -974,6 +1056,11 @@ namespace Behind_Bars.Systems.Jail
             return new Vector3(0f, 80.1529f, 0f); // Facing away from wall/pillar
         }
 
+        /// <summary>
+        /// Resolve the storage-wait location in fallback order: authored inventory drop-off,
+        /// discovered pickup station, then jail root, with the jail root repeated as the exception
+        /// fallback.
+        /// </summary>
         private Vector3 GetStorageLocationForWaiting()
         {
             try
@@ -1002,6 +1089,11 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Collect confiscated item names that do not match the local name-based contraband list.
+        /// The result is best-effort and returns an empty list when the player handler or lookup
+        /// fails; it is used to seed the later storage snapshot.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -1038,6 +1130,11 @@ namespace Behind_Bars.Systems.Jail
             return legalItems;
         }
 
+        /// <summary>
+        /// Apply the current fallback contraband heuristic, which checks case-insensitive name
+        /// substrings against a fixed list.  It does not consult the game's authoritative item
+        /// classification system.
+        /// </summary>
         private bool IsItemContraband(string itemName)
         {
             // Simple contraband check based on item name
@@ -1060,6 +1157,11 @@ namespace Behind_Bars.Systems.Jail
             return false;
         }
 
+        /// <summary>
+        /// Restore player movement/inventory, clear jail and persistent storage state, notify the
+        /// player handler for the release type, and start parole supervision.  Failures are caught
+        /// and logged here rather than propagated to the outer release callback.
+        /// </summary>
         private void CompletePlayerRelease(Player player, ReleaseType releaseType)
         {
             try
@@ -1230,8 +1332,8 @@ namespace Behind_Bars.Systems.Jail
 #endif
         private float CalculateParoleDuration(RapSheet rapSheet, bool hasRapSheet)
         {
-            // Game time scale: 1 game minute = 1 real second, 1 game hour = 60 game minutes, 1 game day = 1440 game minutes
-            // Parole terms are calculated in game time units
+            // Durations are calculated in game-minute units.  Conversion to wall-clock time is left
+            // to the game-time consumers; this calculation does not assume a fixed real-time ratio.
             const float BASE_PAROLE_TIME = 2880f;  // 2 game days (2880 game minutes)
             const float MIN_PAROLE_TIME = 1440f;   // 1 game day (1440 game minutes)
             const float MAX_PAROLE_TIME = 10080f;  // 7 game days (10080 game minutes)
@@ -1278,8 +1380,8 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Calculate additional parole time from new crimes (without base time or LSI modifier)
-        /// Used when extending paused parole
+        /// Calculate additional parole time from the rap sheet's current crime count (without base
+        /// time or LSI modifier).  Used when extending paused parole.
         /// </summary>
         /// <returns>Additional time in game minutes</returns>
 #if !MONO
@@ -1294,8 +1396,8 @@ namespace Behind_Bars.Systems.Jail
                 return 0f;
             }
 
-            // Just calculate crime-based time, without base or LSI modifier
-            // This represents the additional burden of new crimes
+            // Calculate the current crime-based burden without base or LSI modifier.  GetCrimeCount
+            // is a total snapshot here; it is not a delta computed since the prior parole term.
             int crimeCount = rapSheet.GetCrimeCount();
             float additionalTime = crimeCount * CRIME_MULTIPLIER;
 
@@ -1352,7 +1454,8 @@ namespace Behind_Bars.Systems.Jail
                         bailAmountPaid = activeReleases[playerKey].bailAmount;
                     }
                 }
-                // If releaseType is not BailPayment, bailAmountPaid remains 0 (timed out)
+                // If releaseType is not BailPayment, bailAmountPaid intentionally remains 0; this
+                // branch is not a timeout or failure indication.
                 
                 // Get fine amount and rap sheet
                 var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
@@ -2300,11 +2403,19 @@ namespace Behind_Bars.Systems.Jail
 
         #region Public Interface
 
+        /// <summary>
+        /// Return whether the player has an active release request.  Queued requests are not
+        /// included until an officer is assigned.
+        /// </summary>
         public bool IsReleaseInProgress(Player player)
         {
             return player != null && activeReleases.ContainsKey(GetPlayerRuntimeKey(player));
         }
 
+        /// <summary>
+        /// Return the active request status, or <see cref="ReleaseStatus.NotStarted"/> for a null,
+        /// unknown, or merely queued player.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -2319,6 +2430,10 @@ namespace Behind_Bars.Systems.Jail
             return activeReleases.ContainsKey(playerKey) ? activeReleases[playerKey].status : ReleaseStatus.NotStarted;
         }
 
+        /// <summary>
+        /// Register an officer with the NPC manager when available, then refresh this manager's
+        /// local availability snapshot.
+        /// </summary>
         public void RegisterOfficer(ActiveReleaseOfficerBehavior officer)
         {
             if (officer == null)
@@ -2336,6 +2451,10 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Debug($"Registered release officer: {officer.GetBadgeNumber()}");
         }
 
+        /// <summary>
+        /// Remove an officer from the NPC manager when available, then refresh this manager's local
+        /// availability snapshot.
+        /// </summary>
         public void UnregisterOfficer(ActiveReleaseOfficerBehavior officer)
         {
             if (officer == null)
@@ -2354,7 +2473,9 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Cancel any active release process for a player (used during new arrest)
+        /// Cancels any queued or active release process for a player, marking an active request failed, releasing its
+        /// assigned officer, removing it from active state, and allowing queued requests to be processed again. The method
+        /// expects a non-null player; the current catch/log path also dereferences player when reporting a failure.
         /// </summary>
         public void CancelPlayerRelease(Player player)
         {
@@ -2389,7 +2510,9 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Called by InventoryPickupStation when inventory processing is complete
+        /// Marks an active request's inventoryProcessed flag and forwards the completion callback to its assigned release
+        /// officer. A queued, unknown, or null-key request is not created by this method and only produces a warning; no
+        /// release status transition occurs here.
         /// </summary>
         public void OnInventoryProcessingComplete(Player player)
         {
@@ -2419,7 +2542,8 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Called when player confirms they are ready to proceed (NEW)
+        /// Forwards a ready-to-proceed confirmation to the assigned release officer for an active request. This callback does
+        /// not mutate the request status or create an assignment; queued/unknown requests only produce a warning.
         /// </summary>
         public void OnPlayerConfirmationReceived(Player player)
         {
@@ -2448,7 +2572,9 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Called when exit scan is completed (NEW)
+        /// Completes an active release immediately after the exit scanner reports completion. The manager trusts that the
+        /// scanner already teleported the player; it does not validate the scanner source or perform a separate position check.
+        /// Queued/unknown requests only produce a warning.
         /// </summary>
         public void OnExitScanCompleted(Player player)
         {
@@ -2522,6 +2648,10 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Debug("ReleaseManager cancelled active scene release work");
         }
 
+        /// <summary>
+        /// Start a tracked scene coroutine so scene teardown can stop it through
+        /// <see cref="CancelForSceneExit"/>.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -2618,6 +2748,10 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Receive the IL2CPP-safe completion notification from the assigned officer and route it
+        /// through the manager's exactly-once completion guard.
+        /// </summary>
         [HideFromIl2Cpp]
         internal void NotifyOfficerEscortCompleted(ActiveReleaseOfficerBehavior officer, Player player)
         {
@@ -2633,6 +2767,10 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Receive the IL2CPP-safe failure notification from the assigned officer and route it to
+        /// the matching active request; notifications from another officer are ignored.
+        /// </summary>
         [HideFromIl2Cpp]
         internal void NotifyOfficerEscortFailed(ActiveReleaseOfficerBehavior officer, Player player, string reason)
         {
@@ -2649,6 +2787,9 @@ namespace Behind_Bars.Systems.Jail
         }
 #endif
 
+        /// <summary>
+        /// Check the queue for a request with the supplied runtime player key without dequeuing it.
+        /// </summary>
         private bool HasQueuedRelease(string playerKey)
         {
             foreach (var request in releaseQueue)
@@ -2662,6 +2803,10 @@ namespace Behind_Bars.Systems.Jail
             return false;
         }
 
+        /// <summary>
+        /// Remove all queued requests for a player, marking each removed request failed without
+        /// firing the normal active-request failure event.
+        /// </summary>
         private void RemoveQueuedReleaseRequests(string playerKey)
         {
             if (string.IsNullOrEmpty(playerKey) || releaseQueue.Count == 0)
@@ -2690,6 +2835,11 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Associate an officer with a request and, on Mono, attach stable callback delegates that
+        /// can later be removed by identity.  IL2CPP relies on the internal notification bridge and
+        /// therefore stores only the officer reference here.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -2714,6 +2864,10 @@ namespace Behind_Bars.Systems.Jail
 #endif
         }
 
+        /// <summary>
+        /// Remove the request's Mono callback delegates from its assigned officer.  The assigned
+        /// officer reference itself is cleared by <see cref="ReleaseAssignedOfficer"/>.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -2751,6 +2905,10 @@ namespace Behind_Bars.Systems.Jail
 #endif
         }
 
+        /// <summary>
+        /// Detach request callbacks, return the officer to the available pool, optionally send it
+        /// back to post, and clear the request's officer reference.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -2779,6 +2937,11 @@ namespace Behind_Bars.Systems.Jail
             request.assignedOfficer = null;
         }
 
+        /// <summary>
+        /// Detach callbacks and release officers for every active request during manager teardown.
+        /// This helper does not itself clear the active-request dictionary; its callers own that
+        /// lifecycle decision.
+        /// </summary>
         private void CleanupAllActiveReleaseCallbacks()
         {
             if (activeReleases.Count == 0)
@@ -2792,6 +2955,11 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Wait for the canonical supervising officer's intake state machine, then hand off the
+        /// dismissed release summary without reviving the retired manager-owned compliance flow.
+        /// The player is unfrozen on success, invalidation, or the fixed timeout.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -2847,6 +3015,11 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Error($"ReleaseManager: Canonical parole intake was unavailable for {handoffTimeoutSeconds:0}s after {player.name} dismissed the release summary");
         }
 
+        /// <summary>
+        /// Give the canonical supervising officer a bounded opportunity to begin parole intake
+        /// while the release-summary UI is visible.  Failure only logs; it does not revive the
+        /// legacy manager-owned compliance sequence.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif

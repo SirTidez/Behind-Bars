@@ -47,7 +47,9 @@ namespace Behind_Bars.Systems.Jail
 #if MONO
         [Tooltip("Maximum angle in degrees from player forward direction to monitor (180 = any angle)")]
 #endif
-        public float viewAngleThreshold = 75f;  // Increased from 60 to 75 for more lenient detection
+        // Retained serialized configuration value; the current visibility predicate does not read
+        // this threshold, so changing it currently affects only inspector/log output.
+        public float viewAngleThreshold = 75f;
 
 #if MONO
         [Tooltip("Use frustum culling check (expensive - can cause frame spikes if enabled)")]
@@ -57,6 +59,8 @@ namespace Behind_Bars.Systems.Jail
 #if MONO
         [Tooltip("Enable/disable the culling system entirely")]
 #endif
+        // Manager-level update toggle.  This controls the culling loop and is separate from each
+        // SecurityCamera.cameraComponent.enabled state managed by UpdateCameraStates.
         public bool enabled = true;
 
 #if MONO
@@ -64,7 +68,8 @@ namespace Behind_Bars.Systems.Jail
 #endif
         public bool showDebugInfo = false;
 
-        // Core data structures
+        // Core data structures.  Initialize rebuilds these maps/lists; the visibility cache is the
+        // input to camera-state decisions, while the request-time maps debounce state transitions.
         private Dictionary<SecurityCamera, HashSet<MonitorController>> _cameraToMonitorsMap = new Dictionary<SecurityCamera, HashSet<MonitorController>>();
         private Dictionary<MonitorController, bool> _monitorVisibilityCache = new Dictionary<MonitorController, bool>();
         private List<MonitorController> _allMonitors = new List<MonitorController>();
@@ -108,7 +113,9 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Initialize the culling manager with cameras and monitor assignments
+        /// Initializes the culling manager from the supplied cameras and monitor assignments.
+        /// Existing maps, visibility caches, camera lists, and monitor lists are cleared first; current and available cameras
+        /// from each assignment are then registered, and jail bounds are recalculated. Null lists are rejected with no reset.
         /// </summary>
         public void Initialize(List<SecurityCamera> cameras, List<JailMonitorController.MonitorAssignment> monitorAssignments, Transform jailRootTransform = null)
         {
@@ -165,7 +172,9 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Register a monitor-camera relationship
+        /// Adds a monitor-camera relationship and initializes that monitor's cached visibility to false when first seen.
+        /// Null arguments are ignored. Existing relationships are retained, so this method does not remove stale camera or
+        /// monitor mappings when assignments change.
         /// </summary>
         public void RegisterMonitor(MonitorController monitor, SecurityCamera camera)
         {
@@ -695,7 +704,8 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Force a visibility check update (useful for testing)
+        /// Immediately runs visibility and camera-state updates regardless of the enabled flag or the normal check interval.
+        /// It does not update _lastCheckTime, so the regular Update loop may perform another check as soon as its interval allows.
         /// </summary>
         public void ForceUpdate()
         {
@@ -704,7 +714,8 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Get the current visibility state of a monitor
+        /// Returns the cached visibility for a registered monitor, or false for null/unregistered monitors. The result may be
+        /// up to checkInterval old unless ForceUpdate or the regular throttled loop has refreshed it.
         /// </summary>
         public bool IsMonitorVisible(MonitorController monitor)
         {
@@ -715,7 +726,8 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Check if a camera is currently enabled
+        /// Returns the underlying SecurityCamera.cameraComponent enabled flag, or false when the camera or component is null.
+        /// This does not include whether the culling manager currently considers the camera eligible.
         /// </summary>
         public bool IsCameraEnabled(SecurityCamera camera)
         {
@@ -726,8 +738,11 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Handle when a monitor's assigned camera changes (e.g., rotating monitors)
-        /// This ensures the camera-to-monitor mapping stays up to date
+        /// Register the new camera relationship when a monitor changes assignment.  The current
+        /// implementation ignores <paramref name="oldCamera"/>, does not remove stale mappings,
+        /// and does not invoke <see cref="ForceUpdate"/>.  Because visibility is evaluated against
+        /// the retained map first, an old camera may remain eligible while the monitor is visible;
+        /// normal throttled processing observes the change on a later update.
         /// </summary>
         public void OnMonitorCameraChanged(MonitorController monitor, SecurityCamera oldCamera, SecurityCamera newCamera)
         {
@@ -739,9 +754,8 @@ namespace Behind_Bars.Systems.Jail
                 RegisterMonitor(monitor, newCamera);
             }
 
-            // Force an update to recalculate camera states
-            // The UpdateCameraStates method already checks monitor.assignedCamera, so this is mainly
-            // to ensure the new camera is registered in the mapping
+            // No immediate visibility/state update or old-camera removal occurs here.  The next
+            // scheduled Update (or an explicit ForceUpdate call by the caller) evaluates the map.
         }
     }
 }

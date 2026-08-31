@@ -25,13 +25,15 @@ namespace Behind_Bars.Systems.CrimeTracking
         private bool isOnParole;
 
         [SaveableField("paroleStartTime")]
-        private float paroleStartTime; // Now stores game time (game minutes)
+        private float paroleStartTime; // Absolute game time in game minutes.
 
         [SaveableField("paroleEndTime")]
-        private float paroleEndTime; // Now stores game time (game minutes)
+        private float paroleEndTime; // Absolute game time in game minutes.
 
+        // The serialized key is an old public contract. Its value is now game minutes,
+        // not real seconds; keep the field name so existing saves continue to hydrate.
         [SaveableField("paroleTermLengthInSeconds")]
-        private float paroleTermLengthInSeconds; // Kept for JSON compatibility, but now stores game minutes
+        private float paroleTermLengthInSeconds;
 
         [SaveableField("paroleViolations")]
         private List<ViolationRecord> paroleViolations;
@@ -399,7 +401,7 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// <summary>
         /// Gets the remaining time that was preserved when parole was paused.
         /// </summary>
-        /// <returns>The paused remaining time in seconds, or 0 if not paused.</returns>
+        /// <returns>The paused remaining time in game minutes, or 0 if not paused.</returns>
         public float GetPausedRemainingTime()
         {
             return isPaused ? pausedRemainingTime : 0f;
@@ -833,6 +835,14 @@ namespace Behind_Bars.Systems.CrimeTracking
 
         #region Daily Check-In and Warrant Methods
 
+        /// <summary>
+        /// Reads the persisted daily check-in window and reminder state.
+        /// </summary>
+        /// <param name="dayIndex">Receives the scheduled in-game day, or -1 when no window is set.</param>
+        /// <param name="startMinuteOfDay">Receives the inclusive start minute within the in-game day.</param>
+        /// <param name="endMinuteOfDay">Receives the inclusive end minute within the in-game day.</param>
+        /// <param name="reminderSent">Receives whether the reminder for this window was already emitted.</param>
+        /// <returns>True when the day and ordered minute bounds describe an active schedule.</returns>
         public bool TryGetDailyCheckInSchedule(out int dayIndex, out int startMinuteOfDay, out int endMinuteOfDay, out bool reminderSent)
         {
             dayIndex = scheduledCheckInDay;
@@ -842,6 +852,12 @@ namespace Behind_Bars.Systems.CrimeTracking
             return dayIndex >= 0 && startMinuteOfDay >= 0 && endMinuteOfDay >= startMinuteOfDay;
         }
 
+        /// <summary>
+        /// Persists a daily check-in window and clears its one-shot reminder marker.
+        /// </summary>
+        /// <param name="dayIndex">The in-game day on which the window applies.</param>
+        /// <param name="startMinuteOfDay">The inclusive start minute within the day.</param>
+        /// <param name="endMinuteOfDay">The inclusive end minute within the day.</param>
         public void SetDailyCheckInSchedule(int dayIndex, int startMinuteOfDay, int endMinuteOfDay)
         {
             scheduledCheckInDay = dayIndex;
@@ -850,11 +866,17 @@ namespace Behind_Bars.Systems.CrimeTracking
             scheduledCheckInReminderSent = false;
         }
 
+        /// <summary>
+        /// Marks the current persisted check-in window as having sent its reminder.
+        /// </summary>
         public void MarkDailyCheckInReminderSent()
         {
             scheduledCheckInReminderSent = true;
         }
 
+        /// <summary>
+        /// Removes the persisted daily check-in window and resets its reminder marker.
+        /// </summary>
         public void ClearDailyCheckInSchedule()
         {
             scheduledCheckInDay = -1;
@@ -863,8 +885,16 @@ namespace Behind_Bars.Systems.CrimeTracking
             scheduledCheckInReminderSent = false;
         }
 
+        /// <summary>
+        /// Gets whether parole currently carries an active agent warrant.
+        /// </summary>
+        /// <returns>True when warrant enforcement should be treated as active.</returns>
         public bool HasActiveAgentWarrant() => activeAgentWarrant;
 
+        /// <summary>
+        /// Sets the persisted agent-warrant state used by runtime enforcement.
+        /// </summary>
+        /// <param name="active">Whether the warrant should be active.</param>
         public void SetActiveAgentWarrant(bool active)
         {
             activeAgentWarrant = active;

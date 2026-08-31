@@ -21,14 +21,19 @@ using ScheduleOne.PlayerScripts;
 namespace Behind_Bars.UI
 {
     /// <summary>
-    /// Wrapper component for the BehindBarsUI panel that provides easy access to all UI elements
+    /// Wrapper component for the Behind Bars jail-information panel. It owns presentation
+    /// references and a game-time countdown, while release/custody authority remains in the jail
+    /// systems that call this wrapper.
     /// </summary>
     public class BehindBarsUIWrapper : MonoBehaviour
     {
 #if !MONO
+        /// <summary>Creates the IL2CPP wrapper for the jail-information panel component.</summary>
         public BehindBarsUIWrapper(System.IntPtr ptr) : base(ptr) { }
 #endif
 
+        // Serialized/prefab bindings. InitializeComponents resolves these references at runtime
+        // because the wrapper may be created from either the authored prefab or a fallback root.
         public GameObject panel;
         public TextMeshProUGUI title;
         public TextMeshProUGUI lblCrime;
@@ -41,7 +46,8 @@ namespace Behind_Bars.UI
 
         private bool _isInitialized = false;
         
-        // Dynamic update tracking
+        // Dynamic update tracking. Jail seconds are stored in game-time units after the explicit
+        // real-seconds-to-game-hours conversion below; bail values remain currency amounts.
         private float _remainingJailTime = 0f;
         private float _originalJailTime = 0f; // Track original sentence time for bail lerping
         private float _originalBailAmount = 0f;
@@ -50,10 +56,13 @@ namespace Behind_Bars.UI
         private string _crimeText = "";
         private bool _earlyReleaseTriggered = false; // Track if early release has been triggered for this sentence
         
-        // Game time scaling constants
+        // Schedule I's current custody display maps one real second to one game minute. These
+        // constants document the conversion boundary; they are unrelated to the tier UI's
+        // intentionally real-time countdown.
         private const float REAL_SECONDS_PER_GAME_MINUTE = 1f; // 1 real second = 1 game minute in Schedule I
         private const float GAME_SECONDS_PER_GAME_MINUTE = 60f; // 60 game seconds in 1 game minute
 
+        /// <summary>Unity lifecycle entry point that resolves prefab bindings before display calls.</summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -64,7 +73,9 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Initialize UI components and cache references
+        /// Resolves the panel/text/button hierarchy using runtime-appropriate component lookup,
+        /// applies font/wrapping fixes, and installs the entered-button listener once during
+        /// component startup. Missing optional bindings are logged and leave their displays inert.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -182,8 +193,9 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Update the crime information display
+        /// Updates the crime information display without changing panel visibility.
         /// </summary>
+        /// <param name="crime">Display-ready crime description.</param>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -197,8 +209,9 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Update the time information display
+        /// Updates the time information display without changing panel visibility.
         /// </summary>
+        /// <param name="timeInfo">Display-ready time text, normally game-time formatted.</param>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -212,8 +225,9 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Update the bail information display
+        /// Updates the bail information display without changing panel visibility.
         /// </summary>
+        /// <param name="bailInfo">Display-ready currency/status text.</param>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -227,7 +241,7 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Set the UI to show "Bailed Out" status
+        /// Sets the panel to the terminal “Bailed Out” presentation and stops its dynamic loop.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -242,8 +256,11 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Update all jail information at once
+        /// Updates the crime, time, and bail displays as one forwarding operation.
         /// </summary>
+        /// <param name="crime">Display-ready crime description.</param>
+        /// <param name="timeInfo">Display-ready time/status text.</param>
+        /// <param name="bailInfo">Display-ready currency/status text.</param>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -254,9 +271,8 @@ namespace Behind_Bars.UI
             SetBailInfo(bailInfo);
         }
 
-        /// <summary>
-        /// Update the stored bail amount without restarting dynamic updates
-        /// </summary>
+        /// <summary>Updates the stored/displayed bail amount without restarting the jail-time loop.</summary>
+        /// <param name="bailAmount">Current bail requirement in currency units.</param>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -270,8 +286,12 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Start dynamic updates for jail time remaining and bail amount
+        /// Starts the one-second display loop for a sentence. The input is real-world seconds,
+        /// converted here to the game's game-hour/game-second representation; the bail amount is
+        /// held static while the timer runs.
         /// </summary>
+        /// <param name="jailTimeSeconds">Sentence duration expressed in real-world seconds.</param>
+        /// <param name="bailAmount">Bail requirement in currency units.</param>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -300,7 +320,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Stop dynamic updates
+        /// Stops the dynamic update loop by clearing its run flag. Existing display values remain
+        /// until another caller updates or resets them.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -312,8 +333,10 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Completely reset the timer for a new arrest (not just stop it)
+        /// Stops the timer immediately and schedules a complete state reset for the next frame,
+        /// preventing an in-flight update-loop iteration from writing stale values over booking UI.
         /// </summary>
+        /// <param name="bookingBailAmount">Optional known booking bail; negative means unresolved.</param>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -326,6 +349,11 @@ namespace Behind_Bars.UI
             MelonCoroutines.Start(CompleteTimerReset(bookingBailAmount));
         }
 
+        /// <summary>
+        /// Completes the deferred reset after one frame, then clears sentence/bail/early-release
+        /// state and renders the booking placeholder values.
+        /// </summary>
+        /// <param name="bookingBailAmount">Optional known booking bail; negative means unresolved.</param>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -369,7 +397,9 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Dynamic update loop that runs every real second (1 game minute = 60 game seconds)
+        /// Runs the legacy jail-information countdown once per real second, subtracting one game
+        /// minute (sixty game seconds) per tick. It owns the optimistic-release guard and stops
+        /// when booking, release, or scene teardown clears the update flag.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -455,7 +485,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Update the displayed time and bail values
+        /// Recomputes and applies the displayed game-time sentence and static bail values from
+        /// the wrapper's current countdown state.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -481,7 +512,9 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Format time in game seconds to user-friendly display (now uses game time)
+        /// Formats game-time seconds through GameTimeManager, returning <c>Released</c> at zero.
+        /// This legacy panel intentionally uses game-time formatting; the tier-status panel's
+        /// separate real-time contract must not be copied here.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -496,9 +529,7 @@ namespace Behind_Bars.UI
             return GameTimeManager.FormatGameTime(gameMinutes);
         }
 
-        /// <summary>
-        /// Format bail amount to currency
-        /// </summary>
+        /// <summary>Formats a non-positive bail value as <c>No Bail</c>, otherwise as whole currency.</summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -541,7 +572,9 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Handle the "Entered" button click
+        /// Handles the entered-button click by hiding this legacy panel. The commented future
+        /// actions below are intentionally not executed; booking/release transitions belong to
+        /// the owning jail systems.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]

@@ -11,9 +11,15 @@ using Il2CppScheduleOne.PlayerScripts;
 using ScheduleOne.PlayerScripts;
 #endif
 
+/// <summary>
+/// Runtime state for one authored jail door, including prefab instance, lock state,
+/// animation target, and completion callbacks.
+/// </summary>
 [System.Serializable]
 public class JailDoor
 {
+    // Authored holder/operation points and the instantiated door are scene references;
+    // they are rebuilt on scene load rather than persisted in custody data.
     public Transform doorHolder;
     public GameObject doorInstance;
     public Transform doorHinge;
@@ -30,7 +36,8 @@ public class JailDoor
     public float animationSpeed = 2f;
     public bool reverseDirection = false;  // If true, flips the open angle direction
 
-    // Private animation state
+    // Private animation state. currentAngle is the last applied hinge angle; targetAngle
+    // is selected by OpenDoor/CloseDoor while isAnimating gates UpdateDoorAnimation.
     private float targetAngle;
     private float currentAngle;
     private bool isAnimating = false;
@@ -46,6 +53,7 @@ public class JailDoor
     /// </summary>
     public event Action<JailDoor> Closed;
 
+    /// <summary>Classifies the physical role of a jail door.</summary>
     public enum DoorType
     {
         CellDoor,
@@ -55,12 +63,14 @@ public class JailDoor
         AreaDoor
     }
 
+    /// <summary>Describes whether a guard passes through a door or only operates it.</summary>
     public enum DoorInteractionType
     {
         PassThrough,    // Guard moves through door (Inner, Entry, Guard doors)
         OperationOnly   // Guard only opens/closes door (Cell, Holding doors)
     }
 
+    /// <summary>Transient animation/lock state reported by a jail door.</summary>
     public enum DoorState
     {
         Closed,
@@ -70,31 +80,40 @@ public class JailDoor
         Locked
     }
 
+    /// <summary>Returns whether the authored door holder exists.</summary>
     public bool IsValid()
     {
         return doorHolder != null;
     }
 
+    /// <summary>Returns whether a runtime door prefab has been assigned.</summary>
     public bool IsInstantiated()
     {
         return doorInstance != null;
     }
 
+    /// <summary>Returns true only for the fully open state.</summary>
     public bool IsOpen()
     {
         return currentState == DoorState.Open;
     }
 
+    /// <summary>Returns true for both closed and closed-and-locked states.</summary>
     public bool IsClosed()
     {
         return currentState == DoorState.Closed || currentState == DoorState.Locked;
     }
 
+    /// <summary>Returns whether the hinge is moving toward its current target.</summary>
     public bool IsAnimating()
     {
         return isAnimating;
     }
 
+    /// <summary>
+    /// Begins opening the door unless it is locked or already opening/open. Completion
+    /// and the <see cref="Opened"/> event occur on a later animation update.
+    /// </summary>
     public void OpenDoor()
     {
         if (isLocked || currentState == DoorState.Open || currentState == DoorState.Opening)
@@ -107,6 +126,10 @@ public class JailDoor
         Debug.Log($"{doorName}: Opening door (direction: {(reverseDirection ? "reversed" : "normal")})");
     }
 
+    /// <summary>
+    /// Begins closing the door unless it is already closed/closing/locked. Locking is a
+    /// separate operation performed by LockDoor or the owning controller.
+    /// </summary>
     public void CloseDoor()
     {
         if (currentState == DoorState.Closed || currentState == DoorState.Closing || currentState == DoorState.Locked)
@@ -119,6 +142,10 @@ public class JailDoor
         Debug.Log($"{doorName}: Closing door");
     }
 
+    /// <summary>
+    /// Marks the door locked and closes it first when necessary. A closing-and-locking
+    /// transition raises <see cref="Closed"/> only after the hinge reaches its target.
+    /// </summary>
     public void LockDoor()
     {
         isLocked = true;
@@ -139,6 +166,7 @@ public class JailDoor
         }
     }
 
+    /// <summary>Clears the lock and returns a locked door to the closed state.</summary>
     public void UnlockDoor()
     {
         if (isLocked)
@@ -149,6 +177,11 @@ public class JailDoor
         }
     }
 
+    /// <summary>
+    /// Advances the hinge toward its target and raises the corresponding completion event
+    /// when the door reaches its open or closed position.
+    /// </summary>
+    /// <param name="deltaTime">Frame interval used for animation interpolation.</param>
     public void UpdateDoorAnimation(float deltaTime)
     {
         if (!isAnimating || doorHinge == null)
@@ -202,6 +235,8 @@ public class JailDoor
         return reverseDirection ? -openAngle : openAngle;
     }
 
+    // Invoke each listener independently so one subscriber cannot prevent the door state
+    // transition or the remaining listeners from observing completion.
     private void RaiseDoorEvent(Action<JailDoor> listeners, string completedState)
     {
         if (listeners == null)
@@ -222,6 +257,10 @@ public class JailDoor
         }
     }
 
+    /// <summary>
+    /// Resets the authored hinge to its closed angle and derives the interaction mode from
+    /// the configured door type. It does not instantiate a prefab.
+    /// </summary>
     public void InitializeDoor()
     {
         if (doorHinge != null)
@@ -256,7 +295,8 @@ public class JailDoor
         }
     }
 
-    // Legacy method for compatibility
+    // Legacy compatibility wrapper; prefer the explicit OpenDoor/CloseDoor/LockDoor APIs
+    // when the caller needs to reason about asynchronous animation state.
     public void SetDoorState(bool open, bool locked = false)
     {
         if (locked)
@@ -273,25 +313,41 @@ public class JailDoor
         }
     }
 
+    /// <summary>Returns whether the door is currently locked.</summary>
     public bool IsLocked()
     {
         return isLocked;
     }
 }
 
+/// <summary>
+/// Runtime reservation for one holding-cell spawn point. Occupant key and display name
+/// are cleared together when the reservation is released.
+/// </summary>
 [System.Serializable]
 public class SpawnPointOccupancy
 {
+    /// <summary>Authored transform used as the spawn destination.</summary>
     public Transform spawnPoint;
+    /// <summary>Zero-based spawn index within the holding cell.</summary>
     public int spawnIndex;
+    /// <summary>Whether this point is reserved by an occupant.</summary>
     public bool isOccupied;
+    /// <summary>Stable runtime key for the reserved occupant.</summary>
     public string occupantKey;
+    /// <summary>Display name retained for diagnostics.</summary>
     public string occupantName;
 }
 
+/// <summary>
+/// Authored cell geometry plus scene-local door, bed, spawn, and occupancy state used by
+/// booking, recreation, and custody flows.
+/// </summary>
 [System.Serializable]
 public class CellDetail
 {
+    // cellIndex is the authored child index under Cells. It is intentionally distinct
+    // from a compact runtime list position used by some holding-cell APIs.
     public Transform cellTransform;
     public Transform cellBounds;
     public JailDoor cellDoor;
@@ -327,13 +383,16 @@ public class CellDetail
     // Maximum occupants for this cell (3 for holding cells, 1 for regular cells)
     public int maxOccupants = 1;
 
+    /// <summary>Returns whether the cell transform and its door record are usable.</summary>
     public bool IsValid()
     {
         return cellTransform != null && cellDoor.IsValid();
     }
     
     /// <summary>
-    /// Initialize spawn point occupancy tracking
+    /// Initialize spawn point occupancy tracking. Holding cells use this list as the
+    /// authoritative per-occupant reservation; regular cells may use the cell-level
+    /// fallback when no spawn points were authored.
     /// </summary>
     public void InitializeSpawnPointOccupancy()
     {
@@ -355,7 +414,9 @@ public class CellDetail
     }
 
     /// <summary>
-    /// Gets the next available spawn point in this cell
+    /// Gets the next available spawn point in this cell. Holding cells search their
+    /// occupancy records first; regular cells fall back to bounds/transform or the first
+    /// authored point when no per-spawn records exist.
     /// </summary>
     /// <returns>Transform of available spawn point, or null if all are occupied</returns>
     public Transform GetAvailableSpawnPoint()
@@ -377,7 +438,8 @@ public class CellDetail
     }
     
     /// <summary>
-    /// Assigns a player to the first available spawn point
+    /// Assigns a player to the first available spawn point and records the stable key/name
+    /// pair. Holding cells update cell-level occupancy from their per-spawn records.
     /// </summary>
     /// <param name="player">Player to assign</param>
     /// <returns>The spawn point assigned, or null if cell is full</returns>
@@ -537,6 +599,7 @@ public class CellDetail
         return spawnPoints[randomIndex];
     }
 
+    /// <summary>Begins opening this cell's door when its door record is valid.</summary>
     public void OpenCell()
     {
         if (cellDoor.IsValid())
@@ -545,6 +608,7 @@ public class CellDetail
         }
     }
 
+    /// <summary>Begins closing this cell's door when its door record is valid.</summary>
     public void CloseCell()
     {
         if (cellDoor.IsValid())
@@ -553,6 +617,8 @@ public class CellDetail
         }
     }
 
+    /// <summary>Locks or unlocks this cell's door without changing occupancy.</summary>
+    /// <param name="locked">Whether the cell door should be locked.</param>
     public void LockCell(bool locked)
     {
         if (cellDoor.IsValid())
@@ -718,6 +784,10 @@ public class CellDetail
     }
 }
 
+/// <summary>
+/// Authored storage-area references and the two inventory stations used by booking and
+/// release. Component references are resolved lazily through the IL2CPP-safe helpers.
+/// </summary>
 [System.Serializable]
 public class JailStorageArea
 {
@@ -753,6 +823,7 @@ public class JailStorageArea
     private JailInventoryPickupStation jailInventoryComponent;
     private InventoryPickupStation inventoryPickupComponent;
 
+    /// <summary>Returns whether the storage root and guard point are both assigned.</summary>
     public bool IsValid()
     {
         return storageArea != null && guardPoint != null;

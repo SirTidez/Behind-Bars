@@ -31,6 +31,17 @@ using ScheduleOne.Law;
 
 namespace Behind_Bars.Systems
 {
+    /// <summary>
+    /// Coordinates arrest, custody, booking, sentence tracking, and release handoffs.
+    /// </summary>
+    /// <remarks>
+    /// Sentence durations are represented as game minutes throughout the active jail flow,
+    /// even where legacy log text and local variable names say “seconds.” The current path
+    /// captures the arrest snapshot, clears native crimes and wanted state, runs the jail-manager
+    /// booking seam, and then delegates sentence timing/release to the custody services. Release
+    /// helpers clear native/enhanced crime collections, with the legacy fallback repeating that
+    /// cleanup; callers must not infer that a single helper owns all cleanup.
+    /// </remarks>
     public class JailSystem
     {
         private const float MIN_JAIL_TIME = Constants.DEFAULT_MIN_JAIL_TIME;
@@ -43,13 +54,20 @@ namespace Behind_Bars.Systems
         // explicitly cleared on scene shutdown.
         private sealed class PendingParoleArrestCause
         {
+            /// <summary>Parole-specific violation preserved across the native arrest callback.</summary>
             public ViolationType ViolationType;
+            /// <summary>UTC deadline after which the transient cause is discarded.</summary>
             public DateTime ExpiresAtUtc;
         }
 
+        // Scene-transient causes are keyed by stable player ID and expire after a short
+        // handoff window; ClearSceneTransientParoleArrestCauses removes them on scene reset.
         private readonly Dictionary<string, PendingParoleArrestCause> pendingParoleArrestCauses =
             new Dictionary<string, PendingParoleArrestCause>();
 
+        /// <summary>
+        /// Severity used to select sentence/fine presentation for an arrest.
+        /// </summary>
         public enum JailSeverity
         {
             Minor = 0,      // Traffic violations, small theft
@@ -58,18 +76,38 @@ namespace Behind_Bars.Systems
             Severe = 3      // Murder, major drug operations
         }
 
+        /// <summary>
+        /// Calculated custody sentence and its player-facing financial metadata.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="JailTime"/> is a game-minute duration, despite historical log messages
+        /// that append an “s” and the legacy property name.
+        /// </remarks>
         public class JailSentence
         {
+            /// <summary>Severity selected from the combined native/enhanced crime data.</summary>
             public JailSeverity Severity { get; set; }
+            /// <summary>Sentence duration in game minutes consumed by the jail tracker.</summary>
             public float JailTime { get; set; }
+            /// <summary>Fine calculated independently from the sentence duration.</summary>
             public float FineAmount { get; set; }
+            /// <summary>Whether the sentence UI offers a fine-payment alternative.</summary>
             public bool CanPayFine { get; set; }
+            /// <summary>Formatted crime/sentence explanation shown in custody UI.</summary>
             public string Description { get; set; } = "";
         }
 
         /// <summary>
-        /// NEW: Handle immediate arrest without going through police station/ticket GUI
+        /// Handle an immediate arrest without the native police-station ticket GUI.
         /// </summary>
+        /// <param name="player">Player entering custody.</param>
+        /// <remarks>
+        /// The active order is: mark custody, record an applicable parole violation, reset
+        /// prior jail state, capture/log native crimes, clear native wanted state, suppress
+        /// parole UI, apply custody state, show the busted effect, restore UI interactions,
+        /// assess the sentence, and hand off to the jail flow. The legacy crime-sync block
+        /// remains commented out because the Harmony path owns that capture.
+        /// </remarks>
         public IEnumerator HandleImmediateArrest(Player player)
         {
             if (player == null || !Core.IsGameplaySceneActive)
@@ -207,6 +245,11 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Show "Busted" fade effect like the original game
         /// </summary>
+        /// <remarks>
+        /// The primary BlackOverlay call and the control-disabling fallback both wait with
+        /// Unity-scaled <see cref="WaitForSeconds"/>; pausing or changing time scale changes
+        /// the effect duration. The fallback re-enables controls only when it disabled them.
+        /// </remarks>
         private IEnumerator ShowBustedEffect()
         {
             ModLogger.Info("Showing 'Busted' fade effect");
@@ -271,8 +314,10 @@ namespace Behind_Bars.Systems
         }
 
         /// <summary>
-        /// LEGACY: Original arrest handler (kept for compatibility)
+        /// Forward the legacy arrest entry point to the immediate-arrest flow.
         /// </summary>
+        /// <param name="player">Player entering custody.</param>
+        /// <remarks>This compatibility wrapper adds no separate arrest behavior.</remarks>
         public IEnumerator HandlePlayerArrest(Player player)
         {
             ModLogger.Info($"Processing LEGACY arrest for player: {player.name}");
@@ -281,6 +326,11 @@ namespace Behind_Bars.Systems
             yield return HandleImmediateArrest(player);
         }
 
+        /// <summary>
+        /// Assess the player's charges, calculate sentence/fine values, and populate custody UI.
+        /// </summary>
+        /// <param name="player">Player whose current crime data should be assessed.</param>
+        /// <returns>A sentence record using game-minute custody duration.</returns>
         private JailSentence AssessCrimeSeverity(Player player)
         {
             var sentence = new JailSentence();
@@ -310,6 +360,11 @@ namespace Behind_Bars.Systems
             return sentence;
         }
 
+        /// <summary>
+        /// Select the highest matching severity from enhanced and native crime type names.
+        /// </summary>
+        /// <param name="crimeData">Crime-data object retained for the caller's assessment context; the current implementation reads the local player systems.</param>
+        /// <returns>Severe/major/moderate for recognized charges, moderate without a local player, or minor when no recognized charge is found.</returns>
         private JailSeverity DetermineSeverityFromCrimeData(object crimeData)
         {
             // Calculate severity based on actual crime charges, not fine amounts
@@ -406,6 +461,16 @@ namespace Behind_Bars.Systems
         }
 
 
+        /// <summary>
+        /// Populate fine, game-minute sentence, description, and fine-payment fields.
+        /// </summary>
+        /// <param name="sentence">Sentence object to populate.</param>
+        /// <param name="player">Player whose RapSheet and crimes determine the result.</param>
+        /// <remarks>
+        /// The calculator returns game minutes and that value is stored directly in
+        /// <see cref="JailSentence.JailTime"/>. No real-time conversion occurs here; the
+        /// historical local variable/log wording is retained only for compatibility.
+        /// </remarks>
         private void CalculateSentence(JailSentence sentence, Player player)
         {
             // Get RapSheet for sentence calculation
@@ -427,8 +492,9 @@ namespace Behind_Bars.Systems
             // Pass parole status so it can apply appropriate multiplier
             var sentenceData = CrimeSentenceCalculator.Instance.CalculateSentence(player, rapSheet, wasOnParole);
             
-            // Convert game minutes to real-time seconds for JailTime
-            // 1 game minute = 1 real second, so conversion is 1:1
+            // Preserve the calculator's game-minute value in JailTime. The historical local
+            // name and old “real-time seconds” comment were misleading: downstream
+            // JailTimeTracker/WaitForJailSentence interprets this value as game minutes.
             float jailTimeInSeconds = sentenceData.TotalGameMinutes;
             
             sentence.JailTime = jailTimeInSeconds;
@@ -497,7 +563,10 @@ namespace Behind_Bars.Systems
 
 
 
+        // Exit positions are process-local and consumed when the caller requests them; the
+        // persistent player-data service stores the release position separately.
         private Dictionary<string, Vector3> _lastKnownPlayerPosition = new();
+        // Optional station reference created through the IL2CPP-safe helper path.
         private InventoryPickupStation _inventoryPickupStation;
 
         /// <summary>
@@ -544,6 +613,11 @@ namespace Behind_Bars.Systems
             return GetStoredExitPositionByKey(GetPlayerStateKey(player));
         }
 
+        /// <summary>
+        /// Read and consume a process-local exit position by stable player key.
+        /// </summary>
+        /// <param name="playerKey">Stable player key used when the position was stored.</param>
+        /// <returns>The stored position, or <see langword="null"/> when none exists.</returns>
         private Vector3? GetStoredExitPositionByKey(string playerKey)
         {
             if (string.IsNullOrEmpty(playerKey))
@@ -561,6 +635,11 @@ namespace Behind_Bars.Systems
             return null;
         }
 
+        /// <summary>
+        /// Resolve the stable key used by process-local jail state maps.
+        /// </summary>
+        /// <param name="player">Player whose key should be resolved.</param>
+        /// <returns>The shared player identity key.</returns>
         private string GetPlayerStateKey(Player player)
         {
             return Core.ResolvePlayerKey(player);
@@ -614,6 +693,12 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Set player state for jail (enable/disable controls properly)
         /// </summary>
+        /// <param name="player">Player whose custody state should be applied.</param>
+        /// <param name="inJail">Whether the player should be marked in custody.</param>
+        /// <remarks>
+        /// The current owner is <see cref="JailManager"/> when available; without it this
+        /// helper only logs a warning and does not apply a fallback state mutation.
+        /// </remarks>
         private void SetPlayerJailState(Player player, bool inJail)
         {
             var jailManager = Core.Instance?.JailManager;
@@ -629,6 +714,13 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Wait for the specified time while maintaining player controls in jail
         /// </summary>
+        /// <param name="waitTime">Duration in the caller's scaled Unity-second convention.</param>
+        /// <param name="player">Player whose custody controls should be maintained.</param>
+        /// <remarks>
+        /// Polling uses Unity-scaled <see cref="WaitForSeconds"/> intervals and aborts when the
+        /// gameplay scene is no longer active. The player parameter is retained for the
+        /// existing signature but control maintenance is routed through the jail manager.
+        /// </remarks>
         private IEnumerator WaitWithControlMaintenance(float waitTime, Player player)
         {
             ModLogger.Info($"Starting jail time with control maintenance for {waitTime}s");
@@ -664,6 +756,16 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Wait for jail sentence using game time tracking
         /// </summary>
+        /// <param name="sentenceGameMinutes">Sentence duration in game minutes.</param>
+        /// <param name="player">Player currently serving the sentence.</param>
+        /// <remarks>
+        /// The method starts tracker ownership through <see cref="JailManager"/> when present,
+        /// otherwise through the fallback jail tracker. Bail is offered only after intake
+        /// release readiness and cash checks succeed; payment stages a pending release and the
+        /// custody owner later performs the actual release. The 0.1-second polling loop and
+        /// one-second cash/log cadence use Unity-scaled waits/time, while tracker durations are
+        /// game minutes. A scene transition aborts the coroutine before normal cleanup.
+        /// </remarks>
         internal IEnumerator WaitForJailSentence(float sentenceGameMinutes, Player player)
         {
             ModLogger.Info($"[JAIL TRACKING] Starting jail sentence tracking for {player.name}: {sentenceGameMinutes} game minutes ({GameTimeManager.FormatGameTime(sentenceGameMinutes)})");
@@ -916,6 +1018,12 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Mark a pending release type for the player so custody cleanup can complete before the final release.
         /// </summary>
+        /// <param name="player">Player whose pending release should be marked.</param>
+        /// <param name="releaseType">Release reason to retain until custody cleanup.</param>
+        /// <remarks>
+        /// The jail manager owns the marker when available. Without it this compatibility seam
+        /// only logs a warning and does not retain a local pending-release value.
+        /// </remarks>
         public void MarkPendingReleaseType(Player player, ReleaseManager.ReleaseType releaseType)
         {
             var jailManager = Core.Instance?.JailManager;
@@ -936,6 +1044,8 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Check whether the player has a pending release type waiting for custody cleanup.
         /// </summary>
+        /// <param name="player">Player whose pending release should be queried.</param>
+        /// <returns><see langword="true"/> only when the jail manager reports a pending release.</returns>
         public bool HasPendingReleaseType(Player player)
         {
             var jailManager = Core.Instance?.JailManager;
@@ -950,6 +1060,8 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Consume the pending release type for the player, defaulting to time served when no pending bail exists.
         /// </summary>
+        /// <param name="player">Player whose pending release should be consumed.</param>
+        /// <returns>The manager-owned release type, or time served when the manager is unavailable.</returns>
         public ReleaseManager.ReleaseType ConsumePendingReleaseType(Player player)
         {
             var jailManager = Core.Instance?.JailManager;
@@ -962,8 +1074,15 @@ namespace Behind_Bars.Systems
         }
 
         /// <summary>
-        /// Send player directly to holding cell for short sentences
+        /// Send a player to holding custody, run booking, and wait the game-minute sentence.
         /// </summary>
+        /// <param name="player">Player entering the holding-cell flow.</param>
+        /// <param name="sentence">Calculated sentence and financial metadata.</param>
+        /// <remarks>
+        /// This path requires an available jail controller, holding cell, and spawn point;
+        /// otherwise it uses the blackout fallback. Booking completes before sentence timing,
+        /// and post-sentence release is handed to <see cref="JailManager"/> when available.
+        /// </remarks>
         private IEnumerator SendPlayerToHoldingCell(Player player, JailSentence sentence)
         {
             ModLogger.Info($"Sending player {player.name} to holding cell for {sentence.JailTime}s");
@@ -1063,6 +1182,14 @@ namespace Behind_Bars.Systems
         /// Start the booking process for the player
         /// This handles the processing/booking time before sentence starts
         /// </summary>
+        /// <param name="player">Player being booked.</param>
+        /// <param name="sentence">Sentence passed to the booking manager.</param>
+        /// <param name="holdingCell">Holding cell currently assigned to the player.</param>
+        /// <remarks>
+        /// When the jail manager exists, booking is delegated to its attached booking-process
+        /// seam. Without it, the method logs an error and waits five scaled seconds as a
+        /// compatibility fallback; it does not perform the full intake flow itself.
+        /// </remarks>
         private IEnumerator StartBookingProcess(Player player, JailSentence sentence, CellDetail holdingCell)
         {
             ModLogger.Info($"Starting booking/processing for {player.name}");
@@ -1080,8 +1207,15 @@ namespace Behind_Bars.Systems
         }
 
         /// <summary>
-        /// Process player to main jail cell (starts in holding, then transfers)
+        /// Process the player through the active holding-cell intake path.
         /// </summary>
+        /// <param name="player">Player entering custody.</param>
+        /// <param name="sentence">Calculated sentence passed to intake.</param>
+        /// <remarks>
+        /// The method currently sends the player to holding-cell processing only. The follow-up
+        /// main-cell transfer call remains commented out, so the active path does not perform
+        /// the historical holding-to-main-cell move here.
+        /// </remarks>
         private IEnumerator ProcessPlayerToJail(Player player, JailSentence sentence)
         {
             ModLogger.Info($"Processing player {player.name} to main jail cell for {sentence.JailTime}s");
@@ -1097,6 +1231,16 @@ namespace Behind_Bars.Systems
             //yield return TransferToMainJailCell(player, sentence);
         }
 
+        /// <summary>
+        /// Place a player in holding, run booking, and release the temporary holding assignment.
+        /// </summary>
+        /// <param name="player">Player entering intake processing.</param>
+        /// <param name="sentence">Sentence supplied to the booking process.</param>
+        /// <remarks>
+        /// The jail manager owns the intake officer/booking orchestration. This method only
+        /// handles cell assignment, door state, manager handoff, and temporary holding cleanup;
+        /// sentence timing is performed by the caller after this coroutine returns.
+        /// </remarks>
         private IEnumerator SendPlayerToHoldingCellForProcessing(Player player, JailSentence sentence)
         {
             ModLogger.Info($"Sending player {player.name} to holding cell for processing");
@@ -1241,6 +1385,11 @@ namespace Behind_Bars.Systems
             SafeInitiateEnhancedRelease(player, ReleaseManager.ReleaseType.TimeServed);
         }*/
 
+        /// <summary>
+        /// Find the first holding cell with an available spawn point.
+        /// </summary>
+        /// <param name="jailController">Active jail controller containing holding cells.</param>
+        /// <returns>The first available holding cell, or <see langword="null"/>.</returns>
         private CellDetail GetAvailableHoldingCell(JailController jailController)
         {
             // Find holding cell with available spawn points
@@ -1254,6 +1403,11 @@ namespace Behind_Bars.Systems
             return null;
         }
 
+        /// <summary>
+        /// Find the first unoccupied main cell.
+        /// </summary>
+        /// <param name="jailController">Active jail controller containing main cells.</param>
+        /// <returns>The first unoccupied cell, or <see langword="null"/>.</returns>
         private CellDetail GetAvailableMainCell(JailController jailController)
         {
             // Find main cell that's not occupied
@@ -1271,6 +1425,13 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Fallback method when holding cells are not available
         /// </summary>
+        /// <param name="player">Player whose custody sentence should continue.</param>
+        /// <param name="sentence">Sentence tracked while the screen is blacked out.</param>
+        /// <remarks>
+        /// The fallback keeps movement enabled, opens a two-second overlay, uses the normal
+        /// game-minute sentence tracker, and then delegates release to the jail manager or the
+        /// legacy release seam. It is a location/UI fallback, not a separate sentence unit.
+        /// </remarks>
         private IEnumerator FallbackJailMethod(Player player, JailSentence sentence)
         {
             // Keep all controls enabled even in fallback
@@ -1307,8 +1468,16 @@ namespace Behind_Bars.Systems
         }
 
         /// <summary>
-        /// New enhanced release method that integrates with ReleaseManager
+        /// Start the manager-owned enhanced release flow, with a legacy fallback when unavailable.
         /// </summary>
+        /// <param name="player">Player leaving custody.</param>
+        /// <param name="releaseType">Reason/authority for the release.</param>
+        /// <param name="bailAmount">Bail amount associated with a bail release, if applicable.</param>
+        /// <remarks>
+        /// When the jail manager exists it owns this handoff. Otherwise the method bootstraps or
+        /// resolves ReleaseManager, stores the exit position, and falls back to
+        /// <see cref="ReleasePlayerFromJail"/> if coordinated release cannot start.
+        /// </remarks>
         public void InitiateEnhancedRelease(Player player, ReleaseManager.ReleaseType releaseType, float bailAmount = 0f)
         {
             var jailManager = Core.Instance?.JailManager;
@@ -1380,6 +1549,13 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Safely initiate enhanced release, checking for existing releases first
         /// </summary>
+        /// <param name="player">Player whose release should be started.</param>
+        /// <param name="releaseType">Reason/authority for the release.</param>
+        /// <param name="bailAmount">Bail amount associated with a bail release, if applicable.</param>
+        /// <remarks>
+        /// Existing in-progress releases are left untouched. Otherwise this helper delegates
+        /// to the enhanced release seam and thereby centralizes duplicate-release protection.
+        /// </remarks>
         private void SafeInitiateEnhancedRelease(Player player, ReleaseManager.ReleaseType releaseType, float bailAmount = 0f)
         {
             var jailManager = Core.Instance?.JailManager;
@@ -1409,6 +1585,12 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Start jail time after booking process completes
         /// </summary>
+        /// <param name="player">Player whose sentence starts after booking.</param>
+        /// <param name="sentence">Sentence containing game-minute duration.</param>
+        /// <remarks>
+        /// The jail manager owns the active path when available. The fallback waits through the
+        /// same game-minute tracker, then uses the normal post-sentence release handoff.
+        /// </remarks>
         public IEnumerator StartJailTimeAfterBooking(Player player, JailSentence sentence)
         {
             var jailManager = Core.Instance?.JailManager;
@@ -1447,6 +1629,12 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Create inventory snapshot for persistent storage
         /// </summary>
+        /// <param name="player">Player whose inventory should be snapshotted.</param>
+        /// <remarks>
+        /// The current arrest path leaves this compatibility helper commented out because a
+        /// Harmony patch captures inventory before native clearing. Calling this method directly
+        /// remains best effort and logs failures.
+        /// </remarks>
         private void CreateInventorySnapshotIfNeeded(Player player)
         {
             try
@@ -1470,6 +1658,11 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Store player's current position as exit position
         /// </summary>
+        /// <param name="player">Player whose release position should be stored.</param>
+        /// <remarks>
+        /// Despite the historical summary, the current implementation always stores the fixed
+        /// police-station exit coordinates; it does not capture the player's current transform.
+        /// </remarks>
         internal void StorePlayerExitPosition(Player player)
         {
             try
@@ -1494,6 +1687,14 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Clear player's jail status (called by ReleaseManager after release completion)
         /// </summary>
+        /// <param name="player">Player whose custody, UI, transient position, and crime state should be cleared.</param>
+        /// <remarks>
+        /// The method prefers JailManager for custody state, removes the process-local exit
+        /// position, destroys jail UI, and clears native/enhanced crimes. The legacy
+        /// <see cref="ReleasePlayerFromJail"/> fallback repeats the crime cleanup, so both
+        /// release paths intentionally remain aligned rather than assuming this is the only
+        /// possible cleanup caller.
+        /// </remarks>
         public void ClearPlayerJailStatus(Player player)
         {
             try
@@ -1527,8 +1728,8 @@ namespace Behind_Bars.Systems
                     ModLogger.Debug($"Error clearing jail UI: {ex.Message}");
                 }
 
-                // CRITICAL: Clear crimes from both native and enhanced systems (player has been released)
-                // This is the ONLY place crimes should be cleared - after release, not during arrest
+                // Clear crimes from both native and enhanced systems after release. The legacy
+                // ReleasePlayerFromJail fallback repeats this cleanup; keep both paths aligned.
                 if (player.CrimeData != null)
                 {
                     player.CrimeData.ClearCrimes();
@@ -1554,6 +1755,13 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Legacy release method - still used as fallback
         /// </summary>
+        /// <param name="player">Player whose legacy release cleanup should run.</param>
+        /// <remarks>
+        /// This fallback clears arrest/UI/crime state, attempts the native Free calls, restores
+        /// movement/camera/inventory access, and enables the pickup station. It does not perform
+        /// the manager-owned escort/release sequence and may duplicate cleanup done by
+        /// <see cref="ClearPlayerJailStatus"/>.
+        /// </remarks>
         internal void ReleasePlayerFromJail(Player player)
         {
             ModLogger.Info($"Releasing player {player.name} from jail");
@@ -1700,6 +1908,12 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Show the jail info UI with crime details
         /// </summary>
+        /// <param name="sentence">Calculated custody sentence to display.</param>
+        /// <param name="player">Player whose charges and bail should be shown.</param>
+        /// <remarks>
+        /// The visible timer is initialized with zero here and begins after booking; bail is
+        /// resolved from the stored offer or recalculated through <see cref="BailSystem"/>.
+        /// </remarks>
         private void ShowJailInfoUI(JailSentence sentence, Player player)
         {
             try
@@ -1873,6 +2087,15 @@ namespace Behind_Bars.Systems
             }
         }
 
+        /// <summary>
+        /// Resolve the parole-specific charge associated with the current arrest, if available.
+        /// </summary>
+        /// <param name="player">Player whose pending cause or recent violation should be checked.</param>
+        /// <returns>A display name for the pending/recent cause, or an empty string.</returns>
+        /// <remarks>
+        /// The transient pending-cause map takes precedence; otherwise the newest non-generic
+        /// RapSheet violation from the last two minutes is used as a best-effort fallback.
+        /// </remarks>
         private string GetCurrentArrestParoleViolationName(Player player)
         {
             try
@@ -1903,6 +2126,16 @@ namespace Behind_Bars.Systems
             }
         }
 
+        /// <summary>
+        /// Preserve a parole-specific arrest cause across the native pursuit-to-custody callback.
+        /// </summary>
+        /// <param name="player">Player whose next arrest should carry the cause.</param>
+        /// <param name="violationType">Parole violation to preserve.</param>
+        /// <remarks>
+        /// The entry is keyed by stable player ID and expires after
+        /// <c>PendingParoleArrestCauseLifetimeSeconds</c>; it is scene-transient rather than
+        /// persisted RapSheet state.
+        /// </remarks>
         internal void RegisterPendingParoleArrestCause(Player player, ViolationType violationType)
         {
             if (player == null)
@@ -1936,11 +2169,20 @@ namespace Behind_Bars.Systems
             return TryGetPendingParoleArrestCause(player, out violationType);
         }
 
+        /// <summary>
+        /// Clear all scene-transient parole arrest causes during scene teardown/reset.
+        /// </summary>
         internal void ClearSceneTransientParoleArrestCauses()
         {
             pendingParoleArrestCauses.Clear();
         }
 
+        /// <summary>
+        /// Read a non-expired pending parole arrest cause and remove expired entries.
+        /// </summary>
+        /// <param name="player">Player whose transient cause should be read.</param>
+        /// <param name="violationType">Resolved cause, or <see cref="ViolationType.Other"/> when absent.</param>
+        /// <returns><see langword="true"/> when a current cause exists.</returns>
         private bool TryGetPendingParoleArrestCause(Player player, out ViolationType violationType)
         {
             violationType = ViolationType.Other;
@@ -2032,6 +2274,8 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Format jail time in a user-friendly way (now uses game time)
         /// </summary>
+        /// <param name="timeInGameMinutes">Duration in game minutes.</param>
+        /// <returns>A compact game-time string such as <c>2h 5m</c>.</returns>
         private string FormatJailTime(float timeInGameMinutes)
         {
             // Use GameTimeManager to format game time
@@ -2042,6 +2286,14 @@ namespace Behind_Bars.Systems
         /// Calculate bail amount based on fine amount and crime severity
         /// Bail should be significantly higher than the fine for serious crimes
         /// </summary>
+        /// <param name="fineAmount">Base fine amount used by the severity multiplier.</param>
+        /// <param name="severity">Severity selecting the base bail multiplier.</param>
+        /// <returns>The calculated bail amount, or zero for a non-positive fine.</returns>
+        /// <remarks>
+        /// Enhanced crime summary may add murder and witness-intimidation multipliers. This
+        /// calculation is separate from <see cref="BailSystem.CalculateBailAmount"/> and is
+        /// retained as a jail-system compatibility path.
+        /// </remarks>
         public float CalculateBailAmount(float fineAmount, JailSeverity severity)
         {
             if (fineAmount <= 0)
@@ -2107,6 +2359,12 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Reset all jail/booking/release state for a player before new arrest
         /// </summary>
+        /// <param name="player">Player whose active custody flow should be reset.</param>
+        /// <remarks>
+        /// Reset order is booking/release cancellation, escort unregister, release-grace
+        /// clearing, then station-state reset. The manager seam owns the active flow when
+        /// available; the fallback only asks legacy services to clean themselves up.
+        /// </remarks>
         private void ResetPlayerJailState(Player player)
         {
             try
@@ -2159,6 +2417,13 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Record a parole violation if the player was on parole when arrested
         /// </summary>
+        /// <param name="player">Player whose active parole record should be evaluated.</param>
+        /// <remarks>
+        /// A pending specific arrest cause or a fresh non-generic violation suppresses the
+        /// generic <see cref="ViolationType.NewCrime"/> record. Otherwise an on-parole arrest
+        /// adds that generic violation and updates LSI. Missing RapSheet/state is treated as a
+        /// no-op with diagnostic logging.
+        /// </remarks>
         private void RecordParoleViolationIfNeeded(Player player)
         {
             try
@@ -2236,6 +2501,12 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Reset all interaction stations to clean state
         /// </summary>
+        /// <param name="player">Player associated with the reset; currently used only for the surrounding arrest context.</param>
+        /// <remarks>
+        /// This is a best-effort reflection bridge for scene stations. Missing station objects
+        /// or private fields are skipped; failures are logged rather than preventing arrest
+        /// state reset.
+        /// </remarks>
         private void ResetStationStates(Player player)
         {
             try

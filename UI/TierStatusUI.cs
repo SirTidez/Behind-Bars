@@ -24,12 +24,17 @@ namespace Behind_Bars.UI
     /// </summary>
     public sealed class TierStatusUI : MonoBehaviour
     {
+        // Calm/warning/urgent colors are presentation state only. The manager supplies
+        // the real-time duration and decides whether this surface may be visible.
         private static readonly Color Gold = new Color(1f, 0.9f, 0.3f, 1f);
         private static readonly Color Calm = new Color(0.45f, 0.86f, 0.9f, 1f);
         private static readonly Color Warning = new Color(1f, 0.74f, 0.27f, 1f);
         private static readonly Color Urgent = new Color(1f, 0.36f, 0.33f, 1f);
         private static readonly Color NeutralBorder = new Color(0.3f, 0.3f, 0.3f, 1f);
 
+        // These references belong to the dynamically-created card under the player's HUD
+        // canvas. They are cleared together during scene exit so stale Unity wrappers are
+        // never reused after the native HUD has been replaced.
         private GameObject _panel;
         private Image _backgroundImage;
         private Image _leadingEdgeImage;
@@ -54,9 +59,14 @@ namespace Behind_Bars.UI
         private Color _stateColor = Calm;
 
 #if !MONO
+        /// <summary>Creates the IL2CPP wrapper for the injected tier-status component.</summary>
         public TierStatusUI(System.IntPtr ptr) : base(ptr) { }
 #endif
 
+        /// <summary>
+        /// Unity lifecycle entry point. Builds the card lazily because the player HUD canvas
+        /// may not exist yet when the persistent manager creates this component.
+        /// </summary>
         private void Start()
         {
             if (!_isInitialized)
@@ -65,6 +75,11 @@ namespace Behind_Bars.UI
             }
         }
 
+        /// <summary>
+        /// Animates only the urgent edge and cell outline using unscaled time. The animation
+        /// therefore remains tied to the real-time warning state and does not alter countdown
+        /// data or continue presenting a hidden card.
+        /// </summary>
         private void Update()
         {
             if (!_isInitialized || _panel == null || !_panel.activeSelf || _leadingEdgeImage == null)
@@ -84,6 +99,10 @@ namespace Behind_Bars.UI
             }
         }
 
+        /// <summary>
+        /// Creates the shared-HUD card once the player's canvas is available. If the canvas is
+        /// still loading, a single bounded realtime retry coroutine owns the deferred attempt.
+        /// </summary>
         public void CreateUI()
         {
             Canvas hudCanvas = GetPlayerHUDCanvas();
@@ -99,6 +118,10 @@ namespace Behind_Bars.UI
             CreateUIWithCanvas(hudCanvas);
         }
 
+        /// <summary>
+        /// Resolves the native player's HUD canvas using the runtime-appropriate API. A missing
+        /// or not-yet-registered IL2CPP HUD fails closed so creation can be retried safely.
+        /// </summary>
         private Canvas GetPlayerHUDCanvas()
         {
             try
@@ -116,6 +139,12 @@ namespace Behind_Bars.UI
             }
         }
 
+        /// <summary>
+        /// Builds the fixed-width, display-only card under <paramref name="hudCanvas"/>.
+        /// The height is extended for the status rows and the bounded cell badge occupies the
+        /// approved empty space on the right; initialization remains idempotent.
+        /// </summary>
+        /// <param name="hudCanvas">Player HUD canvas that owns the dynamically-created card.</param>
         private void CreateUIWithCanvas(Canvas hudCanvas)
         {
             if (_isInitialized || hudCanvas == null)
@@ -179,6 +208,12 @@ namespace Behind_Bars.UI
             ModLogger.Debug("TierStatusUI created in the shared top-left officer-command slot");
         }
 
+        /// <summary>
+        /// Applies a status snapshot and fades the card in when it was previously hidden.
+        /// Visibility arbitration remains manager-owned so officer instructions can take
+        /// precedence over this presentation surface.
+        /// </summary>
+        /// <param name="data">Current recreation status and real-time countdown snapshot.</param>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -204,6 +239,11 @@ namespace Behind_Bars.UI
             StartFade(1f, 0.15f, deactivateWhenComplete: false);
         }
 
+        /// <summary>
+        /// Updates text, urgency colors, cell emphasis, and phase progress without changing
+        /// whether the manager has authorized the card to remain visible.
+        /// </summary>
+        /// <param name="data">Current recreation status; countdown values are real seconds.</param>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -237,6 +277,7 @@ namespace Behind_Bars.UI
                 : new Color(0.08f, 0.09f, 0.1f, 1f);
         }
 
+        /// <summary>Fades the card out while retaining its references for the next update.</summary>
         internal void Hide()
         {
             if (!_isInitialized || _panel == null || !_panel.activeSelf)
@@ -246,6 +287,10 @@ namespace Behind_Bars.UI
             StartFade(0f, 0.15f, deactivateWhenComplete: true);
         }
 
+        /// <summary>
+        /// Hides synchronously and cancels any fade. The manager uses this path when an officer
+        /// command claims the shared HUD slot or when a scene is being torn down.
+        /// </summary>
         internal void HideImmediate()
         {
             CancelFade();
@@ -259,11 +304,16 @@ namespace Behind_Bars.UI
             }
         }
 
+        /// <summary>Returns whether the initialized card is active with a non-zero alpha.</summary>
         internal bool IsVisible()
         {
             return _isInitialized && _panel != null && _panel.activeSelf && _canvasGroup != null && _canvasGroup.alpha > 0f;
         }
 
+        /// <summary>
+        /// Stops fades and canvas retries, disables the card, and clears all scene-owned Unity
+        /// references. The component can be initialized again against a newly-created HUD.
+        /// </summary>
         public void CancelForSceneExit()
         {
             CancelFade();
@@ -297,6 +347,7 @@ namespace Behind_Bars.UI
             _isInitialized = false;
         }
 
+        /// <summary>Creates a noninteractive image with top-left anchored card geometry.</summary>
         private static Image CreateImage(Transform parent, string name, float x, float y, float width, float height, Color color)
         {
             GameObject obj = new GameObject(name);
@@ -313,6 +364,7 @@ namespace Behind_Bars.UI
             return image;
         }
 
+        /// <summary>Creates a no-wrap, noninteractive TMP label at card-local coordinates.</summary>
         private static TextMeshProUGUI CreateText(
             Transform parent,
             string name,
@@ -345,12 +397,14 @@ namespace Behind_Bars.UI
             return text;
         }
 
+        /// <summary>Replaces the current fade with one target-alpha transition.</summary>
         private void StartFade(float targetAlpha, float duration, bool deactivateWhenComplete)
         {
             CancelFade();
             _fadeCoroutine = MelonCoroutines.Start(FadeTo(targetAlpha, duration, deactivateWhenComplete)) as Coroutine;
         }
 
+        /// <summary>Stops and forgets the currently-owned fade coroutine, if any.</summary>
         private void CancelFade()
         {
             if (_fadeCoroutine != null)
@@ -360,6 +414,13 @@ namespace Behind_Bars.UI
             }
         }
 
+        /// <summary>
+        /// Performs a fade using unscaled delta time so HUD transitions are independent of the
+        /// game's time scale. It deactivates the card only after a requested hide completes.
+        /// </summary>
+        /// <param name="targetAlpha">Final canvas alpha.</param>
+        /// <param name="duration">Transition duration in real seconds.</param>
+        /// <param name="deactivateWhenComplete">Whether to deactivate the panel after hiding.</param>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -385,6 +446,10 @@ namespace Behind_Bars.UI
             _fadeCoroutine = null;
         }
 
+        /// <summary>
+        /// Waits up to ten real seconds for the player HUD canvas, then performs one creation
+        /// attempt and clears its coroutine handle on success or bounded failure.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -407,6 +472,7 @@ namespace Behind_Bars.UI
             ModLogger.Error("TierStatusUI: Player HUD canvas was unavailable after 10 real seconds");
         }
 
+        /// <summary>Routes destruction through the same idempotent scene-exit cleanup path.</summary>
         private void OnDestroy()
         {
             CancelForSceneExit();

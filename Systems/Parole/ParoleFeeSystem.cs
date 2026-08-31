@@ -16,6 +16,12 @@ namespace Behind_Bars.Systems.Parole
     /// Manages parole supervision fees assessed every 7 game days.
     /// Fee amount scales with LSI level.
     /// </summary>
+    /// <remarks>
+    /// Fee scheduling uses the lightweight mod clock's game-minute values and writes directly
+    /// to the current RapSheet parole record. These methods do not perform an authority check
+    /// themselves; the active parole monitor is expected to call assessment on the authoritative
+    /// path.
+    /// </remarks>
     public class ParoleFeeSystem
     {
         private static ParoleFeeSystem _instance;
@@ -97,6 +103,7 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Fee interval in game minutes (7 game days)
         /// </summary>
+        /// <remarks>The value is 10,080 fallback game minutes, not wall-clock minutes.</remarks>
         public const float FEE_INTERVAL_GAME_MINUTES = 1440f * 7f;
 
         /// <summary>
@@ -109,6 +116,8 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Get the weekly fee amount based on LSI level
         /// </summary>
+        /// <param name="lsiLevel">LSI level selecting the fixed fee table.</param>
+        /// <returns>Fee amount in currency units, or zero for no/unknown LSI.</returns>
         public static float GetWeeklyFee(LSILevel lsiLevel)
         {
             switch (lsiLevel)
@@ -124,6 +133,12 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Schedule the first fee assessment for a new parole term
         /// </summary>
+        /// <param name="player">Parolee whose RapSheet change should be marked.</param>
+        /// <param name="rapSheet">RapSheet containing the active parole record.</param>
+        /// <remarks>
+        /// The next-fee time is reset to the current fallback game time plus seven game days
+        /// whenever this method is called. Missing parole state is a no-op.
+        /// </remarks>
         public void InitializeFees(Player player, RapSheet rapSheet)
         {
             if (rapSheet?.CurrentParoleRecord == null) return;
@@ -138,6 +153,13 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Check if fees are due and assess them
         /// </summary>
+        /// <param name="player">Parolee receiving the assessment message.</param>
+        /// <param name="rapSheet">RapSheet containing fee schedule and LSI level.</param>
+        /// <remarks>
+        /// At most one fee is assessed per call; the next due time is moved forward by seven
+        /// game days from the current fallback clock. This method persists the charge and
+        /// queues officer text but does not process payment.
+        /// </remarks>
         public void CheckAndAssessFees(Player player, RapSheet rapSheet)
         {
             if (rapSheet?.CurrentParoleRecord == null) return;
@@ -167,6 +189,15 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Attempt to pay outstanding fees from player's cash
         /// </summary>
+        /// <param name="player">Parolee whose cash and fee record are mutated.</param>
+        /// <param name="rapSheet">RapSheet containing the outstanding fee balance.</param>
+        /// <returns><see langword="true"/> for no balance or full payment; <see langword="false"/> for partial/no payment or an error.</returns>
+        /// <remarks>
+        /// Payment is cash-only. A full payment records the amount and adds rapport; a partial
+        /// payment deducts all available cash and leaves the remainder owed. A zero-cash attempt
+        /// records a missed payment. The current cash bridge does not provide a rollback or
+        /// post-deduction confirmation if the underlying money call fails.
+        /// </remarks>
         public bool AttemptPayment(Player player, RapSheet rapSheet)
         {
             if (rapSheet?.CurrentParoleRecord == null) return false;
@@ -223,6 +254,13 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Handle a missed fee payment
         /// </summary>
+        /// <param name="player">Parolee receiving the consequence message.</param>
+        /// <param name="rapSheet">RapSheet whose missed-payment count and rapport are updated.</param>
+        /// <remarks>
+        /// First miss applies compliance/rapport penalties, second adds a formal violation, and
+        /// third-plus adds a repeated-payment violation. The third-plus branch only sends a
+        /// message that a warrant may be issued; it does not issue the warrant itself.
+        /// </remarks>
         public void HandleMissedPayment(Player player, RapSheet rapSheet)
         {
             if (rapSheet?.CurrentParoleRecord == null) return;
@@ -269,6 +307,8 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Get player's current cash amount
         /// </summary>
+        /// <param name="player">Currently unused; the cash service is global.</param>
+        /// <returns>Global cash balance, or zero when the runtime money service is unavailable.</returns>
         private float GetPlayerCash(Player player)
         {
             try
@@ -293,6 +333,9 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Deduct cash from the player
         /// </summary>
+        /// <param name="player">Currently unused; the cash service is global.</param>
+        /// <param name="amount">Cash amount to pass to the runtime money service.</param>
+        /// <remarks>Errors are logged and swallowed; callers do not receive a success signal.</remarks>
         private void DeductPlayerCash(Player player, float amount)
         {
             try

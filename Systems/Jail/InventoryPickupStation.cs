@@ -24,7 +24,13 @@ using ScheduleOne.Storage;
 namespace Behind_Bars.Systems.Jail
 {
     /// <summary>
-    /// Handles player inventory pickup when being released from jail
+    /// Owns the active release-side personal-property interaction.
+    /// The station reads the persisted snapshot, returns legal items through the registry,
+    /// restores civilian clothing, and notifies ReleaseManager. The former interactive
+    /// StorageEntity surface is unavailable on IL2CPP; fallback transfer is intentionally
+    /// direct and the snapshot is normally cleared after the transfer loop completes, even
+    /// when an individual item definition or inventory call could not be returned; an early
+    /// missing-inventory abort instead leaves the persisted snapshot for later recovery.
     /// </summary>
     public class InventoryPickupStation : MonoBehaviour
     {
@@ -32,7 +38,8 @@ namespace Behind_Bars.Systems.Jail
         public InventoryPickupStation(System.IntPtr ptr) : base(ptr) { }
 #endif
         
-        // InteractableObject component for IL2CPP compatibility
+        // Interaction cache/state. Setter helpers are hidden from IL2CPP because they retain
+        // runtime-specific delegate surfaces; the public station API remains injection-safe.
         private InteractableObject interactableObject;
         private bool hasCachedInteractionMessage;
         private string cachedInteractionMessage;
@@ -70,15 +77,20 @@ namespace Behind_Bars.Systems.Jail
             hasCachedInteractionState = true;
         }
 
-        public float itemPickupDuration = 0.3f; // Time between picking up each item
-        public Transform storageLocation; // Where items are "retrieved" from visually
+        // Retained presentation settings. The current direct transfer returns items through
+        // one registry loop and does not consume itemPickupDuration; storageLocation is visual only.
+        public float itemPickupDuration = 0.3f;
+        public Transform storageLocation;
 
+        // Active release state. legalItems/contrabandItems are rebuilt from persistent data;
+        // they are not themselves the durable snapshot and are cleared after completion.
         private bool isProcessing = false;
         private Player currentPlayer;
         private List<PersistentPlayerData.StoredItem> legalItems = new List<PersistentPlayerData.StoredItem>();
         private List<PersistentPlayerData.StoredItem> contrabandItems = new List<PersistentPlayerData.StoredItem>();
 
-        // Interactive storage components
+        // Interactive storage components are retained for the Mono prototype. On IL2CPP the
+        // StorageEntity injection path is deliberately disabled and direct transfer is used.
         private PrisonStorageEntity storageEntity;
         private bool storageSessionActive = false;
         private bool isDisabledByOfficer = false; // Officer has disabled this station - don't allow reopening
@@ -256,8 +268,10 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Prepare storage with player's items - DOES NOT open it (player must interact)
+        /// Prepare the release snapshot for a player without opening a storage UI.
         /// </summary>
+        /// <param name="player">Player whose persisted legal/contraband items should be staged.</param>
+        /// <remarks>The active path enables the station and waits for interaction; it also removes jail items before property return.</remarks>
         public void PrepareStorageForPlayer(Player player)
         {
             currentPlayer = player;
@@ -296,8 +310,9 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Mark this station as disabled by officer (prevents reopening after close)
+        /// Disable this station after the release officer closes the property handoff.
         /// </summary>
+        /// <remarks>This clears release access and blocks reopening through both interaction and session flags.</remarks>
         public void MarkDisabledByOfficer()
         {
             isDisabledByOfficer = true;
@@ -310,6 +325,7 @@ namespace Behind_Bars.Systems.Jail
         /// Reset the personal-belongings pickup station for a new booking intake.
         /// This hides the release-side cubby so it cannot overlap with intake storage.
         /// </summary>
+        /// <remarks>The station is disabled until a release flow calls <see cref="EnableForRelease"/>.</remarks>
         public void ResetForBooking()
         {
             isProcessing = false;
@@ -441,6 +457,11 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Debug("InventoryPickupStation: Property locker dismissed without completing retrieval");
         }
 
+        /// <summary>
+        /// Read the player's persisted original-clothing layers for the property locker UI.
+        /// </summary>
+        /// <param name="player">Player whose snapshot should be read.</param>
+        /// <returns>A new empty list when persistent data or the player's clothing snapshot is unavailable.</returns>
         internal List<PersistentPlayerData.ClothingLayer> GetStoredClothing(Player player)
         {
             return Core.ResolvePersistentPlayerData()?.GetOriginalClothingForPlayer(player)
@@ -450,6 +471,8 @@ namespace Behind_Bars.Systems.Jail
         /// <summary>
         /// Open storage interface directly without delays
         /// </summary>
+        // Legacy interactive-storage entry point. The active release interaction uses
+        // DirectItemTransfer instead; on IL2CPP storageEntity remains unavailable.
         private void OpenStorageInterface(Player player)
         {
             ModLogger.Info($"Opening storage interface directly for {player.name}");
@@ -503,6 +526,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Legacy combined drop-off/pickup coroutine. No current caller starts this path;
+        // it is retained for the older interactive StorageEntity workflow.
         private IEnumerator ProcessPrisonItemDropOffAndPickup(Player player)
         {
             isProcessing = true;
@@ -549,6 +574,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Legacy prison-item-only drop-off coroutine. The active release path uses the
+        // exact-ID RemoveJailItemsFromInventory pass instead of this name-based routine.
         private IEnumerator ProcessPrisonItemDropOff(Player player)
         {
             ModLogger.Info($"Starting prison item drop-off for {player.name}");
@@ -651,6 +678,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Legacy modal storage presentation. If storageEntity is absent it falls through to
+        // direct completion, but current release setup starts DirectItemTransfer directly.
         private IEnumerator OpenInteractiveStorage(Player player)
         {
             ModLogger.Info($"Opening interactive storage for {player.name}");
@@ -1184,8 +1213,9 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Called by PrisonStorageEntity when storage session is completed
+        /// Close the legacy interactive storage session without finalizing property retrieval.
         /// </summary>
+        /// <remarks>Mono's PrisonStorageEntity may call this callback; the active IL2CPP direct-transfer path does not use it.</remarks>
         public void OnStorageSessionComplete()
         {
             ModLogger.Info("Storage session completed by player - can re-open if needed");
@@ -1399,6 +1429,8 @@ namespace Behind_Bars.Systems.Jail
             }
         }
         
+        // Legacy phone-restoration helper. If no known phone API resolves, it only logs that
+        // the phone was marked returned; it does not guarantee the native phone is enabled.
         private void EnablePlayerPhone()
         {
             try
@@ -1567,6 +1599,11 @@ namespace Behind_Bars.Systems.Jail
         private float lastItemCheckTime = 0f;
         private const float ITEM_CHECK_INTERVAL = 5f; // Check every 5 seconds instead of every frame
 
+        /// <summary>
+        /// Check whether persistent legal or contraband property exists for a player.
+        /// </summary>
+        /// <param name="player">Player whose snapshot should be checked.</param>
+        /// <returns>A cached result for up to five seconds, or <c>false</c> on missing data/error.</returns>
         public bool HasItemsForPlayer(Player player)
         {
             if (player == null) return false;
@@ -1602,8 +1639,10 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Enable the pickup station when a player is being released
+        /// Enable this station for an active release and invite the player to interact.
         /// </summary>
+        /// <param name="player">Player whose release handoff is being prepared.</param>
+        /// <remarks>This enables the interaction surface but does not teleport the player or return items until interaction.</remarks>
         public void EnableForRelease(Player player)
         {
             ModLogger.Info($"Enabling inventory pickup station for {player.name}");
@@ -1632,11 +1671,8 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
-        /// <summary>
-        /// Note: Player teleportation is now handled by the ReleaseManager and ReleaseOfficer
-        /// This method is no longer used in the new release workflow
-        /// </summary>
-
+        // Player teleportation is owned by ReleaseManager/ReleaseOfficer. Update only keeps
+        // this station's interaction label synchronized and does not move the player.
         void Update()
         {
             if (!releaseAccessEnabled)

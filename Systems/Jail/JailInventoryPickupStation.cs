@@ -27,7 +27,10 @@ using ScheduleOne.Clothing;
 namespace Behind_Bars.Systems.Jail
 {
     /// <summary>
-    /// Handles giving new prison inmates their starter items (bed mat, sheets, cup, toothbrush, etc.)
+    /// Gives newly booked inmates the registered prison starter kit and records the booking step.
+    /// During an active release this station deliberately ignores interaction because
+    /// InventoryPickupStation owns the personal-property handoff. The older release-exchange
+    /// coroutine remains incomplete/unused and must not be treated as the release authority.
     /// </summary>
     public class JailInventoryPickupStation : MonoBehaviour
     {
@@ -73,19 +76,25 @@ namespace Behind_Bars.Systems.Jail
             hasCachedInteractionState = true;
         }
         
-        public float itemGiveDuration = 1.0f; // Time between giving each item
-        public Transform storageLocation; // Where items are "retrieved" from visually
+        // Presentation settings. The active starter-kit path grants items in one pass and does
+        // not consume itemGiveDuration; storageLocation is a visual anchor only.
+        public float itemGiveDuration = 1.0f;
+        public Transform storageLocation;
         
+        // Interaction/session state. forceEnabledForNewInmate temporarily overrides Update's
+        // normal eligibility check after a re-arrest reset.
         private bool isProcessing = false;
         private Player currentPlayer;
-        private bool itemsCurrentlyTaken = false; // Track if items are visually taken
-        private bool forceEnabledForNewInmate = false; // Force enabled state after reset, bypass Update checks
-        private float resetTime = 0f; // Time when reset occurred
+        private bool itemsCurrentlyTaken = false;
+        private bool forceEnabledForNewInmate = false;
+        private float resetTime = 0f;
 
-        // Store player's original clothing
+        // Temporary in-memory clothing snapshot used by the legacy clothing helper. It is not
+        // persisted and is cleared after a successful restore or overwritten on the next change.
         private Dictionary<string, object> originalPlayerClothing = new Dictionary<string, object>();
         
-        // Prison starter items that inmates receive (using registered item IDs)
+        // Registry IDs granted by the active booking path. A missing definition causes that
+        // item to be skipped; if all definitions fail, booking completion is not marked.
         private List<string> prisonStarterItems = new List<string>
         {
             "behindbars.bedroll",
@@ -228,6 +237,10 @@ namespace Behind_Bars.Systems.Jail
             MelonCoroutines.Start(ProcessJailItemPickup(currentPlayer));
         }
 
+        /// <summary>
+        /// Legacy release exchange that removes named clothing and attempts name-based property return.
+        /// </summary>
+        /// <remarks>No current caller uses this path; release interactions are rejected here and owned by InventoryPickupStation.</remarks>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -562,6 +575,8 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info("Prison item pickup completed successfully");
         }
         
+        // Active booking grant path. It requires a registry definition, creates one default
+        // instance, and invokes AddItemToInventory; there is no name-based fallback here.
         private bool GivePrisonItem(PlayerInventory inventory, string itemId)
         {
             try
@@ -647,6 +662,8 @@ namespace Behind_Bars.Systems.Jail
         }
         
         
+        // The received marker is stored in the handler's confiscated-item list for compatibility,
+        // not in a dedicated starter-kit field. Missing handler data fails closed (needs=false).
         private bool HasReceivedPrisonItems(Behind_Bars.Players.PlayerHandler playerHandler)
         {
             try
@@ -663,6 +680,8 @@ namespace Behind_Bars.Systems.Jail
             }
         }
         
+        // Records a sentinel string in the player handler after at least one starter item was
+        // granted. This marker is the booking gate consulted by NeedsPrisonItems.
         private void MarkPrisonItemsReceived(Player player)
         {
             try
@@ -683,9 +702,9 @@ namespace Behind_Bars.Systems.Jail
         }
         
         /// <summary>
-        /// Change player's appearance to prison attire
-        /// Uses third-person camera view to fix visual bug when applying uniform
+        /// Apply the configured prison avatar layers while temporarily freezing movement.
         /// </summary>
+        /// <remarks>The former third-person camera transition is commented out, so the current path stays in the normal camera view.</remarks>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -711,8 +730,8 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Error($"Error freezing player movement: {ex.Message}");
             }
             
-            // Enter third-person view to fix visual bug
-            // TEMPORARILY COMMENTED OUT FOR TESTING
+            // The former third-person transition remains disabled; current behavior applies
+            // avatar settings while the normal camera stays active.
             /*
             if (playerCamera != null)
             {
@@ -745,8 +764,8 @@ namespace Behind_Bars.Systems.Jail
                 if (playerAvatar == null)
                 {
                     ModLogger.Error("Could not find player's Avatar component");
-                    // Exit third-person view before breaking
-                    // TEMPORARILY COMMENTED OUT FOR TESTING
+                    // No third-person view was entered on the current path, so there is no
+                    // camera transition to unwind here.
                     /*
                     if (playerCamera != null)
                     {
@@ -771,8 +790,8 @@ namespace Behind_Bars.Systems.Jail
                 if (currentSettings == null)
                 {
                     ModLogger.Error("Could not get player's current avatar settings");
-                    // Exit third-person view before breaking
-                    // TEMPORARILY COMMENTED OUT FOR TESTING
+                    // No third-person view was entered on the current path, so there is no
+                    // camera transition to unwind here.
                     /*
                     if (playerCamera != null)
                     {
@@ -886,12 +905,11 @@ namespace Behind_Bars.Systems.Jail
                 catch { }
             }
 
-            // Hold third-person view for 1 second while player is frozen to see the uniform change
-            // Player remains frozen and in third-person during this wait
+            // Hold the frozen state for one second so the avatar refresh can settle. The
+            // current implementation does not switch to third-person during this wait.
             yield return new WaitForSeconds(1f);
 
-            // Exit third-person view
-            // TEMPORARILY COMMENTED OUT FOR TESTING
+            // No third-person view was entered, so no camera-exit call is required.
             /*
             if (playerCamera != null)
             {
@@ -977,8 +995,9 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Restore player's original clothing (for when they're released)
+        /// Restore the temporary in-memory clothing snapshot for a player.
         /// </summary>
+        /// <remarks>This legacy helper is separate from InventoryPickupStation's persistent clothing restore path and is unused by the active release handoff.</remarks>
         public void RestoreOriginalClothing(Player player)
         {
             try
@@ -1204,6 +1223,12 @@ namespace Behind_Bars.Systems.Jail
             }
         }
         
+        /// <summary>
+        /// Return whether the player handler lacks the starter-kit received sentinel.
+        /// </summary>
+        /// <param name="player">Player whose handler should be checked.</param>
+        /// <returns><c>true</c> when a handler exists and does not contain the marker; otherwise <c>false</c>.</returns>
+        /// <remarks>Errors and missing handlers fail closed, which can leave the station unavailable.</remarks>
         public bool NeedsPrisonItems(Player player)
         {
             try
@@ -1224,8 +1249,9 @@ namespace Behind_Bars.Systems.Jail
         }
         
         /// <summary>
-        /// Reset the station for a new inmate (called from BookingProcess on re-arrest)
+        /// Reset the starter-kit station for a new booking.
         /// </summary>
+        /// <remarks>Re-enables item visuals and temporarily forces interaction until the new inmate uses the station.</remarks>
         public void ResetForNewInmate()
         {
             ModLogger.Info("JailInventoryPickupStation: Resetting for new inmate");
@@ -1258,6 +1284,9 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info("JailInventoryPickupStation: Reset complete and ready for new inmate");
         }
 
+        // Update presents booking/release eligibility. During release it still displays a
+        // legacy exchange label, but OnInteractStart intentionally rejects that interaction;
+        // InventoryPickupStation owns the working release handoff.
         void Update()
         {
             // PRIORITY: Check force-enabled flag first (overrides all other logic)
@@ -1294,10 +1323,11 @@ namespace Behind_Bars.Systems.Jail
 
                 if (isDuringRelease)
                 {
-                    // During release: Allow interaction to exchange prison items for personal belongings
+                    // Legacy presentation only: this message advertises an exchange, but
+                    // OnInteractStart rejects release interaction so InventoryPickupStation
+                    // remains the sole active property handoff.
                     SetInteractionMessage("Exchange prison items for personal belongings");
                     SetInteractionState(InteractableObject.EInteractableState.Default);
-                    // Removed spam debug log: ModLogger.Debug("JailInventoryPickupStation: Release mode - allowing interaction");
                 }
                 else if (localPlayer != null && NeedsPrisonItems(localPlayer))
                 {

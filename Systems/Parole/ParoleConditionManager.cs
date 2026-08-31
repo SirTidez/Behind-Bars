@@ -15,6 +15,12 @@ namespace Behind_Bars.Systems.Parole
     /// Determines which conditions apply for a given parole term and provides
     /// methods for officer-proximity and check-in condition checks.
     /// </summary>
+    /// <remarks>
+    /// The registry is process-local. A manager-owned instance can be torn down through the
+    /// static lifecycle helpers, while a compatibility-created instance is deliberately left
+    /// registered. Runtime active conditions are rebuilt on initialization/restore; the
+    /// persisted parole record remains the source of condition IDs across saves.
+    /// </remarks>
     public class ParoleConditionManager
     {
         private static ParoleConditionManager _instance;
@@ -44,6 +50,9 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Register the active condition manager instance.
         /// </summary>
+        /// <param name="instance">Instance to expose through the compatibility accessor.</param>
+        /// <param name="managedBySystemManager">Whether the system manager owns its teardown.</param>
+        /// <remarks>Registration replaces any existing reference without shutting the previous instance down.</remarks>
         public static ParoleConditionManager RegisterInstance(ParoleConditionManager instance, bool managedBySystemManager = false)
         {
             if (instance == null)
@@ -59,6 +68,7 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Create the manager-owned instance when none is registered yet.
         /// </summary>
+        /// <returns>The existing registered instance, or a newly registered manager-owned instance.</returns>
         public static ParoleConditionManager BootstrapManagedInstance()
         {
             if (TryGetRegisteredInstance(out var existing))
@@ -72,6 +82,8 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Returns the currently registered instance when present.
         /// </summary>
+        /// <param name="instance">Current registered instance when the method returns true.</param>
+        /// <returns><see langword="true"/> when a condition manager is registered.</returns>
         public static bool TryGetRegisteredInstance(out ParoleConditionManager instance)
         {
             instance = _instance;
@@ -81,6 +93,7 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Tears down the manager-owned instance while leaving compatibility-created instances alone.
         /// </summary>
+        /// <returns><see langword="true"/> when a manager-owned reference was cleared.</returns>
         public static bool ShutdownManagedInstance()
         {
             if (_instance == null || !_isManagedBySystemManager)
@@ -93,6 +106,8 @@ namespace Behind_Bars.Systems.Parole
             return true;
         }
 
+        // Definitions are rebuilt once by the constructor; active conditions are a per-term
+        // runtime projection and are returned as copies to keep callers from mutating the list.
         private readonly List<IParoleCondition> _allConditions = new List<IParoleCondition>();
         private readonly List<IParoleCondition> _activeConditions = new List<IParoleCondition>();
 
@@ -107,6 +122,7 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Register all available condition implementations
         /// </summary>
+        /// <remarks>The current registry contains curfew, restricted zones, drug testing, and employment.</remarks>
         private void RegisterAllConditions()
         {
             _allConditions.Clear();
@@ -120,6 +136,13 @@ namespace Behind_Bars.Systems.Parole
         /// Initialize conditions for a parole term based on the player's rap sheet.
         /// Determines which conditions should be active and stores their IDs on the parole record.
         /// </summary>
+        /// <param name="rapSheet">RapSheet containing the active parole record and LSI/crime history.</param>
+        /// <remarks>
+        /// The in-memory active list is cleared first, then applicable definitions are added.
+        /// ParoleRecord.AddActiveCondition prevents duplicate persisted IDs on repeated calls,
+        /// but this method does not remove previously persisted IDs that are no longer applicable.
+        /// A missing RapSheet or parole record is a logged no-op.
+        /// </remarks>
         public void InitializeConditions(RapSheet rapSheet)
         {
             _activeConditions.Clear();
@@ -148,6 +171,11 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Restore active conditions from saved condition IDs (after load)
         /// </summary>
+        /// <param name="conditionIds">Persisted condition identifiers to restore.</param>
+        /// <remarks>
+        /// Restoration only rebuilds the in-memory list from registered definitions; unknown
+        /// IDs are ignored and the persisted list is not rewritten.
+        /// </remarks>
         public void RestoreConditionsFromIds(List<string> conditionIds)
         {
             _activeConditions.Clear();
@@ -168,6 +196,7 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Get all currently active conditions
         /// </summary>
+        /// <returns>A new list containing the currently active condition implementations.</returns>
         public List<IParoleCondition> GetActiveConditions()
         {
             return new List<IParoleCondition>(_activeConditions);
@@ -176,6 +205,7 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Get condition descriptions for the release UI
         /// </summary>
+        /// <returns>Static general requirements plus descriptions of the active special conditions.</returns>
         public (List<string> generalConditions, List<string> specialConditions) GetConditionDescriptions()
         {
             var generalConditions = new List<string>
@@ -199,6 +229,8 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Get a specific condition by ID
         /// </summary>
+        /// <param name="conditionId">Case-sensitive registered condition identifier.</param>
+        /// <returns>The matching condition, or <see langword="null"/> when not registered.</returns>
         public IParoleCondition GetCondition(string conditionId)
         {
             foreach (var condition in _allConditions)
@@ -212,6 +244,8 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Check if a specific condition type is active
         /// </summary>
+        /// <param name="conditionId">Case-sensitive condition identifier to check.</param>
+        /// <returns><see langword="true"/> when the condition is active for the current term.</returns>
         public bool IsConditionActive(string conditionId)
         {
             foreach (var condition in _activeConditions)

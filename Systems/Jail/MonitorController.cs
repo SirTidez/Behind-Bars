@@ -1,12 +1,21 @@
 using UnityEngine;
 using UnityEngine.UI;
 
+/// <summary>
+/// Displays a security camera's render texture on an authored monitor surface.
+/// Assignment is owned by JailMonitorController; this component only resolves the RawImage
+/// and keeps the current camera/texture references in sync.
+/// </summary>
 #if MONO
     public sealed class MonitorController : MonoBehaviour
 #else
 public sealed class MonitorController(IntPtr ptr) : MonoBehaviour(ptr)
 #endif
 {
+    /// <summary>
+    /// Re-apply the assigned camera's current render texture directly to the screen image.
+    /// </summary>
+    /// <remarks>This is a manual recovery helper and does not create a missing texture or RawImage.</remarks>
     public void ForceSetTexture()
     {
         if (assignedCamera != null && assignedCamera.renderTexture != null)
@@ -20,23 +29,36 @@ public sealed class MonitorController(IntPtr ptr) : MonoBehaviour(ptr)
         }
     }
 
+    // The RawImage is normally authored or discovered under this object. A missing image
+    // prevents display but does not invalidate the camera assignment itself.
     public RawImage screenImage;
     public MonitorType monitorType;
     
+    // Current assignment state. RenderTexture ownership remains with SecurityCamera.
     public SecurityCamera assignedCamera;
     public bool isStaticAssignment = true;
     
+    // Diagnostic logging only.
     public bool showDebugInfo = false;
     
     private RenderTexture currentTexture;
     
+    /// <summary>
+    /// Authored monitor placement categories used by monitor discovery/configuration.
+    /// </summary>
     public enum MonitorType
     {
+        /// <summary>Static front-left view.</summary>
         MainFrontLeft,      // Static - Front Left camera
+        /// <summary>Static front-right view.</summary>
         MainFrontRight,     // Static - Front Right camera  
+        /// <summary>Static rear-left view.</summary>
         MainBackLeft,       // Static - Back Left camera
+        /// <summary>Static rear-right view.</summary>
         MainBackRight,      // Static - Back Right camera
+        /// <summary>Rotating side-left view.</summary>
         SideLeft,           // Rotating - Phone/Holding/Hall cameras
+        /// <summary>Rotating side-right view.</summary>
         SideRight           // Rotating - Phone/Holding/Hall cameras
     }
     
@@ -69,6 +91,11 @@ public sealed class MonitorController(IntPtr ptr) : MonoBehaviour(ptr)
         }
     }
     
+    /// <summary>
+    /// Assign a security camera and display its existing render texture.
+    /// </summary>
+    /// <param name="camera">Camera to display, or <c>null</c> to clear the display.</param>
+    /// <remarks>The method does not create a render texture. Mono may force one render; IL2CPP relies on the normal pipeline.</remarks>
     public void SetCamera(SecurityCamera camera)
     {
         if (camera == null)
@@ -110,6 +137,10 @@ public sealed class MonitorController(IntPtr ptr) : MonoBehaviour(ptr)
         }
     }
     
+    /// <summary>
+    /// Clear the camera reference, cached texture, and RawImage texture.
+    /// </summary>
+    /// <remarks>The camera or render texture objects themselves are not destroyed.</remarks>
     public void ClearDisplay()
     {
         assignedCamera = null;
@@ -121,11 +152,13 @@ public sealed class MonitorController(IntPtr ptr) : MonoBehaviour(ptr)
         }
     }
     
+    /// <summary>Return whether a camera is currently assigned.</summary>
     public bool HasCamera()
     {
         return assignedCamera != null;
     }
     
+    /// <summary>Return the assigned camera name, or <c>None</c> when unassigned.</summary>
     public string GetCameraName()
     {
         return assignedCamera != null ? assignedCamera.cameraName : "None";

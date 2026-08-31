@@ -33,6 +33,13 @@ namespace Behind_Bars.Systems
     /// Handles parole monitoring, officer reminders, violations, and completion
     /// Integrates with RapSheet/LSI system for risk assessment
     /// </summary>
+    /// <remarks>
+    /// Runtime records live in memory while the current parole record in the RapSheet carries
+    /// persisted state. Native Schedule I time is preferred for day/minute-of-day scheduling;
+    /// the lightweight mod clock is only a fallback. Server authority gates the enforcement
+    /// actions, but the current network resolver intentionally fails open when no manager or
+    /// an exception is encountered.
+    /// </remarks>
     public class ParoleSystem
     {
         #region Events
@@ -78,6 +85,9 @@ namespace Behind_Bars.Systems
         private const int CHECKIN_END_HOUR_24 = 20;
         private const int GAME_MINUTES_PER_DAY = 1440;
 
+        /// <summary>
+        /// Result of evaluating the manager-owned daily check-in window.
+        /// </summary>
         public enum DailyCheckInStatus
         {
             Allowed = 0,
@@ -105,38 +115,67 @@ namespace Behind_Bars.Systems
         /// </summary>
         public class ParoleRuntimeRecord
         {
+            /// <summary>Stable runtime identity used as the active-record dictionary key.</summary>
             public string PlayerKey { get; set; }
+            /// <summary>Live scene player associated with this runtime record.</summary>
             public Player Player { get; set; }
+            /// <summary>Current in-memory lifecycle state.</summary>
             public ParoleStatus Status { get; set; }
+            /// <summary>Fallback game-minute value sampled when the runtime record began.</summary>
             public float StartGameTimeMinutes { get; set; } // Game time when parole started (game minutes)
+            /// <summary>Total supervision duration in game minutes.</summary>
             public float DurationGameMinutes { get; set; } // Total parole duration (game minutes)
+            /// <summary>Remaining supervision duration reported by <see cref="ParoleTimeTracker"/>.</summary>
             public float TimeRemainingGameMinutes { get; set; } // Remaining time (game minutes)
+            /// <summary>Number of formal violations recorded in this runtime session.</summary>
             public int ViolationCount { get; set; }
+            /// <summary>In-memory descriptions of violations associated with this runtime record.</summary>
             public List<string> Violations { get; set; } = new();
         }
 
         private class PendingOfficerText
         {
+            /// <summary>Latest message awaiting a supervising-officer delivery attempt.</summary>
             public string Message { get; set; }
+            /// <summary>Number of retry attempts already made after the initial queue.</summary>
             public int Attempts { get; set; }
+            /// <summary>Next retry deadline in Unity's scaled <see cref="Time.time"/> domain.</summary>
             public float NextAttemptTime { get; set; }
         }
 
+        // Runtime records and retry/warrant maps are process-local and keyed by the shared
+        // player identity; persisted RapSheet state is restored separately on load.
         private Dictionary<string, ParoleRuntimeRecord> _paroleRecords = new();
         private Dictionary<string, PendingOfficerText> _pendingOfficerTexts = new();
         private HashSet<string> _playersWithActiveWarrants = new();
+        // Time.time is used for the local enforcement throttle, so this is scaled time.
         private Dictionary<string, float> _lastWarrantEnforcementTime = new();
+        // Retained legacy field; dynamic parole officer ownership is now delegated to NpcManager.
         private GameObject? _paroleOfficerPrefab;
+        // Stable named handler used for safe subscription/unsubscription across runtimes.
         private bool _isSubscribedToDayPass;
         private readonly Action _onDayPassHandler;
+        // MelonCoroutines returns a runtime-specific interop handle.
         private object _timeManagerSubscriptionCoroutine;
 
+        /// <summary>
+        /// Create an in-memory parole system and begin best-effort native day-pass wiring.
+        /// </summary>
         public ParoleSystem()
         {
             _onDayPassHandler = HandleDayPassForParoleCheckIns;
             EnsureDayPassSubscription();
         }
 
+        /// <summary>
+        /// Remove the native day-pass listener owned by this parole system.
+        /// </summary>
+        /// <remarks>
+        /// Shutdown currently unsubscribes only the day-pass handler. It does not cancel a
+        /// pending subscription coroutine, clear runtime records, clear active warrants or
+        /// queued officer text, or detach lifecycle-event subscribers; those states therefore
+        /// remain until their normal completion paths or the instance is discarded.
+        /// </remarks>
         public void Shutdown()
         {
             UnsubscribeFromDayPass();
@@ -177,6 +216,13 @@ namespace Behind_Bars.Systems
             OnParoleEnded?.Invoke(player);
         }
 
+        /// <summary>
+        /// Start the deferred native day-pass subscription if one is not already active.
+        /// </summary>
+        /// <remarks>
+        /// The guard prevents duplicate coroutines and duplicate event handlers while the
+        /// native <see cref="TimeManager"/> is still coming online.
+        /// </remarks>
         private void EnsureDayPassSubscription()
         {
             if (_isSubscribedToDayPass || _timeManagerSubscriptionCoroutine != null)
@@ -187,6 +233,15 @@ namespace Behind_Bars.Systems
             _timeManagerSubscriptionCoroutine = MelonCoroutines.Start(WaitForTimeManagerAndSubscribe());
         }
 
+        /// <summary>
+        /// Retry native <see cref="TimeManager"/> lookup and attach the stable day-pass handler.
+        /// </summary>
+        /// <remarks>
+        /// This makes at most 600 attempts with a 0.5-second Unity-scaled wait between them.
+        /// The current coroutine is not cancelled by <see cref="Shutdown"/>; it clears its
+        /// handle on success or exhaustion and logs a warning when the native manager never
+        /// becomes available.
+        /// </remarks>
         private IEnumerator WaitForTimeManagerAndSubscribe()
         {
             int attempts = 0;
@@ -225,6 +280,13 @@ namespace Behind_Bars.Systems
             }
         }
 
+        /// <summary>
+        /// Remove the stable day-pass handler from the native time manager when subscribed.
+        /// </summary>
+        /// <remarks>
+        /// The operation is idempotent and preserves the handler reference used at subscribe
+        /// time. Lookup failures are logged and leave the current subscription flag unchanged.
+        /// </remarks>
         private void UnsubscribeFromDayPass()
         {
             if (!_isSubscribedToDayPass)
@@ -249,6 +311,11 @@ namespace Behind_Bars.Systems
             }
         }
 
+        /// <summary>
+        /// Resolve the shared runtime identity used by parole maps and collaborators.
+        /// </summary>
+        /// <param name="player">Player whose identity should be resolved.</param>
+        /// <returns>A stable key, or an empty string for a null player.</returns>
         internal string GetPlayerRuntimeKeyInternal(Player player)
         {
             if (player == null)
@@ -261,12 +328,30 @@ namespace Behind_Bars.Systems
 
         private string GetPlayerRuntimeKey(Player player) => GetPlayerRuntimeKeyInternal(player);
 
+        /// <summary>
+        /// Gets the live backing map of runtime parole records.
+        /// </summary>
+        /// <remarks>
+        /// This internal surface exposes the dictionary itself for the manager's day-pass
+        /// iteration; callers must not mutate it while a monitoring or completion path is
+        /// enumerating the records.
+        /// </remarks>
         internal Dictionary<string, ParoleRuntimeRecord> ActiveParoleRecords => _paroleRecords;
 
         /// <summary>
         /// Start parole supervision for a player
         /// Creates runtime tracking and initializes RapSheet/LSI integration
         /// </summary>
+        /// <param name="player">Player being released into parole supervision.</param>
+        /// <param name="durationGameMinutes">Supervision duration in game minutes.</param>
+        /// <param name="showUI">Compatibility parameter retained for callers; the current implementation does not read it.</param>
+        /// <remarks>
+        /// The active runtime record is created before RapSheet/condition setup, tracking, and
+        /// monitoring are started. The native parole record remains the persistence authority;
+        /// the runtime record and <see cref="ParoleTimeTracker"/> provide countdown state. The
+        /// dynamic NPC manager owns officer spawning. Lifecycle notification is raised only
+        /// after those startup handoffs have been attempted.
+        /// </remarks>
         public void StartParole(Player player, float durationGameMinutes = PAROLE_DURATION, bool showUI = true)
         {
             ModLogger.Info($"Starting parole for {player.name} for {durationGameMinutes} game minutes ({GameTimeManager.FormatGameTime(durationGameMinutes)})");
@@ -345,6 +430,16 @@ namespace Behind_Bars.Systems
             // starts only after the player acknowledges their conditions, not immediately when parole starts.
         }
 
+        /// <summary>
+        /// Restore runtime tracking for an already-active persisted parole term after a load.
+        /// </summary>
+        /// <param name="player">Loaded scene player to reattach.</param>
+        /// <remarks>
+        /// Only the current authority restores a non-paused persisted term. Existing active
+        /// runtime records are reused, expired terms are ended in the RapSheet, and a new
+        /// tracker/monitor pair is created only when the persisted remaining duration is
+        /// positive. A daily check-in is scheduled only when the loaded player is not in jail.
+        /// </remarks>
         public void EnsureRuntimeParoleTrackingForLoadedPlayer(Player player)
         {
             if (player == null)
@@ -425,6 +520,16 @@ namespace Behind_Bars.Systems
             }
         }
 
+        /// <summary>
+        /// Determine whether this process should perform authoritative parole actions.
+        /// </summary>
+        /// <returns>The native server flag, or <see langword="true"/> when authority cannot be resolved.</returns>
+        /// <remarks>
+        /// On Mono and IL2CPP the appropriate FishNet namespace is selected at compile time.
+        /// The current policy is fail-open: a missing network manager or resolver exception
+        /// returns <see langword="true"/>, allowing local enforcement to continue rather than
+        /// suppressing parole actions.
+        /// </remarks>
         internal bool IsAuthorityForParoleActionsInternal()
         {
             try
@@ -447,11 +552,19 @@ namespace Behind_Bars.Systems
             }
         }
 
+        /// <summary>
+        /// Forward a native day-pass notification to the manager-owned check-in scheduler.
+        /// </summary>
         private void HandleDayPassForParoleCheckIns()
         {
             Core.ResolveParoleManager().HandleDayPassForParoleCheckIns();
         }
 
+        /// <summary>
+        /// Normalize a player name for officer-facing text.
+        /// </summary>
+        /// <param name="player">Player whose display name should be normalized.</param>
+        /// <returns>The trimmed name without a trailing numeric runtime suffix.</returns>
         internal string GetPlayerDisplayNameInternal(Player player)
         {
             string rawName = player?.name ?? "Parolee";
@@ -474,6 +587,11 @@ namespace Behind_Bars.Systems
             return trimmedName;
         }
 
+        /// <summary>
+        /// Format a minute-of-day value as a normalized 12-hour clock time.
+        /// </summary>
+        /// <param name="minuteOfDay">Minute value to normalize across a 24-hour day.</param>
+        /// <returns>A player-facing time such as <c>10:05 AM</c>.</returns>
         internal string FormatMinuteOfDayInternal(int minuteOfDay)
         {
             int normalized = minuteOfDay % GAME_MINUTES_PER_DAY;
@@ -494,6 +612,10 @@ namespace Behind_Bars.Systems
             return $"{hour12}:{minute:00} {designator}";
         }
 
+        /// <summary>
+        /// Read the native day index, falling back to the lightweight mod clock if unavailable.
+        /// </summary>
+        /// <returns>Native <see cref="TimeManager.DayIndex"/> or a zero-based fallback day.</returns>
         internal int GetCurrentDayIndexInternal()
         {
             try
@@ -511,6 +633,10 @@ namespace Behind_Bars.Systems
             return Mathf.Max(0, GameTimeManager.Instance.GetCurrentGameDay() - 1);
         }
 
+        /// <summary>
+        /// Read the native minute of day, falling back to the lightweight mod clock if unavailable.
+        /// </summary>
+        /// <returns>Current native or fallback minute after midnight.</returns>
         internal int GetCurrentMinuteOfDayInternal()
         {
             try
@@ -533,12 +659,26 @@ namespace Behind_Bars.Systems
             return Mathf.Clamp(fallbackHour, 0, 23) * 60 + Mathf.Clamp(fallbackMinute, 0, 59);
         }
 
+        /// <summary>
+        /// Resolve the current daily check-in status through the manager-owned seam.
+        /// </summary>
+        /// <param name="player">Parolee whose scheduled window should be evaluated.</param>
+        /// <param name="windowText">Player-facing window text when a schedule exists.</param>
+        /// <param name="applyConsequences">Whether a missed window should record its consequence.</param>
+        /// <returns>The current check-in status.</returns>
         public DailyCheckInStatus GetDailyCheckInStatus(Player player, out string windowText, bool applyConsequences = true)
         {
             var status = Core.ResolveParoleManager().GetDailyCheckInStatus(player, out windowText, applyConsequences);
             return (DailyCheckInStatus)(int)status;
         }
 
+        /// <summary>
+        /// Attempt to enter a daily check-in session through the manager-owned seam.
+        /// </summary>
+        /// <param name="player">Parolee attempting the check-in.</param>
+        /// <param name="status">Status explaining whether entry was allowed.</param>
+        /// <param name="windowText">Player-facing scheduled window text.</param>
+        /// <returns><see langword="true"/> when the session guard was acquired.</returns>
         public bool TryBeginCheckInSession(Player player, out DailyCheckInStatus status, out string windowText)
         {
             bool allowed = Core.ResolveParoleManager().TryBeginCheckInSession(player, out var managerStatus, out windowText);
@@ -546,16 +686,36 @@ namespace Behind_Bars.Systems
             return allowed;
         }
 
+        /// <summary>
+        /// Release the manager-owned active check-in session guard.
+        /// </summary>
+        /// <param name="player">Parolee whose session should end.</param>
         public void EndCheckInSession(Player player)
         {
             Core.ResolveParoleManager().EndCheckInSession(player);
         }
 
+        /// <summary>
+        /// Mark the current check-in complete and apply its rapport/LSI follow-up.
+        /// </summary>
+        /// <param name="player">Parolee who completed the scheduled appointment.</param>
+        /// <returns><see langword="true"/> when an in-memory requirement was completed.</returns>
         public bool NotifyDailyCheckInCompleted(Player player)
         {
             return Core.ResolveParoleManager().NotifyDailyCheckInCompleted(player);
         }
 
+        /// <summary>
+        /// Record an active parole warrant and ask the native law system to begin pursuit.
+        /// </summary>
+        /// <param name="player">Parolee for whom the warrant is being issued.</param>
+        /// <param name="cause">Parole-specific cause preserved for later custody processing.</param>
+        /// <remarks>
+        /// The native pursuit transport currently uses a <c>WitnessIntimidation</c> crime so
+        /// police response can start. The actual parole cause is stored separately on the
+        /// jail-system pending-cause map, while the RapSheet flag and local key set prevent
+        /// duplicate warrant logging.
+        /// </remarks>
         internal void IssueAgentWarrantInternal(Player player, ViolationType cause = ViolationType.Other)
         {
             if (player == null)
@@ -587,6 +747,14 @@ namespace Behind_Bars.Systems
 
         private bool IsAuthorityForParoleActions() => IsAuthorityForParoleActionsInternal();
 
+        /// <summary>
+        /// Trigger the native police pursuit used to enforce an active parole warrant.
+        /// </summary>
+        /// <param name="player">Wanted parolee to pass to the law and crime systems.</param>
+        /// <remarks>
+        /// This is a best-effort bridge: failure is logged, while the RapSheet/local warrant
+        /// markers remain owned by the caller.
+        /// </remarks>
         private void TriggerPolicePursuitForWarrant(Player player)
         {
             try
@@ -608,6 +776,15 @@ namespace Behind_Bars.Systems
             }
         }
 
+        /// <summary>
+        /// Reassert the arresting pursuit level for a wanted parolee at a throttled interval.
+        /// </summary>
+        /// <param name="player">Loaded scene player to enforce.</param>
+        /// <remarks>
+        /// The throttle uses Unity's scaled <see cref="Time.time"/>. Entering jail clears the
+        /// local warrant marker and persisted RapSheet flag; otherwise the method only nudges
+        /// pursuit back to <c>Arresting</c> when another system has changed it.
+        /// </remarks>
         private void EnforceActiveWarrant(Player player)
         {
             string playerKey = GetPlayerRuntimeKey(player);
@@ -646,6 +823,15 @@ namespace Behind_Bars.Systems
             }
         }
 
+        /// <summary>
+        /// Queue one supervising-officer message for a later delivery attempt.
+        /// </summary>
+        /// <param name="player">Player whose officer message should be retried.</param>
+        /// <param name="message">Non-empty message to retain.</param>
+        /// <remarks>
+        /// A same-player, same-message entry is de-duplicated. Retry deadlines use Unity's
+        /// scaled <see cref="Time.time"/> and are consumed by <see cref="ProcessPendingOfficerText"/>.
+        /// </remarks>
         private void QueueOfficerTextRetry(Player player, string message)
         {
             if (player == null || string.IsNullOrWhiteSpace(message))
@@ -668,6 +854,15 @@ namespace Behind_Bars.Systems
             };
         }
 
+        /// <summary>
+        /// Attempt delivery of a queued officer message when its scaled retry deadline arrives.
+        /// </summary>
+        /// <param name="player">Player whose queued message should be processed.</param>
+        /// <remarks>
+        /// Attempts are spaced by the configured scaled-time interval and removed on success or
+        /// after the maximum attempt count. A failed attempt may leave the record queued for a
+        /// later monitor tick.
+        /// </remarks>
         private void ProcessPendingOfficerText(Player player)
         {
             if (player == null)
@@ -764,6 +959,14 @@ namespace Behind_Bars.Systems
             }
         }
 
+        /// <summary>
+        /// Clear transient check-in, officer-text, warrant, and persisted warrant flags for a player.
+        /// </summary>
+        /// <param name="player">Player whose parole runtime flags should be cleared.</param>
+        /// <remarks>
+        /// This helper does not remove the active runtime parole record or end the RapSheet
+        /// parole term; completion and revocation own those operations separately.
+        /// </remarks>
         private void ClearParoleRuntimeFlags(Player player)
         {
             if (player == null)
@@ -839,6 +1042,14 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Monitor active parole, officer reminders, and condition enforcement
         /// </summary>
+        /// <param name="record">Live runtime record to monitor until it completes or changes state.</param>
+        /// <remarks>
+        /// The monitor exits without completing the term when the scene-bound player is not
+        /// live; loaded-save recovery reattaches a monitor later. Remaining duration comes
+        /// from <see cref="ParoleTimeTracker"/>. Authority-gated check-ins, warrants, officer
+        /// retries, and condition checks run once per loop. The loop's one-second
+        /// <see cref="WaitForSeconds"/> delay is Unity-scaled, not wall-clock time.
+        /// </remarks>
         private IEnumerator MonitorParole(ParoleRuntimeRecord record)
         {
             if (!HasLiveParolePlayer(record))
@@ -912,7 +1123,7 @@ namespace Behind_Bars.Systems
                 // Check for parole violations
                 //yield return CheckForViolations(record);
 
-                yield return new WaitForSeconds(1f); // Check every real second
+                yield return new WaitForSeconds(1f); // Check every scaled Unity second.
             }
 
             // Parole completed or violated
@@ -925,6 +1136,11 @@ namespace Behind_Bars.Systems
 #if !MONO
         [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
 #endif
+        /// <summary>
+        /// Check that a runtime parole record still references a live scene player.
+        /// </summary>
+        /// <param name="record">Runtime record to inspect.</param>
+        /// <returns><see langword="true"/> when the record and its player reference are valid.</returns>
         private static bool HasLiveParolePlayer(ParoleRuntimeRecord record)
         {
             return record != null && record.Player != null;
@@ -933,6 +1149,12 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Handle parole violation consequences
         /// </summary>
+        /// <param name="record">Runtime record receiving the violation consequence.</param>
+        /// <remarks>
+        /// This coroutine contains the older contraband-violation ladder, including extension
+        /// or revocation. The current monitor leaves its <c>CheckForViolations</c> call
+        /// commented out, so this is an incomplete scaffold unless another caller invokes it.
+        /// </remarks>
         private IEnumerator HandleParoleViolation(ParoleRuntimeRecord record)
         {
             ModLogger.Info($"Handling parole violation for {record.Player.name}");
@@ -1035,6 +1257,13 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Handle parole revocation (send back to jail)
         /// </summary>
+        /// <param name="record">Active runtime record being revoked.</param>
+        /// <remarks>
+        /// Revocation stops the tracker, ends and archives the persisted parole record, hides
+        /// the status UI, clears transient flags, raises the end event, then waits one scaled
+        /// second before handing the player to the jail manager. The final arrest is therefore
+        /// a delayed manager handoff, not an immediate operation in this method.
+        /// </remarks>
         private IEnumerator HandleParoleRevocation(ParoleRuntimeRecord record)
         {
             ModLogger.Info($"Handling parole revocation for {record.Player.name}");
@@ -1098,6 +1327,12 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Complete parole for a player (public method for external calls)
         /// </summary>
+        /// <param name="player">Player whose active or persisted parole should be completed.</param>
+        /// <remarks>
+        /// An active runtime record uses the normal completion path. When no runtime record is
+        /// present, the method still attempts to end/archive an active RapSheet record and
+        /// raise the end event, then clears transient runtime flags.
+        /// </remarks>
         public void CompleteParoleForPlayer(Player player)
         {
             if (player == null)
@@ -1142,6 +1377,9 @@ namespace Behind_Bars.Systems
         /// Electronic monitoring curfew check (Severe LSI only).
         /// Called every tick from MonitorParole for always-on curfew detection.
         /// </summary>
+        /// <param name="player">Scene player being monitored.</param>
+        /// <param name="rapSheet">Player RapSheet containing the active curfew condition.</param>
+        /// <param name="currentMinuteOfDay">Native/fallback current minute used for curfew evaluation.</param>
         private void CheckElectronicCurfew(Player player, RapSheet rapSheet, int currentMinuteOfDay)
         {
             if (rapSheet?.CurrentParoleRecord == null) return;
@@ -1229,8 +1467,13 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Evaluate LSI step-down eligibility.
         /// Called after successful daily check-ins.
-        /// Criteria: compliance >= 80 for 3 consecutive game days + no violations + no missed check-ins in window.
+        /// Current enforcement requires compliance >= 80 and three consecutive successful
+        /// check-in calls. The recent-violation criterion is not enforceable yet because
+        /// violation records expose DateTime rather than game-time age; the current loop
+        /// computes an unused cutoff and breaks after the first record without rejecting the
+        /// step-down.
         /// </summary>
+        /// <param name="player">Parolee whose compliance streak should be evaluated.</param>
         public void EvaluateLSIStepDown(Player player)
         {
             var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
@@ -1246,14 +1489,17 @@ namespace Behind_Bars.Systems
                 return;
             }
 
-            // Check for recent violations (none in last 3 game days)
+            // The intended recent-violation check cannot compare DateTime records with the
+            // native game clock yet. Keep the calculated cutoff visible as documentation of
+            // the missing bridge; it is currently unused.
             float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
             float threeDaysAgo = currentGameTime - (GAME_MINUTES_PER_DAY * 3);
             foreach (var violation in paroleRecord.GetViolations())
             {
-                // Skip if we can't determine timing (accept all violations)
-                // ViolationRecord uses DateTime, not game time
-                break; // If any violations exist in the window, don't step down
+                // ViolationRecord uses DateTime, not game time. The loop currently exits
+                // after the first record but does not reject the step-down; this is a
+                // deliberate documentation of the incomplete timing gate, not enforcement.
+                break;
             }
 
             // Increment streak
@@ -1299,6 +1545,13 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Complete parole successfully
         /// </summary>
+        /// <param name="record">Live runtime record whose term has reached completion.</param>
+        /// <remarks>
+        /// Completion marks the runtime state, stops the tracker, clears release grace, ends
+        /// and archives RapSheet state, hides UI, raises the end event, grants rewards, clears
+        /// transient flags, and finally removes the runtime record. The officer despawn helper
+        /// is a compatibility no-op because dynamic NPC ownership lives elsewhere.
+        /// </remarks>
         private void CompleteParole(ParoleRuntimeRecord record)
         {
             if (!HasLiveParolePlayer(record))
@@ -1376,14 +1629,18 @@ namespace Behind_Bars.Systems
         }
 
         /// <summary>
-        /// Despawn parole officer NPC (placeholder)
+        /// Retain the legacy parole-officer despawn hook for compatibility.
         /// </summary>
+        /// <remarks>
+        /// DynamicParoleOfficerManager/NpcManager owns the current officer lifecycle, so this
+        /// method intentionally performs no despawn operation.
+        /// </remarks>
         private void DespawnParoleOfficer()
         {
             ModLogger.Info("Parole Officer NPC despawning removed - feature not implemented");
 
-            // NOTE: NPC despawning functionality has been removed from this mod
-            // No cleanup needed as no NPCs are spawned
+            // NOTE: NPC despawning functionality has been removed from this mod. No cleanup
+            // is needed here because this class does not own a spawned officer.
         }
 
         /// <summary>
@@ -1408,6 +1665,13 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Extend parole duration for a player (in game minutes)
         /// </summary>
+        /// <param name="player">Player whose active runtime term should be extended.</param>
+        /// <param name="additionalGameMinutes">Additional duration in game minutes.</param>
+        /// <remarks>
+        /// This public compatibility path updates the in-memory runtime record and restarts
+        /// <see cref="ParoleTimeTracker"/>. It does not persist the extension to RapSheet;
+        /// the violation-handling path has its own persistence step.
+        /// </remarks>
         public void ExtendParole(Player player, float additionalGameMinutes)
         {
             if (_paroleRecords.TryGetValue(GetPlayerRuntimeKey(player), out var record))

@@ -28,14 +28,23 @@ namespace Behind_Bars.Systems.NPCs
     /// </summary>
     internal sealed class SupervisingOfficerInteractionCoordinator
     {
+        // A session is indexed in both dictionaries.  Every add/remove path must
+        // keep the parolee and officer indexes in lockstep so one participant
+        // cannot be reported idle while the other still owns the interaction.
         private sealed class InteractionSession
         {
+            /// <summary>The exact player retained by this interaction.</summary>
             public Player Parolee;
+            /// <summary>The supervising officer that owns the interaction.</summary>
             public ParoleOfficerBehavior Officer;
+            /// <summary>The workflow kind used to validate completion/cancellation.</summary>
             public SupervisingOfficerInteractionKind Kind;
+            /// <summary>Cached check-in controller used by the cleanup watchdog.</summary>
             public ParoleCheckInSystem CheckInSystem;
         }
 
+        // Polling uses unscaled real time so ownership cleanup still runs while a
+        // dialogue or pause changes the game's time scale.
         private const float PollIntervalSeconds = 0.2f;
         private readonly HashSet<Player> pendingIntakeRequests = new HashSet<Player>();
         private readonly Dictionary<Player, InteractionSession> activeSessionsByParolee = new Dictionary<Player, InteractionSession>();
@@ -43,6 +52,13 @@ namespace Behind_Bars.Systems.NPCs
         private readonly List<InteractionSession> sessionsToRemove = new List<InteractionSession>();
         private float nextPollTime;
 
+        /// <summary>
+        /// Queues one initial-intake request when the player has neither a pending
+        /// request nor an active session.  Queueing does not assign an officer;
+        /// the later mark method commits the bidirectional ownership record.
+        /// </summary>
+        /// <param name="parolee">Player awaiting supervising-officer intake.</param>
+        /// <returns>True when a new pending request was added.</returns>
         public bool TryQueueInitialIntake(Player parolee)
         {
             if (parolee == null)
@@ -59,6 +75,16 @@ namespace Behind_Bars.Systems.NPCs
             return true;
         }
 
+        /// <summary>
+        /// Checks whether an officer/player pair may begin the requested workflow.
+        /// This is a predicate only: it does not add a session or consume a pending
+        /// intake request.  Call the matching mark method after the downstream
+        /// controller accepts the interaction.
+        /// </summary>
+        /// <param name="parolee">Player the workflow would own.</param>
+        /// <param name="officer">Supervising officer that would own the workflow.</param>
+        /// <param name="interactionKind">Intake or check-in ownership being tested.</param>
+        /// <returns>True when neither participant is currently busy and the workflow is eligible.</returns>
         public bool TryBeginInteraction(Player parolee, ParoleOfficerBehavior officer, SupervisingOfficerInteractionKind interactionKind)
         {
             if (parolee == null || officer == null)
@@ -95,6 +121,11 @@ namespace Behind_Bars.Systems.NPCs
             return TryBeginInteraction(parolee, officer, SupervisingOfficerInteractionKind.CheckIn);
         }
 
+        /// <summary>
+        /// Commits a previously queued intake by removing its pending marker and
+        /// inserting the same session into both ownership dictionaries.  Invalid,
+        /// duplicate, or unqueued requests are ignored.
+        /// </summary>
         public void MarkIntakeStarted(Player parolee, ParoleOfficerBehavior officer)
         {
             if (parolee == null || officer == null)
@@ -119,6 +150,10 @@ namespace Behind_Bars.Systems.NPCs
             activeSessionsByOfficer[officer] = session;
         }
 
+        /// <summary>
+        /// Commits a check-in session into both ownership dictionaries after the
+        /// parole manager accepts the check-in.  Existing player ownership wins.
+        /// </summary>
         public void MarkCheckInStarted(Player parolee, ParoleOfficerBehavior officer)
         {
             if (parolee == null || officer == null)
@@ -151,6 +186,13 @@ namespace Behind_Bars.Systems.NPCs
             MarkCheckInStarted(parolee, officer);
         }
 
+        /// <summary>
+        /// Removes an active session only when its kind and, when supplied, owner
+        /// officer match.  Intake cancellation also clears a pending request.
+        /// </summary>
+        /// <param name="parolee">Player whose ownership should be released.</param>
+        /// <param name="officer">Expected owner; null permits cleanup by player/kind.</param>
+        /// <param name="interactionKind">Kind that must match the stored session.</param>
         public void EndInteraction(Player parolee, ParoleOfficerBehavior officer, SupervisingOfficerInteractionKind interactionKind)
         {
             if (parolee == null)
@@ -200,6 +242,7 @@ namespace Behind_Bars.Systems.NPCs
             EndInteraction(parolee, officer, SupervisingOfficerInteractionKind.CheckIn);
         }
 
+        /// <summary>Removes only the pending-intake marker for a player.</summary>
         public void ClearPendingIntake(Player parolee)
         {
             if (parolee == null)
@@ -210,6 +253,10 @@ namespace Behind_Bars.Systems.NPCs
             pendingIntakeRequests.Remove(parolee);
         }
 
+        /// <summary>
+        /// Removes pending and active ownership for a player, including the
+        /// reverse officer index when its session still points to that player.
+        /// </summary>
         public void ClearPlayer(Player player)
         {
             if (player == null)
@@ -270,6 +317,11 @@ namespace Behind_Bars.Systems.NPCs
             return false;
         }
 
+        /// <summary>
+        /// Runs the unscaled-time cleanup watchdog at the configured interval.
+        /// It removes sessions whose player/officer or downstream controller no
+        /// longer reports the owning workflow as active.
+        /// </summary>
         public void Poll()
         {
             if (activeSessionsByParolee.Count == 0)
@@ -287,6 +339,10 @@ namespace Behind_Bars.Systems.NPCs
             CleanupActiveSessions();
         }
 
+        /// <summary>
+        /// Finds stale sessions without mutating the dictionary during iteration,
+        /// then removes each session only if both indexes still reference it.
+        /// </summary>
         private void CleanupActiveSessions()
         {
             sessionsToRemove.Clear();
@@ -331,6 +387,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Checks the officer-side ownership index used by admission predicates.</summary>
         private bool IsOfficerBusy(ParoleOfficerBehavior officer)
         {
             if (officer == null)
@@ -341,6 +398,10 @@ namespace Behind_Bars.Systems.NPCs
             return activeSessionsByOfficer.ContainsKey(officer);
         }
 
+        /// <summary>
+        /// Verifies a check-in session against its live controller and exact player
+        /// identity so a reused officer cannot retain stale ownership.
+        /// </summary>
         private bool IsCheckInStillActive(InteractionSession session)
         {
             if (session == null || session.Officer == null || session.Parolee == null)

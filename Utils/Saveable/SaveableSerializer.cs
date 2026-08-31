@@ -15,14 +15,32 @@ using Newtonsoft.Json;
 namespace Behind_Bars.Utils.Saveable
 {
     /// <summary>
-    /// Utility class for serializing/deserializing Saveable objects using reflection.
-    /// Finds fields marked with [SaveableField] and converts them to/from JSON.
+    /// Utility class for serializing and deserializing <see cref="Saveable"/>
+    /// objects using the mod's attribute-based persistence contract.
+    /// Only fields marked with <see cref="SaveableFieldAttribute"/> participate;
+    /// this is a deliberately small bridge for save data, not a general-purpose
+    /// replacement for either runtime's JSON serializer.
     /// </summary>
     public static class SaveableSerializer
     {
         /// <summary>
-        /// Serializes a Saveable object to JSON by finding all [SaveableField] marked fields.
+        /// Serializes a saveable to an indented JSON object containing its marked fields.
         /// </summary>
+        /// <param name="saveable">Instance whose marked fields should be read.</param>
+        /// <returns>
+        /// JSON containing the fields that could be read, or <c>{}</c> when the
+        /// instance is null or an outer serialization failure occurs.
+        /// </returns>
+        /// <remarks>
+        /// Reflection walks the concrete type and intermediate base types, stopping
+        /// before <see cref="Saveable"/>. A non-empty
+        /// <see cref="SaveableFieldAttribute.SaveName"/> is the JSON key; otherwise
+        /// the CLR field name is used. Non-serialized fields and fields that throw
+        /// during access are skipped. Non-string <see cref="IEnumerable"/> values
+        /// are emitted as arrays, which means dictionary keys are not preserved by
+        /// this outer collection path. The final JSON call uses Newtonsoft.Json on
+        /// Mono and System.Text.Json on IL2CPP.
+        /// </remarks>
         public static string Serialize(Saveable saveable)
         {
             if (saveable == null)
@@ -109,8 +127,22 @@ namespace Behind_Bars.Utils.Saveable
         }
 
         /// <summary>
-        /// Deserializes JSON to a Saveable object by setting fields marked with [SaveableField].
+        /// Deserializes a JSON object into the marked fields of a saveable.
         /// </summary>
+        /// <param name="saveable">Instance whose marked fields should be assigned.</param>
+        /// <param name="json">JSON object produced by this serializer or a compatible caller.</param>
+        /// <remarks>
+        /// The same concrete/intermediate-type reflection walk is used as in
+        /// <see cref="Serialize"/>. Unknown keys are ignored, while duplicate
+        /// attribute names resolve to the last field inserted into the field map.
+        /// Empty JSON is treated as no data. Parse and assignment failures are
+        /// logged without aborting the complete load; an assignment failure leaves
+        /// that field unchanged, while <see cref="DeserializeValue"/> may return
+        /// an explicit default for an invalid enum/vector/date. This method does
+        /// not throw those errors to its caller. Newtonsoft.Json is used on Mono
+        /// and System.Text.Json is flattened into plain CLR values on IL2CPP
+        /// before conversion.
+        /// </remarks>
         public static void Deserialize(Saveable saveable, string json)
         {
             if (saveable == null)
@@ -202,6 +234,18 @@ namespace Behind_Bars.Utils.Saveable
         }
 
 #if !MONO
+        /// <summary>
+        /// Converts an IL2CPP <see cref="STJ.JsonElement"/> tree into the plain CLR
+        /// dictionaries, lists, primitives, and dates consumed by the recursive
+        /// save-value converter.
+        /// </summary>
+        /// <param name="element">JSON element to flatten.</param>
+        /// <returns>A recursively converted CLR value, or null for JSON null/undefined.</returns>
+        /// <remarks>
+        /// Numeric values are narrowed in the order Int32, Int64, Single, then
+        /// Double. JSON strings that System.Text.Json recognizes as dates become
+        /// <see cref="DateTime"/> values; other strings remain strings.
+        /// </remarks>
         private static object ConvertJsonElementToPlainObject(STJ.JsonElement element)
         {
             switch (element.ValueKind)
@@ -249,9 +293,22 @@ namespace Behind_Bars.Utils.Saveable
 #endif
 
         /// <summary>
-        /// Serializes a single value to a format suitable for JSON.
-        /// Handles objects with SaveableField attributes by serializing them recursively.
+        /// Converts one field value into a JSON-compatible CLR representation.
         /// </summary>
+        /// <param name="value">Value to convert; null is preserved as null.</param>
+        /// <returns>
+        /// A primitive, string, anonymous Unity-value object, list, nested saveable
+        /// dictionary, or runtime-serializer-compatible object.
+        /// </returns>
+        /// <remarks>
+        /// Unity vectors and colors are reduced to component objects, enums become
+        /// names, and <see cref="DateTime"/> uses round-trip (ISO 8601) text.
+        /// Objects with marked fields recurse through their fields; other custom
+        /// objects round-trip through the active JSON runtime. If that fallback
+        /// fails, the value's <c>ToString()</c> result is used. Non-string
+        /// <see cref="IEnumerable"/> values are treated as arrays, including
+        /// dictionaries.
+        /// </remarks>
         public static object SerializeValue(object value)
         {
             if (value == null)
@@ -372,9 +429,24 @@ namespace Behind_Bars.Utils.Saveable
         }
 
         /// <summary>
-        /// Deserializes a value from JSON to the target type.
-        /// Handles objects with SaveableField attributes by deserializing them recursively.
+        /// Converts a plain JSON value into the requested target type.
         /// </summary>
+        /// <param name="targetType">CLR type expected by the destination field.</param>
+        /// <param name="value">Plain JSON value, or an IL2CPP JsonElement before flattening.</param>
+        /// <returns>
+        /// A converted value, a type default, the original value for a failed
+        /// primitive conversion, or null when no compatible value can be created.
+        /// </returns>
+        /// <remarks>
+        /// The supported special cases are Unity vectors/colors, enums, dates,
+        /// <see cref="List{T}"/>, <see cref="Dictionary{TKey,TValue}"/>, arrays,
+        /// primitives, and classes whose fields carry
+        /// <see cref="SaveableFieldAttribute"/>. Recursive class creation requires
+        /// a usable parameterless constructor. Other types fall back to the active
+        /// runtime JSON serializer. Conversion failures are intentionally reduced
+        /// to defaults/null or a logged warning so one bad field does not abort the
+        /// complete save load.
+        /// </remarks>
         public static object DeserializeValue(Type targetType, object value)
         {
             if (value == null)

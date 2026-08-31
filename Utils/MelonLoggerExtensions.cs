@@ -5,6 +5,13 @@ using MelonLoader;
 
 namespace Behind_Bars.Helpers
 {
+    /// <summary>
+    /// Retained legacy reflection helpers for MelonLoader's private logger API.
+    /// </summary>
+    /// <remarks>
+    /// No current production call sites were found for these private helpers;
+    /// their behavior is intentionally unchanged until a consumer is restored.
+    /// </remarks>
     public static class MelonLoggerExtensions
     {
         private static string GetLoggerName(MelonLogger.Instance logger)

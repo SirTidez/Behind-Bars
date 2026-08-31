@@ -25,9 +25,14 @@ namespace Behind_Bars.UI
     public class ParoleStatusUI : MonoBehaviour
     {
 #if !MONO
+        /// <summary>
+        /// Creates the IL2CPP wrapper instance for the persistent parole status panel.
+        /// </summary>
         public ParoleStatusUI(System.IntPtr ptr) : base(ptr) { }
 #endif
 
+        // Runtime-created panel and text references. The panel is attached to the
+        // current HUD canvas and is rebuilt when that scene-owned canvas is replaced.
         private GameObject _statusPanel;
         private Image _backgroundImage;
         private TextMeshProUGUI _headerText;
@@ -41,9 +46,15 @@ namespace Behind_Bars.UI
         private TMP_FontAsset _defaultFontAsset;
         private UnityEngine.Material _defaultFontMaterial;
 
+        // A single fade handle is shared by Show and Hide so a new transition can
+        // stop the previous one before it writes to the CanvasGroup.
         private bool _isInitialized = false;
         private Coroutine _fadeCoroutine;
 
+        /// <summary>
+        /// Starts one-time panel construction; HUD lookup may defer it until the
+        /// gameplay canvas and a usable TMP font are available.
+        /// </summary>
         public void Start()
         {
             if (!_isInitialized)
@@ -53,8 +64,9 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Create the persistent parole status UI elements
-        /// Can be called manually or via Unity's Start()
+        /// Creates the persistent parole status panel, or schedules a bounded retry
+        /// when the player HUD is not ready. It may be called manually or by Unity's
+        /// Start method and is idempotent after successful construction.
         /// </summary>
         public void CreateUI()
         {
@@ -80,7 +92,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Get the player's HUD canvas
+        /// Resolves the active player HUD canvas through the Mono or IL2CPP singleton
+        /// path. A not-yet-created HUD returns null so creation can retry safely.
         /// </summary>
         private Canvas GetPlayerHUDCanvas()
         {
@@ -116,8 +129,11 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Create UI with a known canvas
+        /// Builds the status panel under a known HUD canvas and caches a valid TMP
+        /// font/material pair before creating text. The initialized guard prevents a
+        /// deferred retry from creating a second panel.
         /// </summary>
+        /// <param name="mainCanvas">The gameplay HUD canvas that owns this panel.</param>
         private void CreateUIWithCanvas(Canvas mainCanvas)
         {
             try
@@ -226,7 +242,9 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Wait for HUD canvas to be available and then create UI
+        /// Waits up to ten half-second polls for the HUD canvas, then creates the
+        /// panel once it is available. The bounded retry avoids a coroutine that
+        /// would otherwise survive indefinitely outside a gameplay scene.
         /// </summary>
 #if !MONO
         [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
@@ -255,8 +273,11 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Show parole status UI with data
+        /// Presents the current parole snapshot and fades the panel in only when it
+        /// was previously hidden. Repeated updates while visible refresh text without
+        /// restarting the transition.
         /// </summary>
+        /// <param name="data">The current parole data snapshot to display.</param>
 #if !MONO
         [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
 #endif
@@ -319,8 +340,11 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Update status without re-fading
+        /// Updates displayed parole values without starting a new fade. A snapshot
+        /// that is no longer on parole hides the panel, while optional curfew,
+        /// compliance, and fee rows are enabled only when their values apply.
         /// </summary>
+        /// <param name="data">The current parole data snapshot, or null to skip.</param>
 #if !MONO
         [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
 #endif
@@ -412,7 +436,9 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Hide the status UI with fade out
+        /// Starts the normal fade-out for the status panel. Scene teardown should use
+        /// <see cref="CancelForSceneExit"/> so no coroutine can resume against an
+        /// unloading HUD canvas.
         /// </summary>
         public void Hide()
         {
@@ -439,7 +465,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Check if status UI is currently visible
+        /// Reports whether the initialized panel is active and its CanvasGroup is
+        /// currently presenting an opaque status surface.
         /// </summary>
         public bool IsVisible()
         {
@@ -447,8 +474,9 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Ends status presentation synchronously before a scene transition.  This
-        /// avoids the fade coroutine writing to a HUD CanvasGroup after it unloads.
+        /// Ends status presentation synchronously before a scene transition. This
+        /// avoids the fade coroutine writing to a HUD CanvasGroup after it unloads;
+        /// the component itself remains available for the next HUD presentation.
         /// </summary>
         public void CancelForSceneExit()
         {
@@ -470,11 +498,13 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Format LSI level with search probability
+        /// Creates one left-aligned text row within the status panel's normalized
+        /// vertical range and applies the cached font/material configuration.
         /// </summary>
-        /// <summary>
-        /// Helper to create a text row in the status panel
-        /// </summary>
+        /// <param name="parent">The status panel transform that owns the row.</param>
+        /// <param name="name">The object name used for the row hierarchy.</param>
+        /// <param name="anchorMinY">The lower normalized panel anchor.</param>
+        /// <param name="anchorMaxY">The upper normalized panel anchor.</param>
         private TextMeshProUGUI CreateStatusRow(Transform parent, string name, float anchorMinY, float anchorMaxY)
         {
             GameObject obj = new GameObject(name);
@@ -493,6 +523,11 @@ namespace Behind_Bars.UI
             return text;
         }
 
+        /// <summary>
+        /// Finds a usable TMP font/material pair from the HUD, global TMP settings,
+        /// or loaded text objects and caches it for all rows created by this panel.
+        /// </summary>
+        /// <param name="canvas">The current HUD canvas to probe first.</param>
         private void CacheTextDefaults(Canvas canvas)
         {
             if (canvas == null)
@@ -545,6 +580,11 @@ namespace Behind_Bars.UI
             }
         }
 
+        /// <summary>
+        /// Applies the cached TMP assets and non-interactive defaults to one text
+        /// component before it is populated or shown.
+        /// </summary>
+        /// <param name="text">The runtime-created text component to initialize.</param>
         private void InitializeTextComponent(TextMeshProUGUI text)
         {
             if (text == null)
@@ -578,6 +618,10 @@ namespace Behind_Bars.UI
             text.SetAllDirty();
         }
 
+        /// <summary>
+        /// Reapplies the cached TMP assets to every row. This is intentionally safe to
+        /// call during Show because HUD/font initialization can finish after creation.
+        /// </summary>
         private void ApplyFontFixes()
         {
             if (_statusPanel == null)
@@ -630,6 +674,12 @@ namespace Behind_Bars.UI
             }
         }
 
+        /// <summary>
+        /// Formats the LSI level and search probability used by the supervision row.
+        /// The probability is already supplied as a whole-number percentage.
+        /// </summary>
+        /// <param name="level">The assessed supervision level.</param>
+        /// <param name="searchPercent">The associated search probability percentage.</param>
 #if !MONO
         [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
 #endif
@@ -649,7 +699,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Fade in animation
+        /// Fades the status panel in over scaled game time and finishes at full alpha
+        /// so a partially completed frame cannot leave the HUD dimmed.
         /// </summary>
 #if !MONO
         [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
@@ -670,7 +721,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Fade out animation
+        /// Fades the status panel out over scaled game time and deactivates its root
+        /// after the transition completes.
         /// </summary>
 #if !MONO
         [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]

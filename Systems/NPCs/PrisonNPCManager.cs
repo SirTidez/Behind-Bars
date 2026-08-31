@@ -34,8 +34,9 @@ using ScheduleOne;
 namespace Behind_Bars.Systems.NPCs
 {
     /// <summary>
-    /// Manages prison NPCs with customizable appearances and behaviors
-    /// Enhanced for IL2CPP compatibility and intake coordination
+    /// Owns scene-time prison NPC creation and registry bookkeeping. Native
+    /// BaseNPCSpawner factories establish the game NPC first; canonical behavior
+    /// components and lightweight wrapper components are then attached by role.
     /// </summary>
     public class PrisonNPCManager : MonoBehaviour
     {
@@ -43,18 +44,24 @@ namespace Behind_Bars.Systems.NPCs
         public PrisonNPCManager(System.IntPtr ptr) : base(ptr) { }
 #endif
 
+        /// <summary>Gets the scene-owned prison NPC manager, or null before Awake.</summary>
         public static PrisonNPCManager Instance { get; private set; }
         private Coroutine? npcInitializationCoroutine;
         private readonly List<Coroutine> guardDialogueInitializationCoroutines = new();
         
-        // NPC spawning status
+        // Set only after the ordered guard/manager/inmate initialization coroutine
+        // reaches its final step; a failed individual spawn does not necessarily
+        // prevent this flag from becoming true.
+        /// <summary>Whether the initial NPC population coroutine has completed.</summary>
         public bool IsSpawningComplete { get; private set; } = false;
 
-        // NPC tracking
+        // Wrapper lists are manager-owned snapshots; canonical behavior registries
+        // below are the sources used for coordination and availability checks.
         private List<PrisonGuard> activeGuards = new List<PrisonGuard>();
         private List<PrisonInmate> activeInmates = new List<PrisonInmate>();
         
-        // Guard coordination for IL2CPP-safe management
+        // Canonical behavior registries. The role-specific pointer fields are
+        // convenience selections and are not independent ownership records.
         private List<GuardBehavior> registeredGuards = new List<GuardBehavior>();
         private List<ParoleOfficerBehavior> registeredParoleOfficers = new List<ParoleOfficerBehavior>();
         private List<ReleaseOfficerBehavior> registeredReleaseOfficers = new List<ReleaseOfficerBehavior>();
@@ -64,7 +71,8 @@ namespace Behind_Bars.Systems.NPCs
         private float nextPatrolTime = 0f;
         private readonly float PATROL_COOLDOWN = 300f; // 5 minutes between coordinated patrols
         
-        // Enhanced spawn configuration
+        // Spawn caps/configuration. maxParoleOfficers is consumed by the dynamic
+        // parole manager; this manager does not directly loop over that cap here.
         public int maxGuards = 5; // 2 guard-room posts, intake/release, and the day-room patrol
         public int maxParoleOfficers = 6; // 1 supervising (stationary) + 5 patrol officers
         public int maxInmates = 8;
@@ -82,6 +90,10 @@ namespace Behind_Bars.Systems.NPCs
         };
         
 
+        /// <summary>
+        /// Establishes the scene singleton. A duplicate component is destroyed and
+        /// does not participate in spawning or registration.
+        /// </summary>
         private void Awake()
         {
             if (Instance == null)
@@ -95,6 +107,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Resolves authored spawn points and starts the ordered population
+        /// coroutine. It does not synchronously guarantee that NPCs exist.
+        /// </summary>
         private void Start()
         {
             // Initialize spawn points from JailController
@@ -135,6 +151,10 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Debug("PrisonNPCManager cancelled scene initialization");
         }
 
+        /// <summary>
+        /// Cancels scene-owned initialization, tears down the dynamic parole
+        /// manager, and clears the singleton when this manager is destroyed.
+        /// </summary>
         private void OnDestroy()
         {
             CancelForSceneExit();
@@ -145,7 +165,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Initialize spawn points from the jail controller
+        /// Resolves guard spawn arrays from JailController and creates manager-owned
+        /// inmate spawn transforms around the jail center.
         /// </summary>
         private void InitializeSpawnPoints()
         {
@@ -182,7 +203,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Create spawn points for inmates around the jail area
+        /// Creates six manager-owned radial inmate spawn transforms. These are
+        /// synthetic points; cell assignment remains the authority for placement.
         /// </summary>
         private void CreateInmateSpawnPoints(JailController jailController)
         {
@@ -215,7 +237,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Initialize NPCs in the prison
+        /// Runs the ordered startup pipeline: wait, spawn staffed guards, create
+        /// DynamicParoleOfficerManager, spawn inmates, then set IsSpawningComplete.
+        /// Individual failures are logged by each stage and do not all abort the
+        /// enclosing coroutine.
         /// </summary>
         private IEnumerator InitializeNPCs()
         {
@@ -241,7 +266,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Initialize the dynamic parole officer manager
+        /// Creates the scene-owned DynamicParoleOfficerManager child. That manager
+        /// is the normal owner of dynamic parole-officer creation; this method only
+        /// installs and initializes its component.
         /// </summary>
         private void InitializeDynamicParoleOfficerManager()
         {
@@ -797,8 +824,16 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Spawn a single guard using BaseNPC prefab (ID 182)
+        /// Creates one canonical guard through the prepared native-NPC factory,
+        /// attaches GuardBehavior and the PrisonGuard wrapper, then finalizes its
+        /// network/NavMesh placement. Injection failure destroys the prepared
+        /// object rather than installing a static fallback.
         /// </summary>
+        /// <param name="position">World-space spawn position.</param>
+        /// <param name="firstName">Display name passed to the native NPC factory.</param>
+        /// <param name="badgeNumber">Optional stable badge; generated when empty.</param>
+        /// <param name="assignment">Canonical guard assignment.</param>
+        /// <returns>The initialized wrapper, or null when preparation, injection, or finalization fails.</returns>
         public PrisonGuard SpawnGuard(Vector3 position, string firstName = "Officer", string badgeNumber = "", GuardBehavior.GuardAssignment assignment = GuardBehavior.GuardAssignment.GuardRoom0)
         {
             try
@@ -829,6 +864,8 @@ namespace Behind_Bars.Systems.NPCs
                     return null;
                 }
 
+                // Native object -> canonical behavior -> audio -> wrapper -> finalize.
+                // The wrapper is bookkeeping; GuardBehavior owns runtime behavior.
                 // Add audio system components for voice commands
                 AddAudioSystemToGuard(guardObject, npcComponent, true);
 
@@ -857,8 +894,16 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Spawn a single parole officer using BaseNPC prefab (ID 182)
+        /// Creates one canonical parole officer through the prepared native-NPC
+        /// factory, applies appearance before behavior injection, then attaches
+        /// ParoleOfficerBehavior, its wrapper, and (for the supervisor) the
+        /// check-in system before final placement.
         /// </summary>
+        /// <param name="position">World-space spawn position.</param>
+        /// <param name="firstName">Display name passed to the native NPC factory.</param>
+        /// <param name="badgeNumber">Optional stable badge; generated when empty.</param>
+        /// <param name="assignment">Canonical parole-officer assignment.</param>
+        /// <returns>The initialized wrapper, or null when preparation, injection, or finalization fails.</returns>
         public ParoleOfficer SpawnParoleOfficer(Vector3 position, string firstName = "Officer", string badgeNumber = "", ParoleOfficerBehavior.ParoleOfficerAssignment assignment = ParoleOfficerBehavior.ParoleOfficerAssignment.PoliceStationSupervisor)
         {
             try
@@ -891,6 +936,8 @@ namespace Behind_Bars.Systems.NPCs
                     return null;
                 }
 
+                // The wrapper stores metadata only; ParoleOfficerBehavior remains
+                // the canonical owner of patrol/intake behavior and registration.
                 AddAudioSystemToGuard(paroleOfficerObject, npcComponent, true);
 
                 var paroleOfficer = BBHelpers.AddComponentSafe<ParoleOfficer>(paroleOfficerObject);
@@ -931,8 +978,17 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Spawn a single inmate using BaseNPCSpawner with working avatar system
+        /// Creates one inmate through BaseNPCSpawner, which owns native avatar,
+        /// network, and NavMesh setup, then attaches the PrisonInmate metadata
+        /// wrapper. Direct calls stop there; the normal SpawnInmates flow adds
+        /// InmateBehavior afterward for jail movement, so the wrapper is not that
+        /// behavior.
         /// </summary>
+        /// <param name="position">World-space spawn position.</param>
+        /// <param name="firstName">Display name passed to the native factory.</param>
+        /// <param name="prisonerID">Optional identifier; generated when empty.</param>
+        /// <param name="crimeType">Crime label stored by the wrapper.</param>
+        /// <returns>The initialized wrapper, or null when native creation fails.</returns>
         public PrisonInmate SpawnInmate(Vector3 position, string firstName = "Inmate", string prisonerID = "", string crimeType = "Unknown")
         {
             try
@@ -970,9 +1026,8 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        /// <summary>
-        /// Get all active guards
-        /// </summary>
+        /// <summary>Returns a cleaned snapshot of manager-tracked guard wrappers.</summary>
+        /// <returns>A new list; removing from it does not unregister or destroy a guard.</returns>
         public List<PrisonGuard> GetActiveGuards()
         {
             // Clean up null references
@@ -980,9 +1035,8 @@ namespace Behind_Bars.Systems.NPCs
             return new List<PrisonGuard>(activeGuards);
         }
 
-        /// <summary>
-        /// Get all active inmates
-        /// </summary>
+        /// <summary>Returns a cleaned snapshot of manager-tracked inmate wrappers.</summary>
+        /// <returns>A new list; removing from it does not unregister or destroy an inmate.</returns>
         public List<PrisonInmate> GetActiveInmates()
         {
             // Clean up null references
@@ -990,9 +1044,8 @@ namespace Behind_Bars.Systems.NPCs
             return new List<PrisonInmate>(activeInmates);
         }
 
-        /// <summary>
-        /// Remove a guard from tracking
-        /// </summary>
+        /// <summary>Removes a guard wrapper from the manager's active snapshot.</summary>
+        /// <param name="guard">Wrapper to stop tracking; the scene object is not destroyed.</param>
         public void RemoveGuard(PrisonGuard guard)
         {
             if (activeGuards.Contains(guard))
@@ -1002,9 +1055,8 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        /// <summary>
-        /// Remove an inmate from tracking
-        /// </summary>
+        /// <summary>Removes an inmate wrapper from the manager's active snapshot.</summary>
+        /// <param name="inmate">Wrapper to stop tracking; the scene object is not destroyed.</param>
         public void RemoveInmate(PrisonInmate inmate)
         {
             if (activeInmates.Contains(inmate))
@@ -1050,8 +1102,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Fix parole officer appearance using NPCAppearanceManager (more reliable than searching scene)
-        /// This ensures consistent guard appearance even when spawned before other guards
+        /// Applies the parole officer's appearance through NPCAppearanceManager,
+        /// sanitizing accessory settings before loading them into the native Avatar.
+        /// If no Avatar/settings can be resolved, the current scene-search fallback
+        /// is attempted and may leave the native appearance unchanged.
         /// </summary>
         private void FixParoleOfficerAppearance(GameObject npcInstance, string firstName)
         {
@@ -1177,6 +1231,12 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Removes accessory entries from the settings selected for a parole officer
+        /// Avatar load. EmployeeManager normally supplies a clone, but a cache
+        /// fallback can return a live cached reference, so this sanitize may mutate
+        /// that cached object. It is a spawn-stability step, not full customization.
+        /// </summary>
 #if !MONO
         private void SanitizeParoleOfficerAvatarSettings(Il2CppScheduleOne.AvatarFramework.AvatarSettings avatarSettings)
         {
@@ -1214,7 +1274,9 @@ namespace Behind_Bars.Systems.NPCs
 #endif
 
         /// <summary>
-        /// Fix BaseNPC appearance by copying from existing NPCs
+        /// Passes an existing source Avatar's current settings to the target.
+        /// This legacy fallback does not synthesize appearance data when no source
+        /// Avatar is found; it only logs and leaves the target's current settings.
         /// </summary>
         private void FixNPCAppearance(GameObject npcInstance, string npcType)
         {
@@ -2215,15 +2277,18 @@ namespace Behind_Bars.Systems.NPCs
         #region Guard Coordination Methods
         
         /// <summary>
-        /// Register a guard with the manager for coordination
+        /// Registers a canonical GuardBehavior once and updates the convenience
+        /// intake-officer pointer when its role is IntakeOfficer. This registry is
+        /// separate from the active wrapper list used by spawn bookkeeping.
         /// </summary>
+        /// <param name="guard">Canonical guard behavior to register.</param>
         public void RegisterGuard(GuardBehavior guard)
         {
             if (!registeredGuards.Contains(guard))
             {
                 registeredGuards.Add(guard);
 
-                // Track intake officer specifically
+                // Track supervising officer specifically.
                 if (guard.GetRole() == GuardBehavior.GuardRole.IntakeOfficer)
                 {
                     intakeOfficer = guard;
@@ -2235,8 +2300,10 @@ namespace Behind_Bars.Systems.NPCs
         }
         
         /// <summary>
-        /// Unregister a guard from the manager
+        /// Removes a canonical guard and clears the intake pointer when it refers
+        /// to that exact behavior. It does not destroy the underlying GameObject.
         /// </summary>
+        /// <param name="guard">Canonical guard behavior to unregister.</param>
         public void UnregisterGuard(GuardBehavior guard)
         {
             if (registeredGuards.Contains(guard))
@@ -2254,8 +2321,12 @@ namespace Behind_Bars.Systems.NPCs
         }
         
         /// <summary>
-        /// Try to assign a coordinated patrol to guards
+        /// Starts a paired patrol only when the scaled Unity-time cooldown has
+        /// elapsed and the requesting guard is idle. The current partner search
+        /// matches role area, not route geometry, and this coroutine does not
+        /// reserve doors.
         /// </summary>
+        /// <param name="requestingGuard">Idle guard requesting a patrol partner.</param>
         public IEnumerator TryAssignPatrol(GuardBehavior requestingGuard)
         {
             // Check if it's time for a patrol and no patrol is in progress
@@ -2285,7 +2356,8 @@ namespace Behind_Bars.Systems.NPCs
         }
         
         /// <summary>
-        /// Find a suitable patrol partner for a guard
+        /// Finds the first idle guard sharing the requester's stationary-role area.
+        /// It returns no partner for patrol-role guards or across role areas.
         /// </summary>
         private GuardBehavior FindPatrolPartner(GuardBehavior requestingGuard)
         {
@@ -2309,7 +2381,8 @@ namespace Behind_Bars.Systems.NPCs
         }
         
         /// <summary>
-        /// End patrol coordination state
+        /// Clears the manager's patrol-in-progress flag; it does not stop either
+        /// guard's patrol state or release any door reservation.
         /// </summary>
         public void EndPatrolCoordination()
         {
@@ -2318,16 +2391,19 @@ namespace Behind_Bars.Systems.NPCs
         }
         
         /// <summary>
-        /// Get the intake officer for prisoner processing
+        /// Gets the convenience pointer to the registered intake guard.
         /// </summary>
+        /// <returns>The last registered IntakeOfficer, or null.</returns>
         public GuardBehavior GetIntakeOfficer()
         {
             return intakeOfficer;
         }
         
         /// <summary>
-        /// Check if intake officer is available
+        /// Checks whether the registered intake guard exists and is not processing
+        /// an intake. Null/stale pointers are not repaired by this query.
         /// </summary>
+        /// <returns>True when the intake pointer is present and idle.</returns>
         public bool IsIntakeOfficerAvailable()
         {
             if (intakeOfficer != null)
@@ -2338,8 +2414,12 @@ namespace Behind_Bars.Systems.NPCs
         }
         
         /// <summary>
-        /// Request prisoner escort from intake officer
+        /// Converts a prisoner GameObject to its Player and forwards the request to
+        /// the legacy intake officer entry point. This method does not reserve a
+        /// route or guarantee that the officer accepted the downstream request.
         /// </summary>
+        /// <param name="prisoner">GameObject expected to carry a Player component.</param>
+        /// <returns>True when an available intake officer accepted the forwarding call.</returns>
         public bool RequestPrisonerEscort(GameObject prisoner)
         {
             if (prisoner == null)
@@ -2373,8 +2453,9 @@ namespace Behind_Bars.Systems.NPCs
         }
         
         /// <summary>
-        /// Get all registered guards
+        /// Returns a cleaned copy of the canonical guard registry.
         /// </summary>
+        /// <returns>A new list; mutating it does not unregister guards.</returns>
         public List<GuardBehavior> GetRegisteredGuards()
         {
             // Clean up null references
@@ -2387,8 +2468,11 @@ namespace Behind_Bars.Systems.NPCs
         #region Parole Officer Coordination Methods
 
         /// <summary>
-        /// Register a guard with the manager for coordination
+        /// Registers a canonical ParoleOfficerBehavior once and updates the
+        /// supervising-officer convenience pointer when applicable. This list is
+        /// the manager's registry; it does not own the dynamic manager's lifecycle.
         /// </summary>
+        /// <param name="officer">Canonical parole officer behavior to register.</param>
         public void RegisterParoleOfficer(ParoleOfficerBehavior officer)
         {
             if (!registeredParoleOfficers.Contains(officer))
@@ -2407,8 +2491,12 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Unregister a guard from the manager
+        /// Removes a canonical parole officer and clears the supervising pointer
+        /// when it refers to that exact behavior. It does not clear coordinator
+        /// escort ownership by itself. The legacy diagnostic below still labels
+        /// this pointer an "intake officer".
         /// </summary>
+        /// <param name="officer">Canonical parole officer behavior to unregister.</param>
         public void UnregisterParoleOfficer(ParoleOfficerBehavior officer)
         {
             if (registeredParoleOfficers.Contains(officer))
@@ -2426,8 +2514,11 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Register a release officer with the manager for canonical release-officer ownership.
+        /// Registers a canonical release officer for lookup by ReleaseManager.
+        /// Registration is idempotent for the same component and does not itself
+        /// reserve or begin an escort.
         /// </summary>
+        /// <param name="officer">Release officer behavior to register.</param>
         public void RegisterReleaseOfficer(ReleaseOfficerBehavior officer)
         {
             if (officer == null)
@@ -2443,8 +2534,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Unregister a release officer from the manager.
+        /// Removes a release officer from the manager lookup registry. Active
+        /// escort/coordinator cleanup remains the release behavior's responsibility.
         /// </summary>
+        /// <param name="officer">Release officer behavior to unregister.</param>
         public void UnregisterReleaseOfficer(ReleaseOfficerBehavior officer)
         {
             if (officer == null)
@@ -2459,8 +2552,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Get all registered release officers.
+        /// Returns a cleaned copy of the canonical release-officer registry.
         /// </summary>
+        /// <returns>A new list; mutating it does not unregister officers.</returns>
         public List<ReleaseOfficerBehavior> GetRegisteredReleaseOfficers()
         {
             registeredReleaseOfficers.RemoveAll(officer => officer == null);
@@ -2468,8 +2562,11 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Try to assign a coordinated patrol to officers
+        /// Starts a paired patrol after the scaled Unity-time cooldown when the
+        /// requesting officer is idle. The current partner test only compares the
+        /// broad PatrolOfficer role, not actual route/region assignment.
         /// </summary>
+        /// <param name="requestingOfficer">Idle patrol officer requesting a partner.</param>
         public IEnumerator TryAssignPatrol(ParoleOfficerBehavior requestingOfficer)
         {
             // Check if it's time for a patrol and no patrol is in progress
@@ -2499,7 +2596,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Find a suitable patrol partner for a parole officer
+        /// Finds the first other idle patrol-role officer. It does not verify that
+        /// the two officers share a route or physical region.
         /// </summary>
         private ParoleOfficerBehavior FindPatrolPartner(ParoleOfficerBehavior requestingOfficer)
         {
@@ -2522,7 +2620,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// End patrol coordination state
+        /// Clears the parole patrol-in-progress flag without stopping active patrol
+        /// state on either officer.
         /// </summary>
         public void EndParolePatrolCoordination()
         {
@@ -2531,25 +2630,32 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Get the supervising officer for prisoner processing
+        /// Gets the current supervising-officer pointer selected during registration.
         /// </summary>
+        /// <returns>The registered supervisor, or null.</returns>
         public ParoleOfficerBehavior GetSupervisingOfficer()
         {
             return paroleSupervisor;
         }
 
         /// <summary>
-        /// Check if supervising officer is available
+        /// Checks whether the registered supervisor exists and is not processing
+        /// canonical intake. It does not validate check-in or coordinator ownership.
         /// </summary>
+        /// <returns>True when the supervisor pointer is present and intake-idle.</returns>
         public bool IsSupervisingOfficerAvailable()
         {
             return paroleSupervisor != null && !paroleSupervisor.IsProcessingIntake();
         }
 
         /// <summary>
-        /// Request prisoner escort from parole officer
-        /// TODO: Implement parole intake proccess here
+        /// Compatibility request that converts the parolee GameObject to Player and
+        /// forwards it to the supervising officer's legacy intake entry point. The
+        /// misleading "release escort" name is retained for callers; this method
+        /// does not invoke ReleaseOfficerBehavior or perform a physical release.
         /// </summary>
+        /// <param name="parolee">GameObject expected to carry a Player component.</param>
+        /// <returns>True when the supervisor and Player component are available and the request is forwarded.</returns>
         public bool RequestReleaseEscort(GameObject parolee)
         {
             if (IsSupervisingOfficerAvailable() && parolee != null)
@@ -2579,8 +2685,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Get all registered guards
+        /// Returns a cleaned copy of the canonical parole-officer registry.
         /// </summary>
+        /// <returns>A new list; mutating it does not unregister officers.</returns>
         public List<ParoleOfficerBehavior> GetRegisteredParoleOfficers()
         {
             // Clean up null references

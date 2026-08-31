@@ -34,31 +34,50 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Guard Configuration
 
+        /// <summary>Role selected for this guard's normal jail duties.</summary>
         public enum GuardRole
         {
+            /// <summary>Remains stationed in the guard room.</summary>
             GuardRoomStationary,    // Guards stationed in guard room
+            /// <summary>Remains stationed in the booking area.</summary>
             BookingStationary,      // Guards stationed in booking area
+            /// <summary>Owns prisoner booking through <see cref="IntakeOfficerStateMachine"/>.</summary>
             IntakeOfficer,          // Dedicated intake processing guard
+            /// <summary>Follows the configured patrol route.</summary>
             PatrolGuard,            // Guards doing patrol routes
+            /// <summary>Responds to incidents and lockdown assignments.</summary>
             ResponseGuard           // Responds to incidents
         }
 
+        /// <summary>Spawn/post assignment that determines role-specific scene ownership.</summary>
         public enum GuardAssignment
         {
+            /// <summary>First guard-room post.</summary>
             GuardRoom0,    // Guard room spawn point 0
+            /// <summary>Second guard-room post.</summary>
             GuardRoom1,    // Guard room spawn point 1
+            /// <summary>Primary booking post, normally occupied by the intake officer.</summary>
             Booking0,      // Booking spawn point 0 (usually intake officer)
+            /// <summary>Secondary booking post.</summary>
             Booking1,      // Booking spawn point 1
+            /// <summary>Dedicated cell-block/day-room patrol assignment.</summary>
             DayRoomPatrol  // Dedicated officer for the cell-block/day-room circuit
         }
 
+        /// <summary>Current activity layered over the base NPC state.</summary>
         public enum GuardActivity
         {
+            /// <summary>No active patrol, intake, escort, or incident response.</summary>
             Idle,
+            /// <summary>Following a patrol route.</summary>
             Patrolling,
+            /// <summary>Delegating prisoner processing to the intake state machine.</summary>
             ProcessingIntake,
+            /// <summary>Monitoring a prisoner escort and compliance distance.</summary>
             EscortingPrisoner,
+            /// <summary>Holding a post while another system owns orchestration.</summary>
             MonitoringArea,
+            /// <summary>Moving to or handling an incident.</summary>
             RespondingToIncident
         }
 
@@ -66,19 +85,28 @@ namespace Behind_Bars.Systems.NPCs
         [System.Serializable]
         public class PatrolRoute
         {
+            /// <summary>World-space patrol points in traversal order.</summary>
             public Vector3[] points;
+            /// <summary>Patrol movement speed in world units per second.</summary>
             public float speed = 2.5f;
+            /// <summary>Idle time at each patrol point, in Unity seconds.</summary>
             public float waitTime = 3f;
+            /// <summary>Whether the authored route is available for use.</summary>
             public bool isActive = true;
         }
 
         [System.Serializable]
         public class IntakeStationInfo
         {
+            /// <summary>Stable station key used by the MONO intake compatibility surface.</summary>
             public string stationName;
+            /// <summary>Scene transform representing the station.</summary>
             public Transform stationTransform;
+            /// <summary>Guard-facing point used for station interaction.</summary>
             public Transform guardPoint;
+            /// <summary>Whether this station expects a prisoner.</summary>
             public bool requiresPrisoner = true;
+            /// <summary>Station processing duration, in Unity seconds.</summary>
             public float processingTime = 5f;
         }
 #endif
@@ -87,38 +115,66 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Guard Properties
 
+        /// <summary>Role behavior selected for this guard.</summary>
         public GuardRole role = GuardRole.GuardRoomStationary;
+        /// <summary>Spawn/post assignment used to resolve role and route ownership.</summary>
         public GuardAssignment assignment;
+        /// <summary>Display/diagnostic badge identifier; generated when empty.</summary>
         public string badgeNumber = "";
+        /// <summary>Configured experience level used by role data; currently informational.</summary>
         public int experienceLevel = 1;
 #if MONO
+        /// <summary>MONO-authored patrol route; IL2CPP stores equivalent points in a private array.</summary>
         public PatrolRoute patrolRoute = new PatrolRoute();
 #else
+        /// <summary>IL2CPP patrol wait time copied from the native-compatible route configuration.</summary>
         private float patrolWaitTime = 3f;
+        /// <summary>IL2CPP patrol points supplied through the hidden route bridge.</summary>
         private Vector3[] patrolRoutePoints = Array.Empty<Vector3>();
 #endif
+        /// <summary>Unity-time start of the current shift.</summary>
         public float shiftStartTime = 0f;
+        /// <summary>Configured shift length, in Unity seconds.</summary>
         public float shiftDuration = 480f; // 8 minutes default
 
         // Runtime state
+        /// <summary>Activity layered over the inherited coarse NPC state.</summary>
         private GuardActivity currentActivity = GuardActivity.Idle;
+        /// <summary>Security-door owner for non-intake escort operations.</summary>
         private SecurityDoorBehavior doorBehavior;
+        /// <summary>Optional native voice-command controller.</summary>
         private JailNPCAudioController audioController;
+        /// <summary>Optional dialogue/UI controller for guard commands.</summary>
         private JailNPCDialogueController dialogueController;
+        /// <summary>Resolved spawn/post transform for the assignment.</summary>
         private Transform assignedSpawnPoint;
+        /// <summary>Index of the current patrol waypoint.</summary>
         private int currentPatrolIndex = 0;
+        /// <summary>Unity-time arrival timestamp for the current patrol waypoint.</summary>
         private float lastPatrolTime = 0f;
+        /// <summary>Whether a patrol waypoint has been dispatched and remains active.</summary>
         private bool hasActivePatrolDestination;
+        /// <summary>Whether patrol arrival has passed the completion test.</summary>
         private bool patrolArrivalConfirmed;
+        /// <summary>Number of recovery attempts made for the current patrol waypoint.</summary>
         private int patrolRetryCount;
+        /// <summary>Unity-time sample used to detect a stalled patrol route.</summary>
         private float lastPatrolProgressTime;
+        /// <summary>Last position used for patrol progress comparison.</summary>
         private Vector3 lastPatrolProgressPosition;
+        /// <summary>Prevents repeated retry-limit warnings for one waypoint.</summary>
         private bool patrolRetryLimitLogged;
+        /// <summary>Whether the guard is available for normal duty.</summary>
         private bool isOnDuty = true;
+        /// <summary>Cell-facing target used by day-room inspection rotation.</summary>
         private Vector3 dayRoomInspectionTarget;
+        /// <summary>Whether <see cref="dayRoomInspectionTarget"/> is valid.</summary>
         private bool hasDayRoomInspectionTarget;
+        /// <summary>Optional authored cell-facing targets paired with day-room patrol points.</summary>
         private Vector3[] dayRoomInspectionTargets = Array.Empty<Vector3>();
+        /// <summary>Whether the day-room guard's native baton is currently equipped.</summary>
         private bool dayRoomPatrolBatonEquipped;
+        /// <summary>Prevents repeated native-movement ownership diagnostics.</summary>
         private bool dayRoomNativeMovementLogged;
 
         // Deliberately below the game's ordinary walking pace so the day-room guard
@@ -140,40 +196,63 @@ namespace Behind_Bars.Systems.NPCs
         #region Intake Officer State
 
         // Intake processing
+        /// <summary>Prisoner currently owned by intake or escort behavior, if any.</summary>
         private Player currentPrisoner;
 #if MONO
+        /// <summary>MONO station definitions retained for the legacy intake compatibility path.</summary>
         private Dictionary<string, IntakeStationInfo> intakeStations;
+        /// <summary>MONO set of completed legacy station keys.</summary>
         private HashSet<string> completedStations = new HashSet<string>();
 #endif
+        /// <summary>Current station key used by intake diagnostics.</summary>
         private string currentTargetStation = "";
+        /// <summary>Whether this guard has delegated an intake workflow.</summary>
         private bool isProcessingIntake = false;
 
         // Prisoner compliance system
+        /// <summary>Current escort patience value, clamped to the 0–100 range.</summary>
         private float guardPatience = 100f;
+        /// <summary>Unity-time timestamp of the last compliance warning.</summary>
         private float lastComplianceWarningTime = 0f;
+        /// <summary>Number of compliance violations observed during the current escort.</summary>
         private int complianceViolationCount = 0;
+        /// <summary>Last sampled prisoner position used for diagnostics.</summary>
         private Vector3 lastKnownPrisonerPosition;
 
-        // Compliance constants
+        // Compliance thresholds are world-space meters; rates/cooldowns use Unity seconds.
+        /// <summary>Distance at or below which the prisoner is considered perfectly compliant.</summary>
         private const float COMPLIANCE_PERFECT = 2f;      // 0-2m: Perfect compliance
+        /// <summary>Distance at or above which a warning may be issued.</summary>
         private const float COMPLIANCE_WARNING = 3f;      // 2-3m: Warning zone
+        /// <summary>Distance at or above which active intervention messaging is used.</summary>
         private const float COMPLIANCE_VIOLATION = 5f;    // 3-5m: Active intervention
+        /// <summary>Distance at or above which the escort is treated as an escape attempt.</summary>
         private const float COMPLIANCE_ESCAPE = 8f;       // 5m+: Escape attempt
+        /// <summary>Patience loss rate per Unity second while outside the perfect range.</summary>
         private const float PATIENCE_LOSS_RATE = 2f;
+        /// <summary>Patience recovery rate per Unity second while compliant.</summary>
         private const float PATIENCE_GAIN_RATE = 3f;
+        /// <summary>Minimum Unity seconds between compliance warnings.</summary>
         private const float WARNING_COOLDOWN = 5f;
 
         #endregion
 
         #region Patrol System
 
+        /// <summary>Filtered patrol points resolved from the jail controller.</summary>
         private List<Transform> availablePatrolPoints = new List<Transform>();
+        /// <summary>Whether patrol-point resolution has completed for this guard.</summary>
         private bool patrolInitialized = false;
 
         #endregion
 
         #region Initialization
 
+        /// <summary>
+        /// Resolves shared door/audio/dialogue surfaces, initializes patrol/intake data, applies the role
+        /// profile, and registers this guard with the NPC manager. Registration is paired with
+        /// <see cref="OnDestroy"/> so destroyed guards cannot be selected for later work.
+        /// </summary>
         protected override void InitializeNPC()
         {
             doorBehavior = BBHelpers.GetComponentSafe<SecurityDoorBehavior>(gameObject);
@@ -203,6 +282,7 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Debug($"GuardBehavior initialized: {role} guard {badgeNumber} at {assignment}");
         }
 
+        /// <summary>Unregisters the guard before releasing base resources and native presentation state.</summary>
         protected override void OnDestroy()
         {
             // Guard registration outlives Unity object destruction unless it is removed
@@ -212,6 +292,12 @@ namespace Behind_Bars.Systems.NPCs
             base.OnDestroy();
         }
 
+        /// <summary>
+        /// Applies an assignment and badge, derives the role, resolves its spawn point, and initializes audio.
+        /// The shared Unity lifecycle still owns full component initialization.
+        /// </summary>
+        /// <param name="guardAssignment">Spawn/post assignment for the guard.</param>
+        /// <param name="badge">Optional stable badge identifier; generated when empty.</param>
         public void Initialize(GuardAssignment guardAssignment, string badge = "")
         {
             assignment = guardAssignment;
@@ -240,13 +326,15 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Initialize audio and dialogue components for voice commands
+        /// Resolves optional audio and dialogue controllers from the current native NPC object. The canonical
+        /// template/spawner path is expected to provide these components; missing controllers only disable
+        /// their presentation paths and do not create a fallback NPC graph.
         /// </summary>
         private void InitializeAudioComponents()
         {
             try
             {
-                // Get audio controller (should be added by DirectNPCBuilder)
+                // The canonical native template/spawner path provides this component; DirectNPCBuilder is legacy.
                 audioController = BBHelpers.GetComponentSafe<JailNPCAudioController>(gameObject);
                 if (audioController == null)
                 {
@@ -329,6 +417,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Maps the configured role to its activity and starts patrol setup when required.</summary>
         private void SetupGuardRole()
         {
             ConfigureDayRoomPatrolProfile();
@@ -348,6 +437,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Copies non-null jail patrol points into the guard's route cache.</summary>
         private void InitializePatrolPoints()
         {
             availablePatrolPoints.Clear();
@@ -368,6 +458,7 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Debug($"Guard {badgeNumber} initialized with {availablePatrolPoints.Count} patrol points");
         }
 
+        /// <summary>Builds the MONO compatibility station table from canonical jail transforms.</summary>
         private void InitializeIntakeStations()
         {
 #if MONO
@@ -396,11 +487,13 @@ namespace Behind_Bars.Systems.NPCs
 #endif
         }
 
+        /// <summary>Generates a four-digit diagnostic badge suffix for an unconfigured guard.</summary>
         private string GenerateBadgeNumber()
         {
             return $"G{UnityEngine.Random.Range(1000, 9999)}";
         }
 
+        /// <summary>Resolves the assignment-specific spawn transform from the jail hierarchy.</summary>
         private void SetAssignedSpawnPoint()
         {
             assignedSpawnPoint = FindSpawnPoint(assignment.ToString());
@@ -410,6 +503,10 @@ namespace Behind_Bars.Systems.NPCs
 
         #region State Management (Override BaseJailNPC)
 
+        /// <summary>
+        /// Dispatches idle activity. Patrol guards continue waypoint/inspection work, monitoring guards remain
+        /// under their external orchestration owner, and intake processing is driven by its state machine.
+        /// </summary>
         protected override void HandleIdleState()
         {
             switch (currentActivity)
@@ -427,6 +524,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Runs base movement completion, then advances patrol recovery or prisoner-compliance checks. Patrol
+        /// activity depends on the base destination result unless the native day-room movement path is active.
+        /// </summary>
         protected override void HandleMovingState()
         {
             base.HandleMovingState();
@@ -450,6 +551,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Dispatches work-state activity to intake/escort owners without duplicating their workflows.</summary>
         protected override void HandleWorkingState()
         {
             switch (currentActivity)
@@ -467,6 +569,10 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Patrol Logic
 
+        /// <summary>
+        /// Maintains the current patrol waypoint, confirms arrival, waits at the point, and dispatches the
+        /// next waypoint. Movement failure is delegated to the bounded recovery path.
+        /// </summary>
         private void HandlePatrolLogic()
         {
             if (!patrolInitialized || GetPatrolPointCount() == 0) return;
@@ -509,6 +615,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Resets waypoint/retry state, equips the day-room patrol baton when applicable, and dispatches the
+        /// first configured waypoint. A patrol with no points remains inactive.
+        /// </summary>
         public void StartPatrol()
         {
             if (GetPatrolPointCount() == 0) return;
@@ -531,6 +641,11 @@ namespace Behind_Bars.Systems.NPCs
             DispatchCurrentPatrolPoint(true);
         }
 
+        /// <summary>
+        /// Records the current waypoint as active, updates day-room inspection/speed state, and requests the
+        /// route. Retry recovery calls this without clearing the retry count.
+        /// </summary>
+        /// <param name="resetRetryCount">Whether this is a fresh waypoint dispatch.</param>
         private void DispatchCurrentPatrolPoint(bool resetRetryCount)
         {
             int patrolPointCount = GetPatrolPointCount();
@@ -561,6 +676,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Reissues a stalled or failed patrol destination after the retry delay, up to the bounded retry
+        /// limit. Exhaustion retains the waypoint until a restart or eventual arrival.
+        /// </summary>
         private void HandlePatrolMovementRecovery()
         {
             if (!hasActivePatrolDestination || patrolArrivalConfirmed || patrolRetryCount >= MaxPatrolRetries)
@@ -600,6 +719,13 @@ namespace Behind_Bars.Systems.NPCs
             DispatchCurrentPatrolPoint(false);
         }
 
+        /// <summary>
+        /// Routes day-room patrol movement through the native NPC movement owner so its SpeedController keeps
+        /// authority over effective speed. Other assignments use <see cref="BaseJailNPC.MoveTo"/> directly.
+        /// </summary>
+        /// <param name="destination">World-space destination.</param>
+        /// <param name="tolerance">Optional completion tolerance in world units.</param>
+        /// <returns>True when the selected movement owner accepted the route.</returns>
         public override bool MoveTo(Vector3 destination, float tolerance = -1f)
         {
             // BaseJailNPC's direct NavMeshAgent path is kept for every other guard role.
@@ -631,6 +757,10 @@ namespace Behind_Bars.Systems.NPCs
             return true;
         }
 
+        /// <summary>
+        /// Applies the slow day-room patrol profile and leaves ordinary guard assignments on their native
+        /// defaults. The NavMesh value alone is insufficient because native movement may overwrite it.
+        /// </summary>
         private void ConfigureDayRoomPatrolProfile()
         {
             if (assignment != GuardAssignment.DayRoomPatrol)
@@ -666,6 +796,10 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>
+        /// Replaces the named native speed control for day-room patrols. This is IL2CPP-hidden because it is
+        /// an internal native bridge, not a public injected API.
+        /// </summary>
         private void ApplyDayRoomPatrolSpeedControl()
         {
             if (assignment != GuardAssignment.DayRoomPatrol || npcComponent?.Movement?.SpeedController == null)
@@ -691,6 +825,12 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Pairs a patrol waypoint with an authored inspection target, falling back to the nearest cell
+        /// interior when no paired target was supplied.
+        /// </summary>
+        /// <param name="patrolPoint">Waypoint used for nearest-cell fallback.</param>
+        /// <param name="patrolIndex">Index into the optional paired target array.</param>
         private void SetDayRoomInspectionTarget(Vector3 patrolPoint, int patrolIndex)
         {
             hasDayRoomInspectionTarget = false;
@@ -738,6 +878,10 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>
+        /// Requests the native baton equippable once for the day-room assignment. No wrapper component is
+        /// created; the native NPC slot remains the source of truth.
+        /// </summary>
         private void EnsureDayRoomPatrolBaton()
         {
             if (assignment != GuardAssignment.DayRoomPatrol || dayRoomPatrolBatonEquipped || npcComponent == null)
@@ -767,6 +911,8 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>Enters emergency response activity and equips the native Taser or baton assignment.</summary>
+        /// <param name="isPrimaryResponder">Whether this guard is the primary Taser responder.</param>
         public void EnterEmergencyLockdown(bool isPrimaryResponder)
         {
             StopMovement();
@@ -792,6 +938,7 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>Stops movement and emits the visible subdual instruction; the lockdown manager owns transfer.</summary>
         public void PerformLockdownSubdual()
         {
             StopMovement();
@@ -803,6 +950,9 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>
+        /// Clears the emergency native equippable and restores normal monitoring or day-room patrol behavior.
+        /// </summary>
         public void ExitEmergencyLockdown()
         {
             // Each guard has a single native equippable slot. Clear the response
@@ -826,6 +976,7 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>Clears the single native equippable slot used for emergency response.</summary>
         private void ClearEmergencyEquippable()
         {
             if (npcComponent == null)
@@ -847,11 +998,13 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>Returns the native NPC component for internal IL2CPP-safe coordination bridges.</summary>
         public NPC GetNativeNpc()
         {
             return npcComponent;
         }
 
+        /// <summary>Turns a day-room patrol guard toward its paired cell inspection target while stopped.</summary>
         private void MaintainDayRoomCellInspection()
         {
             if (assignment != GuardAssignment.DayRoomPatrol || !hasDayRoomInspectionTarget)
@@ -873,6 +1026,11 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>
+        /// Replaces the patrol route and restarts patrol when already active. The vector-array bridge is hidden
+        /// from IL2CPP callers because the native route is consumed internally.
+        /// </summary>
+        /// <param name="points">World-space patrol points in traversal order.</param>
         public void AssignPatrolRoute(Vector3[] points)
         {
 #if MONO
@@ -889,6 +1047,9 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>Assigns a day-room route and its optional cell-facing inspection targets.</summary>
+        /// <param name="points">World-space patrol points in traversal order.</param>
+        /// <param name="inspectionTargets">Optional world-space cell targets paired by index.</param>
         public void AssignDayRoomPatrolRoute(Vector3[] points, Vector3[] inspectionTargets)
         {
             dayRoomInspectionTargets = inspectionTargets?.ToArray() ?? Array.Empty<Vector3>();
@@ -898,6 +1059,7 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>Returns the configured route length, falling back to resolved jail patrol points.</summary>
         private int GetPatrolPointCount()
         {
 #if MONO
@@ -917,6 +1079,8 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>Returns a patrol point by wrapped index from configured or resolved route data.</summary>
+        /// <param name="index">Logical patrol index.</param>
         private Vector3 GetPatrolPointPosition(int index)
         {
 #if MONO
@@ -937,8 +1101,14 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Intake Officer Logic
 
+        /// <summary>Detailed intake state machine owned by an intake-role guard.</summary>
         private IntakeOfficerStateMachine intakeStateMachine;
 
+        /// <summary>
+        /// Ensures an intake state machine exists and delegates prisoner booking to it. Guard activity remains
+        /// a summary/coordination layer; detailed doors, stations, and completion belong to the delegate.
+        /// </summary>
+        /// <param name="prisoner">Prisoner to process.</param>
         public void StartIntakeProcess(Player prisoner)
         {
             if (role != GuardRole.IntakeOfficer)
@@ -979,17 +1149,17 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        /// <summary>
-        /// Check if intake processing is active (delegates to state machine)
-        /// </summary>
+        /// <summary>Returns whether the delegated intake state machine is processing a prisoner.</summary>
         public bool IsIntakeProcessingActive()
         {
             return intakeStateMachine != null && intakeStateMachine.IsProcessingIntake();
         }
 
         /// <summary>
-        /// Handle door triggers during intake escort (delegates to state machine)
+        /// Forwards an intake door trigger to the detailed state machine. That receiver currently logs the
+        /// compatibility callback while SecurityDoorBehavior owns real operations.
         /// </summary>
+        /// <param name="triggerName">Door trigger identifier.</param>
         public void HandleIntakeDoorTrigger(string triggerName)
         {
             if (intakeStateMachine != null && role == GuardRole.IntakeOfficer)
@@ -1002,6 +1172,7 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Prisoner Compliance
 
+        /// <summary>Samples escort distance and forwards it to the patience/violation state update.</summary>
         private void CheckPrisonerCompliance()
         {
             if (currentPrisoner == null) return;
@@ -1010,6 +1181,11 @@ namespace Behind_Bars.Systems.NPCs
             UpdatePrisonerCompliance(distance);
         }
 
+        /// <summary>
+        /// Updates patience and warning cooldown from world-space escort distance. Thresholds are evaluated in
+        /// order from perfect compliance to escape response; this method only emits response messaging.
+        /// </summary>
+        /// <param name="distance">Current guard-to-prisoner distance in world units.</param>
         private void UpdatePrisonerCompliance(float distance)
         {
             bool isCompliant = distance <= COMPLIANCE_PERFECT;
@@ -1035,6 +1211,8 @@ namespace Behind_Bars.Systems.NPCs
             lastKnownPrisonerPosition = currentPrisoner.transform.position;
         }
 
+        /// <summary>Emits the response instruction appropriate for the current compliance-distance band.</summary>
+        /// <param name="distance">Current guard-to-prisoner distance in world units.</param>
         private void HandleComplianceViolation(float distance)
         {
             complianceViolationCount++;
@@ -1058,12 +1236,18 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Monitoring and Response
 
+        /// <summary>
+        /// Intentionally empty for monitoring guards. Intake orchestration is owned by
+        /// <see cref="IntakeOfficerStateMachine"/> and <see cref="BookingProcess"/> rather than an independent
+        /// arrival-polling path here.
+        /// </summary>
         private void HandleMonitoringLogic()
         {
             // Intake orchestration is owned by IntakeOfficerStateMachine/BookingProcess.
             // Monitoring guards deliberately have no independent arrival polling path.
         }
 
+        /// <summary>Maintains active escort compliance or returns to monitoring when its prisoner disappears.</summary>
         private void HandleEscortLogic()
         {
             if (currentPrisoner == null)
@@ -1080,6 +1264,11 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Door Integration
 
+        /// <summary>
+        /// Gives intake officers first opportunity to receive a door trigger; all other escort operations go
+        /// to the guard's SecurityDoorBehavior. The intake receiver currently preserves a compatibility no-op.
+        /// </summary>
+        /// <param name="other">Collider that entered this guard's trigger volume.</param>
         private void OnTriggerEnter(Collider other)
         {
             // Handle door triggers - delegate to intake state machine if processing intake
@@ -1107,6 +1296,9 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Utility Methods
 
+        /// <summary>Finds the first jail-hierarchy transform whose name contains the supplied station key.</summary>
+        /// <param name="stationName">Case-insensitive station name fragment.</param>
+        /// <returns>Matching transform, or null when the jail controller/scene has no match.</returns>
         private Transform FindStationTransform(string stationName)
         {
             var jailController = Core.JailController;
@@ -1117,12 +1309,18 @@ namespace Behind_Bars.Systems.NPCs
                 t.name.Contains(stationName, StringComparison.OrdinalIgnoreCase));
         }
 
+        /// <summary>Resolves a guard point using the two supported station naming conventions.</summary>
+        /// <param name="stationName">Station name fragment.</param>
+        /// <returns>Matching guard point, or null when absent.</returns>
         private Transform FindGuardPoint(string stationName)
         {
             return FindStationTransform($"GuardPoint_{stationName}") ??
                    FindStationTransform($"{stationName}_GuardPoint");
         }
 
+        /// <summary>Finds the assignment-specific spawn transform in the jail hierarchy.</summary>
+        /// <param name="assignmentName">Assignment enum name fragment.</param>
+        /// <returns>Matching spawn transform, or null when absent.</returns>
         private Transform FindSpawnPoint(string assignmentName)
         {
             var jailController = Core.JailController;
@@ -1139,18 +1337,28 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Public Interface
 
+        /// <summary>Returns the configured guard role.</summary>
         public GuardRole GetRole() => role;
+        /// <summary>Returns the configured spawn/post assignment.</summary>
         public GuardAssignment GetAssignment() => assignment;
+        /// <summary>Returns the current activity layered over the base NPC state.</summary>
         public GuardActivity GetCurrentActivity() => currentActivity;
+        /// <summary>Returns the display/diagnostic badge identifier.</summary>
         public string GetBadgeNumber() => badgeNumber;
+        /// <summary>Returns whether the guard is available for normal duty.</summary>
         public bool IsOnDuty() => isOnDuty;
+        /// <summary>Returns delegated intake activity when available, otherwise the cached guard flag.</summary>
         public bool IsProcessingIntake()
         {
             return intakeStateMachine != null ? intakeStateMachine.IsProcessingIntake() : isProcessingIntake;
         }
+        /// <summary>Returns the prisoner currently owned by escort/intake behavior, or null.</summary>
         public Player GetCurrentPrisoner() => currentPrisoner;
+        /// <summary>Returns current escort patience in the 0–100 range.</summary>
         public float GetGuardPatience() => guardPatience;
 
+        /// <summary>Updates duty availability and stops movement when taking the guard off duty.</summary>
+        /// <param name="onDuty">Whether this guard should remain available for normal work.</param>
         public void SetOnDuty(bool onDuty)
         {
             isOnDuty = onDuty;
@@ -1161,12 +1369,19 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Changes role and reapplies the corresponding activity profile.</summary>
+        /// <param name="newRole">Role to assign.</param>
         public void AssignToRole(GuardRole newRole)
         {
             role = newRole;
             SetupGuardRole();
         }
 
+        /// <summary>
+        /// Sends this guard to an incident unless it is currently escorting a prisoner, preserving escort
+        /// ownership over incident response.
+        /// </summary>
+        /// <param name="location">World-space incident location.</param>
         public void RespondToIncident(Vector3 location)
         {
             if (currentActivity != GuardActivity.EscortingPrisoner) // Don't abandon escorting
@@ -1185,8 +1400,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Override BaseJailNPC attack handling for guard-specific responses
+        /// Forwards attacks to the central jail-guard assault coordinator. That coordinator owns lockdown,
+        /// custody transfer, and duplicate suppression for both runtime targets.
         /// </summary>
+        /// <param name="attacker">Player who attacked this guard.</param>
         public override void OnAttackedByPlayer(Player attacker)
         {
             base.OnAttackedByPlayer(attacker);
@@ -1200,6 +1417,11 @@ namespace Behind_Bars.Systems.NPCs
             Harmony.HarmonyPatches.TryBeginJailGuardAssault(this, attacker);
         }
 
+        /// <summary>
+        /// Legacy duplicate assault path retained for compatibility. The active attack entry point is
+        /// <see cref="OnAttackedByPlayer"/> and the central assault coordinator; this method is not the parity path.
+        /// </summary>
+        /// <param name="attacker">Player who attacked this guard.</param>
         private void HandlePlayerAttack(Player attacker)
         {
             // Stop current activity
@@ -1241,6 +1463,7 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Debug and Visualization
 
+        /// <summary>Draws base destination/state gizmos plus guard activity, prisoner, and patrol overlays.</summary>
         protected override void OnDrawGizmos()
         {
             base.OnDrawGizmos();

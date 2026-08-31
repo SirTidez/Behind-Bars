@@ -23,19 +23,30 @@ namespace Behind_Bars.UI
     public class BailUI : MonoBehaviour
     {
 #if !MONO
+        /// <summary>
+        /// Creates the IL2CPP wrapper instance for the HUD bail prompt.
+        /// </summary>
         public BailUI(System.IntPtr ptr) : base(ptr) { }
 #endif
 
+        // Runtime-created prompt hierarchy and cached presentation references. The
+        // panel belongs to the active HUD canvas and is hidden when not actionable.
         private GameObject _bailPanel;
         private Image _backgroundImage;
         private TextMeshProUGUI _bailText;
         private CanvasGroup _canvasGroup;
 
+        // Current prompt state and the one transition handle shared by Show/Hide.
+        // Scene teardown stops the handle before the HUD canvas can be destroyed.
         private bool _isInitialized = false;
         private Coroutine _fadeCoroutine;
         private float _currentBailAmount = 0f;
         private bool _isVisible = false;
 
+        /// <summary>
+        /// Starts one-time prompt construction; HUD lookup may defer it until the
+        /// gameplay canvas and a usable TMP font are available.
+        /// </summary>
         public void Start()
         {
             if (!_isInitialized)
@@ -45,7 +56,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Create the persistent bail UI elements
+        /// Creates the persistent bail prompt, or schedules a bounded retry when the
+        /// player HUD is not ready. Creation is idempotent after successful setup.
         /// </summary>
         public void CreateUI()
         {
@@ -71,7 +83,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Get the player's HUD canvas
+        /// Resolves the active player HUD canvas through the Mono or IL2CPP singleton
+        /// path. A not-yet-created HUD returns null so creation can retry safely.
         /// </summary>
         private Canvas GetPlayerHUDCanvas()
         {
@@ -105,8 +118,11 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Create UI with a known canvas
+        /// Builds the prompt under a known HUD canvas and validates TMP assets before
+        /// creating text. The initialized guard prevents duplicate hierarchies when a
+        /// deferred canvas retry overlaps normal startup.
         /// </summary>
+        /// <param name="mainCanvas">The gameplay HUD canvas that owns this prompt.</param>
         private void CreateUIWithCanvas(Canvas mainCanvas)
         {
             try
@@ -180,7 +196,9 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Wait for HUD canvas to be available and then create UI
+        /// Waits up to ten half-second polls for the HUD canvas, then creates the
+        /// prompt once it is available. The bounded retry avoids a coroutine that
+        /// would otherwise persist outside a gameplay scene.
         /// </summary>
         private IEnumerator WaitForCanvasAndCreate()
         {
@@ -206,8 +224,11 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Show bail UI with specified bail amount
+        /// Presents the bail prompt with the current currency amount and fades it in.
+        /// The amount is formatted for display as whole dollars; payment handling is
+        /// owned by the caller that responds to the configured bailout key.
         /// </summary>
+        /// <param name="bailAmount">The amount of bail, in game currency.</param>
         public void ShowBail(float bailAmount)
         {
             if (!_isInitialized)
@@ -244,8 +265,10 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Update bail amount without re-fading
+        /// Updates the displayed currency amount without restarting a fade. If the
+        /// prompt is not currently active, this delegates to <see cref="ShowBail"/>.
         /// </summary>
+        /// <param name="bailAmount">The latest amount of bail, in game currency.</param>
         public void UpdateBailAmount(float bailAmount)
         {
             if (!_isInitialized || !_bailPanel.activeSelf)
@@ -269,7 +292,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Hide the bail UI with fade out
+        /// Marks the prompt hidden and starts its normal fade-out. Scene teardown
+        /// should use <see cref="CancelForSceneExit"/> to stop the coroutine directly.
         /// </summary>
         public void Hide()
         {
@@ -298,7 +322,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Check if bail UI is currently visible
+        /// Reports whether the initialized prompt is active, visible through its
+        /// CanvasGroup, and still marked actionable by the presentation state.
         /// </summary>
         public bool IsVisible()
         {
@@ -306,7 +331,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Get current bail amount being displayed
+        /// Returns the last bail amount supplied to the prompt, even while it is
+        /// hidden, so the owning system can compare its cached offer.
         /// </summary>
         public float GetCurrentBailAmount()
         {
@@ -316,7 +342,8 @@ namespace Behind_Bars.UI
         /// <summary>
         /// Ends presentation synchronously before the gameplay HUD is destroyed.
         /// Scene teardown must not rely on a fade coroutine that can resume against a
-        /// destroyed CanvasGroup in the menu scene.
+        /// destroyed CanvasGroup in the menu scene; the component remains reusable for
+        /// the next gameplay HUD.
         /// </summary>
         public void CancelForSceneExit()
         {
@@ -339,7 +366,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Fade in animation
+        /// Fades the prompt in over scaled game time and finishes at full alpha so an
+        /// interrupted frame cannot leave the HUD partially visible.
         /// </summary>
         private IEnumerator FadeIn()
         {
@@ -357,7 +385,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Fade out animation
+        /// Fades the prompt out over scaled game time and deactivates its root after
+        /// the transition completes.
         /// </summary>
         private IEnumerator FadeOut()
         {

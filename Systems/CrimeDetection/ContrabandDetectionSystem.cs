@@ -30,11 +30,17 @@ namespace Behind_Bars.Systems.CrimeDetection
     /// </summary>
     public enum ELegalStatus
     {
+        /// <summary>Item is treated as lawful or unclassifiable.</summary>
         Legal,
+        /// <summary>Controlled substance classification.</summary>
         ControlledSubstance,
+        /// <summary>Low-severity drug classification.</summary>
         LowSeverityDrug,
+        /// <summary>Moderate-severity drug classification.</summary>
         ModerateSeverityDrug,
+        /// <summary>High-severity drug classification.</summary>
         HighSeverityDrug,
+        /// <summary>Illegal weapon classification.</summary>
         IllegalWeapon
     }
 
@@ -44,7 +50,9 @@ namespace Behind_Bars.Systems.CrimeDetection
     /// </summary>
     public enum ContrabandSearchContext
     {
+        /// <summary>Arrest inventory search; weapon possession is handled by native arrest policy.</summary>
         Arrest,
+        /// <summary>Parole search; weapon possession is emitted as a parole violation.</summary>
         Parole
     }
 
@@ -53,8 +61,14 @@ namespace Behind_Bars.Systems.CrimeDetection
     /// </summary>
     public class ContrabandDetectionSystem
     {
+        // Owner used only when the search is committed; classification itself returns
+        // local CrimeInstance objects so callers can inspect or batch them first.
         private CrimeDetectionSystem _crimeDetectionSystem;
         
+        /// <summary>
+        /// Creates a contraband classifier associated with the owning crime detection system.
+        /// </summary>
+        /// <param name="crimeDetectionSystem">System that receives detected local charges.</param>
         public ContrabandDetectionSystem(CrimeDetectionSystem crimeDetectionSystem)
         {
             _crimeDetectionSystem = crimeDetectionSystem;
@@ -62,8 +76,13 @@ namespace Behind_Bars.Systems.CrimeDetection
         }
         
         /// <summary>
-        /// Perform a contraband search on a player and detect illegal items
+        /// Performs a contraband search on a player and creates local charges for detected items.
+        /// The default arrest context classifies weapons through the native arrest path only;
+        /// parole searches additionally treat weapon possession as a parole-condition offense.
         /// </summary>
+        /// <param name="player">Player whose native and live inventory slots are inspected.</param>
+        /// <param name="context">Search reason that controls the weapon-charge policy.</param>
+        /// <returns>New local crime instances; the list is empty when no inventory is available or no item qualifies.</returns>
         public List<CrimeInstance> PerformContrabandSearch(
             Player player,
             ContrabandSearchContext context = ContrabandSearchContext.Arrest)
@@ -134,7 +153,10 @@ namespace Behind_Bars.Systems.CrimeDetection
             List<CrimeInstance> detectedCrimes,
             ContrabandSearchContext context)
         {
-            // Track drug quantities for trafficking detection
+            // Each inventory slot contributes at most one possession charge. Drug quantities
+            // are accumulated separately so the aggregate trafficking threshold can be applied
+            // after all slots have been classified; weapons are handled first for parole so a
+            // permissive product-like shape cannot consume the weapon path.
             int totalDrugQuantity = 0;
             var drugsByType = new Dictionary<ELegalStatus, int>();
             
@@ -235,6 +257,10 @@ namespace Behind_Bars.Systems.CrimeDetection
                 detectedCrimes.Add(traffickingInstance);
                 ModLogger.Info($"Drug trafficking detected: {totalDrugQuantity} total drug units");
             }
+
+            // The current trafficking decision is based on totalDrugQuantity. The per-severity
+            // dictionary remains classification bookkeeping for diagnostics/future policy and
+            // must not be mistaken for a second set of charges.
             
             if (detectedCrimes.Count > 0)
             {
@@ -253,6 +279,8 @@ namespace Behind_Bars.Systems.CrimeDetection
         /// </summary>
         private CrimeInstance ProcessProductItem(object productInstance, Vector3 location)
         {
+            // Severity is a classification multiplier, not an additional quantity charge;
+            // aggregate trafficking is decided separately by ProcessInventorySlots.
             var legalStatus = GetProductLegalStatus(productInstance);
             
             Crime crime = null;
@@ -292,6 +320,8 @@ namespace Behind_Bars.Systems.CrimeDetection
         /// </summary>
         private CrimeInstance ProcessWeaponItem(object itemInstance, Vector3 location)
         {
+            // This method is reached only for the parole weapon branch. Arrest searches
+            // deliberately do not call it, even though the same item may be illegal.
             // In Schedule I, most weapons are likely illegal for civilians to carry
             // This is a simplified check - could be enhanced with weapon licensing system
             var crime = new WeaponPossession();
@@ -309,7 +339,9 @@ namespace Behind_Bars.Systems.CrimeDetection
             if (productInstance == null)
                 return ELegalStatus.Legal;
 
-            // First check the actual instance type - most reliable method
+            // Classification precedence is instance type first, then the product definition
+            // name. This keeps known native shapes authoritative while retaining a name-based
+            // fallback for runtime variants that do not expose the same managed type.
             string instanceType = productInstance.GetType().Name;
             ModLogger.Debug($"Checking ProductItemInstance type: {instanceType}");
 
@@ -435,8 +467,15 @@ namespace Behind_Bars.Systems.CrimeDetection
         }
         
         /// <summary>
-        /// Add detected contraband crimes to the crime detection system
+        /// Adds detected contraband crimes to the mod record and, for the owning player,
+        /// mirrors them into native CrimeData to trigger the game's response flow.
         /// </summary>
+        /// <param name="contrabandCrimes">Local crime instances produced by the search.</param>
+        /// <param name="player">Player whose mod/native records receive those instances.</param>
+        /// <remarks>
+        /// The native mirror is gated by <c>player.IsOwner</c>; remote clients still retain
+        /// the local mod record but do not write another player's native CrimeData.
+        /// </remarks>
         public void ProcessContrabandCrimes(List<CrimeInstance> contrabandCrimes, Player player)
         {
             foreach (var crimeInstance in contrabandCrimes)
@@ -473,6 +512,8 @@ namespace Behind_Bars.Systems.CrimeDetection
 
         private static object GetItemDefinitionObject(object itemInstance)
         {
+            // Native item definitions have appeared as either properties or fields across
+            // runtime/API shapes. Probe both without changing the caller's item object.
             if (itemInstance == null)
             {
                 return null;
@@ -510,11 +551,15 @@ namespace Behind_Bars.Systems.CrimeDetection
 
         private static string GetItemDefinitionName(object itemInstance)
         {
+            // Return the definition's readable identifier, or "Unknown" when no definition
+            // can be reached. Callers use this for diagnostics and name-based classification.
             return GetDefinitionName(GetItemDefinitionObject(itemInstance));
         }
 
         private static string GetDirectItemName(object itemInstance)
         {
+            // Prefer an item-level Name/name/ID/id value before falling back to an empty string;
+            // this is deliberately separate from definition lookup for native shape tolerance.
             if (itemInstance == null)
             {
                 return string.Empty;
@@ -549,6 +594,8 @@ namespace Behind_Bars.Systems.CrimeDetection
 
         private static int GetItemAmount(object itemInstance)
         {
+            // Amount is the quantity used by the trafficking aggregate. A missing or unreadable
+            // amount represents one item so a slot is not silently discarded from classification.
             if (itemInstance == null)
             {
                 return 0;
@@ -586,6 +633,8 @@ namespace Behind_Bars.Systems.CrimeDetection
 
         private static string GetDefinitionName(object definition)
         {
+            // Definition identifiers vary in casing and exposure between runtimes. Probe the
+            // common property/field spellings, then retain the native type name for diagnostics.
             if (definition == null)
             {
                 return "Unknown";
@@ -627,6 +676,8 @@ namespace Behind_Bars.Systems.CrimeDetection
 
         private static object GetSlotItemInstance(object slot)
         {
+            // Inventory slot wrappers expose the item through ItemInstance; failure to read it
+            // means the slot is empty for this search, not that the player has a legal item.
             if (slot == null)
             {
                 return null;
@@ -646,6 +697,8 @@ namespace Behind_Bars.Systems.CrimeDetection
 
         private static bool IsProductLikeItem(object itemInstance)
         {
+            // Product-like detection intentionally accepts either a Product type name or an
+            // Amount property because IL2CPP inventory objects may not share Mono's type shape.
             if (itemInstance == null)
             {
                 return false;
@@ -657,6 +710,8 @@ namespace Behind_Bars.Systems.CrimeDetection
 
         private static bool IsWeedLikeItem(object itemInstance)
         {
+            // Weed has a distinct native instance shape in some builds, so it is classified by
+            // type name when it does not pass the broader product-like test.
             if (itemInstance == null)
             {
                 return false;
@@ -668,6 +723,8 @@ namespace Behind_Bars.Systems.CrimeDetection
 
         private static bool HasProperty(object instance, string propertyName)
         {
+            // Lightweight shape probe used by the product fallback; it does not read or invoke
+            // the property and therefore cannot establish that the value is valid.
             if (instance == null)
             {
                 return false;

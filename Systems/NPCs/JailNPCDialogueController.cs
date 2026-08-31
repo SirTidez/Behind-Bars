@@ -17,35 +17,66 @@ using ScheduleOne.VoiceOver;
 namespace Behind_Bars.Systems.NPCs
 {
     /// <summary>
-    /// Custom dialogue controller for jail NPCs that provides context-aware dialog based on NPC state
+    /// Adapts the native <see cref="DialogueController"/> greeting list to the current jail-NPC
+    /// state and optionally routes contextual text/voice through the jail controllers. The
+    /// state machine that owns transitions remains external; this component only mirrors the
+    /// requested state and controls its greeting override visibility.
     /// </summary>
     public class JailNPCDialogueController : MonoBehaviour
     {
         [System.Serializable]
         private class StateDialogue
         {
+            /// <summary>Case-insensitive state key supplied by the owning NPC state machine.</summary>
             public string stateName;
+            /// <summary>Greeting assigned to the matching native greeting override.</summary>
             public string greeting;
+            /// <summary>Random contextual messages used when the state is active.</summary>
             public string[] interactions;
+            /// <summary>Whether contextual voice is requested for this state.</summary>
             public bool playVO = true;
+            /// <summary>Voice category passed to the jail audio controller.</summary>
             public EVOLineType voType = EVOLineType.Greeting;
         }
 
 #if MONO
         [Header("NPC Dialog Configuration")]
 #endif
+        /// <summary>
+        /// Configured state-to-dialogue records. The native GreetingOverrides list is rebuilt
+        /// in the same order, so changing this list requires reinitializing the overrides.
+        /// </summary>
         private List<StateDialogue> stateDialogues = new List<StateDialogue>();
+
+        /// <summary>Text used when no configured state matches the current state.</summary>
         public string defaultGreeting = "Hello.";
+
+        /// <summary>
+        /// Minimum Unity scaled-time interval between contextual text/voice messages.
+        /// </summary>
         public float greetingCooldown = 5f;
 
+        /// <summary>Canonical jail behavior used for state ownership and player-facing text.</summary>
         private BaseJailNPC jailNPC;
+        /// <summary>Native dialogue surface whose greeting override list is mirrored.</summary>
         private DialogueController baseController;
+        /// <summary>Native dialogue handler reference retained for compatibility with the NPC graph.</summary>
         private DialogueHandler dialogueHandler;
+        /// <summary>Optional jail audio surface used for state voice commands.</summary>
         private JailNPCAudioController audioController;
+        /// <summary>Scaled time at which the last contextual message was emitted.</summary>
         private float lastGreetingTime;
+        /// <summary>Last state accepted by <see cref="UpdateGreetingForState"/>.</summary>
         private string currentState = "";
+        /// <summary>Whether native greeting overrides currently match <see cref="stateDialogues"/>.</summary>
         private bool greetingOverridesInitialized;
 
+        /// <summary>
+        /// Resolves native/jail references, populates defaults when no state records were
+        /// supplied, and installs the hidden greeting overrides. A fallback object without
+        /// <see cref="BaseJailNPC"/> disables this integration rather than pretending to own
+        /// the NPC's dialogue lifecycle.
+        /// </summary>
         protected virtual void Start()
         {
             RefreshComponentReferences();
@@ -69,6 +100,11 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Debug($"JailNPCDialogueController initialized for {gameObject.name}");
         }
 
+        /// <summary>
+        /// Lazily resolves the native dialogue components and optional jail controllers. This
+        /// may be called again after native components finish initialization, so cached
+        /// references are never replaced while still valid.
+        /// </summary>
         private void RefreshComponentReferences()
         {
             jailNPC ??= BBHelpers.GetComponentSafe<BaseJailNPC>(gameObject);
@@ -77,6 +113,11 @@ namespace Behind_Bars.Systems.NPCs
             audioController ??= BBHelpers.GetComponentSafe<JailNPCAudioController>(gameObject);
         }
 
+        /// <summary>
+        /// Installs the state records into the native greeting list once the base dialogue
+        /// controller exists. A forced pass is required after state records are added or when
+        /// the native list has been rebuilt by another component.
+        /// </summary>
         private void TryInitializeGreetingOverrides(bool force = false)
         {
             RefreshComponentReferences();
@@ -101,6 +142,10 @@ namespace Behind_Bars.Systems.NPCs
             greetingOverridesInitialized = baseController.GreetingOverrides != null && baseController.GreetingOverrides.Count == stateDialogues.Count;
         }
 
+        /// <summary>
+        /// Finds a configured state by case-insensitive name. State transitions that have no
+        /// matching record intentionally return -1 and use the default message path.
+        /// </summary>
         private int FindStateDialogueIndex(string stateName)
         {
             if (string.IsNullOrWhiteSpace(stateName))
@@ -119,6 +164,10 @@ namespace Behind_Bars.Systems.NPCs
             return -1;
         }
 
+        /// <summary>
+        /// Supplies the baseline jail/intake state records when a caller has not configured
+        /// any. Role-specific controllers may replace or extend these records afterward.
+        /// </summary>
         protected virtual void InitializeDefaultStateDialogues()
         {
             stateDialogues.AddRange(new StateDialogue[]
@@ -242,6 +291,12 @@ namespace Behind_Bars.Systems.NPCs
             });
         }
 
+        /// <summary>
+        /// Rebuilds the native greeting override list in one-to-one state-record order. Every
+        /// override starts hidden; <see cref="UpdateGreetingForState"/> selects at most one.
+        /// This component owns the list contents while it is active and therefore clears
+        /// pre-existing greeting overrides before adding its records.
+        /// </summary>
         protected virtual void SetupGreetingOverrides()
         {
             RefreshComponentReferences();
@@ -275,7 +330,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Update the NPC's greeting based on their current state
+        /// Selects the native greeting override for a state-machine transition. The requested
+        /// state is stored only after a native DialogueController is available; an unknown
+        /// state hides all configured overrides and leaves contextual messages on the default
+        /// path.
         /// </summary>
         /// <param name="state">The current state of the NPC</param>
         public virtual void UpdateGreetingForState(string state)
@@ -342,7 +400,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Send a contextual message based on current state
+        /// Emits one cooldown-gated contextual message for the last accepted state, then
+        /// optionally requests its voice line. Text is sent through <see cref="BaseJailNPC"/>
+        /// and does not advance or replace the owning NPC state machine.
         /// </summary>
         /// <param name="messageType">Type of message (greeting, interaction, instruction)</param>
         public virtual void SendContextualMessage(string messageType = "interaction")
@@ -396,7 +456,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Play voice command based on state and voice type
+        /// Maps a state/voice category to a jail audio command when the optional audio
+        /// controller is ready. This method does not provide an audio fallback when the
+        /// controller or database is unavailable.
         /// </summary>
         /// <param name="stateName">Current NPC state</param>
         /// <param name="voiceType">Type of voice line to play</param>
@@ -426,7 +488,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Convert NPC state and voice type to guard command type
+        /// Converts the state name first and uses <paramref name="voiceType"/> only when no
+        /// state-specific mapping exists. The mapping is a presentation concern; it does not
+        /// alter the authoritative state transition.
         /// </summary>
         /// <param name="stateName">Current NPC state</param>
         /// <param name="voiceType">Voice line type</param>
@@ -477,7 +541,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Send a specific guard command with voice
+        /// Sends an optional voice command and optional player-facing text without changing
+        /// the owning NPC state. The cooldown timestamp is updated even when one of the
+        /// optional output surfaces is unavailable.
         /// </summary>
         /// <param name="commandType">Type of command to issue</param>
         /// <param name="message">Optional text message to display</param>
@@ -508,7 +574,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Add a custom state dialogue configuration
+        /// Adds or replaces a state dialogue record using a case-insensitive state key, then
+        /// forces the native greeting override list to be rebuilt. The string-array signature
+        /// remains hidden from IL2CPP because it is a configuration bridge, not an exposed
+        /// injected runtime API.
         /// </summary>
         /// <param name="stateName">Name of the state</param>
         /// <param name="greeting">Greeting message for this state</param>
@@ -545,7 +614,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Get the current dialogue state
+        /// Returns the last state accepted by <see cref="UpdateGreetingForState"/>. It is a
+        /// presentation mirror and is not an authority for the underlying NPC state machine.
         /// </summary>
         /// <returns>Current state name</returns>
         public string GetCurrentDialogueState()

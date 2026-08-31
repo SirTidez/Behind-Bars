@@ -22,8 +22,15 @@ namespace Behind_Bars.Systems.Jail
     public class CrimeSentenceCalculator
     {
         private static CrimeSentenceCalculator? _instance;
+
+        /// <summary>
+        /// Lazily created process-local sentence calculator.
+        /// </summary>
+        /// <remarks>The instance is not persisted or synchronized across multiplayer peers.</remarks>
         public static CrimeSentenceCalculator Instance => _instance ??= new CrimeSentenceCalculator();
 
+        // Sentence bounds are game-minute units, not wall-clock minutes. JailTimeTracker
+        // converts/consumes the resulting value according to the game's time system.
         private const float MIN_SENTENCE_MINUTES = 120f; // Minimum sentence: 2 game hours (120 game minutes)
         private const float MAX_SENTENCE_MINUTES = 7200f; // Maximum sentence: 5 game days (7200 minutes)
 
@@ -35,6 +42,8 @@ namespace Behind_Bars.Systems.Jail
         /// <param name="player">The player to calculate sentence for</param>
         /// <param name="rapSheet">The player's rap sheet (optional)</param>
         /// <param name="wasOnParole">Whether the player was on parole when arrested (affects sentence multiplier)</param>
+        /// <returns>A new sentence breakdown clamped to the configured game-minute bounds.</returns>
+        /// <remarks>RapSheet entries are preferred; CrimeData fills only missing crime types. No crimes produce the minimum sentence.</remarks>
         public JailSentenceData CalculateSentence(Player player, RapSheet? rapSheet = null, bool wasOnParole = false)
         {
             var sentenceData = new JailSentenceData();

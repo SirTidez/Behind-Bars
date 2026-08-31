@@ -17,8 +17,15 @@ namespace Behind_Bars.Systems.Jail
         public ExitReleaseTriggerRelay(System.IntPtr ptr) : base(ptr) { }
 #endif
 
+        // Back-reference is valid only while the owning scanner is monitoring its trigger;
+        // OnDestroy clears it so stale physics callbacks cannot reach the old station.
         private ExitScannerStation owner;
 
+        /// <summary>
+        /// Attach this relay to the scanner that owns the authored exit trigger.
+        /// </summary>
+        /// <param name="scanner">Scanner receiving validated trigger callbacks.</param>
+        /// <remarks>This is an internal IL2CPP-hidden setup seam; the relay performs no release work itself.</remarks>
 #if !MONO
         [HideFromIl2Cpp]
 #endif

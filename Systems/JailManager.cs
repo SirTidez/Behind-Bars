@@ -26,8 +26,12 @@ namespace Behind_Bars.Systems
     {
         private readonly JailSystem jailSystem;
         private readonly JailTimeTracker jailTimeTracker;
+        // Release markers are process-local, stable-keyed handoff state. They survive only
+        // until consumed by post-sentence cleanup or cleared during manager shutdown.
         private readonly System.Collections.Generic.Dictionary<string, ReleaseManager.ReleaseType> pendingReleaseTypes =
             new System.Collections.Generic.Dictionary<string, ReleaseManager.ReleaseType>();
+        // These are attached collaborators; JailManager does not own their construction or
+        // shutdown beyond clearing its references.
         private ReleaseManager? releaseManager;
         private BookingProcess? bookingProcess;
 
@@ -97,6 +101,16 @@ namespace Behind_Bars.Systems
         /// Run the active booking process for a jailed player through the manager-owned booking seam.
         /// This centralizes booking orchestration while preserving the current booking-process implementation.
         /// </summary>
+        /// <param name="player">Player entering booking.</param>
+        /// <param name="sentence">Calculated sentence passed to the booking process.</param>
+        /// <param name="fallbackWaitSeconds">Scaled wait used when no booking process can be resolved.</param>
+        /// <remarks>
+        /// When BookingProcess exists, completion is accepted through the named lifecycle event
+        /// for the matching player. The booking-state check is only an interruption guard; it
+        /// is not treated as canonical completion. The temporary handler is removed in
+        /// <c>finally</c> even when the scene unloads or booking throws. If the collaborator is
+        /// absent, the fallback only waits and does not run intake orchestration.
+        /// </remarks>
         public System.Collections.IEnumerator RunBookingProcess(Player player, JailSystem.JailSentence sentence, float fallbackWaitSeconds = 5f)
         {
             if (!Core.IsGameplaySceneActive || player == null || sentence == null)
@@ -164,6 +178,12 @@ namespace Behind_Bars.Systems
         /// Apply the canonical custody-state control policy for jailed or releasing players.
         /// This preserves the current behavior of keeping player controls enabled while in custody.
         /// </summary>
+        /// <param name="player">Player whose custody context is being applied.</param>
+        /// <param name="inJail">State label used for logging; both branches currently maintain enabled controls.</param>
+        /// <remarks>
+        /// The current implementation does not toggle a distinct movement policy based on
+        /// <paramref name="inJail"/>; both values call <see cref="MaintainCustodyControls"/>.
+        /// </remarks>
         public void ApplyCustodyState(Player player, bool inJail)
         {
             if (player == null)
@@ -193,6 +213,11 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Re-apply the active custody control policy. This is safe to call repeatedly from wait loops.
         /// </summary>
+        /// <remarks>
+        /// The current policy enables inventory, camera look, movement, HUD, and crosshair and
+        /// locks the mouse. It is deliberately idempotent and is shared by both custody and
+        /// release-state application.
+        /// </remarks>
         public void MaintainCustodyControls()
         {
             PlayerSingleton<PlayerInventory>.Instance.enabled = true;
@@ -303,6 +328,9 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Mark a pending release type for the player so custody cleanup can complete before the final release.
         /// </summary>
+        /// <param name="player">Player whose release type should be retained.</param>
+        /// <param name="releaseType">Release reason consumed by post-sentence cleanup.</param>
+        /// <remarks>Writing the same player key replaces the prior pending release type.</remarks>
         public void MarkPendingReleaseType(Player player, ReleaseManager.ReleaseType releaseType)
         {
             if (player == null)
@@ -317,6 +345,8 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Check whether the player has a pending release type waiting for custody cleanup.
         /// </summary>
+        /// <param name="player">Player whose pending release marker should be queried.</param>
+        /// <returns><see langword="true"/> when a process-local marker exists.</returns>
         public bool HasPendingReleaseType(Player player)
         {
             return player != null && pendingReleaseTypes.ContainsKey(Core.ResolvePlayerKey(player));
@@ -326,6 +356,12 @@ namespace Behind_Bars.Systems
         /// Determines whether bail can initiate a release without colliding with the active
         /// intake officer's cell-return workflow.
         /// </summary>
+        /// <param name="player">Player requesting bail release readiness.</param>
+        /// <returns><see langword="true"/> when release infrastructure exists and intake is not processing.</returns>
+        /// <remarks>
+        /// Readiness requires a registered/resolvable release manager and a bound intake officer;
+        /// it does not itself verify cash, sentence status, or a pending bail authorization.
+        /// </remarks>
         public bool IsBailReleaseReady(Player player)
         {
             if (player == null)
@@ -346,6 +382,8 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Consume the pending release type for the player, defaulting to time served when no pending release exists.
         /// </summary>
+        /// <param name="player">Player whose marker should be removed and returned.</param>
+        /// <returns>The stored release type, or time served when no marker exists.</returns>
         public ReleaseManager.ReleaseType ConsumePendingReleaseType(Player player)
         {
             if (player == null)
@@ -367,6 +405,15 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Initiate the enhanced release flow through the manager-owned jail/release seam.
         /// </summary>
+        /// <param name="player">Player leaving custody.</param>
+        /// <param name="releaseType">Reason/authority for the release.</param>
+        /// <param name="bailAmount">Bail amount associated with bail release, if applicable.</param>
+        /// <remarks>
+        /// The exit position is stored before ReleaseManager is resolved or bootstrapped. If a
+        /// coordinated release cannot start, the method falls back to JailSystem's direct
+        /// release cleanup. This manager delegates release ownership and does not itself wait
+        /// for escort completion.
+        /// </remarks>
         public void InitiateEnhancedRelease(Player player, ReleaseManager.ReleaseType releaseType, float bailAmount = 0f)
         {
             if (player == null)
@@ -428,6 +475,13 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Safely initiate enhanced release, checking for an existing release first.
         /// </summary>
+        /// <param name="player">Player whose release should be started.</param>
+        /// <param name="releaseType">Reason/authority for the release.</param>
+        /// <param name="bailAmount">Bail amount associated with bail release, if applicable.</param>
+        /// <remarks>
+        /// An existing in-progress release is left untouched. Missing release infrastructure is
+        /// bootstrapped best effort before the coordinated release call.
+        /// </remarks>
         public void SafeInitiateEnhancedRelease(Player player, ReleaseManager.ReleaseType releaseType, float bailAmount = 0f)
         {
             if (player == null)
@@ -457,6 +511,8 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Cancel any active release flow for a player through the manager-owned jail/release seam.
         /// </summary>
+        /// <param name="player">Player whose active release should be cancelled.</param>
+        /// <remarks>Missing release infrastructure is a no-op after best-effort bootstrap.</remarks>
         public void CancelActiveRelease(Player player)
         {
             if (player == null)
@@ -481,6 +537,11 @@ namespace Behind_Bars.Systems
         /// This keeps release-manager interaction behind the manager seam while preserving the
         /// current behavior that booking owns its own runtime cleanup.
         /// </summary>
+        /// <param name="player">Player whose active release should be cancelled.</param>
+        /// <remarks>
+        /// The current booking branch only resolves/logs the booking collaborator; it does not
+        /// call a booking reset API. Release cancellation is the only direct mutation here.
+        /// </remarks>
         public void ResetActiveJailFlow(Player player)
         {
             if (player == null)
@@ -501,6 +562,12 @@ namespace Behind_Bars.Systems
         /// Resolve the stored bail amount for a player, calculating and caching a fallback amount
         /// when the booking flow did not already store one.
         /// </summary>
+        /// <param name="player">Player whose bail amount should be resolved.</param>
+        /// <returns>Stored/calculated bail amount, or zero when the bail system/fine is unavailable.</returns>
+        /// <remarks>
+        /// A fallback calculation writes the amount back to the process-local BailSystem cache;
+        /// this method does not perform payment or mark a release authorization.
+        /// </remarks>
         public float ResolveBailAmount(Player player)
         {
             if (player == null)
@@ -539,6 +606,8 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Complete the post-sentence release handoff through the manager-owned jail/release seam.
         /// </summary>
+        /// <param name="player">Player whose sentence cleanup should hand off to release.</param>
+        /// <remarks>Consumes a pending release marker and passes any bail amount to the safe release seam.</remarks>
         public void CompletePostSentenceRelease(Player player)
         {
             if (player == null)
@@ -556,6 +625,12 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Complete the post-booking jail-time flow through the manager-owned jail/release seam.
         /// </summary>
+        /// <param name="player">Player whose sentence starts after booking.</param>
+        /// <param name="sentence">Sentence containing game-minute duration.</param>
+        /// <remarks>
+        /// The jail system owns the wait/tracker; this wrapper only performs the post-wait scene
+        /// check and release handoff.
+        /// </remarks>
         public System.Collections.IEnumerator StartJailTimeAfterBooking(Player player, JailSystem.JailSentence sentence)
         {
             if (player == null || sentence == null)
@@ -602,6 +677,10 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Resets attached collaborator references without altering owned jail-system state.
         /// </summary>
+        /// <remarks>
+        /// Shutdown clears pending release markers and collaborator references. It does not shut
+        /// down the owned <see cref="JailSystem"/> or the shared <see cref="JailTimeTracker"/>.
+        /// </remarks>
         public void Shutdown()
         {
             pendingReleaseTypes.Clear();

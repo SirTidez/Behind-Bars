@@ -18,6 +18,8 @@ namespace Behind_Bars.Systems.CrimeTracking
     /// </summary>
     public class RapSheetManager
     {
+        // The registered manager is process-local. The ownership flag distinguishes the
+        // system-manager instance from the compatibility singleton for safe shutdown.
         private static RapSheetManager _instance;
         private static bool _isManagedBySystemManager;
 
@@ -110,6 +112,8 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// Get or create a RapSheet for a player.
         /// Returns cached instance if available, otherwise creates and caches a new one.
         /// </summary>
+        /// <param name="player">Player whose rap sheet should be loaded or created.</param>
+        /// <returns>The cached/loaded rap sheet, or null when <paramref name="player"/> is null.</returns>
         public RapSheet GetRapSheet(Player player)
         {
             if (player == null)
@@ -122,6 +126,8 @@ namespace Behind_Bars.Systems.CrimeTracking
             string playerCacheKey = GetPlayerCacheKey(player);
             string stableSaveIdentity = RapSheet.GetPersistenceIdentityForPlayer(player);
             
+            // Stable player key is the primary cache identity. A name-keyed cache entry
+            // is promoted in place for compatibility with older manager state.
             // Check cache first to avoid creating duplicate instances
             if (_rapSheetCache.TryGetValue(playerCacheKey, out RapSheet cachedRapSheet))
             {
@@ -148,6 +154,9 @@ namespace Behind_Bars.Systems.CrimeTracking
                 return legacyCachedRapSheet;
             }
 
+            // Prefer the stable save folder, then inspect the legacy display-name folder.
+            // Loading the latter sets a migration flag so the Saveable identity is marked
+            // dirty after hydration.
             // Check if we should load from save data first
             bool shouldLoadFromSave = false;
             string savePath = null;
@@ -184,13 +193,16 @@ namespace Behind_Bars.Systems.CrimeTracking
                 ModLogger.Warn($"[RAP SHEET] Error checking save path for {playerName}: {ex.Message}");
             }
             
-            // Create new rap sheet only if not in cache
+            // Create new rap sheet only if not in cache. Skip OnLoaded while a manual load
+            // is pending; the load path invokes hydration and the failure path invokes it
+            // explicitly to restore runtime references/collections.
             // Skip OnLoaded() if we're going to load data - LoadInternal() will call it
             // This will auto-register with SaveManager
             // RapSheet constructor calls InitializeSaveable() which registers with SaveManager
             var rapSheet = new RapSheet(player, skipOnLoaded: shouldLoadFromSave);
             
-            // Load from save data if available
+            // Load from save data if available. A load failure retains the newly created
+            // object and falls back to OnLoaded initialization rather than returning null.
             // The Loader.Load() will be called by the game's save system, but we need to trigger it manually
             // since RapSheet is not auto-discovered (it's per-player, not singleton)
             if (shouldLoadFromSave && !string.IsNullOrEmpty(savePath))
@@ -244,6 +256,7 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// <summary>
         /// Mark rap sheet data as changed - game's save system will handle saving automatically
         /// </summary>
+        /// <param name="player">Player whose cached rap sheet should be marked dirty.</param>
         public void MarkRapSheetChanged(Player player)
         {
             if (player == null)
@@ -262,6 +275,7 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// <summary>
         /// Clear the cache for a specific player (useful when player is removed or save changes).
         /// </summary>
+        /// <param name="player">Player whose stable and legacy cache keys should be removed.</param>
         public void ClearCacheForPlayer(Player player)
         {
             if (player == null)
@@ -308,6 +322,8 @@ namespace Behind_Bars.Systems.CrimeTracking
                 return string.Empty;
             }
 
+            // Cache identity follows Core's stable key and intentionally does not fall
+            // back here; callers separately remove/check the legacy display-name key.
             return Behind_Bars.Core.ResolvePlayerKey(player);
         }
     }

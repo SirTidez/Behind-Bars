@@ -23,7 +23,9 @@ using ScheduleOne.UI;
 namespace Behind_Bars.Systems.Jail
 {
     /// <summary>
-    /// Handles player inventory drop-off during booking process
+    /// Handles the active booking inventory snapshot and drop-off interaction. The station
+    /// clears native inventory through reflection when available, persists only a string
+    /// snapshot, and uses a legacy fallback that assumes the final slot is cash.
     /// </summary>
     public class InventoryDropOffStation : MonoBehaviour
     {
@@ -69,9 +71,14 @@ namespace Behind_Bars.Systems.Jail
             hasCachedInteractionState = true;
         }
         
-        public float itemDropDuration = 1.0f; // Time between dropping each item (1 second to match notification)
-        public Transform storageLocation; // Where items are "stored" visually
-        
+        // Retained inspector settings. The active path clears inventory in one operation;
+        // itemDropDuration is not currently used to animate individual item transfers.
+        public float itemDropDuration = 1.0f;
+        // Visual marker only; this component does not place item objects into storageLocation.
+        public Transform storageLocation;
+
+        // isProcessing gates repeat interaction. currentPlayer identifies the player whose
+        // snapshot is being processed; BookingProcess remains the completion authority.
         private bool isProcessing = false;
         private BookingProcess bookingProcess;
         private Player currentPlayer;
@@ -101,6 +108,8 @@ namespace Behind_Bars.Systems.Jail
             }
         }
         
+        // The interaction component is configured once during Start; the listener uses the
+        // runtime-specific delegate form required by the existing Mono/IL2CPP surface.
         private void SetupInteractableComponent()
         {
             // Get or create InteractableObject component
@@ -132,6 +141,10 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Debug("InteractableObject component configured with event listeners");
         }
         
+        /// <summary>
+        /// Validates booking ownership and starts the scene-local inventory snapshot/clear
+        /// coroutine. A completed legacy drop-off is not repeated.
+        /// </summary>
         private void OnInteractStart()
         {
             if (isProcessing)
@@ -182,6 +195,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Snapshot items before clearing native slots, publish the snapshot to booking and
+        // the player record, then refresh the visible inventory and interaction state.
         private IEnumerator ProcessInventoryDropOff(Player player)
         {
             isProcessing = true;
@@ -285,6 +300,9 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info("Inventory drop-off completed successfully");
         }
         
+        // Reflection is used because inventory slot APIs differ by runtime/build. If no
+        // names can be read, this method currently fabricates common-item labels; callers
+        // must treat the result as a best-effort record, not proof of owned items.
         private List<string> GetInventoryItems(PlayerInventory inventory)
         {
             List<string> items = new List<string>();
@@ -468,6 +486,9 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        // Prefer the native ClearInventory method when exposed. The reflection fallback
+        // skips the final slot under the current cash-slot convention, so the two paths
+        // are not guaranteed to have identical cash behavior.
         private void ClearAllInventorySlots(PlayerInventory inventory)
         {
             try
@@ -499,6 +520,10 @@ namespace Behind_Bars.Systems.Jail
                         var slots = getSlotsMethod.Invoke(inventory, null);
                         if (slots is System.Collections.IList allSlots)
                         {
+                            // The existing log text says "including cash", but this
+                            // fallback loop intentionally skips the final slot under the
+                            // current cash-slot convention. Keep the discrepancy visible
+                            // until the native slot contract is verified.
                             ModLogger.Info($"Clearing {allSlots.Count} inventory slots (including cash)");
                             for (int i = 0; i < allSlots.Count - 1; i++) // Skip cash slot (last one)
                             {
@@ -567,6 +592,8 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        // Completion only updates the interaction surface; inventory persistence was
+        // already attempted by ProcessInventoryDropOff before this method is called.
         private void CompleteDropOff()
         {
             isProcessing = false;
@@ -579,6 +606,10 @@ namespace Behind_Bars.Systems.Jail
             }
         }
         
+        /// <summary>
+        /// Returns whether BookingProcess has toggled the legacy inventory-drop-off flag.
+        /// It does not prove that every native slot was cleared or that items were stored.
+        /// </summary>
         public bool IsComplete()
         {
             return bookingProcess != null && bookingProcess.inventoryDropOffComplete;

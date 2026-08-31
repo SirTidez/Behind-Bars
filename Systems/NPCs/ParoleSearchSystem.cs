@@ -29,7 +29,12 @@ namespace Behind_Bars.Systems.NPCs
     /// </summary>
     public class ParoleSearchSystem
     {
+        // Search state is process-wide and keyed by the exact Player object.  The
+        // two clocks below are intentionally different: search cooldown uses
+        // real Unity seconds, while release grace is stored in game minutes.
         private static ParoleSearchSystem _instance;
+
+        /// <summary>Gets the process-wide search coordinator, creating it lazily.</summary>
         public static ParoleSearchSystem Instance
         {
             get
@@ -42,11 +47,11 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        // Search cooldowns per player to prevent spam
+        // Search cooldowns per player to prevent spam (Time.time seconds).
         private Dictionary<Player, float> lastSearchTime = new Dictionary<Player, float>();
         private const float SEARCH_COOLDOWN = 120f; // 2 minutes minimum between searches
 
-        // Grace period after release before searches can occur (in game minutes)
+        // Grace period after release before searches can occur (game-clock minutes).
         private Dictionary<Player, float> releaseTime = new Dictionary<Player, float>();
         private const float RELEASE_GRACE_PERIOD_GAME_MINUTES = 30f; // Half an in-game hour
 
@@ -60,6 +65,8 @@ namespace Behind_Bars.Systems.NPCs
         /// Get detection range based on LSI level
         /// Higher risk levels = larger detection radius (more intensive supervision)
         /// </summary>
+        /// <param name="lsiLevel">The player's current parole risk level.</param>
+        /// <returns>The detection radius in world units, or the base fallback for an unknown value.</returns>
         public float GetDetectionRange(LSILevel lsiLevel)
         {
             switch (lsiLevel)
@@ -80,9 +87,16 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Check if a parole officer should initiate a random search
-        /// Called from patrol logic when officer is near a player
+        /// Evaluates whether patrol logic may start a random search.  This method
+        /// is a pure eligibility/probability check: it does not freeze the player,
+        /// reserve the officer, or start the search coroutine.  It rejects active
+        /// intake/escort/search work, non-parole players, visible release-summary
+        /// UI, the game-time post-release grace period, and the real-time cooldown
+        /// before applying LSI range, rapport, and random probability rules.
         /// </summary>
+        /// <param name="officer">Candidate patrol officer.</param>
+        /// <param name="player">Candidate parolee.</param>
+        /// <returns>True when the candidate passes all gates and the random roll succeeds.</returns>
         public bool ShouldInitiateSearch(ParoleOfficerBehavior officer, Player player)
         {
             // Pre-checks
@@ -172,8 +186,13 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Initiate a contraband search on the player
+        /// Runs the complete search coroutine.  Movement is disabled globally for
+        /// the player while the officer approaches and checks inventory; normal
+        /// exits restore movement and patrol ownership in <c>finally</c>, while an
+        /// arrest leaves those responsibilities to the arrest flow.
         /// </summary>
+        /// <param name="officer">Officer performing the search.</param>
+        /// <param name="player">Player whose inventory is searched.</param>
         public IEnumerator PerformParoleSearch(ParoleOfficerBehavior officer, Player player)
         {
             if (officer == null || player == null) yield break;
@@ -360,8 +379,12 @@ namespace Behind_Bars.Systems.NPCs
         }
         
         /// <summary>
-        /// Restore player movement after search completes
+        /// Restores global player movement after a search unless the release
+        /// summary UI is still visible, in which case the summary workflow retains
+        /// the freeze.  This method does not resume an officer; the coroutine owns
+        /// that separate patrol transition.
         /// </summary>
+        /// <param name="player">Player whose movement state is being restored.</param>
         private void RestorePlayerMovement(Player player)
         {
             if (player == null) return;
@@ -386,6 +409,11 @@ namespace Behind_Bars.Systems.NPCs
         /// Handle contraband detection during search
         /// Returns true if arrest was initiated, false otherwise
         /// </summary>
+        /// <param name="officer">Officer responsible for the detected violation.</param>
+        /// <param name="player">Player whose rap sheet and custody state are updated.</param>
+        /// <param name="crimes">Detected contraband crime records; empty input is ignored.</param>
+        /// <param name="searchSource">Human-readable source used in violation details/logs.</param>
+        /// <returns>True when a native or fallback arrest flow was started.</returns>
         internal bool ProcessDetectedParoleContraband(
             ParoleOfficerBehavior officer,
             Player player,
@@ -516,6 +544,11 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Classifies a detected crime as an illegal weapon using the canonical
+        /// type/name first and then the current string heuristics.  The fallback
+        /// keywords are intentionally conservative and may miss new item names.
+        /// </summary>
         private static bool IsIllegalWeaponCrime(CrimeInstance crime)
         {
             if (crime == null)
@@ -540,6 +573,7 @@ namespace Behind_Bars.Systems.NPCs
         /// Record the release time for a player (used for grace period)
         /// Call this when parole starts after release
         /// </summary>
+        /// <param name="player">Player whose current game-clock release time is stored.</param>
         public void RecordReleaseTime(Player player)
         {
             if (player == null) return;
@@ -552,6 +586,7 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Clear release time for a player (when parole ends or player is arrested)
         /// </summary>
+        /// <param name="player">Player whose stored release grace entry should be removed.</param>
         public void ClearReleaseTime(Player player)
         {
             if (player != null && releaseTime.ContainsKey(player))
@@ -564,6 +599,7 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Clear search cooldown for a player (for testing)
         /// </summary>
+        /// <param name="player">Player whose real-time search cooldown should be removed.</param>
         public void ClearSearchCooldown(Player player)
         {
             if (lastSearchTime.ContainsKey(player))

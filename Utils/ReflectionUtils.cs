@@ -15,6 +15,10 @@ namespace Behind_Bars.Utils
         /// </summary>
         /// <typeparam name="TBaseClass">The base class derived from.</typeparam>
         /// <returns>A list of all types derived from the base class.</returns>
+        /// <remarks>Scans every currently loaded non-skipped assembly and
+        /// returns non-abstract assignable types. Assembly/type load failures
+        /// are silently ignored, and enumeration order follows the runtime's
+        /// assembly/type order; duplicates are not explicitly removed.</remarks>
         internal static List<Type> GetDerivedClasses<TBaseClass>()
         {
             List<Type> derivedClasses = new List<Type>();
@@ -53,7 +57,12 @@ namespace Behind_Bars.Utils
         /// INTERNAL: Gets all types by their name.
         /// </summary>
         /// <param name="typeName">The name of the type.</param>
-        /// <returns>The actual type identified by the name.</returns>
+        /// <returns>The first matching type, or <c>null</c> when no loaded
+        /// assembly contains one.</returns>
+        /// <remarks>Attempts an exact <see cref="Type.GetType(string, bool, bool)"/>
+        /// lookup, then searches non-skipped assemblies and finally all
+        /// assemblies. Matching is case-sensitive; failed reflection loads and
+        /// the direct lookup exception path are silent and produce no log.</remarks>
         internal static Type? GetTypeByName(string typeName)
         {
             // Fast path: allow fully-qualified type names to resolve quickly
@@ -100,6 +109,9 @@ namespace Behind_Bars.Utils
         /// </summary>
         /// <param name="assembly">The assembly to check.</param>
         /// <returns>Whether to skip the assembly or not.</returns>
+        /// <remarks>Uses case-sensitive prefix checks against
+        /// <see cref="Assembly.FullName"/>. A null assembly is not guarded and
+        /// therefore throws when its full name is accessed.</remarks>
         internal static bool ShouldSkipAssembly(Assembly assembly)
         {
             string? fullName = assembly.FullName;
@@ -121,6 +133,10 @@ namespace Behind_Bars.Utils
         /// </summary>
         /// <param name="asm">The assembly to get types from.</param>
         /// <returns>The types that were successfully loaded from the assembly.</returns>
+        /// <remarks>For a <see cref="ReflectionTypeLoadException"/>, only the
+        /// non-null successfully loaded types are returned. Any other exception
+        /// (including a null assembly) produces an empty sequence without
+        /// logging.</remarks>
         internal static IEnumerable<Type> SafeGetTypes(Assembly asm)
         {
             try
@@ -142,7 +158,12 @@ namespace Behind_Bars.Utils
         /// </summary>
         /// <param name="type">The type you want to recursively search.</param>
         /// <param name="bindingFlags">The binding flags to apply during the search.</param>
-        /// <returns></returns>
+        /// <returns>Fields declared on the type and each base type up to, but
+        /// excluding, <see cref="object"/>.</returns>
+        /// <remarks><see cref="BindingFlags.DeclaredOnly"/> is added for each
+        /// level. A null type returns an empty array; the result can include
+        /// inherited framework or saveable fields when the supplied flags allow
+        /// them.</remarks>
         internal static FieldInfo[] GetAllFields(Type? type, BindingFlags bindingFlags)
         {
             List<FieldInfo> fieldInfos = new List<FieldInfo>();
@@ -161,6 +182,9 @@ namespace Behind_Bars.Utils
         /// <param name="methodName">The name of the method you're searching for.</param>
         /// <param name="bindingFlags">The binding flags to apply during the search.</param>
         /// <returns>The method info if found, otherwise null.</returns>
+        /// <remarks>Searches the type and each base type up to, but excluding,
+        /// <see cref="object"/> and returns the first runtime match. Reflection
+        /// exceptions are not caught here.</remarks>
         internal static MethodInfo? GetMethod(Type? type, string methodName, BindingFlags bindingFlags)
         {
             while (type != null && type != typeof(object))
@@ -178,6 +202,8 @@ namespace Behind_Bars.Utils
         /// <summary>
         /// INTERNAL: The different ValueTuple types.
         /// </summary>
+        /// <remarks>Stores the open generic definitions for one through eight
+        /// tuple elements; larger/rest-field tuple shapes are not represented.</remarks>
         private static readonly HashSet<Type> _valueTupleTypes = new HashSet<Type>()
         {
             typeof(ValueTuple<>),
@@ -195,6 +221,8 @@ namespace Behind_Bars.Utils
         /// </summary>
         /// <param name="obj">The object type to check</param>
         /// <returns>Whether the type is a ValueTuple or not</returns>
+        /// <remarks>Only generic value tuples with one through eight generic
+        /// definitions are recognized. Reference types and null return false.</remarks>
         internal static bool IsValueTuple(object obj)
         {
             if (obj == null)
@@ -212,7 +240,11 @@ namespace Behind_Bars.Utils
         /// Retrieves the Items from the ValueTuple instance.
         /// </summary>
         /// <param name="obj">The ValueTuple instance</param>
-        /// <returns>The items in the ValueTuple instance.</returns>
+        /// <returns>The public instance field values in reflection field order,
+        /// or <c>null</c> when <paramref name="obj"/> is not a recognized tuple.</returns>
+        /// <remarks>Field access exceptions are allowed to propagate. The
+        /// helper relies on the same one-through-eight tuple recognition as
+        /// <see cref="IsValueTuple(object)"/>.</remarks>
         internal static object[]? GetValueTupleItems(object obj)
         {
             if (!IsValueTuple(obj))
@@ -229,6 +261,8 @@ namespace Behind_Bars.Utils
         /// <summary>
         /// INTERNAL: Shared cache for const string field retrieval across appearance classes.
         /// </summary>
+        /// <remarks>This process-wide cache is keyed by type, has no locking or
+        /// invalidation, and stores mutable lists returned directly to callers.</remarks>
         private static readonly Dictionary<Type, List<string>> _constStringFieldsCache = new Dictionary<Type, List<string>>();
 
         /// <summary>
@@ -240,7 +274,9 @@ namespace Behind_Bars.Utils
         /// A list of constant string values defined in the type.
         /// </returns>
         /// <remarks>
-        /// Uses reflection to gather constants and caches them for future calls to improve performance.
+        /// Uses reflection to gather public static literal string fields and
+        /// caches them for future calls to improve performance. A cached list is
+        /// returned directly, so caller mutations affect later callers.
         /// </remarks>
         internal static List<string> GetConstStringFields(Type type)
         {
@@ -270,6 +306,11 @@ namespace Behind_Bars.Utils
         /// <param name="memberName">The name of the field or property.</param>
         /// <param name="value">The value to set.</param>
         /// <returns><c>true</c> if the member was successfully set; otherwise, <c>false</c>.</returns>
+        /// <remarks>Searches fields before properties using public/non-public
+        /// instance flags and requires the supplied value to already be an
+        /// instance of the declared type (or null). Member lookup/set failures
+        /// are swallowed without logging; this direct type lookup does not
+        /// explicitly walk private base members.</remarks>
         internal static bool TrySetFieldOrProperty(object target, string memberName, object value)
         {
             if (target == null) return false;
@@ -316,6 +357,10 @@ namespace Behind_Bars.Utils
         /// <param name="target">The target object to get the member from.</param>
         /// <param name="memberName">The name of the field or property.</param>
         /// <returns>The value of the member, or <c>null</c> if not found or inaccessible.</returns>
+        /// <remarks>Searches fields before readable properties using
+        /// public/non-public instance flags. Lookup and getter failures are
+        /// swallowed without logging, and a legitimate null value is
+        /// indistinguishable from a missing/inaccessible member.</remarks>
         internal static object TryGetFieldOrProperty(object target, string memberName)
         {
             if (target == null) return null;
@@ -355,6 +400,10 @@ namespace Behind_Bars.Utils
         /// <param name="type">The type to get the static member from.</param>
         /// <param name="memberName">The name of the field or property.</param>
         /// <returns>The value of the member, or <c>null</c> if not found or inaccessible.</returns>
+        /// <remarks>Searches fields before readable properties using
+        /// public/non-public static flags. Reflection failures are swallowed
+        /// without logging, and a null result is ambiguous. This lookup is made
+        /// on the supplied type rather than an explicit base-type walk.</remarks>
         internal static object TryGetStaticFieldOrProperty(Type type, string memberName)
         {
             if (type == null) return null;
@@ -394,6 +443,11 @@ namespace Behind_Bars.Utils
         /// <param name="memberName">The name of the field or property.</param>
         /// <param name="value">The value to set.</param>
         /// <returns><c>true</c> if the member was successfully set; otherwise, <c>false</c>.</returns>
+        /// <remarks>Searches fields before writable properties using
+        /// public/non-public static flags and performs no type conversion.
+        /// Lookup and setter failures are swallowed without logging; a null
+        /// value is accepted before the runtime setter decides whether the
+        /// target type permits it.</remarks>
         internal static bool TrySetStaticFieldOrProperty(Type type, string memberName, object value)
         {
             if (type == null) return false;

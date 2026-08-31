@@ -34,6 +34,8 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Configuration
 
+        // Proximity/cooldown use real Unity seconds.  The parole manager remains
+        // the authority for game-clock check-in windows and consequences.
         private const float CHECK_IN_PROXIMITY = 5f; // Distance to trigger check-in
         private const float CHECK_IN_COOLDOWN = 30f; // Cooldown between check-ins (real seconds)
         private const float CHECK_IN_PROCESSING_TIME = 3f; // Time to process check-in
@@ -44,6 +46,9 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Component References
 
+        // These references are scene-owned helpers.  The check-in system may
+        // start before dialogue components finish loading, so the trigger setup
+        // coroutine is intentionally retryable.
         private ParoleOfficerBehavior paroleOfficer;
         private JailNPCDialogueController dialogueController;
         private StationaryBehavior stationaryBehavior;
@@ -56,15 +61,29 @@ namespace Behind_Bars.Systems.NPCs
 
         #region State
 
+        // Only this exact player may be completed or released from the coordinator
+        // while a check-in is active; proximity searches must not replace it.
         private Player currentCheckInParolee;
+        // Set for the duration of ProcessCheckIn and cleared by normal completion
+        // or arrest abort.  The coordinator watchdog uses this state as evidence
+        // that the check-in session is still alive.
         private bool isProcessingCheckIn = false;
+        // Set when the routine pocket search starts an arrest so normal cleanup
+        // does not restore movement or treat the check-in as successful.
         private bool checkInArrestInitiated;
+        // Last attempted check-in timestamps are real-time cooldown entries keyed
+        // by Player; scheduling eligibility is checked separately by ParoleManager.
         private Dictionary<Player, float> lastCheckInTimes = new Dictionary<Player, float>();
 
         #endregion
 
         #region Initialization
 
+        /// <summary>
+        /// Caches the supervising officer and scene helpers.  Dialogue ownership
+        /// is established asynchronously in <see cref="Start"/> after native
+        /// components have had a chance to attach.
+        /// </summary>
         private void Awake()
         {
             paroleOfficer = BBHelpers.GetComponentSafe<ParoleOfficerBehavior>(gameObject);
@@ -72,11 +91,16 @@ namespace Behind_Bars.Systems.NPCs
             stationaryBehavior = BBHelpers.GetComponentSafe<StationaryBehavior>(gameObject);
         }
 
+        /// <summary>Starts retryable interaction-trigger setup after scene load.</summary>
         private void Start()
         {
             MelonCoroutines.Start(WaitForInteractionTrigger());
         }
 
+        /// <summary>
+        /// Disposes the dialogue wrapper and releases any exact check-in player
+        /// still owned by the coordinator when this component is destroyed.
+        /// </summary>
         private void OnDestroy()
         {
             dialogueWrapper?.Dispose();
@@ -92,6 +116,11 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Check-In Detection
 
+        /// <summary>
+        /// Retries interaction setup at half-second intervals until the hook is
+        /// installed or twenty attempts fail.  A failed hook leaves the component
+        /// inactive rather than fabricating a dialogue controller.
+        /// </summary>
         private IEnumerator WaitForInteractionTrigger()
         {
             int retries = 0;
@@ -111,6 +140,11 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Installs the check-in dialogue wrapper, suppresses greeting overrides,
+        /// registers the container, and binds the managed choice callback.  The
+        /// operation is idempotent while <see cref="interactionHooked"/> is true.
+        /// </summary>
         private void SetupInteractionTrigger()
         {
             if (interactionHooked)
@@ -160,6 +194,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Disables native greeting overrides so the check-in container remains
+        /// the visible interaction surface.
+        /// </summary>
         private void DisableGreetingOverrides()
         {
             if (baseDialogueController?.GreetingOverrides == null)
@@ -173,6 +211,11 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Builds or replaces the check-in dialogue container and moves it to the
+        /// front of the handler list.  The current implementation intentionally
+        /// gives this container index-zero precedence over other containers.
+        /// </summary>
         private void RegisterCheckInDialogueContainer()
         {
             if (dialogueHandler == null)
@@ -222,6 +265,7 @@ namespace Behind_Bars.Systems.NPCs
             dialogueHandler.dialogueContainers.Insert(0, container);
         }
 
+        /// <summary>Re-applies the check-in container override after a dialogue exit.</summary>
         private void EnsureContainerOnInteract()
         {
             if (dialogueWrapper == null)
@@ -233,6 +277,11 @@ namespace Behind_Bars.Systems.NPCs
             dialogueWrapper.UseContainerOnInteract(CHECK_IN_DIALOGUE_CONTAINER_NAME);
         }
 
+        /// <summary>
+        /// Handles the check-in choice after rejecting active intake, missing
+        /// nearby parolees, and non-supervising officers before starting the
+        /// coordinator-backed check-in transaction.
+        /// </summary>
         private void OnCheckInDialogueChoiceSelected()
         {
             if (isProcessingCheckIn)
@@ -266,6 +315,11 @@ namespace Behind_Bars.Systems.NPCs
             InitiateCheckIn(parolee);
         }
 
+        /// <summary>
+        /// Finds the nearest on-parole player within the interaction radius whose
+        /// real-time attempt cooldown has expired.  The selected player becomes
+        /// the exact session identity passed to <see cref="InitiateCheckIn"/>.
+        /// </summary>
         private Player FindNearbyParoleeForInteraction()
         {
             var players = GameObject.FindObjectsOfType<Player>();
@@ -316,8 +370,11 @@ namespace Behind_Bars.Systems.NPCs
         #region Public Methods
 
         /// <summary>
-        /// Initiate check-in process for a parolee
+        /// Reserves check-in ownership, asks ParoleManager to validate the current
+        /// game-clock window, and starts the processing coroutine.  Failed manager
+        /// validation rolls back coordinator ownership and shows rejection dialogue.
         /// </summary>
+        /// <param name="parolee">The exact player to retain for the check-in.</param>
         public void InitiateCheckIn(Player parolee)
         {
             if (parolee == null)
@@ -367,6 +424,10 @@ namespace Behind_Bars.Systems.NPCs
             MelonCoroutines.Start(ProcessCheckIn(parolee));
         }
 
+        /// <summary>
+        /// Presents the scheduling rejection state and restores the check-in
+        /// container after the rejection interaction closes.
+        /// </summary>
         private void ShowCheckInRejectedDialogue(ParoleManager.CheckInStatus status, string windowText)
         {
             if (dialogueController == null)
@@ -403,8 +464,12 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Process the check-in
+        /// Runs the ordered check-in phases: rapport greeting, compliance review,
+        /// routine pocket search, optional conditions, recording, completion, and
+        /// coordinator cleanup.  A pocket-search arrest exits through the abort
+        /// path and must not continue to normal completion.
         /// </summary>
+        /// <param name="parolee">The player captured by the active check-in session.</param>
         private IEnumerator ProcessCheckIn(Player parolee)
         {
             checkInArrestInitiated = false;
@@ -559,6 +624,11 @@ namespace Behind_Bars.Systems.NPCs
             EnsureContainerOnInteract();
         }
 
+        /// <summary>
+        /// Performs the scheduled parole pocket search before recording completion.
+        /// Contraband is handed to the shared parole-search classifier; an arrest
+        /// sets the local abort flag and leaves custody cleanup to the arrest flow.
+        /// </summary>
         private IEnumerator ProcessRoutinePocketSearch(Player parolee)
         {
             if (parolee == null || paroleOfficer == null)
@@ -598,6 +668,11 @@ namespace Behind_Bars.Systems.NPCs
             yield return new WaitForSeconds(1f);
         }
 
+        /// <summary>
+        /// Aborts check-in after a compliance-search arrest, clears local state,
+        /// releases manager/coordinator ownership, and restores the interaction
+        /// container without recording a successful visit.
+        /// </summary>
         private void AbortCheckInForArrest(Player parolee)
         {
             ModLogger.Info($"ParoleCheckInSystem: Ended check-in for {parolee?.name ?? "unknown parolee"} because a compliance search initiated custody");
@@ -619,6 +694,10 @@ namespace Behind_Bars.Systems.NPCs
             EnsureContainerOnInteract();
         }
 
+        /// <summary>
+        /// Ends both ParoleManager and supervising-officer coordinator ownership
+        /// for the exact player, if one is supplied.
+        /// </summary>
         private void EndCheckInSession(Player parolee)
         {
             if (parolee == null)
@@ -630,6 +709,7 @@ namespace Behind_Bars.Systems.NPCs
             Core.ResolveDynamicParoleOfficerManager()?.CompleteSupervisingOfficerCheckIn(parolee, paroleOfficer);
         }
 
+        /// <summary>Teardown alias used to release an active check-in during destruction.</summary>
         private void ReleaseCheckInOwnership(Player parolee)
         {
             if (parolee == null)
@@ -641,8 +721,11 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Record check-in in parole record
+        /// Applies the manager's daily-check-in timing gate, then records the
+        /// interaction in the parole record and marks the rap sheet changed.  A
+        /// late/invalid window shows rejection dialogue instead of recording.
         /// </summary>
+        /// <param name="parolee">The player whose check-in should be recorded.</param>
         private void RecordCheckIn(Player parolee)
         {
             var paroleManager = Core.ResolveParoleManager();
@@ -669,24 +752,32 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Check if currently processing a check-in
+        /// Returns whether the check-in coroutine currently owns a parolee.
         /// </summary>
+        /// <returns>True while normal check-in processing or its condition phases run.</returns>
         public bool IsProcessingCheckIn()
         {
             return isProcessingCheckIn;
         }
 
         /// <summary>
-        /// Get the current parolee being checked in
+        /// Gets the exact player retained by the active check-in session.
         /// </summary>
+        /// <returns>The active parolee, or null when no check-in is processing.</returns>
         public Player GetCurrentCheckInParolee()
         {
             return currentCheckInParolee;
         }
 
         /// <summary>
-        /// Process drug test during check-in if the drug test condition is active
+        /// Runs the optional drug-test condition using the parole record's LSI
+        /// probability.  A failed test mutates compliance/rapport and records a
+        /// contraband violation; a clean result only grants the current rapport
+        /// adjustment.
         /// </summary>
+        /// <param name="parolee">Player whose inventory is checked.</param>
+        /// <param name="rapSheet">Current rap sheet used for LSI and persistence.</param>
+        /// <param name="paroleRecord">Active parole record containing condition state.</param>
         private IEnumerator ProcessDrugTest(Player parolee, RapSheet rapSheet, ParoleRecord paroleRecord)
         {
             if (!paroleRecord.IsConditionActive("drug_test"))
@@ -748,8 +839,15 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Check if player has drug items in inventory (reuses ParoleSystem.IsDrugItem logic)
+        /// Checks the local player's hotbar slots for drug-like item names.  This
+        /// is the current reduced compatibility implementation: it does not call
+        /// the parole-system classifier and relies on case-insensitive substring
+        /// matching after reflection resolves each ItemInstance name.
         /// </summary>
+        /// <param name="parolee">The player being tested; the current implementation
+        /// uses the process-wide PlayerInventory singleton rather than this object's
+        /// inventory reference.</param>
+        /// <returns>True when a recognized drug keyword is present in a hotbar slot.</returns>
         private bool CheckPlayerForDrugs(Player parolee)
         {
             try
@@ -788,6 +886,11 @@ namespace Behind_Bars.Systems.NPCs
             return false;
         }
 
+        /// <summary>
+        /// Resolves an item display name through the supported property/definition
+        /// shapes.  If no name is exposed, the runtime type name is returned so
+        /// the reduced string classifier still has a deterministic input.
+        /// </summary>
         private static string GetItemName(object itemInstance)
         {
             if (itemInstance == null)
@@ -846,6 +949,10 @@ namespace Behind_Bars.Systems.NPCs
             return itemInstance.GetType().Name;
         }
 
+        /// <summary>
+        /// Reads a slot's ItemInstance property through the compatibility path,
+        /// returning null when the slot or property cannot be resolved.
+        /// </summary>
         private static object GetSlotItemInstance(object slot)
         {
             if (slot == null)
@@ -866,8 +973,13 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Process employment verification during check-in
+        /// Applies the optional employment condition, recording warnings and
+        /// compliance consequences through the parole record before returning to
+        /// the main check-in sequence.
         /// </summary>
+        /// <param name="parolee">Player whose employment is evaluated.</param>
+        /// <param name="rapSheet">Rap sheet receiving persisted changes.</param>
+        /// <param name="paroleRecord">Active parole record containing condition state.</param>
         private IEnumerator ProcessEmploymentCheck(Player parolee, RapSheet rapSheet, ParoleRecord paroleRecord)
         {
             if (!paroleRecord.IsConditionActive("employment"))
@@ -927,8 +1039,12 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Process fee payment during check-in
+        /// Attempts automatic payment for any fees owed during check-in and
+        /// records the current condition outcome through the parole manager.
         /// </summary>
+        /// <param name="parolee">Player whose fees are evaluated and paid.</param>
+        /// <param name="rapSheet">Rap sheet used by the fee system.</param>
+        /// <param name="paroleRecord">Active parole record containing fee state.</param>
         private IEnumerator ProcessFeePayment(Player parolee, RapSheet rapSheet, ParoleRecord paroleRecord)
         {
             float feesOwed = paroleRecord.GetTotalFeesOwed();

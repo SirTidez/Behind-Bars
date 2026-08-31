@@ -36,6 +36,11 @@ namespace Behind_Bars.UI
     public class BehindBarsUIManager
     {
         private static BehindBarsUIManager? _instance;
+
+        /// <summary>
+        /// Gets the process-wide UI service. The service survives scene changes, while each
+        /// scene-bound presentation is explicitly rebuilt or released by the scene lifecycle.
+        /// </summary>
         public static BehindBarsUIManager Instance => _instance ??= new BehindBarsUIManager();
 
         private GameObject? _uiPrefab;
@@ -414,6 +419,10 @@ namespace Behind_Bars.UI
             DestroyPooledOverlayCanvas();
         }
 
+        /// <summary>
+        /// Releases the pooled Behind Bars overlay and removes a same-name orphan left behind
+        /// by an unload race. The exact-name lookup is restricted to the canvas owned here.
+        /// </summary>
         private static void DestroyPooledOverlayCanvas()
         {
             var pooledCanvas = _pooledOverlayCanvas;
@@ -511,12 +520,18 @@ namespace Behind_Bars.UI
 
         private GameObject? _officerCommandManager;
         private OfficerCommandUI? _officerCommandUI;
+
+        // A non-null command is the arbitration flag for the shared top-left HUD slot. Tier
+        // status is lower priority and must remain synchronously hidden until this is cleared.
         private OfficerCommandData? _currentCommand;
 
         // === JAIL TIER STATUS SYSTEM ===
 
+        // The manager host persists only long enough to coordinate the scene presentation. The
+        // card itself owns references to the current HUD canvas and is reset at scene exit.
         private GameObject _tierStatusManager;
         private TierStatusUI _tierStatusUI;
+        // Polls schedule state at a bounded realtime cadence; ShutdownSceneUI is its owner.
         private Coroutine _tierStatusUpdateCoroutine;
 
         // === PAROLE STATUS SYSTEM ===
@@ -524,6 +539,10 @@ namespace Behind_Bars.UI
         private GameObject? _paroleStatusManager;
         private ParoleStatusUI? _paroleStatusUI;
         private Coroutine? _paroleStatusUpdateCoroutine;
+        // Event subscription state is deliberately explicit so static release and Player.Local
+        // arrest listeners can be removed during scene shutdown. The player wrapper is retained;
+        // the IL2CPP branch currently recreates the Action trampoline during removal, so delegate
+        // identity/equality remains a cleanup assumption to harden in a future behavior pass.
         private Coroutine? _arrestSubscriptionCoroutine;
         private Player? _arrestSubscriptionPlayer;
         private bool _isSubscribedToArrestEvents = false;
@@ -850,7 +869,8 @@ namespace Behind_Bars.UI
         // === OFFICER COMMAND SYSTEM ===
 
         /// <summary>
-        /// Show a persistent officer command notification
+        /// Shows an officer command and claims the shared top-left HUD slot. Any tier-status
+        /// presentation is hidden immediately before the command is created or updated.
         /// </summary>
         public void ShowOfficerCommand(OfficerCommandData data)
         {
@@ -887,7 +907,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Update the current officer command
+        /// Updates the command that owns the shared top-left HUD slot. Tier status remains
+        /// suppressed while the command data is current, including during a UI rebuild.
         /// </summary>
         public void UpdateOfficerCommand(OfficerCommandData data)
         {
@@ -987,6 +1008,10 @@ namespace Behind_Bars.UI
 
         // === JAIL TIER STATUS SYSTEM ===
 
+        /// <summary>
+        /// Starts the single realtime tier-status polling loop. Creation is deferred until a
+        /// gameplay scene has a valid HUD, and repeated initialization does not add a second loop.
+        /// </summary>
         private void InitializeTierStatusUI()
         {
             if (_tierStatusUpdateCoroutine == null)
@@ -996,6 +1021,10 @@ namespace Behind_Bars.UI
             }
         }
 
+        /// <summary>
+        /// Creates the persistent host and runtime-appropriate tier-status component once.
+        /// The component then binds its presentation to the current player HUD canvas.
+        /// </summary>
         private void CreateTierStatusUI()
         {
             if (_tierStatusUI != null)
@@ -1013,6 +1042,11 @@ namespace Behind_Bars.UI
             _tierStatusUI?.CreateUI();
         }
 
+        /// <summary>
+        /// Arbitrates the lower-priority tier surface against officer commands and scene state,
+        /// then projects the latest recreation snapshot into the card at a 0.1-second realtime
+        /// cadence. The loop is stopped by <see cref="ShutdownSceneUI"/>.
+        /// </summary>
         private IEnumerator UpdateTierStatusCoroutine()
         {
             while (true)
@@ -1061,6 +1095,13 @@ namespace Behind_Bars.UI
             }
         }
 
+        /// <summary>
+        /// Converts lifecycle status into display strings and normalized progress. The countdown
+        /// is kept in real-world seconds all the way to the UI so it is not affected by game-time
+        /// scaling; urgency starts at thirty seconds and becomes critical at ten seconds.
+        /// </summary>
+        /// <param name="status">Current local player's recreation schedule snapshot.</param>
+        /// <returns>A presentation snapshot for the tier-status card.</returns>
         private static TierStatusData BuildTierStatusData(JailRecreationStatus status)
         {
             float remainingRealSeconds = Mathf.Max(0f, status.RemainingRealSeconds);
@@ -1085,6 +1126,9 @@ namespace Behind_Bars.UI
             };
         }
 
+        /// <summary>Maps the internal tier enum to the short label used by the card.</summary>
+        /// <param name="tier">Tier value reported by the jail lifecycle.</param>
+        /// <returns>A display label, or <c>UNKNOWN</c> for an unsupported value.</returns>
         private static string FormatTierName(JailRecreationTier tier)
         {
             return tier switch
@@ -1126,8 +1170,10 @@ namespace Behind_Bars.UI
         }
         
         /// <summary>
-        /// Subscribe to Player.local.onArrested and ReleaseManager.OnReleaseCompleted events
-        /// for immediate parole status UI visibility control
+        /// Subscribes once to Player.Local arrest and ReleaseManager release events for immediate
+        /// parole visibility control. The player wrapper is retained for removal in
+        /// <see cref="ShutdownSceneUI"/>; IL2CPP currently recreates the arrest delegate there,
+        /// so successful deregistration depends on the runtime's delegate equality behavior.
         /// </summary>
         private void SubscribeToArrestReleaseEvents()
         {
@@ -1147,7 +1193,8 @@ namespace Behind_Bars.UI
         }
         
         /// <summary>
-        /// Coroutine that waits for Player.Local to become available, then subscribes to onArrested
+        /// Waits for Player.Local to become available, then records that exact player wrapper for
+        /// the matching arrest-listener removal during scene shutdown.
         /// </summary>
         private IEnumerator WaitForPlayerAndSubscribeToArrest()
         {
@@ -1528,7 +1575,11 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Releases transient scene UI and its listeners without destroying the persistent UI service.
+        /// Releases transient scene UI and its listeners without destroying the persistent UI
+        /// service. Coroutines stop first, then fades/listeners are cancelled before their hosts
+        /// are destroyed; this prevents scene teardown from resuming work against old HUD objects.
+        /// Officer-command and tier surfaces are cleared before the remaining presentation hosts,
+        /// and no method in this path lazily recreates UI.
         /// </summary>
         public void ShutdownSceneUI()
         {

@@ -16,6 +16,12 @@ using ScheduleOne.Interaction;
 
 namespace Behind_Bars.Systems.Jail
 {
+    /// <summary>
+    /// Discovers authored prison and holding-cell geometry, prepares the progressive
+    /// bunk components, and owns scene-local spawn/occupancy lookup for custody flows.
+    /// CellDetail.cellIndex preserves the authored child index; APIs that explicitly say
+    /// runtime index instead use the compact holdingCells list position.
+    /// </summary>
 #if MONO
     public sealed class JailCellManager : MonoBehaviour
 #else
@@ -25,6 +31,8 @@ namespace Behind_Bars.Systems.Jail
 #if MONO
         [Header("Cell Management")]
 #endif
+        // These lists are rebuilt during Initialize. Entries are authored scene records;
+        // occupancy and player/NPC ownership are maintained by their CellDetail fields.
         public List<CellDetail> cells = new List<CellDetail>();
         public List<CellDetail> holdingCells = new List<CellDetail>();
 
@@ -42,18 +50,33 @@ namespace Behind_Bars.Systems.Jail
         [System.Serializable]
         public class HoldingCellSpawnPoint
         {
+            /// <summary>Zero-based authored spawn-point index within the holding cell.</summary>
             public int spawnIndex;
+
+            /// <summary>Transform used as the physical holding-cell destination.</summary>
             public Transform spawnTransform;
+
+            /// <summary>Whether this spawn point currently has a reserved occupant.</summary>
             public bool isOccupied = false;
+
+            /// <summary>Stable runtime key of the current occupant, when any.</summary>
             public string occupantKey = "";
+
+            /// <summary>Display name of the current occupant for diagnostics.</summary>
             public string occupantName = "";
 
+            /// <summary>Returns the authored transform name or a stable index fallback.</summary>
             public string GetSpawnPointName()
             {
                 return spawnTransform?.name ?? $"Spawn[{spawnIndex}]";
             }
         }
 
+        /// <summary>
+        /// Rebuilds cell and holding-cell records from the supplied jail root, then
+        /// prepares authored bed surfaces and holding-cell spawn occupancy.
+        /// </summary>
+        /// <param name="jailRoot">Root transform containing Cells and HoldingCells.</param>
         public void Initialize(Transform jailRoot)
         {
             preparedBedComponents.Clear();
@@ -112,6 +135,8 @@ namespace Behind_Bars.Systems.Jail
             RetryPendingNpcBunkClaims();
         }
 
+        // A CellDetail.cellIndex is the authored child position under Cells, not the
+        // compact cells-list position. Door and tier callers depend on that distinction.
         void DiscoverCells(Transform jailRoot)
         {
             cells.Clear();
@@ -169,6 +194,10 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Debug($"Discovered {cells.Count} prison cells total");
         }
 
+        // Holding-cell discovery first uses the authored naming pattern, then a legacy
+        // nested-child fallback. Fallback records may therefore have a different index
+        // contract than the normal authored path and should be addressed by name/runtime
+        // list index where the API specifies it.
         void DiscoverHoldingCells(Transform jailRoot)
         {
             holdingCells.Clear();
@@ -784,6 +813,8 @@ namespace Behind_Bars.Systems.Jail
                    bed.bedSheet != null && bed.pillow != null;
         }
 
+        // Rebuild per-spawn occupancy after discovery. A holding cell's cell-level
+        // occupancy is derived from these entries by CellDetail helpers.
         void InitializeHoldingCellSpawnPoints()
         {
             foreach (var holdingCell in holdingCells)
@@ -812,6 +843,12 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Assigns a player to the first free holding-cell spawn point. The returned
+        /// transform is the reserved destination, or null when no point is available.
+        /// </summary>
+        /// <param name="player">Player entering a holding cell.</param>
+        /// <returns>The reserved spawn transform, or null when assignment fails.</returns>
         public Transform AssignPlayerToHoldingCell(Player player)
         {
             if (player == null)
@@ -887,6 +924,11 @@ namespace Behind_Bars.Systems.Jail
             return null;
         }
 
+        /// <summary>
+        /// Releases the player's stable-key/name reservation from whichever holding-cell
+        /// spawn currently owns it. This changes occupancy only; it does not move the player.
+        /// </summary>
+        /// <param name="player">Player whose holding-cell reservation should be cleared.</param>
         public void ReleasePlayerFromHoldingCell(Player player)
         {
             if (player == null)
@@ -922,16 +964,22 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Warn($"⚠️ Player {occupantDisplayName} not found in any holding cell");
         }
 
+        /// <summary>Returns the first regular cell with available occupancy, if any.</summary>
         public CellDetail GetAvailableJailCell()
         {
             return cells.FirstOrDefault(c => c.IsAvailable());
         }
 
+        /// <summary>Returns the first holding cell with an available spawn point, if any.</summary>
         public CellDetail GetAvailableHoldingCell()
         {
             return holdingCells.FirstOrDefault(c => c.HasAvailableSpace());
         }
 
+        /// <summary>
+        /// Summarizes total, available, and occupied holding-cell spawn points and cells.
+        /// </summary>
+        /// <returns>(total spawns, available spawns, occupied spawns, holding-cell count).</returns>
         public (int totalSpawns, int available, int occupied, int totalCells) GetHoldingCellStatus()
         {
             int totalSpawns = holdingCells.Sum(hc => hc.spawnPointOccupancy.Count);
@@ -941,16 +989,25 @@ namespace Behind_Bars.Systems.Jail
             return (totalSpawns, available, occupied, holdingCells.Count);
         }
 
+        /// <summary>Finds a regular cell by its authored CellDetail.cellIndex.</summary>
+        /// <param name="cellIndex">Authored cell child index.</param>
+        /// <returns>The matching cell, or null when not discovered.</returns>
         public CellDetail GetCellByIndex(int cellIndex)
         {
             return cells.FirstOrDefault(c => c.cellIndex == cellIndex);
         }
 
+        /// <summary>Finds a holding cell by its stored CellDetail.cellIndex.</summary>
+        /// <param name="cellIndex">Stored holding-cell index.</param>
+        /// <returns>The matching holding cell, or null when not discovered.</returns>
         public CellDetail GetHoldingCellByIndex(int cellIndex)
         {
             return holdingCells.FirstOrDefault(c => c.cellIndex == cellIndex);
         }
 
+        /// <summary>Finds a holding cell by its authored transform name.</summary>
+        /// <param name="holdingCellName">Exact holding-cell transform name.</param>
+        /// <returns>The matching holding cell, or null when not discovered.</returns>
         public CellDetail GetHoldingCellByName(string holdingCellName)
         {
             if (string.IsNullOrEmpty(holdingCellName))

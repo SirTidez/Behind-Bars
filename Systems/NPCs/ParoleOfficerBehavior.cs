@@ -28,7 +28,10 @@ using ScheduleOne.AvatarFramework;
 namespace Behind_Bars.Systems.NPCs
 {
     /// <summary>
-    /// Consolidated parole officer behavior - replaces JailGuardBehavior, IntakeOfficerStateMachine, SmartEscortPath, PatrolSystem
+    /// Consolidated parole officer behavior for patrol, escort, search, and
+    /// incident response.  Supervising intake is delegated to the canonical
+    /// ParoleIntakeStateMachine; this component mirrors its activity for shared
+    /// officer/UI integration.
     /// Inherits from BaseJailNPC for core functionality, uses SecurityDoorBehavior for door operations
     /// </summary>
     public class ParoleOfficerBehavior : BaseJailNPC
@@ -39,6 +42,7 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Parole Officer Configuration
 
+        /// <summary>Role of the officer, including the dedicated supervising role.</summary>
         public enum ParoleOfficerRole
         {
             SupervisingOfficer,            // Dedicated supervisor for processing new parolees
@@ -46,6 +50,7 @@ namespace Behind_Bars.Systems.NPCs
             RandomSearchOfficer       // Conducts random searches
         }
 
+        /// <summary>Roster assignment that determines route, role, and station.</summary>
         public enum ParoleOfficerAssignment
         {
             PoliceStationSupervisor, // Supervisor; exterior only for release, intake, and check-in work
@@ -56,6 +61,7 @@ namespace Behind_Bars.Systems.NPCs
             NorthtownPatrol          // Patrols northtown area
         }
 
+        /// <summary>Activity mirrored to dialogue, command notifications, and patrol logic.</summary>
         public enum ParoleOfficerActivity
         {
             Idle,
@@ -68,13 +74,22 @@ namespace Behind_Bars.Systems.NPCs
             ConductingHomeVisit
         }
 
+        /// <summary>
+        /// Serializable patrol route definition.  Points are world-space
+        /// waypoints, while speed and wait time are runtime navigation values.
+        /// </summary>
         [System.Serializable]
         public class PatrolRoute
         {
+            /// <summary>Registry name used to resolve this route.</summary>
             public string routeName = "DefaultRoute";
+            /// <summary>Ordered world-space patrol waypoints.</summary>
             public Vector3[] points;
+            /// <summary>NavMesh movement speed in world units per second.</summary>
             public float speed = 2.5f;
+            /// <summary>Real-time wait at each waypoint.</summary>
             public float waitTime = 3f;
+            /// <summary>Whether patrol logic may use this route.</summary>
             public bool isActive = true;
         }
 
@@ -92,15 +107,23 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Parole Officer Properties
 
+        /// <summary>Configured role used by intake, search, and incident routing.</summary>
         public ParoleOfficerRole role = ParoleOfficerRole.PatrolOfficer;
+        /// <summary>Roster assignment used to select the route and spawn point.</summary>
         public ParoleOfficerAssignment assignment;
+        /// <summary>Stable display/coordination identifier for this officer.</summary>
         public string badgeNumber = "";
+        /// <summary>Reserved for future experience-based behavior tuning.</summary>
         public int experienceLevel = 1;
+        /// <summary>Route selected for patrol officers; supervisors normally have no route.</summary>
         public PatrolRoute patrolRoute = new PatrolRoute();
+        /// <summary>Initial Unity-time marker for this officer's schedule.</summary>
         public float shiftStartTime = 0f;
+        /// <summary>Reserved shift-duration value in seconds; roster scheduling currently owns duty decisions.</summary>
         public float shiftDuration = 480f; // 8 minutes default
 
-        // Runtime state
+        // Runtime state: currentActivity is mirrored to command/dialogue surfaces;
+        // the intake state machine owns the authoritative supervising workflow.
         private ParoleOfficerActivity currentActivity = ParoleOfficerActivity.Idle;
         private SecurityDoorBehavior doorBehavior;
         private JailNPCAudioController audioController;
@@ -111,7 +134,8 @@ namespace Behind_Bars.Systems.NPCs
         private float lastPatrolTime = 0f;
         private bool isOnDuty = true;
 
-        // Search system integration
+        // Search system integration.  The patrol scheduler invokes searches only
+        // when this officer is not consumed by intake or escort work.
         private float lastSearchCheckTime = 0f;
         private const float SEARCH_CHECK_INTERVAL = 5f; // Check for search opportunities every 5 seconds
 
@@ -119,14 +143,16 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Supervising Officer State
 
-        // Intake processing
+        // Intake processing.  currentParolee is the exact player retained by the
+        // canonical ParoleIntakeStateMachine; do not substitute a nearby player.
         private Player currentParolee;
         //private Dictionary<string, IntakeStationInfo> intakeStations;
         //private HashSet<string> completedStations = new HashSet<string>();
         //private string currentTargetStation = "";
         private bool isProcessingIntake = false;
 
-        // Parolee compliance system
+        // Parolee compliance system.  Patience and warning counters are escort-
+        // local state and are reset/escalated by the distance thresholds below.
         private float officerPatience = 100f;
         private float lastComplianceWarningTime = 0f;
         private int complianceViolationCount = 0;
@@ -148,7 +174,8 @@ namespace Behind_Bars.Systems.NPCs
         private List<Transform> availablePatrolPoints = new List<Transform>();
         private bool patrolInitialized = false;
 
-        // Mapping between assignment and route names
+        // Mapping between assignment and route names.  The supervisor deliberately
+        // maps to null because its post is stationary rather than route-based.
         public static readonly Dictionary<ParoleOfficerAssignment, string> AssignmentToRouteMap = new Dictionary<ParoleOfficerAssignment, string>
         {
             { ParoleOfficerAssignment.PoliceStationSupervisor, null }, // Supervising officer, no route
@@ -163,6 +190,13 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Initialization
 
+        /// <summary>
+        /// Resolves or creates the security-door seam, initializes route/audio
+        /// helpers, and registers this officer with PrisonNPCManager.  If the
+        /// injected door component cannot be resolved or created, later
+        /// door-dependent paths remain unavailable; this method does not install
+        /// a static-guard replacement.
+        /// </summary>
         protected override void InitializeNPC()
         {
             doorBehavior = BBHelpers.GetComponentSafe<SecurityDoorBehavior>(gameObject);
@@ -191,6 +225,11 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Debug($"ParoleOfficerBehavior initialized: {role} officer {badgeNumber} at {assignment}");
         }
 
+        /// <summary>
+        /// Removes the officer from PrisonNPCManager and delegates base look-
+        /// controller cleanup before the native NPC object is destroyed.  It does
+        /// not itself clear the intake state machine or coordinator session.
+        /// </summary>
         protected override void OnDestroy()
         {
             // Dynamic parole officers are spawned/despawned with the Main scene. Pair their
@@ -200,6 +239,13 @@ namespace Behind_Bars.Systems.NPCs
             base.OnDestroy();
         }
 
+        /// <summary>
+        /// Applies an assignment and optional badge, then initializes role-specific
+        /// patrol/interaction state.  The parameter name is retained for API
+        /// compatibility even though it represents a parole-officer assignment.
+        /// </summary>
+        /// <param name="guardAssignment">Assignment used to select the officer role and route.</param>
+        /// <param name="badge">Optional stable badge identifier; generated when empty.</param>
         public void Initialize(ParoleOfficerBehavior.ParoleOfficerAssignment guardAssignment, string badge = "")
         {
             assignment = guardAssignment;
@@ -495,6 +541,11 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Applies assignment-to-role rules and configures stationary versus
+        /// patrol behavior.  Supervisors remain post-based; route officers use
+        /// the preset route registry and patrol scheduler.
+        /// </summary>
         private void SetupOfficerRole()
         {
             switch (role)
@@ -517,6 +568,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Resolves the route named by the assignment and caches its waypoints.
+        /// Missing routes leave patrol unavailable rather than inventing points.
+        /// </summary>
         private void InitializePatrolPoints()
         {
             availablePatrolPoints.Clear();
@@ -595,11 +650,13 @@ namespace Behind_Bars.Systems.NPCs
         //    }
         //}
 
+        /// <summary>Generates a display badge identifier for an officer with no supplied badge.</summary>
         private string GenerateBadgeNumber()
         {
             return $"G{UnityEngine.Random.Range(1000, 9999)}";
         }
 
+        /// <summary>Resolves and caches the authored spawn/post transform for this assignment.</summary>
         private void SetAssignedSpawnPoint()
         {
             assignedSpawnPoint = FindSpawnPoint(assignment.ToString());
@@ -609,6 +666,7 @@ namespace Behind_Bars.Systems.NPCs
 
         #region State Management (Override BaseJailNPC)
 
+        /// <summary>Handles idle duty without starting an independent intake/search workflow.</summary>
         protected override void HandleIdleState()
         {
             switch (currentActivity)
@@ -628,6 +686,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Maintains base navigation while preserving escort/intake activity ownership.</summary>
         protected override void HandleMovingState()
         {
             base.HandleMovingState();
@@ -642,6 +701,7 @@ namespace Behind_Bars.Systems.NPCs
             UpdateOfficerCommandNotification(currentActivity);
         }
 
+        /// <summary>Dispatches working activity logic; supervising intake remains state-machine-owned.</summary>
         protected override void HandleWorkingState()
         {
             switch (currentActivity)
@@ -663,8 +723,8 @@ namespace Behind_Bars.Systems.NPCs
         #region Patrol Logic
 
         /// <summary>
-        /// Performance: Check if officer reached destination before moving to next patrol point
-        /// Previous logic was time-based which caused constant path recalculation
+        /// Advances the assigned patrol route, waits at points, and periodically
+        /// evaluates search/condition opportunities for nearby parolees.
         /// </summary>
         private void HandlePatrolLogic()
         {
@@ -687,6 +747,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Starts patrol activity when a valid route is initialized.  The existing
+        /// patrol index is retained so a resumed officer continues its route.
+        /// </summary>
         public void StartPatrol()
         {
             // TODO: For officers spawned at police station entrance, add initial pathfinding to route start point before beginning patrol loop
@@ -705,6 +769,7 @@ namespace Behind_Bars.Systems.NPCs
             MoveToNextPatrolPoint();
         }
 
+        /// <summary>Moves toward the current route point and advances the index on arrival.</summary>
         private void MoveToNextPatrolPoint()
         {
             if (availablePatrolPoints.Count == 0) return;
@@ -718,6 +783,11 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Debug($"Guard {badgeNumber} patrolling to point {currentPatrolIndex}");
         }
 
+        /// <summary>
+        /// Replaces the active patrol waypoints and resets route traversal.  This
+        /// is a managed/test integration point and does not alter roster assignment.
+        /// </summary>
+        /// <param name="points">Ordered world-space waypoints, or null to disable the route.</param>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -731,8 +801,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Check if any nearby players should be searched
-        /// Called periodically during patrol
+        /// Finds eligible nearby parolees and starts the shared search coroutine.
+        /// This method changes activity to SearchingParolee before the coroutine
+        /// freezes the player, preventing patrol logic from issuing competing work.
         /// </summary>
         private void CheckForSearchOpportunities()
         {
@@ -798,8 +869,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Check for parole condition violations during patrol (curfew, restricted zones).
-        /// Only detects violations when officer is nearby.
+        /// Evaluates curfew/restricted-area conditions for nearby parolees using
+        /// the game clock and records violations through their rap sheets.
         /// </summary>
         private void CheckPatrolConditionViolations(Player[] players)
         {
@@ -870,6 +941,11 @@ namespace Behind_Bars.Systems.NPCs
 
         private ParoleIntakeStateMachine paroleIntakeStateMachine;
 
+        /// <summary>
+        /// Gets or injects the canonical supervising-intake state machine.  This
+        /// helper is hidden from the IL2CPP public surface and refuses to replace
+        /// a failed injection with a static/fallback behavior.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -890,8 +966,11 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Start parole intake process for a parolee
+        /// Hands a new parolee to the canonical intake state machine and mirrors
+        /// the processing activity on this officer.  Intake ownership and player
+        /// cleanup belong to the state machine/coordinator, not this wrapper.
         /// </summary>
+        /// <param name="parolee">Exact player to retain for intake.</param>
         public void HandleParoleIntake(Player parolee)
         {
             if (role != ParoleOfficerRole.SupervisingOfficer)
@@ -940,24 +1019,26 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Start intake process (legacy method - redirects to HandleParoleIntake)
+        /// Compatibility shim that forwards legacy intake callers to the canonical
+        /// parole intake state machine.
         /// </summary>
+        /// <param name="parolee">Player to process through canonical intake.</param>
         public void StartIntakeProcess(Player parolee)
         {
             HandleParoleIntake(parolee);
         }
 
-        /// <summary>
-        /// Check if intake processing is active (delegates to state machine)
-        /// </summary>
+        /// <summary>Returns whether canonical or mirrored intake state is active.</summary>
         public bool IsIntakeProcessingActive()
         {
             return paroleIntakeStateMachine != null && paroleIntakeStateMachine.IsProcessingIntake();
         }
 
         /// <summary>
-        /// Marks the supervising officer as escorting the parolee during automatic intake.
+        /// Marks the officer as escorting the exact intake player and begins the
+        /// navigation/activity mirror used by command notifications.
         /// </summary>
+        /// <param name="parolee">Player retained by the intake state machine.</param>
         public void BeginIntakeEscort(Player parolee)
         {
             if (role != ParoleOfficerRole.SupervisingOfficer || parolee == null)
@@ -970,7 +1051,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Clears the intake escort state once the location explanation completes.
+        /// Clears the intake escort mirror and returns activity ownership to the
+        /// caller/state machine; it does not record intake completion itself.
         /// </summary>
         public void CompleteIntakeEscort()
         {
@@ -981,9 +1063,9 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        /// <summary>
-        /// Check whether this officer is already handling intake for the specified parolee.
-        /// </summary>
+        /// <summary>Checks whether this officer's canonical intake owns the exact player.</summary>
+        /// <param name="parolee">Player identity to compare.</param>
+        /// <returns>True only when the intake state machine is active for that player.</returns>
         public bool IsHandlingIntakeFor(Player parolee)
         {
             return role == ParoleOfficerRole.SupervisingOfficer &&
@@ -995,6 +1077,9 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Parolee Compliance
 
+        // Compliance thresholds below are measured in world-space metres.  The
+        // officer's patience changes with frame delta, while warning cooldowns
+        // use real Unity time.
         private void CheckParoleeCompliance()
         {
             if (currentParolee == null) return;
@@ -1019,6 +1104,11 @@ namespace Behind_Bars.Systems.NPCs
             return 0f;
         }
 
+        /// <summary>
+        /// Applies distance-based patience changes and throttled warnings for the
+        /// exact escorted parolee.  This does not change the officer's activity or
+        /// start an arrest on its own.
+        /// </summary>
         private void UpdateParoleeCompliance(float distance)
         {
             bool isCompliant = distance <= COMPLIANCE_PERFECT;
@@ -1044,6 +1134,10 @@ namespace Behind_Bars.Systems.NPCs
             lastKnownParoleePosition = currentParolee.transform.position;
         }
 
+        /// <summary>
+        /// Increments the local warning count and sends the message associated with
+        /// the current warning, intervention, or escape-distance band.
+        /// </summary>
         private void HandleComplianceViolation(float distance)
         {
             complianceViolationCount++;
@@ -1067,6 +1161,11 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Monitoring and Response
 
+        /// <summary>
+        /// Leaves arrival/intake polling to DynamicParoleOfficerManager and the
+        /// canonical ParoleIntakeStateMachine; monitoring officers have no local
+        /// arrival poller to avoid duplicate ownership.
+        /// </summary>
         private void HandleMonitoringLogic()
         {
             // DynamicParoleOfficerManager and ParoleIntakeStateMachine own arrival/intake work.
@@ -1074,7 +1173,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Change parole officer activity and update notifications
+        /// Changes the mirrored activity and updates the officer-command surface.
+        /// The command surface is authoritative over passive HUD status: intake
+        /// processing is delegated to the canonical state machine, and a tier UI
+        /// must defer whenever an officer command is active.
         /// </summary>
         private void ChangeParoleActivity(ParoleOfficerActivity newActivity)
         {
@@ -1096,7 +1198,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Update officer command notification based on current activity
+        /// Publishes activity command data unless canonical intake owns the message.
+        /// This is an officer-command producer, not a general-purpose HUD status
+        /// update.
         /// </summary>
         private void UpdateOfficerCommandNotification(ParoleOfficerActivity activity)
         {
@@ -1126,7 +1230,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Determine if this activity should display a command notification
+        /// Determines whether the current activity has a player-facing officer
+        /// command.  Only escort and search activities currently qualify.
         /// </summary>
         private bool ShouldShowCommandNotification(ParoleOfficerActivity activity)
         {
@@ -1139,7 +1244,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Get command data for the current activity
+        /// Builds the command payload for escort/search activity.  A null result
+        /// means no command should be published; intake remains state-machine-owned.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -1178,7 +1284,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Hide officer command notification
+        /// Clears the officer-command surface after this officer no longer owns it.
+        /// Passive HUD status may resume only after this handoff.
         /// </summary>
         private void HideOfficerCommandNotification()
         {
@@ -1194,15 +1301,19 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Search Notification Methods
 
-        // Search state tracking
+        // Search state tracking.  These fields feed the officer-command surface;
+        // they are intentionally separate from passive tier-status HUD state.
         private string currentSearchMessage = "";
         private bool searchInProgress = false;
         private bool searchContrabandFound = false;
         private int contrabandItemCount = 0;
 
         /// <summary>
-        /// Show search notification - called when search starts
+        /// Shows the current search instruction through the officer-command surface
+        /// and records whether the search is still active.
         /// </summary>
+        /// <param name="message">Instruction or result text shown to the player.</param>
+        /// <param name="isSearching">Whether the search workflow remains active.</param>
         public void ShowSearchNotification(string message, bool isSearching)
         {
             currentSearchMessage = message;
@@ -1225,8 +1336,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Update search notification during search process
+        /// Updates the current search instruction without changing ownership or
+        /// search activity state.
         /// </summary>
+        /// <param name="message">Replacement instruction text.</param>
         public void UpdateSearchNotification(string message)
         {
             currentSearchMessage = message;
@@ -1249,8 +1362,11 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Show search results notification
+        /// Shows the final search result through the officer-command surface and
+        /// records the detected-item summary for later message queries.
         /// </summary>
+        /// <param name="contrabandFound">Whether the search found contraband.</param>
+        /// <param name="itemCount">Number of detected items when applicable.</param>
         public void ShowSearchResults(bool contrabandFound, int itemCount = 0)
         {
             searchContrabandFound = contrabandFound;
@@ -1337,6 +1453,10 @@ namespace Behind_Bars.Systems.NPCs
 
         #endregion
 
+        /// <summary>
+        /// Maintains compliance for the active escort and returns the officer to
+        /// monitoring when its exact parolee reference is gone.
+        /// </summary>
         private void HandleEscortLogic()
         {
             if (currentParolee == null)
@@ -1355,6 +1475,7 @@ namespace Behind_Bars.Systems.NPCs
 
         private ParoleCheckInSystem checkInSystem;
 
+        /// <summary>Resolves and caches the supervising officer's check-in controller.</summary>
         private ParoleCheckInSystem GetCheckInSystem()
         {
             if (checkInSystem != null)
@@ -1370,6 +1491,7 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Compatibility shim for older callers. ParoleCheckInSystem owns check-in interaction flow.
         /// </summary>
+        /// <param name="parolee">Player forwarded to the check-in controller.</param>
         public void HandleCheckIn(Player parolee)
         {
             if (role != ParoleOfficerRole.SupervisingOfficer)
@@ -1780,8 +1902,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Override BaseJailNPC attack handling for guard-specific responses
+        /// Routes an attack through the parole officer's immediate-arrest response
+        /// and interrupts supervising intake when this officer owns one.
         /// </summary>
+        /// <param name="attacker">Player who attacked the officer.</param>
         public override void OnAttackedByPlayer(Player attacker)
         {
             base.OnAttackedByPlayer(attacker);
@@ -1794,6 +1918,12 @@ namespace Behind_Bars.Systems.NPCs
             HandlePlayerAttack(attacker);
         }
 
+        /// <summary>
+        /// Stops current navigation, warns the attacker, starts the jail-manager
+        /// arrest coroutine, and cancels an active supervising intake.  Failure to
+        /// resolve the jail manager is logged; no local fallback arrest is invented.
+        /// </summary>
+        /// <param name="attacker">Player to pass to the immediate-arrest flow.</param>
         private void HandlePlayerAttack(Player attacker)
         {
             // Stop current activity

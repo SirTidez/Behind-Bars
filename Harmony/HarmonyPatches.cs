@@ -34,10 +34,17 @@ using UnityEngine.SceneManagement;
 
 namespace Behind_Bars.Harmony
 {
+    /// <summary>
+    /// Harmony integration boundary for native arrest, crime, loading, input, and visibility
+    /// callbacks. Static transient state is correlated across native prefix/postfix pairs and is
+    /// reset with the active gameplay session by <see cref="Core"/>.
+    /// </summary>
     [HarmonyPatch]
     public static class HarmonyPatches
     {
         private static Core? _core;
+        // These flags describe short-lived native callback ownership. They must fail open when
+        // their owning flow is unavailable and be cleared at scene/session teardown.
         private static bool _jailSystemHandlingArrest = false;
         private static CrimeDetectionSystem? _crimeDetectionSystem;
         private static bool _mugshotInProgress = false;
@@ -49,7 +56,10 @@ namespace Behind_Bars.Harmony
         private static int _nativeLoadingSession;
         private static string _nativeLoadingStatus = "Preparing Behind Bars...";
         
-        // Cooldown tracking for assault detection to prevent duplicates
+        // Cooldown/correlation state prevents duplicate assault handling while preserving the
+        // game's native crime pipeline. Pending entries are consumed by matching prefix/postfix
+        // callbacks; the persisted-event set is cleared at scene/session reset and can therefore
+        // span multiple arrests during one active gameplay scene.
         private static Dictionary<string, float> _assaultCooldown = new Dictionary<string, float>();
         private const float ASSAULT_COOLDOWN_SECONDS = 3f; // Prevent duplicate processing within 3 seconds
         private const float PENDING_CIVILIAN_ASSAULT_SECONDS = 1.5f;
@@ -61,11 +71,20 @@ namespace Behind_Bars.Harmony
 
         internal sealed class NativeArrestCrimeSnapshot
         {
+            /// <summary>Sequence identifying the native arrest capture that produced this snapshot.</summary>
             public int CaptureId { get; }
+            /// <summary>Native crime object captured before the game's arrest flow clears it.</summary>
             public Crime Crime { get; }
+            /// <summary>Non-negative native occurrence count retained for rap-sheet persistence.</summary>
             public int Quantity { get; }
+            /// <summary>World position captured with the native crime occurrence.</summary>
             public Vector3 Location { get; }
 
+            /// <summary>Creates an immutable native-crime snapshot for the current arrest.</summary>
+            /// <param name="captureId">Arrest-scoped capture sequence.</param>
+            /// <param name="crime">Native crime value to retain.</param>
+            /// <param name="quantity">Native occurrence count; negative values are clamped to zero.</param>
+            /// <param name="location">World position associated with the crime.</param>
             public NativeArrestCrimeSnapshot(int captureId, Crime crime, int quantity, Vector3 location)
             {
                 CaptureId = captureId;
@@ -82,6 +101,8 @@ namespace Behind_Bars.Harmony
         /// </summary>
         private sealed class PendingCivilianAssault
         {
+            // PlayerKey/VictimId identify the damage event; ExpiresAt uses Unity Time.time and
+            // NativeAddCrimeSuppressed bridges the native AddCrime prefix to its postfix.
             public string PlayerKey = string.Empty;
             public string VictimId = string.Empty;
             public float ExpiresAt;
@@ -95,11 +116,18 @@ namespace Behind_Bars.Harmony
         /// </summary>
         private sealed class PendingOfficerAssault
         {
+            // Officer context is an enhancement for an already-native Assault. ExpiresAt uses
+            // Unity Time.time so stale health callbacks cannot annotate a later crime.
             public string PlayerKey = string.Empty;
             public NPC Officer = null!;
             public float ExpiresAt;
         }
         
+        /// <summary>
+        /// Initializes the static patch dependencies for a mod lifetime and replaces any stale
+        /// crime-detection reference from an earlier startup attempt.
+        /// </summary>
+        /// <param name="core">Persistent Behind Bars core owner for delegated jail actions.</param>
         public static void Initialize(Core core)
         {
             _core = core;
@@ -202,7 +230,8 @@ namespace Behind_Bars.Harmony
         /// <summary>
         /// Clears transient scene-only patch state before the Main scene unloads.
         /// Saved RapSheet data is intentionally not touched here; the live crime record
-        /// and pending witness work are scene-owned and must be discarded.
+        /// and pending witness work are scene-owned and must be discarded. This also resets
+        /// arrest-capture sequencing and the in-memory persistence deduplication set.
         /// </summary>
         public static void ResetSceneTransientState()
         {
@@ -252,6 +281,12 @@ namespace Behind_Bars.Harmony
             return snapshots;
         }
 
+        /// <summary>
+        /// Suppresses local punch input while fingerprint or guard-lockdown flows own the
+        /// interaction. Returning <c>true</c> preserves native behavior for other players or
+        /// when no lock is active.
+        /// </summary>
+        /// <param name="__instance">Punch controller receiving the native update.</param>
         [HarmonyPatch(typeof(PunchController), "UpdateInput")]
         [HarmonyPrefix]
         private static bool PunchController_UpdateInput_Prefix(PunchController __instance)
@@ -259,6 +294,8 @@ namespace Behind_Bars.Harmony
             return !(_fingerprintScanInputLocked || _guardLockdownInputLocked) || __instance == null || __instance.player != Player.Local;
         }
 
+        /// <summary>Overrides native loading text only for the active Behind Bars loading hold.</summary>
+        /// <param name="__result">Native status text replaced while the session hold is active.</param>
         [HarmonyPatch(typeof(LoadManager), "GetLoadStatusText")]
         [HarmonyPostfix]
         private static void LoadManager_GetLoadStatusText_Postfix(ref string __result)
@@ -269,6 +306,11 @@ namespace Behind_Bars.Harmony
             }
         }
 
+        /// <summary>
+        /// Defers native loading-screen close while the current gameplay session is still
+        /// bootstrapping; otherwise returns <c>true</c> and leaves native close behavior intact.
+        /// </summary>
+        /// <param name="__instance">Loading screen whose close request is being evaluated.</param>
         [HarmonyPatch(typeof(LoadingScreen), "Close")]
         [HarmonyPrefix]
         private static bool LoadingScreen_Close_Prefix(LoadingScreen __instance)
@@ -603,6 +645,14 @@ namespace Behind_Bars.Harmony
         }
         */
 
+        /// <summary>
+        /// Skips the immediate native civilian Assault insertion when it matches a recently
+        /// tracked damage event. The deferred witness/police path remains responsible for the
+        /// eventual escalation, preventing the same incident from being recorded twice.
+        /// </summary>
+        /// <param name="__instance">Native crime data owner.</param>
+        /// <param name="crime">Native crime being submitted.</param>
+        /// <param name="quantity">Native occurrence count supplied by the game.</param>
         [HarmonyPatch(typeof(PlayerCrimeData), "AddCrime")]
         [HarmonyPrefix]
         public static bool PlayerCrimeData_AddCrime_Prefix(PlayerCrimeData __instance, Crime crime, int quantity)
@@ -616,6 +666,14 @@ namespace Behind_Bars.Harmony
             return false;
         }
 
+        /// <summary>
+        /// Mirrors native crime occurrences into the local ledger after the original call unless
+        /// the prefix consumed a deferred civilian Assault. Officer context enhances the exact
+        /// resulting incident; it does not create a replacement native crime.
+        /// </summary>
+        /// <param name="__instance">Native crime data owner.</param>
+        /// <param name="crime">Native crime accepted by the game.</param>
+        /// <param name="quantity">Number of native occurrences to mirror.</param>
         [HarmonyPatch(typeof(PlayerCrimeData), "AddCrime")]
         [HarmonyPostfix]
         public static void PlayerCrimeData_AddCrime_PostFix(PlayerCrimeData __instance, Crime crime, int quantity)
@@ -671,7 +729,9 @@ namespace Behind_Bars.Harmony
         /// <summary>
         /// Detects contextual officer involvement for the native Assault event without
         /// replacing or mutating the game's crime data. The enhancement is attached to
-        /// the exact local ledger incident created by the AddCrime listener.
+        /// the exact local ledger incident created by the AddCrime listener. When the short
+        /// callback correlation is unavailable, the current implementation falls back to the
+        /// nearest active police officer within five metres.
         /// </summary>
         private static bool TryDetectNativeStreetOfficerAssault(
             PlayerCrimeData crimeData,
@@ -722,6 +782,12 @@ namespace Behind_Bars.Harmony
             return true;
         }
 
+        /// <summary>
+        /// Stores the exact officer-health context expected to precede a native Assault callback.
+        /// The short realtime expiry prevents a late callback from annotating another incident.
+        /// </summary>
+        /// <param name="officer">Officer that received the tracked damage.</param>
+        /// <param name="player">Player responsible for the tracked damage.</param>
         private static void TrackPendingOfficerAssault(NPC officer, Player player)
         {
             if (officer == null || player == null)
@@ -737,6 +803,14 @@ namespace Behind_Bars.Harmony
             };
         }
 
+        /// <summary>
+        /// Consumes a matching officer-assault context exactly once for a native Assault. Expired,
+        /// mismatched, or inactive-officer entries are discarded or ignored rather than reused.
+        /// </summary>
+        /// <param name="crimeData">Native crime data carrying the player identity.</param>
+        /// <param name="crime">Native crime being correlated.</param>
+        /// <param name="officer">Matched active officer, when correlation succeeds.</param>
+        /// <returns><c>true</c> when an exact live officer context was consumed.</returns>
         private static bool TryConsumePendingOfficerAssault(PlayerCrimeData crimeData, Crime crime, out NPC officer)
         {
             officer = null;
@@ -765,6 +839,12 @@ namespace Behind_Bars.Harmony
             return true;
         }
 
+        /// <summary>
+        /// Records a civilian damage event so the following native Assault can be deferred until
+        /// the witness/police response path decides whether it should escalate.
+        /// </summary>
+        /// <param name="victim">Civilian NPC that received the damage.</param>
+        /// <param name="player">Player associated with the damage event.</param>
         private static void TrackPendingCivilianAssault(NPC victim, Player player)
         {
             if (victim == null || player == null)
@@ -780,6 +860,13 @@ namespace Behind_Bars.Harmony
             };
         }
 
+        /// <summary>
+        /// Marks one matching local civilian Assault for native suppression during the AddCrime
+        /// prefix. The marker bridges the prefix and postfix and is never a general crime filter.
+        /// </summary>
+        /// <param name="crimeData">Native crime data carrying the player identity.</param>
+        /// <param name="crime">Native crime being submitted.</param>
+        /// <returns><c>true</c> when this exact Assault should skip native insertion.</returns>
         private static bool TrySuppressImmediateCivilianAssault(PlayerCrimeData crimeData, Crime crime)
         {
             var pending = _pendingCivilianAssault;
@@ -802,6 +889,14 @@ namespace Behind_Bars.Harmony
             return true;
         }
 
+        /// <summary>
+        /// Consumes the civilian suppression marker in the AddCrime postfix so a skipped native
+        /// call is not mirrored back into the local ledger. Stale or mismatched markers are not
+        /// applied to another player's or another crime's callback.
+        /// </summary>
+        /// <param name="crimeData">Native crime data carrying the player identity.</param>
+        /// <param name="crime">Native crime being finalized.</param>
+        /// <returns><c>true</c> when the matching deferred Assault marker was consumed.</returns>
         private static bool TryConsumeSuppressedCivilianAssault(PlayerCrimeData crimeData, Crime crime)
         {
             var pending = _pendingCivilianAssault;
@@ -819,6 +914,12 @@ namespace Behind_Bars.Harmony
             return true;
         }
 
+        /// <summary>
+        /// Returns the stable player key used by transient crime correlation, preferring the
+        /// native PlayerCode and falling back to the wrapper name only when no code is available.
+        /// </summary>
+        /// <param name="player">Player whose correlation identity is required.</param>
+        /// <returns>A stable non-null correlation key, or an empty string for null.</returns>
         private static string GetPlayerCrimeKey(Player player)
         {
             if (player == null)
@@ -851,6 +952,12 @@ namespace Behind_Bars.Harmony
                    string.Equals(candidate.PlayerCode, localPlayer.PlayerCode, StringComparison.Ordinal);
         }
 
+        /// <summary>
+        /// Captures local inventory before native arrest mutation can remove or relocate property.
+        /// Non-local targets and unavailable core services intentionally fail closed.
+        /// </summary>
+        /// <param name="arrestTarget">Player target reported by the native arrest callback.</param>
+        /// <param name="callbackName">Callback name included in diagnostics.</param>
         private static void CapturePreArrestProperty(Player arrestTarget, string callbackName)
         {
             if (_core == null || !IsLocalArrestTarget(arrestTarget))
@@ -1078,6 +1185,15 @@ namespace Behind_Bars.Harmony
             }
         }
 
+        /// <summary>
+        /// Adds one arrest crime to the rap sheet only once per stable event key. A failed native
+        /// rap-sheet insertion removes the global claim so a later retry can still persist it.
+        /// </summary>
+        /// <param name="rapSheet">Rap sheet receiving the arrest charge.</param>
+        /// <param name="crimeInstance">Local incident to persist.</param>
+        /// <param name="persistedEventKeys">Arrest-local keys already written to the rap sheet.</param>
+        /// <param name="explicitEventKey">Optional native snapshot key used instead of rebuilding one.</param>
+        /// <returns><c>true</c> when the incident was newly persisted.</returns>
         private static bool TryPersistArrestCrime(
             RapSheet rapSheet,
             CrimeInstance crimeInstance,
@@ -1101,6 +1217,13 @@ namespace Behind_Bars.Harmony
             return true;
         }
 
+        /// <summary>
+        /// Checks whether a native snapshot is already represented by a contextual local incident
+        /// in the same crime family, preventing a second charge for the enhanced occurrence.
+        /// </summary>
+        /// <param name="snapshot">Captured native crime being resolved.</param>
+        /// <param name="activeCrimes">Local incident ledger candidates.</param>
+        /// <returns><c>true</c> when a matching crime family is present.</returns>
         private static bool IsRepresentedByEnhancedCrime(NativeArrestCrimeSnapshot snapshot, IEnumerable<CrimeInstance> activeCrimes)
         {
             if (snapshot?.Crime == null || activeCrimes == null)
@@ -1126,6 +1249,13 @@ namespace Behind_Bars.Harmony
             return false;
         }
 
+        /// <summary>
+        /// Normalizes type/display names for coarse arrest deduplication. Assault variants share
+        /// one family; other crimes retain their type when available.
+        /// </summary>
+        /// <param name="typeName">Native or local crime type name.</param>
+        /// <param name="displayName">Human-readable crime name fallback.</param>
+        /// <returns>Comparison family used for native/enhanced incident matching.</returns>
         private static string GetCrimeFamily(string typeName, string displayName)
         {
             string combined = $"{typeName} {displayName}";
@@ -1154,6 +1284,13 @@ namespace Behind_Bars.Harmony
                    string.Equals(crime.CrimeName, "Witness Intimidation", StringComparison.OrdinalIgnoreCase);
         }
 
+        /// <summary>
+        /// Builds the stable key used to avoid persisting one local incident more than once. A
+        /// native incident ID is authoritative; the fallback combines rounded timestamp, location,
+        /// severity, type, and wanted/custody classification.
+        /// </summary>
+        /// <param name="crimeInstance">Incident whose persistence identity is required.</param>
+        /// <returns>A deterministic event key, or <c>"null"</c> for a null incident.</returns>
         private static string BuildCrimeEventKey(CrimeInstance crimeInstance)
         {
             if (crimeInstance == null)
@@ -1178,8 +1315,13 @@ namespace Behind_Bars.Harmony
         }
         
         /// <summary>
-        /// Log all crimes to the player's rap sheet on arrest
+        /// Persists the arrest's mod-originated incidents and pre-clear native crime snapshot to
+        /// the rap sheet. Native occurrences are resolved through the local ledger so contextual
+        /// enhancements remain one charge; the rap sheet is marked changed only after processing,
+        /// and live CrimeData is intentionally left for release cleanup.
         /// </summary>
+        /// <param name="player">Arrested player whose rap sheet receives the charges.</param>
+        /// <param name="nativeCrimeSnapshots">Optional pre-clear native snapshot; captured when omitted.</param>
         internal static void LogCrimesToRapSheet(Player player, IEnumerable<NativeArrestCrimeSnapshot> nativeCrimeSnapshots = null)
         {
             if (player == null)
@@ -1370,7 +1512,8 @@ namespace Behind_Bars.Harmony
         }
         
         /// <summary>
-        /// Calculate severity based on crime type
+        /// Calculate severity based on crime type. This is a display/ledger weighting heuristic,
+        /// not a native crime mutation; unrecognized crimes retain the default severity of 1.0.
         /// </summary>
         private static float CalculateCrimeSeverity(Crime crime)
         {
@@ -1383,10 +1526,10 @@ namespace Behind_Bars.Harmony
             // Major crimes (severity 3.0)
             if (crimeName.Contains("murder") || crimeName.Contains("manslaughter"))
                 severity = 3.0f;
-            // Serious crimes (severity 2.5)
+            // Officer assaults use severity 2.0 in the current heuristic.
             else if (crimeName.Contains("assault") && crimeName.Contains("officer"))
                 severity = 2.0f;
-            // Moderate crimes (severity 2.0)
+            // Other assaults, robberies, and possession use severity 1.5.
             else if (crimeName.Contains("assault") || crimeName.Contains("robbery") || crimeName.Contains("possession"))
                 severity = 1.5f;
             // Minor crimes (severity 1.0)
@@ -1397,6 +1540,10 @@ namespace Behind_Bars.Harmony
         }
         
         // NEW: Prevent ArrestNoticeScreen from opening when our jail system is handling the arrest
+        /// <summary>
+        /// Prevents the native arrest notice from recording/opening while Behind Bars owns the
+        /// arrest flow. Returning <c>false</c> skips the original only for that active handoff.
+        /// </summary>
         [HarmonyPatch(typeof(ArrestNoticeScreen), "RecordCrimes")]
         [HarmonyPrefix]
         public static bool ArrestNoticeScreen_RecordCrimes_Prefix()
@@ -1415,6 +1562,10 @@ namespace Behind_Bars.Harmony
         }
         
         // NEW: Also prevent ArrestNoticeScreen.Open from being called
+        /// <summary>
+        /// Prevents a second native arrest-notice open during Behind Bars custody handling while
+        /// allowing the game's normal notice behavior for unrelated arrests.
+        /// </summary>
         [HarmonyPatch(typeof(ArrestNoticeScreen), "Open")]
         [HarmonyPrefix]
         public static bool ArrestNoticeScreen_Open_Prefix()
@@ -1519,7 +1670,9 @@ namespace Behind_Bars.Harmony
         // ====== CRIME DETECTION PATCHES ======
         
         /// <summary>
-        /// Detect NPC deaths and classify as murders or manslaughter
+        /// Detects nearby local-player NPC deaths and forwards a current proximity-based intent
+        /// heuristic to CrimeDetectionSystem. This is not causal weapon attribution: close deaths
+        /// are currently treated as intentional and may produce false positives.
         /// </summary>
         [HarmonyPatch(typeof(NPC), "OnDie")]
         [HarmonyPostfix]
@@ -1746,6 +1899,13 @@ namespace Behind_Bars.Harmony
             }
         }
 
+        /// <summary>
+        /// Routes an officer-assault consequence into the canonical immediate-arrest coroutine.
+        /// Existing jail/arrest state and an unavailable JailSystem fail closed to avoid duplicate
+        /// custody transitions.
+        /// </summary>
+        /// <param name="player">Local player to re-arrest.</param>
+        /// <param name="officerName">Officer name included in diagnostics.</param>
         private static void TriggerImmediateOfficerReArrest(Player player, string officerName)
         {
             if (player == null)
@@ -1869,7 +2029,8 @@ namespace Behind_Bars.Harmony
         }
         
         /// <summary>
-        /// Override player visibility during mugshot capture to keep avatar on Player layer
+        /// Keeps the local avatar visible during mugshot capture while allowing the native setter
+        /// to run with the corrected value. All other visibility calls pass through unchanged.
         /// </summary>
         [HarmonyPatch(typeof(Player), nameof(Player.SetVisibleToLocalPlayer))]
         [HarmonyPrefix]

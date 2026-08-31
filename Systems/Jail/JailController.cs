@@ -24,6 +24,9 @@ public sealed class JailController : MonoBehaviour
 public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
 #endif
 {
+    // JailController is the scene-level composition root. Managers own their own
+    // runtime state; these references only establish initialization order and provide
+    // compatibility delegation for older callers.
     public BookingProcess BookingProcessController { get; set; }
 
     public GameObject jailDoorPrefab;
@@ -48,6 +51,8 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     public Transform holdingCell00GuardPoint;
     public Transform holdingCell01GuardPoint;
 
+    // Camera records are rebuilt from the authored SecurityCameras hierarchy before
+    // monitor assignment; they are not persisted scene data.
     public List<SecurityCamera> securityCameras = new List<SecurityCamera>();
 
     public bool showDebugInfo = false;
@@ -61,7 +66,8 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     public KeyCode blackoutKey = KeyCode.H;
     public KeyCode normalLightingKey = KeyCode.N;
 
-    // Properties for backward compatibility
+    // Backward-compatible views delegate to the owning managers. Missing managers return
+    // fresh empty records so diagnostics can continue without mutating a fake singleton.
     public List<CellDetail> cells => cellManager?.cells ?? new List<CellDetail>();
     public List<CellDetail> holdingCells => cellManager?.holdingCells ?? new List<CellDetail>();
     public List<Transform> patrolPoints => patrolManager?.GetPatrolPoints() ?? new List<Transform>();
@@ -140,6 +146,11 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         }
     }
 
+    /// <summary>
+    /// Initializes jail managers in dependency order, discovers security cameras and
+    /// triggers, and optionally emits a status snapshot. Repeated calls rebuild the
+    /// manager-owned scene lists and should be treated as a scene setup operation.
+    /// </summary>
     public void InitializeJail()
     {
         // Initialize all controllers
@@ -157,6 +168,8 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         }
     }
 
+    // Components are created through the project-safe helper before their authored
+    // lists are initialized. A missing required manager aborts the remainder of setup.
     void InitializeControllers()
     {
         ModLogger.Debug("InitializeControllers: ensuring jail controller components");
@@ -316,6 +329,8 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         }
     }
 
+    // Camera components must exist before monitors and culling are initialized; this
+    // method therefore owns the camera -> monitor -> culling ordering.
     void SetupSecurityCameras()
     {
         // First, create/setup the actual security cameras
@@ -334,6 +349,8 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         ModLogger.Debug($"Security camera setup completed with {securityCameras.Count} cameras");
     }
 
+    // Rebuild the runtime camera list from authored positions. Existing camera
+    // components are reused rather than duplicated.
     void CreateSecurityCameras()
     {
         securityCameras.Clear();
@@ -348,6 +365,8 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         ModLogger.Debug($"✓ Created {securityCameras.Count} security cameras");
     }
 
+    // Security camera positions are direct children of SecurityCameras; child order is
+    // preserved only for deterministic discovery/logging, not as a gameplay index.
     void DiscoverSecurityCameraPositions()
     {
         Transform camerasParent = transform.Find("SecurityCameras");
@@ -364,6 +383,8 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         }
     }
 
+    // Resolve or add one safe camera component at the authored position, then classify
+    // it from its name before monitor assignment consumes the list.
     void SetupSecurityCameras(Transform cameraPosition)
     {
         SecurityCamera existingCamera = Helpers.GetComponentSafe<SecurityCamera>(cameraPosition.gameObject);
@@ -382,6 +403,8 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         ConfigureSecurityCamera(camera, cameraPosition.name);
     }
 
+    // Called once for each discovered camera. It also applies cameraDownwardAngle, so a
+    // repeated setup call would accumulate the rotation adjustment.
     void ConfigureSecurityCamera(SecurityCamera camera, string cameraName)
     {
         camera.cameraName = cameraName;
@@ -421,7 +444,11 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         ModLogger.Debug($"✓ Configured camera: {cameraName} (Type: {camera.cameraType})");
     }
 
-    // Public API methods - delegate to appropriate controllers
+    // Public API methods delegate to the owning controllers. These wrappers intentionally
+    // do not duplicate manager state or provide fallback behavior of their own.
+    /// <summary>
+    /// Locks jail doors through JailDoorController and switches lighting to Emergency.
+    /// </summary>
     public void EmergencyLockdown()
     {
         // Lock all doors
@@ -432,6 +459,7 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
 
         ModLogger.Info("🔒 EMERGENCY LOCKDOWN ACTIVATED! Doors locked, emergency lighting enabled.");
     }
+    /// <summary>Unlocks all jail doors through the door controller and restores normal lighting.</summary>
     public void UnlockAll()
     {
         // Unlock all doors
@@ -442,30 +470,104 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
 
         ModLogger.Info("🔓 All doors unlocked! Normal lighting restored.");
     }
+    /// <summary>Opens every regular jail-cell door through the door controller.</summary>
     public void OpenAllCells() => doorController?.OpenAllCells();
+
+    /// <summary>Closes every regular jail-cell door through the door controller.</summary>
     public void CloseAllCells() => doorController?.CloseAllCells();
+
+    /// <summary>Switches the jail lighting controller to its Blackout state.</summary>
     public void Blackout() => lightingController?.SetJailLighting(JailLightingController.LightingState.Blackout);
+
+    /// <summary>Applies a complete jail lighting state through the lighting controller.</summary>
+    /// <param name="state">Lighting state to apply.</param>
     public void SetJailLighting(JailLightingController.LightingState state) => lightingController?.SetJailLighting(state);
+
+    /// <summary>Toggles one named area through the lighting controller.</summary>
+    /// <param name="areaName">Configured area name.</param>
     public void ToggleAreaLighting(string areaName) => lightingController?.ToggleAreaLighting(areaName);
+
+    /// <summary>Sets one named area enabled or disabled through the lighting controller.</summary>
+    /// <param name="areaName">Configured area name.</param>
+    /// <param name="enabled">Whether the area lights should be enabled.</param>
     public void SetAreaLighting(string areaName, bool enabled) => lightingController?.SetAreaLighting(areaName, enabled);
+
+    /// <summary>Advances every monitor assignment to its next available camera.</summary>
     public void RotateAllMonitors() => monitorController?.RotateAllMonitors();
+
+    /// <summary>Assigns a camera to a monitor through the monitor controller.</summary>
+    /// <param name="monitor">Monitor surface to update.</param>
+    /// <param name="camera">Camera source to display.</param>
     public void SetMonitorCamera(MonitorController monitor, SecurityCamera camera) => monitorController?.SetMonitorCamera(monitor, camera);
+
+    /// <summary>Assigns a player to the first free holding-cell spawn point.</summary>
+    /// <param name="player">Player entering custody.</param>
+    /// <returns>Reserved spawn transform, or null when no manager/space exists.</returns>
     public Transform AssignPlayerToHoldingCell(Player player) => cellManager?.AssignPlayerToHoldingCell(player);
+
+    /// <summary>Assigns a player to a named holding-cell spawn point.</summary>
+    /// <param name="player">Player entering custody.</param>
+    /// <param name="holdingCellName">Authored holding-cell transform name.</param>
+    /// <returns>Reserved spawn transform, or null when assignment fails.</returns>
     public Transform AssignPlayerToHoldingCellByName(Player player, string holdingCellName) => cellManager?.AssignPlayerToHoldingCellByName(player, holdingCellName);
+
+    /// <summary>Releases the player's holding-cell occupancy reservation.</summary>
+    /// <param name="player">Player whose reservation should be cleared.</param>
     public void ReleasePlayerFromHoldingCell(Player player) => cellManager?.ReleasePlayerFromHoldingCell(player);
+
+    /// <summary>Returns the first available regular jail cell, if the cell manager exists.</summary>
     public CellDetail GetAvailableJailCell() => cellManager?.GetAvailableJailCell();
+
+    /// <summary>Returns the first holding cell with free spawn capacity.</summary>
     public CellDetail GetAvailableHoldingCell() => cellManager?.GetAvailableHoldingCell();
+
+    /// <summary>Finds a regular cell by its authored cell index.</summary>
+    /// <param name="cellIndex">Authored CellDetail index.</param>
     public CellDetail GetCellByIndex(int cellIndex) => cellManager?.GetCellByIndex(cellIndex);
+
+    /// <summary>Finds a holding cell by its stored cell index.</summary>
+    /// <param name="cellIndex">Stored holding-cell index.</param>
     public CellDetail GetHoldingCellByIndex(int cellIndex) => cellManager?.GetHoldingCellByIndex(cellIndex);
+
+    /// <summary>Finds a holding cell by its authored transform name.</summary>
+    /// <param name="holdingCellName">Exact holding-cell name.</param>
     public CellDetail GetHoldingCellByName(string holdingCellName) => cellManager?.GetHoldingCellByName(holdingCellName);
+
+    /// <summary>Gets the compact holding-cell list index used by bounds and door checks.</summary>
+    /// <param name="holdingCellName">Exact holding-cell name.</param>
     public int GetHoldingCellRuntimeIndexByName(string holdingCellName) => cellManager?.GetHoldingCellRuntimeIndexByName(holdingCellName) ?? -1;
+
+    /// <summary>Finds the compact holding-cell list index containing the player.</summary>
+    /// <param name="player">Player to locate.</param>
     public int FindPlayerHoldingCell(Player player) => cellManager?.FindPlayerHoldingCell(player) ?? -1;
+
+    /// <summary>Tests player position against a compact holding-cell list index.</summary>
+    /// <param name="player">Player to test.</param>
+    /// <param name="holdingCellIndex">Compact holding-cell list index.</param>
     public bool IsPlayerInHoldingCellBounds(Player player, int holdingCellIndex) => cellManager?.IsPlayerInHoldingCellBounds(player, holdingCellIndex) ?? false;
+
+    /// <summary>Returns whether the player has cleared the specified holding-cell boundary.</summary>
+    /// <param name="player">Player to test.</param>
+    /// <param name="holdingCellIndex">Compact holding-cell list index.</param>
     public bool HasPlayerExitedHoldingCell(Player player, int holdingCellIndex) => cellManager?.HasPlayerExitedHoldingCell(player, holdingCellIndex) ?? true;
+
+    /// <summary>Tests player position against an authored regular jail-cell index.</summary>
+    /// <param name="player">Player to test.</param>
+    /// <param name="cellIndex">Authored cell index.</param>
     public bool IsPlayerInJailCellBounds(Player player, int cellIndex) => cellManager?.IsPlayerInJailCellBounds(player, cellIndex) ?? false;
+
+    /// <summary>Returns the first matching area name for a world position.</summary>
+    /// <param name="playerPosition">World position to classify.</param>
     public string GetPlayerCurrentArea(Vector3 playerPosition) => areaManager?.GetPlayerCurrentArea(playerPosition) ?? "Unknown";
+
+    /// <summary>Returns a copy of the currently discovered patrol-point list.</summary>
     public List<Transform> GetPatrolPoints() => patrolManager?.GetPatrolPoints() ?? new List<Transform>();
+
+    /// <summary>Rebuilds patrol points from this jail root through JailPatrolManager.</summary>
     public void InitializePatrolPoints() => patrolManager?.Initialize(transform);
+    /// <summary>
+    /// Rebuilds authored jail, holding, booking, and exit doors through the door controller.
+    /// </summary>
     public void SetupDoors()
     {
         if (doorController == null)
@@ -475,6 +577,7 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
         doorController.steelDoorPrefab = steelDoorPrefab;
         doorController.SetupDoors();
     }
+    /// <summary>Returns the lighting controller's area records, or an empty list if unavailable.</summary>
     public List<JailLightingController.AreaLighting> areaLights => lightingController?.areaLights ?? new List<JailLightingController.AreaLighting>();
 
     // Test methods - delegate to appropriate controllers
@@ -529,7 +632,9 @@ public sealed class JailController(IntPtr ptr) : MonoBehaviour(ptr)
     public void LogStatus() => LogJailStatus();
 
     /// <summary>
-    /// Programmatically setup door triggers for automatic door handling during escort
+    /// Discovers and logs the authored door-trigger objects used by escort diagnostics.
+    /// The active component wiring remains disabled in this branch, so this method does
+    /// not currently install DoorTriggerHandler instances or configure colliders.
     ///
     /// DOOR STRUCTURE (from Unity Hierarchy):
     ///

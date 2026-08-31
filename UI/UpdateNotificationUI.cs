@@ -19,9 +19,15 @@ namespace Behind_Bars.UI
     public class UpdateNotificationUI : MonoBehaviour
     {
 #if !MONO
+        /// <summary>
+        /// Creates the IL2CPP wrapper instance for the update-notification scaffold.
+        /// </summary>
         public UpdateNotificationUI(System.IntPtr ptr) : base(ptr) { }
 #endif
 
+        // Runtime-created hierarchy and presentation references. The canvas is marked
+        // DontDestroyOnLoad by CreateUI, while the button references remain valid only
+        // until this component is destroyed.
         private GameObject _notificationPanel;
         private GameObject _canvasObject;
         private Canvas _canvas;
@@ -33,11 +39,15 @@ namespace Behind_Bars.UI
         private Button _closeButton;
         private ScrollRect _scrollRect;
 #if !MONO
+        // IL2CPP UnityEvent removal requires the same delegate instance that was added;
+        // these fields intentionally retain those identities for teardown.
         private System.Action? _closeButtonClickHandler;
         private System.Action? _viewDetailsButtonClickHandler;
         private System.Action? _dismissButtonClickHandler;
 #endif
 
+        // The coroutine fields use object because MelonCoroutines returns a runtime
+        // handle whose concrete type differs between Mono and IL2CPP.
         private bool _isInitialized = false;
         private bool _isVisible = false;
         private object _fadeCoroutine;
@@ -45,8 +55,11 @@ namespace Behind_Bars.UI
         private VersionInfo? _currentVersionInfo;
 
         /// <summary>
-        /// Show update notification with version information
+        /// Intentionally does nothing while the update-notification presentation is
+        /// being reworked. The version is not cached, displayed, or auto-dismissed by
+        /// this entry point until the disabled path is explicitly restored.
         /// </summary>
+        /// <param name="versionInfo">The available-version data, currently unused.</param>
         public void Show(VersionInfo versionInfo)
         {
             //TODO: Temporarily disable showing the update notification until its been reworked
@@ -54,7 +67,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Hide the update notification
+        /// Hides the notification presentation and stops any pending auto-dismiss
+        /// routine. This remains callable even while <see cref="Show"/> is disabled.
         /// </summary>
         public void Hide()
         {
@@ -68,7 +82,9 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Create the UI hierarchy programmatically
+        /// Creates the persistent notification hierarchy programmatically, including
+        /// its own overlay canvas, only once. The public Show entry point currently
+        /// bypasses this scaffold while the presentation is being reworked.
         /// </summary>
         private void CreateUI()
         {
@@ -300,6 +316,10 @@ namespace Behind_Bars.UI
             RegisterDismissButtonListener();
         }
 
+        /// <summary>
+        /// Registers the close button callback once. The IL2CPP branch reuses a stable
+        /// delegate field because UnityEvent.RemoveListener matches delegate identity.
+        /// </summary>
         private void RegisterCloseButtonListener()
         {
             if (_closeButton == null)
@@ -317,6 +337,10 @@ namespace Behind_Bars.UI
 #endif
         }
 
+        /// <summary>
+        /// Registers the details button callback once, preserving the IL2CPP delegate
+        /// instance so teardown can remove exactly the listener that was added.
+        /// </summary>
         private void RegisterViewDetailsButtonListener()
         {
             if (_viewDetailsButton == null)
@@ -334,6 +358,10 @@ namespace Behind_Bars.UI
 #endif
         }
 
+        /// <summary>
+        /// Registers the dismiss button callback once, preserving the IL2CPP delegate
+        /// instance so teardown can remove exactly the listener that was added.
+        /// </summary>
         private void RegisterDismissButtonListener()
         {
             if (_dismissButton == null)
@@ -351,6 +379,11 @@ namespace Behind_Bars.UI
 #endif
         }
 
+        /// <summary>
+        /// Removes each registered button callback using the matching stable handler
+        /// identity. This is called before destruction so no UnityEvent retains this
+        /// component after its notification hierarchy is gone.
+        /// </summary>
         private void UnregisterButtonListeners()
         {
             if (_closeButton != null)
@@ -547,7 +580,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Cleanup when destroyed
+        /// Cleans up button listeners and stops active fade/auto-dismiss routines before
+        /// the notification component is destroyed.
         /// </summary>
         private void OnDestroy()
         {

@@ -20,8 +20,17 @@ namespace Behind_Bars.Systems
     /// stay explicit: the prison NPC manager, parole officer manager, and supervising officer
     /// coordinator remain collaborators rather than being subsumed into a behavior rewrite.
     /// </summary>
+    /// <remarks>
+    /// Registrations received before the scene's <see cref="PrisonNPCManager"/> is available
+    /// are queued and flushed when bindings are attached. The queues are simple FIFO lists
+    /// without duplicate suppression; callers should avoid registering the same instance more
+    /// than once. This shell never owns or destroys the collaborator components themselves.
+    /// </remarks>
     public sealed class NpcManager
     {
+        // Deferred registrations preserve scene-order arrivals until the canonical prison
+        // manager is bound. Unregistration has a separate queue so a late binding cannot
+        // accidentally re-add an officer that was already removed.
         private readonly List<GuardBehavior> pendingGuardRegistrations = new();
         private readonly List<ParoleOfficerBehavior> pendingParoleOfficerRegistrations = new();
         private readonly List<ReleaseOfficerBehavior> pendingReleaseOfficerRegistrations = new();
@@ -47,6 +56,10 @@ namespace Behind_Bars.Systems
         /// This keeps the manager responsible for owning its own scene references instead of relying on
         /// callers to push references in manually.
         /// </summary>
+        /// <remarks>
+        /// Refresh resolves the current scene managers and then flushes any deferred registry
+        /// operations. It does not recreate behavior components or transfer their ownership.
+        /// </remarks>
         public void RefreshSceneBindings()
         {
             AttachSceneManagers(ResolveScenePrisonNpcManager(), Core.ResolveDynamicParoleOfficerManager());
@@ -57,6 +70,11 @@ namespace Behind_Bars.Systems
         /// This preserves the current on-demand bootstrap behavior without forcing callers to resolve
         /// the dynamic manager directly.
         /// </summary>
+        /// <remarks>
+        /// The method first reuses an attached/scene instance, then creates a host GameObject and
+        /// adds the component through the runtime-appropriate safe path. Failure is logged and
+        /// leaves the reference null; no retry queue is kept for this manager creation itself.
+        /// </remarks>
         public void EnsureDynamicParoleOfficerManager()
         {
             if (DynamicParoleOfficerManager != null)
@@ -96,6 +114,9 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Attaches the scene-level prison and parole NPC managers for coordination only.
         /// </summary>
+        /// <param name="prisonNpcManager">Scene prison manager to attach, or null.</param>
+        /// <param name="dynamicParoleOfficerManager">Scene dynamic parole manager to attach, or null.</param>
+        /// <remarks>Attaching a prison manager immediately flushes deferred registrations.</remarks>
         public void AttachSceneManagers(
             PrisonNPCManager? prisonNpcManager,
             DynamicParoleOfficerManager? dynamicParoleOfficerManager)
@@ -108,6 +129,7 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Attaches the supervising officer interaction coordinator for shared ownership tracking.
         /// </summary>
+        /// <param name="coordinator">Coordinator collaborator to attach, or null to detach.</param>
         internal void AttachSupervisingOfficerCoordinator(
             SupervisingOfficerInteractionCoordinator? coordinator)
         {
@@ -133,6 +155,7 @@ namespace Behind_Bars.Systems
         /// Forward a parole-start transition through the NPC domain manager to the active
         /// dynamic parole officer orchestrator.
         /// </summary>
+        /// <param name="player">Player whose parole start should be forwarded.</param>
         public void HandleParoleStarted(Player player)
         {
             EnsureDynamicParoleOfficerManager();
@@ -150,6 +173,7 @@ namespace Behind_Bars.Systems
         /// Forward a parole-end transition through the NPC domain manager to the active
         /// dynamic parole officer orchestrator.
         /// </summary>
+        /// <param name="player">Player whose parole end should be forwarded.</param>
         public void HandleParoleEnded(Player player)
         {
             EnsureDynamicParoleOfficerManager();
@@ -209,6 +233,11 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Register a guard with the canonical NPC registry.
         /// </summary>
+        /// <param name="guard">Guard instance to register.</param>
+        /// <remarks>
+        /// If the prison manager is unavailable, the instance is appended to the deferred
+        /// queue and registered when the next scene binding is attached.
+        /// </remarks>
         public void RegisterGuard(GuardBehavior guard)
         {
             var prisonNpcManager = GetPrisonNpcManager();
@@ -224,6 +253,7 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Removes a guard from both deferred and live canonical registries.
         /// </summary>
+        /// <param name="guard">Guard instance to remove.</param>
         public void UnregisterGuard(GuardBehavior guard)
         {
             if (guard == null)
@@ -238,6 +268,8 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Register a parole officer with the canonical NPC registry.
         /// </summary>
+        /// <param name="officer">Parole officer instance to register.</param>
+        /// <remarks>Unavailable scene managers defer registration in arrival order.</remarks>
         public void RegisterParoleOfficer(ParoleOfficerBehavior officer)
         {
             var prisonNpcManager = GetPrisonNpcManager();
@@ -253,6 +285,7 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Removes a parole officer from both deferred and live canonical registries.
         /// </summary>
+        /// <param name="officer">Parole officer instance to remove.</param>
         public void UnregisterParoleOfficer(ParoleOfficerBehavior officer)
         {
             if (officer == null)
@@ -267,6 +300,12 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Spawn a parole officer through the canonical NPC ownership seam.
         /// </summary>
+        /// <param name="position">World position for the spawned officer.</param>
+        /// <param name="firstName">Officer first name.</param>
+        /// <param name="badgeNumber">Officer badge identifier.</param>
+        /// <param name="assignment">Officer assignment used by the canonical manager.</param>
+        /// <returns>The created officer, or <see langword="null"/> when the prison manager is not bound.</returns>
+        /// <remarks>Unlike registry registration, spawn requests are not queued when the scene manager is absent.</remarks>
         public ParoleOfficer? SpawnParoleOfficer(
             Vector3 position,
             string firstName = "Officer",
@@ -286,6 +325,8 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Request a prisoner escort through the canonical NPC ownership seam.
         /// </summary>
+        /// <param name="prisoner">Prisoner GameObject to pass to the scene manager.</param>
+        /// <returns><see langword="true"/> only when a bound prison manager accepts the request.</returns>
         public bool RequestPrisonerEscort(GameObject prisoner)
         {
             var prisonNpcManager = GetPrisonNpcManager();
@@ -295,6 +336,8 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Register a release officer with the canonical NPC registry.
         /// </summary>
+        /// <param name="officer">Release officer instance to register.</param>
+        /// <remarks>Unavailable scene managers defer registration in arrival order.</remarks>
         public void RegisterReleaseOfficer(ReleaseOfficerBehavior officer)
         {
             var prisonNpcManager = GetPrisonNpcManager();
@@ -310,6 +353,8 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Unregister a release officer from the canonical NPC registry.
         /// </summary>
+        /// <param name="officer">Release officer instance to unregister.</param>
+        /// <remarks>When unbound, the removal is queued separately from deferred registrations.</remarks>
         public void UnregisterReleaseOfficer(ReleaseOfficerBehavior officer)
         {
             var prisonNpcManager = GetPrisonNpcManager();
@@ -354,6 +399,7 @@ namespace Behind_Bars.Systems
         /// Resets all attached references.
         /// This is a safe no-op scaffold and does not attempt to destroy or reinitialize any collaborator.
         /// </summary>
+        /// <remarks>Pending registration and unregistration requests are discarded during shutdown.</remarks>
         public void Shutdown()
         {
             pendingGuardRegistrations.Clear();
@@ -365,6 +411,10 @@ namespace Behind_Bars.Systems
             SupervisingOfficerInteractionCoordinator = null;
         }
 
+        /// <summary>
+        /// Get the attached prison manager, refreshing scene bindings when it is absent.
+        /// </summary>
+        /// <returns>The bound scene manager, or <see langword="null"/> when unavailable.</returns>
         private PrisonNPCManager? GetPrisonNpcManager()
         {
             if (PrisonNpcManager == null)
@@ -380,6 +430,13 @@ namespace Behind_Bars.Systems
             return PrisonNpcManager;
         }
 
+        /// <summary>
+        /// Replay deferred registry operations against the newly bound prison manager.
+        /// </summary>
+        /// <remarks>
+        /// Registrations flush guard, parole, and release queues before release-officer
+        /// unregistrations; null entries are skipped and each queue is cleared after replay.
+        /// </remarks>
         private void FlushPendingRegistrations()
         {
             if (PrisonNpcManager == null)
@@ -440,6 +497,13 @@ namespace Behind_Bars.Systems
             }
         }
 
+        /// <summary>
+        /// Append a non-null registry operation to a deferred queue and log the deferral.
+        /// </summary>
+        /// <typeparam name="T">NPC behavior type stored by the queue.</typeparam>
+        /// <param name="queue">Destination deferred-operation queue.</param>
+        /// <param name="item">NPC behavior instance to queue.</param>
+        /// <param name="operation">Operation name used in diagnostics.</param>
         private static void QueuePendingRegistration<T>(List<T> queue, T item, string operation) where T : class
         {
             if (item == null)

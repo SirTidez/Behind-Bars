@@ -33,6 +33,10 @@ namespace Behind_Bars.Systems.Jail
         public PrisonItemEquippable(System.IntPtr ptr) : base(ptr) { }
 #endif
 
+        /// <summary>
+        /// Equip the prison item through the base viewmodel and apply the fixed hand-space
+        /// transform used by the custom prison-item prefab.
+        /// </summary>
         public override void Equip(ItemInstance item)
         {
             base.Equip(item);
@@ -46,6 +50,9 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info($"Prison item equipped: {PrisonItemRegistry.GetItemInstanceIdentifier(item)}");
         }
         
+        /// <summary>
+        /// Log the removal of the prison item and delegate viewmodel cleanup to the base class.
+        /// </summary>
         public override void Unequip()
         {
             ModLogger.Info($"Prison item unequipped");
@@ -59,6 +66,9 @@ namespace Behind_Bars.Systems.Jail
     [HarmonyPatch(typeof(Registry), "_GetItem")]
     public static class PrisonItemRegistry
     {
+        // This is a one-time registration-attempt guard, not proof that every definition reached
+        // the game's registry.  RegisterPrisonItems catches its own failures, after which callers
+        // still set this flag; registration is also not synchronized across concurrent callers.
         private static bool itemsRegistered = false;
         
         // Prison item definitions
@@ -102,6 +112,11 @@ namespace Behind_Bars.Systems.Jail
             }
         };
         
+        /// <summary>
+        /// Harmony prefix for the registry item lookup.  The requested ID is intentionally not
+        /// changed; the prefix only makes a best-effort one-time registration attempt before the
+        /// original lookup executes.
+        /// </summary>
         public static void Prefix(Registry __instance, string ID)
         {
             if (!itemsRegistered)
@@ -111,6 +126,12 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Attempt to register the prison definitions before a caller needs them.  A missing
+        /// runtime registry or an exception escaping the setup leaves the guard unset so a later
+        /// call may retry; the registration routine catches its own failures, so a partial/failed
+        /// attempt may still set the guard when that routine returns.
+        /// </summary>
         public static void EnsureRegistered()
         {
             if (itemsRegistered)
@@ -141,6 +162,13 @@ namespace Behind_Bars.Systems.Jail
             }
         }
         
+        /// <summary>
+        /// Build and add the configured prison definitions using the active runtime's item types.
+        /// Asset-bundle prefabs and embedded icons are optional best-effort enrichments; reflection
+        /// supplies compatibility fallbacks for definition members.  Icon/prefab failures are
+        /// logged and skipped where possible, while an exception outside those inner guards can
+        /// stop the remaining loop; a return does not guarantee every definition was registered.
+        /// </summary>
         private static void RegisterPrisonItems(Registry registry)
         {
             try
@@ -275,6 +303,11 @@ namespace Behind_Bars.Systems.Jail
             };
         }
         
+        /// <summary>
+        /// Derive a repeatable GUID from an item identifier using an MD5 digest.  The current
+        /// registration path computes this value for diagnostics/compatibility but does not pass it
+        /// to <c>AddToRegistry</c>, so it is not currently the registry's authoritative identity.
+        /// </summary>
         private static Guid GenerateDeterministicGuid(string input)
         {
             using (var provider = System.Security.Cryptography.MD5.Create())
@@ -284,6 +317,11 @@ namespace Behind_Bars.Systems.Jail
             }
         }
         
+        /// <summary>
+        /// Load a PNG manifest resource and convert it to a Unity sprite.  Missing resources,
+        /// invalid image data, and exceptions return <c>null</c> after logging so icon failure does
+        /// not prevent the rest of item registration.
+        /// </summary>
         private static Sprite LoadIconFromResources(string resourcePath)
         {
             try
@@ -335,6 +373,11 @@ namespace Behind_Bars.Systems.Jail
             }
         }
         
+        /// <summary>
+        /// Mutate an item prefab for world interaction and viewmodel use.  Missing collider and
+        /// rigidbody components are added, any existing generic equippable is removed before the
+        /// custom component is attempted, and setup errors are logged without escaping.
+        /// </summary>
         private static void SetupItemPrefab(object itemDef, GameObject prefab, PrisonItemInfo itemInfo)
         {
             try
@@ -393,6 +436,11 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Best-effort assign an item category through a reflected property or field.  Missing,
+        /// read-only, invalid, or otherwise incompatible category members only produce diagnostics;
+        /// they do not abort registration of the remaining definition.
+        /// </summary>
         private static void AssignItemCategory(object itemDef, string categoryName)
         {
             try
@@ -435,6 +483,11 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Set a definition member through a writable property first, then a field.  If neither
+        /// member exists or the object is null, this compatibility helper silently leaves the
+        /// definition unchanged.
+        /// </summary>
         private static void SetItemDefinitionValue(object itemDef, string memberName, object value)
         {
             if (itemDef == null)
@@ -457,6 +510,10 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Produce a diagnostic label from a reflected <c>Name</c>/<c>name</c> member, falling back
+        /// to the runtime type name or <c>null</c> for an absent definition.
+        /// </summary>
         private static string GetItemDefinitionLabel(object itemDef)
         {
             if (itemDef == null)
@@ -470,6 +527,11 @@ namespace Behind_Bars.Systems.Jail
             return string.IsNullOrWhiteSpace(nameValue) ? type.Name : nameValue;
         }
 
+        /// <summary>
+        /// Resolve an item definition through a non-generic public <c>GetItem(string)</c> method.
+        /// Reflection deliberately keeps Mono/IL2CPP wrapper types out of the exposed signature;
+        /// invalid input, missing methods, and invocation failures return <c>null</c>.
+        /// </summary>
         public static object GetRegistryItemDefinition(object registry, string itemId)
         {
             if (registry == null || string.IsNullOrWhiteSpace(itemId))
@@ -507,6 +569,11 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Return the most useful stable identifier available on an item instance: reflected ID,
+        /// then reflected Name, then the runtime type name.  A null instance is reported as
+        /// <c>"null"</c> for diagnostics.
+        /// </summary>
         public static string GetItemInstanceIdentifier(object itemInstance)
         {
             if (itemInstance == null)
@@ -540,7 +607,8 @@ namespace Behind_Bars.Systems.Jail
         
         
         /// <summary>
-        /// Check if an item ID is a registered prison item
+        /// Returns whether the exact, case-sensitive item ID exists in the static prison-item definition dictionary.
+        /// The current dictionary lookup expects a non-null key; this method does not normalize or resolve aliases.
         /// </summary>
         public static bool IsPrisonItem(string itemId)
         {
@@ -548,13 +616,18 @@ namespace Behind_Bars.Systems.Jail
         }
         
         /// <summary>
-        /// Get all registered prison item IDs
+        /// Returns the live dictionary-key view for all registered prison item IDs, not a snapshot. Enumeration reflects later
+        /// registry mutations and preserves the dictionary's key comparer/order behavior.
         /// </summary>
         public static IEnumerable<string> GetPrisonItemIds()
         {
             return PrisonItems.Keys;
         }
 
+        /// <summary>
+        /// Returns the configured display name for an exact, case-sensitive prison item ID, or the original ID when the ID
+        /// is unknown, blank, or has no configured name. A null ID is normalized to an empty string for the return value.
+        /// </summary>
         public static string GetPrisonItemDisplayName(string itemId)
         {
             if (string.IsNullOrWhiteSpace(itemId))
@@ -573,6 +646,9 @@ namespace Behind_Bars.Systems.Jail
     /// </summary>
     public class PrisonItemInfo
     {
+        // These fields are the registration recipe: the framework ID/display metadata, optional
+        // embedded icon resource, and optional asset-bundle prefab name.  They are mutable because
+        // the definitions are initialized as object literals and consumed by reflection later.
         public string id;
         public string name;
         public string description;

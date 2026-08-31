@@ -6,10 +6,23 @@ namespace Behind_Bars.Utils;
 
 public static class MelonLoaderVersionChecker
 {
+    // These are display-policy strings, not a semantic version range. The
+    // checker never installs, blocks, or updates MelonLoader based on them.
     private const string PROBLEMATIC_VERSION = "0.7.1.0";
     private const string RECOMMENDED_VERSION_1 = "0.7.0";
     private const string RECOMMENDED_VERSION_2 = "0.7.2-nightly";
 
+    /// <summary>
+    /// Logs the MelonLoader version detected by the loaded runtime and warns
+    /// when it matches the mod's fixed compatibility policy.
+    /// </summary>
+    /// <remarks>
+    /// The policy is intentionally a string heuristic: one exact version is
+    /// treated as problematic, other versions beginning with
+    /// <c>0.7.1</c> are treated as near-problematic, and all other detected
+    /// values are reported as apparently compatible. This method does not
+    /// validate releases semantically or perform an update.
+    /// </remarks>
     public static void CheckMelonLoaderVersion()
     {
         try
@@ -48,6 +61,16 @@ public static class MelonLoaderVersionChecker
         }
     }
 
+    /// <summary>
+    /// Resolves a MelonLoader assembly version using the known type first and
+    /// then the currently loaded assembly list.
+    /// </summary>
+    /// <returns>The assembly version string, or <c>null</c> when no suitable
+    /// assembly can be resolved.</returns>
+    /// <remarks>
+    /// Reflection and assembly enumeration failures are intentionally silent;
+    /// the public check reports the resulting unknown version as a warning.
+    /// </remarks>
     private static string GetMelonLoaderVersion()
     {
         try
@@ -85,6 +108,17 @@ public static class MelonLoaderVersionChecker
         }
     }
 
+    /// <summary>
+    /// Applies the checker's prefix-based near-problematic version heuristic.
+    /// </summary>
+    /// <param name="version">The version string to compare.</param>
+    /// <returns><c>true</c> for a string beginning with <c>0.7.1</c> except
+    /// the two explicitly excluded exact strings.</returns>
+    /// <remarks>
+    /// Comparison is case-sensitive and is not parsed as a
+    /// <see cref="Version"/>. Null or otherwise unusable input returns
+    /// <c>false</c> through the current catch-all behavior.
+    /// </remarks>
     private static bool IsVersionCloseToProblematic(string version)
     {
         try
@@ -108,6 +142,17 @@ public static class MelonLoaderVersionChecker
         }
     }
 
+    /// <summary>
+    /// Builds and emits the repeated warning block for the exact problematic
+    /// version policy match.
+    /// </summary>
+    /// <param name="detectedVersion">The version string shown in the warning.</param>
+    /// <remarks>
+    /// The block is sent three times through <see cref="ModLogger.Error(string)"/>
+    /// followed by three individual error-labelled lines. Padding is for the
+    /// fixed-width display only; the supplied version is not truncated or
+    /// otherwise validated.
+    /// </remarks>
     private static void ShowBigWarning(string detectedVersion)
     {
         StringBuilder warning = new StringBuilder();

@@ -20,27 +20,36 @@ namespace Behind_Bars.Systems.NPCs
 #if MONO
         [SerializeField]
 #endif
+        // Authored world-space post. A zero value is replaced with the current
+        // transform position during Start.
         private Vector3 stationaryPosition;
 
 #if MONO
         [SerializeField]
 #endif
+        // Radius used by IsAtPosition and the periodic maintenance check, in
+        // world units. Auto-return requires twice this tolerance.
         private float positionTolerance = 1.5f;
 
 #if MONO
         [SerializeField]
 #endif
+        // Retained Mono-serialized tuning field; current movement delegates to
+        // BaseJailNPC.MoveTo and does not apply this speed directly.
         private float returnSpeed = 2.5f;
 
 #if MONO
         [SerializeField]
 #endif
+        // Master gate for the periodic position-maintenance loop.
         private bool maintainPosition = true;
 
         #endregion
 
         #region State
 
+        // StationaryBehavior owns only the post/tolerance state; BaseJailNPC owns
+        // actual navigation and movement completion.
         private BaseJailNPC npcComponent;
         private bool isAtPosition = false;
         private bool isReturning = false;
@@ -52,6 +61,10 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Initialization
 
+        /// <summary>
+        /// Resolves the BaseJailNPC navigation owner. Without that component this
+        /// helper can report position but cannot issue a return request.
+        /// </summary>
         private void Awake()
         {
             npcComponent = BBHelpers.GetComponentSafe<BaseJailNPC>(gameObject);
@@ -61,6 +74,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Captures the current transform as the post when no serialized position
+        /// was supplied. This component does not otherwise move the NPC at startup.
+        /// </summary>
         private void Start()
         {
             // If position not set, use current position
@@ -76,8 +93,9 @@ namespace Behind_Bars.Systems.NPCs
         #region Public Methods
 
         /// <summary>
-        /// Set the stationary position for this NPC
+        /// Sets the world-space post used by future checks and return requests.
         /// </summary>
+        /// <param name="position">New stationary world-space position.</param>
         public void SetStationaryPosition(Vector3 position)
         {
             stationaryPosition = position;
@@ -85,7 +103,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Return to the stationary position
+        /// Requests BaseJailNPC navigation to the post unless already within the
+        /// configured tolerance. The serialized returnSpeed is not applied here.
         /// </summary>
         public void ReturnToPosition()
         {
@@ -107,8 +126,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Check if NPC is at the stationary position
+        /// Checks the current transform against the post using squared distance and
+        /// updates the cached at-position flag.
         /// </summary>
+        /// <returns>True when within positionTolerance world units.</returns>
         public bool IsAtPosition()
         {
             isAtPosition = GetDistanceSquaredFromStationaryPosition() <= positionTolerance * positionTolerance;
@@ -116,16 +137,20 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Get the stationary position
+        /// Gets the configured or startup-captured world-space post.
         /// </summary>
+        /// <returns>The stationary position used by this component.</returns>
         public Vector3 GetStationaryPosition()
         {
             return stationaryPosition;
         }
 
         /// <summary>
-        /// Enable or disable position maintenance
+        /// Enables or disables periodic drift correction. Disabling also cancels
+        /// the local returning flag but does not stop a BaseJailNPC path already
+        /// accepted by navigation.
         /// </summary>
+        /// <param name="maintain">Whether automatic position maintenance is enabled.</param>
         public void SetMaintainPosition(bool maintain)
         {
             maintainPosition = maintain;
@@ -136,8 +161,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Check if position maintenance is enabled
+        /// Gets whether the periodic drift-correction loop is enabled.
         /// </summary>
+        /// <returns>True when maintenance may issue automatic return requests.</returns>
         public bool IsMaintainingPosition()
         {
             return maintainPosition;
@@ -147,6 +173,11 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Update
 
+        /// <summary>
+        /// Samples position every quarter scaled Unity second while maintenance is
+        /// enabled. It clears returning inside tolerance and only auto-returns when
+        /// drift exceeds twice the configured tolerance.
+        /// </summary>
         private void Update()
         {
             if (!maintainPosition || npcComponent == null) return;
@@ -183,6 +214,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Returns squared world distance from the current post.</summary>
         private float GetDistanceSquaredFromStationaryPosition()
         {
             return (transform.position - stationaryPosition).sqrMagnitude;
@@ -192,6 +224,7 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Gizmos
 
+        /// <summary>Draws the post and tolerance radius for editor inspection only.</summary>
         private void OnDrawGizmosSelected()
         {
             // Draw stationary position

@@ -13,8 +13,21 @@ namespace Behind_Bars.Utils
     /// </summary>
     internal static class JailMaterialCompatibility
     {
+        /// <summary>
+        /// Name of the Schedule I URP shader used when a bundled shader cannot be resolved.
+        /// </summary>
         private const string FallbackShaderName = "Universal Render Pipeline/Lit";
 
+        /// <summary>
+        /// Rebinds jail renderer materials to shaders already loaded by Schedule I.
+        /// </summary>
+        /// <param name="jailRoot">The jail hierarchy whose active and inactive child renderers are repaired.</param>
+        /// <remarks>Each renderer's <see cref="Renderer.sharedMaterials"/> is
+        /// inspected. The selected shader is assigned directly to the shared
+        /// <see cref="Material"/> object, so other renderers or asset references
+        /// sharing that material can be mutated as well. No material clones or
+        /// undo records are created; a missing fallback shader leaves bindings
+        /// unchanged and an outer exception is logged.</remarks>
         public static void RepairForScheduleOne(GameObject jailRoot)
         {
             if (jailRoot == null)
@@ -92,6 +105,16 @@ namespace Behind_Bars.Utils
             }
         }
 
+        /// <summary>
+        /// Resolves an exact game-owned shader name, falling back when the name
+        /// is blank, error-like, unavailable, or otherwise not found.
+        /// </summary>
+        /// <param name="bundledShaderName">The shader name serialized in the bundled material.</param>
+        /// <param name="fallbackShader">The already resolved fallback shader.</param>
+        /// <returns>The exact matching shader or <paramref name="fallbackShader"/>,
+        /// which may itself be <c>null</c>.</returns>
+        /// <remarks>Lookup is case-sensitive through <see cref="Shader.Find"/>
+        /// and shader objects are returned as shared references.</remarks>
         private static Shader ResolveScheduleOneShader(string bundledShaderName, Shader fallbackShader)
         {
             // Prefer an exact game-owned shader by the original material's

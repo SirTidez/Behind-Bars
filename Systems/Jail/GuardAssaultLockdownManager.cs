@@ -37,6 +37,9 @@ namespace Behind_Bars.Systems.Jail
         private const float NonLethalSubdualDamage = 1f;
         private const float DisciplinaryHoldSeconds = 60f;
 
+        // These references describe one scene-local assault response.  They are cleared
+        // together after custody is restored or when Main unloads; none of them is a
+        // persisted crime/sentence record.
         private static GuardAssaultLockdownManager _instance;
         private bool lockdownActive;
         private Player incidentPlayer;
@@ -112,6 +115,10 @@ namespace Behind_Bars.Systems.Jail
             return true;
         }
 
+        /// <summary>
+        /// Resolves the jail-owned response component, adding it to the jail controller
+        /// only when the current scene has not created one yet.
+        /// </summary>
         private static GuardAssaultLockdownManager GetOrCreate()
         {
             if (_instance != null)
@@ -134,6 +141,11 @@ namespace Behind_Bars.Systems.Jail
             return _instance;
         }
 
+        /// <summary>
+        /// Captures the incident participants, suspends any interrupted intake, and
+        /// switches guards, doors, and lighting into the temporary emergency state.
+        /// The incident coroutine owns the pursuit and subsequent custody transfer.
+        /// </summary>
         private void BeginLockdown(GuardBehavior guard, Player player)
         {
             lockdownActive = true;
@@ -155,6 +167,11 @@ namespace Behind_Bars.Systems.Jail
             incidentCoroutine = MelonCoroutines.Start(ResolveIncident()) as Coroutine;
         }
 
+        /// <summary>
+        /// Closes the occupied intake door and cancels the canonical intake state when
+        /// the assault interrupted booking. Returns whether a resumable booking
+        /// checkpoint was actually captured.
+        /// </summary>
         private static bool SuspendInterruptedIntake(Player player)
         {
             SecureInterruptedHoldingCellDoor(player);
@@ -204,6 +221,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Pursuit ends either at subdual, which hands off to custody transfer, or when
+        // a required participant disappears; it must not leave lockdown state orphaned.
         private IEnumerator ResolveIncident()
         {
             GuardBehavior responder = initiatingGuard;
@@ -237,6 +256,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Apply temporary player controls and secure the incident player in exactly one
+        // destination before restoring normal custody state and any interrupted intake.
         private IEnumerator SecurePlayerAfterSubdual()
         {
             SetSubdualControls(true);
@@ -279,6 +300,10 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Places an already assigned prisoner in the authoritative cell destination,
+        /// closes/locks that cell, and optionally records the assault sentence penalty.
+        /// </summary>
         private bool SecureInAssignedCell(Player player, bool applyTrackedPenalty = true)
         {
             var cellAssignments = Core.ResolveCellAssignmentManager();
@@ -316,6 +341,10 @@ namespace Behind_Bars.Systems.Jail
             return true;
         }
 
+        /// <summary>
+        /// Moves an interrupted booking to the authored disciplinary holding cell,
+        /// replacing the stale intake-cell reservation before the timed re-intake.
+        /// </summary>
         private bool SecureInDisciplinaryHoldingCell(Player player)
         {
             var jail = Core.JailController;
@@ -347,6 +376,10 @@ namespace Behind_Bars.Systems.Jail
             return true;
         }
 
+        /// <summary>
+        /// Re-enters the canonical intake officer at the checkpoint captured before the
+        /// assault. Failure leaves normal custody restored but does not invent completion.
+        /// </summary>
         private void ResumeIntakeAfterDisciplinaryHold(Player player)
         {
             if (player == null)
@@ -379,12 +412,16 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Debug($"[LOCKDOWN] Placed {player.name} upright and facing west in {destinationName}");
         }
 
+        // Normal restoration is deliberately centralized so every successful transfer
+        // clears guards, shared route doors, lighting, and lockdown flags consistently.
         private void RestoreJailAfterSecure()
         {
             RestoreNormalCustodyState();
             ModLogger.Info("[LOCKDOWN] Fully cleared after the player was secured; guards, shared routes, and lighting restored to normal custody state.");
         }
 
+        // This path is used only when the pursuit cannot continue. It restores the jail
+        // response state but intentionally does not claim that the player was secured.
         private void EndLockdownWithoutTransfer(string reason)
         {
             RestoreNormalCustodyState();
@@ -411,6 +448,10 @@ namespace Behind_Bars.Systems.Jail
             resumeInterruptedBooking = false;
         }
 
+        /// <summary>
+        /// Restores guards, shared route doors, lighting, and transient lockdown state.
+        /// It does not move the player or alter persisted crime/sentence data.
+        /// </summary>
         private void RestoreNormalCustodyState()
         {
             foreach (var registeredGuard in Core.Instance?.NpcManager?.GetRegisteredGuards() ?? Enumerable.Empty<GuardBehavior>())
@@ -424,6 +465,10 @@ namespace Behind_Bars.Systems.Jail
             incidentCoroutine = null;
         }
 
+        /// <summary>
+        /// Applies or releases the temporary movement, inventory, camera, and input
+        /// locks used while the custody blackout is active.
+        /// </summary>
         private static void SetSubdualControls(bool locked)
         {
             HarmonyPatches.SetGuardLockdownInputLocked(locked);

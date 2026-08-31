@@ -17,6 +17,13 @@ namespace Behind_Bars.Systems
     /// This manager owns construction, access, and shutdown for the core gameplay services
     /// that previously lived directly on <see cref="Core"/>.
     /// </summary>
+    /// <remarks>
+    /// Initialization is intentionally ordered from jail/release through parole support and
+    /// NPC/UI bindings so cross-domain resolvers can use the manager graph. The initialized
+    /// flag is set only after the full sequence returns; a mid-sequence exception can therefore
+    /// leave a partially populated graph for diagnostics, and shutdown is best effort across
+    /// each service boundary.
+    /// </remarks>
     public class BehindBarsSystemManager : ISubsystemLifecycle
     {
         /// <summary>
@@ -94,10 +101,19 @@ namespace Behind_Bars.Systems
         /// </summary>
         public HomeVisitSystem? HomeVisitSystemService { get; private set; }
 
+        // Set only after Initialize completes. This guard prevents duplicate graph creation,
+        // but does not itself roll back a partially completed initialization.
         private bool _isInitialized;
+        // Named event handlers are retained so the manager can remove the exact subscriptions
+        // it added when the owned parole system is still available.
         private bool _isSubscribedToParoleLifecycle;
 
         /// <inheritdoc />
+        /// <remarks>
+        /// Constructs owned shells, bootstraps managed support services, attaches collaborators,
+        /// subscribes to managed parole lifecycle events, and refreshes scene bindings. Repeated
+        /// calls after successful initialization are ignored.
+        /// </remarks>
         public void Initialize()
         {
             if (_isInitialized)
@@ -152,6 +168,10 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Initialize the scene-bound UI layer through the manager-owned UI service.
         /// </summary>
+        /// <remarks>
+        /// This is separate from graph initialization because the UI requires a gameplay HUD;
+        /// it also refreshes scene jail/NPC bindings after the UI handoff.
+        /// </remarks>
         public void InitializeSceneUI()
         {
             UIManager?.InitializeSceneUI();
@@ -161,6 +181,10 @@ namespace Behind_Bars.Systems
         /// <summary>
         /// Refresh scene-bound collaborator attachments for scaffold managers without changing live flow ownership.
         /// </summary>
+        /// <remarks>
+        /// Booking and NPC references are resolved from the current scene and attached to their
+        /// owning shells. This method does not create a second jail/release/parole service graph.
+        /// </remarks>
         public void RefreshSceneManagerBindings()
         {
             JailManager?.AttachBookingProcess(Core.ResolveBookingProcess());
@@ -168,6 +192,12 @@ namespace Behind_Bars.Systems
         }
 
         /// <inheritdoc />
+        /// <remarks>
+        /// Unsubscribes manager-owned parole handlers first, then requests best-effort shutdown
+        /// of jail/parole/NPC/crime/support/UI/release services before clearing references. A
+        /// service exception is logged and does not prevent later cleanup groups from running;
+        /// individual service shells may retain their own incomplete transient state.
+        /// </remarks>
         public void Shutdown()
         {
             if (!_isInitialized)
@@ -250,6 +280,10 @@ namespace Behind_Bars.Systems
             ModLogger.Debug("BehindBarsSystemManager shut down");
         }
 
+        /// <summary>
+        /// Attach the manager's stable handlers to the owned parole lifecycle events once.
+        /// </summary>
+        /// <remarks>The guard prevents duplicate forwarding into the scene NPC orchestrator.</remarks>
         private void SubscribeToParoleLifecycle()
         {
             if (_isSubscribedToParoleLifecycle || ParoleSystem == null)
@@ -263,6 +297,13 @@ namespace Behind_Bars.Systems
             ModLogger.Debug("BehindBarsSystemManager subscribed to manager-owned ParoleSystem lifecycle events");
         }
 
+        /// <summary>
+        /// Remove the manager's parole lifecycle handlers when the owned event source is present.
+        /// </summary>
+        /// <remarks>
+        /// Unsubscription is idempotent; if the source has already been cleared, the guard
+        /// returns without attempting to recreate or resolve a replacement source.
+        /// </remarks>
         private void UnsubscribeFromParoleLifecycle()
         {
             if (!_isSubscribedToParoleLifecycle || ParoleSystem == null)

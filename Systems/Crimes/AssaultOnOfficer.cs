@@ -13,6 +13,7 @@ namespace Behind_Bars.Systems.Crimes
     [Serializable]
     public class AssaultOnOfficer : Crime
     {
+        /// <summary>Gets or sets the native display label for this charge.</summary>
         public override string CrimeName
         {
             get;

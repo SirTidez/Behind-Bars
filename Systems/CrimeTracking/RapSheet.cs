@@ -34,6 +34,7 @@ namespace Behind_Bars.Systems.CrimeTracking
     /// </summary>
     public class Vector3JsonConverter : JsonConverter<Vector3>
     {
+        /// <inheritdoc />
         public override void WriteJson(JsonWriter writer, Vector3 value, JsonSerializer serializer)
         {
             writer.WriteStartObject();
@@ -46,8 +47,11 @@ namespace Behind_Bars.Systems.CrimeTracking
             writer.WriteEndObject();
         }
 
+        /// <inheritdoc />
         public override Vector3 ReadJson(JsonReader reader, Type objectType, Vector3 existingValue, bool hasExistingValue, JsonSerializer serializer)
         {
+            // Unspecified coordinates default to zero for compatibility with the original
+            // lightweight converter used by older RapSheet saves.
             float x = 0, y = 0, z = 0;
 
             while (reader.Read())
@@ -95,7 +99,8 @@ namespace Behind_Bars.Systems.CrimeTracking
 
         /// <summary>
         /// Minimum risk - Low supervision requirements
-        /// Search chance: 10% per patrol encounter
+        /// Legacy design note: search chance was 10% per patrol encounter;
+        /// GetSearchProbability currently returns 15%.
         /// Check-in frequency: Once per week
         /// </summary>
         Minimum = 1,
@@ -129,15 +134,23 @@ namespace Behind_Bars.Systems.CrimeTracking
     /// </summary>
     public class RapSheet : Saveable
     {
+        // Persisted once and reused as the inmate-facing identifier. It is generated
+        // locally when absent; it is not regenerated during hydration.
         [SaveableField("inmateID")]
         private string _inmateID;
 
+        // Display metadata. FullName is refreshed from Player during OnLoaded when a
+        // live player reference is available.
         [SaveableField("fullName")]
         private string _fullName;
 
+        // Stable save identity supplied by Core when possible. Save paths fall back to
+        // the persisted/display name only when this key is unavailable.
         [SaveableField("playerKey")]
         private string _playerKey;
 
+        // The serialized key retains the historical "Commited" spelling for save
+        // compatibility; the list itself is the rap sheet's canonical crime history.
         [SaveableField("crimesCommited")]
         private List<CrimeInstance> _crimesCommited;
 
@@ -184,7 +197,11 @@ namespace Behind_Bars.Systems.CrimeTracking
         [SaveableField("completedParoleCount")]
         private int _completedParoleCount = 0;
 
-        // Properties for safe access
+        // Properties for safe access. Setters mark the Saveable dirty so callers that
+        // mutate persisted state do not have to know the save framework details.
+        /// <summary>
+        /// Gets or sets the persisted inmate-facing identifier.
+        /// </summary>
         public string InmateID
         {
             get => _inmateID;
@@ -195,6 +212,9 @@ namespace Behind_Bars.Systems.CrimeTracking
             }
         }
 
+        /// <summary>
+        /// Gets or sets the display name stored with the rap sheet.
+        /// </summary>
         public string FullName
         {
             get => _fullName;
@@ -205,6 +225,9 @@ namespace Behind_Bars.Systems.CrimeTracking
             }
         }
 
+        /// <summary>
+        /// Gets or sets the committed-crime history; a missing list is materialized on read.
+        /// </summary>
         public List<CrimeInstance> CrimesCommited
         {
             get => _crimesCommited ??= new List<CrimeInstance>();
@@ -215,6 +238,9 @@ namespace Behind_Bars.Systems.CrimeTracking
             }
         }
 
+        /// <summary>
+        /// Gets or sets the stable player key used to select the save identity.
+        /// </summary>
         public string PlayerKey
         {
             get => _playerKey;
@@ -225,6 +251,9 @@ namespace Behind_Bars.Systems.CrimeTracking
             }
         }
 
+        /// <summary>
+        /// Gets or sets the active parole record, if the player is currently on parole.
+        /// </summary>
         public ParoleRecord CurrentParoleRecord
         {
             get => _currentParoleRecord;
@@ -235,6 +264,9 @@ namespace Behind_Bars.Systems.CrimeTracking
             }
         }
 
+        /// <summary>
+        /// Gets or sets archived parole records retained for risk assessment history.
+        /// </summary>
         public List<ParoleRecord> PastParoleRecords
         {
             get => _pastParoleRecords ??= new List<ParoleRecord>();
@@ -245,6 +277,9 @@ namespace Behind_Bars.Systems.CrimeTracking
             }
         }
 
+        /// <summary>
+        /// Gets or sets the currently persisted LSI risk tier.
+        /// </summary>
         public LSILevel LSILevel
         {
             get => _lsiLevel;
@@ -255,6 +290,9 @@ namespace Behind_Bars.Systems.CrimeTracking
             }
         }
 
+        /// <summary>
+        /// Gets or sets the local timestamp of the last LSI calculation.
+        /// </summary>
         public DateTime LastLSIAssessment
         {
             get => _lastLSIAssessment;
@@ -265,6 +303,10 @@ namespace Behind_Bars.Systems.CrimeTracking
             }
         }
 
+        /// <summary>
+        /// Gets or sets the compliance reduction applied to the calculated LSI score.
+        /// Values are clamped to the current 0-40 reduction cap.
+        /// </summary>
         public int ComplianceLSIReduction
         {
             get => _complianceLSIReduction;
@@ -275,6 +317,10 @@ namespace Behind_Bars.Systems.CrimeTracking
             }
         }
 
+        /// <summary>
+        /// Gets or sets the rapport score carried from the previous parole term.
+        /// A negative value means no carry-over is pending.
+        /// </summary>
         public float CarryOverRapport
         {
             get => _carryOverRapport;
@@ -285,6 +331,10 @@ namespace Behind_Bars.Systems.CrimeTracking
             }
         }
 
+        /// <summary>
+        /// Gets or sets the sentence reduction modifier earned through parole performance.
+        /// Values are clamped to the current 0.0-0.5 range.
+        /// </summary>
         public float SentenceReductionModifier
         {
             get => _sentenceReductionModifier;
@@ -295,6 +345,9 @@ namespace Behind_Bars.Systems.CrimeTracking
             }
         }
 
+        /// <summary>
+        /// Gets or sets the number of parole terms completed successfully.
+        /// </summary>
         public int CompletedParoleCount
         {
             get => _completedParoleCount;
@@ -306,11 +359,23 @@ namespace Behind_Bars.Systems.CrimeTracking
         }
 
         // Non-Serialized fields
+        /// <summary>
+        /// Runtime player reference. It is deliberately omitted from saves and restored by SetPlayer/OnLoaded.
+        /// </summary>
         [NonSerialized]
         public Player Player;
 
         // Saveable implementation
+        // Both names derive from the same sanitized stable identity so a load does not
+        // silently switch files when a display name contains path-invalid characters.
+        /// <summary>
+        /// Gets the save folder derived from the stable player identity.
+        /// </summary>
         protected override string SaveFolderName => $"BehindBars/{GetPersistenceIdentity()}";
+
+        /// <summary>
+        /// Gets the save file name derived from the stable player identity.
+        /// </summary>
         protected override string SaveFileName => $"RapSheet_{GetPersistenceIdentity()}";
 
         /// <summary>
@@ -354,8 +419,11 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// Set the player reference after deserialization.
         /// Should be called after loading from save data.
         /// </summary>
+        /// <param name="player">The live player instance to reconnect, or null during teardown.</param>
         public void SetPlayer(Player player)
         {
+            // Hydration is intentionally two-phase: Saveable restores fields first,
+            // then this method reconnects the non-serialized Player and nested records.
             this.Player = player;
             if (player != null)
             {
@@ -378,6 +446,11 @@ namespace Behind_Bars.Systems.CrimeTracking
             }
         }
 
+        /// <summary>
+        /// Resolves the save identity that should be used for a specific player.
+        /// </summary>
+        /// <param name="player">Player whose stable key or name should be examined.</param>
+        /// <returns>A path-safe stable key, or <c>Unknown</c> when no identity is available.</returns>
         internal static string GetPersistenceIdentityForPlayer(Player player)
         {
             if (player == null)
@@ -395,6 +468,8 @@ namespace Behind_Bars.Systems.CrimeTracking
 
         private static string GetPersistenceIdentity(string playerKey, string fallbackName)
         {
+            // Prefer a stable player key; the name fallback is only for older/malformed
+            // records. Sanitization keeps identity selection deterministic and filesystem-safe.
             string rawIdentity = !string.IsNullOrWhiteSpace(playerKey) ? playerKey : fallbackName;
             if (string.IsNullOrWhiteSpace(rawIdentity))
             {
@@ -416,6 +491,8 @@ namespace Behind_Bars.Systems.CrimeTracking
 
         private static string SanitizePathSegment(string value)
         {
+            // Saveable paths are derived from user/game data. Replace separators and
+            // invalid filename characters rather than allowing them to create folders.
             if (string.IsNullOrWhiteSpace(value))
             {
                 return "Unknown";
@@ -440,8 +517,13 @@ namespace Behind_Bars.Systems.CrimeTracking
         }
 
         /// <summary>
-        /// Generates a unique inmate ID for the player.
+        /// Generates a six-character pseudo-unique inmate ID for the player.
         /// </summary>
+        /// <remarks>
+        /// The current implementation truncates a new GUID, so the value is intended as
+        /// a compact display identifier rather than a collision-proof primary key. Once
+        /// persisted, it remains stable through save/load.
+        /// </remarks>
         public string GenerateInmateID()
         {
             string inmateID = Guid.NewGuid().ToString();
@@ -502,9 +584,13 @@ namespace Behind_Bars.Systems.CrimeTracking
         #region LSI Risk Assessment
 
         /// <summary>
-        /// Get LSI calculation breakdown for display
-        /// Returns a structured breakdown of how the LSI score was calculated
+        /// Gets the component scores used by the current LSI calculation.
         /// </summary>
+        /// <returns>
+        /// A tuple containing adjusted total score, crime-count score, average-severity
+        /// score, current-violation score, past-record score, and resulting tier. With
+        /// no crimes, the current implementation returns zero components and Minimum.
+        /// </returns>
         public (int totalScore, int crimeCountScore, int severityScore, int violationScore, int pastParoleScore, LSILevel resultingLevel) GetLSIBreakdown()
         {
             if (CrimesCommited == null || CrimesCommited.Count == 0)
@@ -512,6 +598,9 @@ namespace Behind_Bars.Systems.CrimeTracking
                 return (0, 0, 0, 0, 0, LSILevel.Minimum);
             }
 
+            // The breakdown intentionally mirrors CalculateLSILevel rather than reading
+            // the cached tier. The past-record factor counts every archived record as a
+            // failure, even when the record's outcome is not otherwise inspected.
             int crimeCountScore = Math.Min(CrimesCommited.Count * 2, 20);
             
             float avgSeverity = 0f;
@@ -558,6 +647,9 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// <returns>Calculated LSI level</returns>
         public LSILevel CalculateLSILevel()
         {
+            // This is the current reduced model: it uses all crimes, current violations,
+            // and the number of archived parole records, then subtracts the persisted
+            // compliance reduction. It does not inspect crime type or archived outcomes.
             ModLogger.Debug($"[LSI] Starting LSI calculation for {FullName}");
 
             if (CrimesCommited == null || CrimesCommited.Count == 0)
@@ -672,6 +764,9 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// <returns>Probability as a float between 0.0 and 1.0</returns>
         public float GetSearchProbability()
         {
+            // Keep this explicit mapping in sync with runtime behavior. The enum's
+            // Minimum XML text still says 10%, but the current implementation returns
+            // 15% for Minimum; this comment records the intentional-as-is mismatch.
             switch (LSILevel)
             {
                 case LSILevel.None:
@@ -935,6 +1030,8 @@ namespace Behind_Bars.Systems.CrimeTracking
         {
             base.OnLoaded();
 
+            // Saveable can legitimately leave newer collections null when loading an
+            // older schema. Recreate them before any identity or parole hydration work.
             // Initialize collections if null
             if (_crimesCommited == null)
                 _crimesCommited = new List<CrimeInstance>();
@@ -957,7 +1054,8 @@ namespace Behind_Bars.Systems.CrimeTracking
                 }
             }
 
-            // Set Player reference on ParoleRecord objects (they're non-serialized, so need to be restored)
+            // ParoleRecord.Player is non-serialized, so restore it for the active record
+            // and every archived record before callers use officer/parole behavior.
             if (_currentParoleRecord != null && Player != null)
                 _currentParoleRecord.SetPlayer(Player);
 
@@ -970,7 +1068,9 @@ namespace Behind_Bars.Systems.CrimeTracking
                 }
             }
 
-            // Restore active parole conditions from saved IDs
+            // Conditions persist as IDs, while the runtime manager owns live condition
+            // objects. Restore is best-effort; malformed/missing managers do not discard
+            // the saved RapSheet and are reported through the existing warning path.
             if (_currentParoleRecord != null && _currentParoleRecord.IsOnParole())
             {
                 try
@@ -1002,7 +1102,8 @@ namespace Behind_Bars.Systems.CrimeTracking
         protected override void OnSaved()
         {
             base.OnSaved();
-            // No cleanup needed - data is already in a saveable state
+            // No normalization is performed here. SaveableField values are already the
+            // persisted contract, and changing them at this hook could alter old saves.
         }
 
         #endregion

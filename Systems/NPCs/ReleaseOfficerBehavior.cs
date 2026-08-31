@@ -38,6 +38,11 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Officer State
 
+        /// <summary>
+        /// Phases of the canonical release escort.  Door transitions and player
+        /// acknowledgement advance the workflow; returning to post is a cleanup
+        /// phase rather than an active release session.
+        /// </summary>
         public enum ReleaseState
         {
             Idle,                      // At guard post
@@ -53,6 +58,8 @@ namespace Behind_Bars.Systems.NPCs
             ReturningToPost            // Returning to guard post
         }
 
+        // currentReleasee and currentReleaseeKey identify one release session;
+        // all callbacks must verify that identity before advancing or cleaning up.
         private ReleaseState currentReleaseState = ReleaseState.Idle;
         private Player currentReleasee;
         private string currentReleaseeKey = string.Empty;
@@ -60,7 +67,8 @@ namespace Behind_Bars.Systems.NPCs
         private string badgeNumber;
         private bool isAvailable = true;
 
-        // State machine timing
+        // State-machine timing uses real Unity seconds.  stateStartTime shadows the
+        // base NPC timestamp because release transitions have their own watchdog.
         private new float stateStartTime;
         private const float STATE_TIMEOUT = 300f; // 5 minutes max per state
         private const float PLAYER_CHECK_INTERVAL = 1f; // How often to update player position (faster for responsive door handling)
@@ -69,18 +77,21 @@ namespace Behind_Bars.Systems.NPCs
         private const float DOOR_CLOSE_RETRY_DELAY = 2f;
         private float lastPlayerPositionCheck = 0f;
 
-        // Movement and tracking
+        // Movement and tracking for the exact currentReleasee.  The officer owns
+        // the destination, while SecurityDoorBehavior owns physical door events.
         private Vector3 destinationPosition;
         private Vector3 lastKnownPlayerPosition;
         private bool isEscorting = false;
         private const float ESCORT_FOLLOW_DISTANCE = 5f;
         private const float DESTINATION_TOLERANCE = 2.0f;
 
-        // Audio and dialogue
+        // Audio and dialogue references are scene/native components resolved during
+        // initialization and may be unavailable during the first load frame.
         private JailNPCAudioController audioController;
         private JailNPCDialogueController dialogueController;
 
-        // Dialogue system for ready-to-leave interaction
+        // Dialogue system for ready-to-leave interaction.  The ready container is
+        // an explicit acknowledgement gate and must not be replaced by a greeting.
         private DialogueHandler dialogueHandler;
         private DialogueController baseDialogueController;
         private NPCDialogueWrapper npcDialogueWrapper;
@@ -88,26 +99,32 @@ namespace Behind_Bars.Systems.NPCs
         private bool dialogueContainerRegistered = false;
         private bool readyInteractionEnabled = false;
 
-        // Performance: Cache dialogue lookups to avoid searching every frame
+        // Cache dialogue lookups to avoid searching every frame; these values are
+        // invalidated when the interaction is disabled or the component dies.
         private DialogueContainer _cachedReadyContainer;
         private bool _greetingOverridesProcessed = false;
 
-        // Door management
+        // Door management.  triggeredDoorOperations prevents duplicate requests;
+        // isSecurityDoorActive tracks ownership of the asynchronous door seam.
         private HashSet<string> triggeredDoorOperations = new HashSet<string>();
         private bool isSecurityDoorActive = false;
         private Coroutine delayedNavigationResumeCoroutine;
 
-        // Destination tracking to prevent duplicate events
+        // Destination tracking prevents duplicate arrival callbacks for a named
+        // release destination.
         private Dictionary<string, bool> stationDestinationProcessed = new Dictionary<string, bool>();
 
-        // Continuous rotation system
+        // Continuous rotation system used only while the officer is waiting for
+        // the player; it must be stopped during teardown.
         private object continuousLookingCoroutine;
 
-        // Door clearance tracking (like IntakeOfficer)
+        // Door-clearance tracking protects the player from a cell door close while
+        // they are still inside the authored doorway bounds.
         private bool playerDoorClearDetected = false;
 
 
-        // Proactive release timing - learn from first escort cycle
+        // Proactive release timing learns an estimate from the first return journey;
+        // it is advisory scheduling data, not a state-machine timeout.
         private float estimatedTravelTimeToPost = 0f; // Time it takes to get from cell to guard post
         private bool hasLearnedTravelTime = false;
         private float returnJourneyStartTime = 0f;
@@ -117,10 +134,15 @@ namespace Behind_Bars.Systems.NPCs
         #region Events
 
 #if MONO
+        /// <summary>Raised after a release state changes on Mono.</summary>
         public new System.Action<ReleaseState> OnStateChanged;
+        /// <summary>Raised when an escort is accepted for a player.</summary>
         public System.Action<Player> OnEscortStarted;
+        /// <summary>Raised when the release process completes normally.</summary>
         public System.Action<Player> OnEscortCompleted;
+        /// <summary>Raised when release escort cannot complete, with a reason.</summary>
         public System.Action<Player, string> OnEscortFailed;
+        /// <summary>Raised for ReleaseManager-visible escort state changes.</summary>
         public System.Action<Player, ReleaseState> OnStatusUpdate;
 #endif
 
@@ -128,6 +150,12 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Initialization
 
+        /// <summary>
+        /// Initializes the canonical release officer, resolves its post/audio/
+        /// dialogue helpers, registers it with PrisonNPCManager, and subscribes
+        /// to SecurityDoor completion/failure events.  Existing active release
+        /// state is preserved rather than reset during reinitialization.
+        /// </summary>
         protected override void InitializeNPC()
         {
             // Don't call base.InitializeNPC() as it's abstract
@@ -174,6 +202,11 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Debug($"ReleaseOfficer {badgeNumber} initialized and registered");
         }
 
+        /// <summary>
+        /// Resolves or injects the SecurityDoorBehavior used for shared physical
+        /// door transitions; the operation callbacks are subscribed separately by
+        /// <see cref="InitializeNPC"/>.
+        /// </summary>
         private void EnsureSecurityDoorComponent()
         {
             // Check if SecurityDoorBehavior is already attached
@@ -190,6 +223,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Resolves the authored release guard post, creating a local fallback
+        /// transform at the officer's current position when no post is available.
+        /// </summary>
         private void FindGuardPost()
         {
             // Look for a guard post or use the booking area - use guardSpawns[1] for release officers
@@ -209,6 +246,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Resolves the optional audio controller used for release commands.</summary>
         private void InitializeAudioComponents()
         {
             try
@@ -237,6 +275,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Resolves the base dialogue components and prepares release greetings;
+        /// the ready-to-leave container is installed by its dedicated setup path.
+        /// </summary>
         private void SetupReleaseDialogue()
         {
             if (dialogueController == null) return;
@@ -273,9 +315,11 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Sets up the dialogue container for the "ready to leave" interaction
-        /// Returns true if setup was successful, false otherwise
+        /// Registers the ready-to-leave container and choice callback across the
+        /// supported dialogue layouts.  Greeting overrides are suppressed while
+        /// this interaction is active so the acknowledgement remains visible.
         /// </summary>
+        /// <returns>True when the ready interaction is fully installed.</returns>
         private bool SetupReadyToLeaveDialogue()
         {
             try
@@ -413,13 +457,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Called when player selects "Let's go" (acknowledge) in dialogue
-        /// THIS IS THE ONLY PLACE that triggers movement to exit scanner
-        /// The release officer will NOT move until this choice is selected
-        /// 
-        /// Dialogue flow:
-        ///   1. Player selects "I'm ready to leave" -> advances to confirm node (no action needed)
-        ///   2. Player selects "Let's go" -> THIS method is called -> triggers movement to exit scanner
+        /// Handles the player's ready acknowledgement and advances only the active
+        /// release session.  This callback must not be confused with inventory or
+        /// exit-scan completion callbacks.
         /// </summary>
         private void OnPlayerAcknowledgeDialogueChoice()
         {
@@ -465,13 +505,15 @@ namespace Behind_Bars.Systems.NPCs
             OnPlayerConfirmedReady();
         }
 
+        /// <summary>Generates a display identifier for the release officer.</summary>
         private string GenerateBadgeNumber()
         {
             return $"R{UnityEngine.Random.Range(1000, 9999)}";
         }
 
         /// <summary>
-        /// Gets the root NPC GameObject - handles case where ReleaseOfficerBehavior might be on a child object
+        /// Resolves the root object that owns native dialogue/interaction components
+        /// across Mono and IL2CPP hierarchy layouts.
         /// </summary>
         private GameObject GetRootNPCGameObject()
         {
@@ -514,6 +556,11 @@ namespace Behind_Bars.Systems.NPCs
             return gameObject;
         }
 
+        /// <summary>
+        /// Installs the native/reflection-compatible ready interaction on the root
+        /// NPC object.  The operation is intentionally separate from the release
+        /// state machine so dialogue setup can be retried without changing state.
+        /// </summary>
         private void SetupGuardInteraction()
         {
             // Get root NPC GameObject first
@@ -575,7 +622,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Finalize the inventory pickup - clear remaining items and notify completion
+        /// Finalizes the storage handoff after inventory pickup, disables the
+        /// station interaction, and notifies ReleaseManager that the player may
+        /// proceed.  It does not complete the exit scan itself.
         /// </summary>
         private void FinalizeInventoryPickup()
         {
@@ -630,7 +679,8 @@ namespace Behind_Bars.Systems.NPCs
         #region State Management
 
         /// <summary>
-        /// Performance: Override OnEnable to use custom state update handler
+        /// Re-enables base navigation/tick behavior and performs deferred dialogue
+        /// setup once for release processing.
         /// </summary>
         protected override void OnEnable()
         {
@@ -640,13 +690,20 @@ namespace Behind_Bars.Systems.NPCs
             ProcessDialogueSetup();
         }
 
+        /// <summary>
+        /// Delegates disable handling to the base NPC behavior. Release-session
+        /// cleanup is performed by the explicit cancellation/completion paths and
+        /// by <see cref="OnDestroy"/>; this hook has no additional local teardown.
+        /// </summary>
         protected override void OnDisable()
         {
             base.OnDisable();
         }
 
         /// <summary>
-        /// Process dialogue container management once instead of every frame
+        /// Completes delayed dialogue setup and ensures the ready-to-leave
+        /// container remains the interaction entry point after native components
+        /// finish loading.
         /// </summary>
         private void ProcessDialogueSetup()
         {
@@ -692,7 +749,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Override state update handler to include release state machine
+        /// Dispatches base movement updates and release-state processing on the
+        /// centralized NPC tick.
         /// </summary>
         protected override void OnStateUpdateTick(float currentTime)
         {
@@ -702,6 +760,11 @@ namespace Behind_Bars.Systems.NPCs
             UpdateReleaseStateMachine();
         }
 
+        /// <summary>
+        /// Converts a base navigation arrival into the current release-state
+        /// transition, ignoring stale destinations that no longer belong to the
+        /// active session.
+        /// </summary>
         private void HandleDestinationReached(Vector3 destination)
         {
             // Ignore destination events when SecurityDoor is actively controlling the guard
@@ -742,6 +805,11 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Runs state timeouts, player-position checks, and the active release
+        /// handler.  Release state uses real Unity time; door animation completion
+        /// is still reported asynchronously by SecurityDoorBehavior.
+        /// </summary>
         private void UpdateReleaseStateMachine()
         {
             // Check state timeout, but exclude waiting states (player can take as long as they want)
@@ -816,6 +884,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Identifies states that retain active releasee escort ownership.</summary>
         private bool IsEscortState(ReleaseState state)
         {
             return state == ReleaseState.MovingToPrisonDoor ||
@@ -824,6 +893,10 @@ namespace Behind_Bars.Systems.NPCs
                    state == ReleaseState.MovingToPlayer;
         }
 
+        /// <summary>
+        /// Refreshes the exact releasee position and re-paths or reminds the player
+        /// only when movement exceeds the configured threshold.
+        /// </summary>
         private void CheckAndUpdatePlayerPosition()
         {
             if (currentReleasee == null || Time.time - lastPlayerPositionCheck < PLAYER_CHECK_INTERVAL)
@@ -858,6 +931,12 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Changes release phase, notifies ReleaseManager for mapped phases, updates
+        /// dialogue/command surfaces, and executes entry side effects.  It does not
+        /// acquire a new releasee or validate an external player identity.
+        /// </summary>
+        /// <param name="newState">The next release workflow phase.</param>
         public void ChangeReleaseState(ReleaseState newState)
         {
             if (currentReleaseState == newState) return;
@@ -895,6 +974,7 @@ namespace Behind_Bars.Systems.NPCs
             OnStateEnter(newState);
         }
 
+        /// <summary>Returns true for states that map to ReleaseManager status events.</summary>
         private bool ShouldNotifyStatusUpdate(ReleaseState state)
         {
             // Only notify for states that correspond to ReleaseManager statuses
@@ -905,6 +985,11 @@ namespace Behind_Bars.Systems.NPCs
                    state == ReleaseState.ProcessingExit;
         }
 
+        /// <summary>
+        /// Maps release phases to greeting states unless the ready-to-leave
+        /// interaction override is active, in which case greeting updates are
+        /// suppressed to preserve the explicit choice container.
+        /// </summary>
         private void UpdateDialogueForState(ReleaseState state)
         {
             if (dialogueController == null) return;
@@ -945,7 +1030,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Update officer command notification based on current state
+        /// Publishes release instructions to the officer-command surface.  This
+        /// command surface takes precedence over passive player HUD status until
+        /// the release phase no longer requires an instruction.
         /// </summary>
         private void UpdateOfficerCommandNotification(ReleaseState state)
         {
@@ -969,9 +1056,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        /// <summary>
-        /// Determine if this state should display a command notification
-        /// </summary>
+        /// <summary>Identifies release phases that own the officer-command surface.</summary>
         private bool ShouldShowCommandNotification(ReleaseState state)
         {
             return state switch
@@ -984,9 +1069,7 @@ namespace Behind_Bars.Systems.NPCs
             };
         }
 
-        /// <summary>
-        /// Get command data for the current state
-        /// </summary>
+        /// <summary>Builds the current player-facing command payload for a release phase.</summary>
         private OfficerCommandData? GetCommandDataForState(ReleaseState state)
         {
             return state switch
@@ -1015,9 +1098,7 @@ namespace Behind_Bars.Systems.NPCs
             };
         }
 
-        /// <summary>
-        /// Hide officer command notification
-        /// </summary>
+        /// <summary>Clears the release officer-command surface after ownership ends.</summary>
         private void HideOfficerCommandNotification()
         {
             try
@@ -1030,6 +1111,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Performs entry actions for the release phase, including navigation,
+        /// door requests, interaction enabling, and continuous player-facing look.
+        /// </summary>
         private void OnStateEnter(ReleaseState state)
         {
             ModLogger.Debug($"ReleaseOfficer {badgeNumber}: OnStateEnter({state})");
@@ -1106,6 +1191,7 @@ namespace Behind_Bars.Systems.NPCs
 
         #region State Handlers
 
+        /// <summary>Returns an available officer to its authored guard post.</summary>
         private new void HandleIdleState()
         {
             // Stay at guard post when idle
@@ -1119,6 +1205,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Approaches the exact releasee or their assigned cell-door exterior and
+        /// advances only after the destination callback confirms arrival.
+        /// </summary>
         private void HandleMovingToPlayerState()
         {
             // This state now navigates to the player's CELL DOOR, not the player themselves
@@ -1132,6 +1222,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Opens the releasee's cell when needed and waits for the player to clear
+        /// the cell bounds before continuing the custody route.
+        /// </summary>
         private void HandleOpeningCellState()
         {
             if (currentReleasee == null)
@@ -1178,6 +1272,12 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Requests the shared prison-entry door transition and normally waits for
+        /// its asynchronous completion/failure callback before leaving the cell
+        /// area. Missing or rejected shared-door work may use the verified direct
+        /// fallback and advance without that callback.
+        /// </summary>
         private void HandleMovingToPrisonDoorState()
         {
             if (currentReleasee == null)
@@ -1253,6 +1353,7 @@ namespace Behind_Bars.Systems.NPCs
             // Otherwise, continue navigating to door (handled by OnStateEnter navigation)
         }
 
+        /// <summary>Checks destination progress while retaining the exact releasee on the active route.</summary>
         private void HandleEscortState()
         {
             if (currentReleasee == null)
@@ -1277,6 +1378,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Holds the release sequence until the exact player is outside the cell
+        /// bounds, then starts the delayed safety close and advances the route.
+        /// </summary>
         private void HandleWaitingForPlayerExitCellState()
         {
             // Wait indefinitely for player to exit cell - no timeout to avoid locking player in
@@ -1312,6 +1417,7 @@ namespace Behind_Bars.Systems.NPCs
             // NO TIMEOUT - wait indefinitely for player to avoid locking them in
         }
 
+        /// <summary>Waits for the player-controlled inventory pickup interaction.</summary>
         private void HandleWaitingAtStorageState()
         {
             if (currentReleasee == null)
@@ -1335,6 +1441,7 @@ namespace Behind_Bars.Systems.NPCs
         // Removed old door state handlers - using simpler CheckForDoorTriggers approach like IntakeOfficer
 
 
+        /// <summary>Moves the exact releasee from storage to the exit scanner.</summary>
         private void HandleEscortingToExitScannerState()
         {
             if (currentReleasee == null)
@@ -1360,6 +1467,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Holds release ownership until the player completes the exit scan.</summary>
         private void HandleWaitingForExitScanState()
         {
             if (currentReleasee == null)
@@ -1378,6 +1486,7 @@ namespace Behind_Bars.Systems.NPCs
             // NO TIMEOUT - wait indefinitely for player to scan
         }
 
+        /// <summary>Performs the final release transition before completion cleanup.</summary>
         private void HandleProcessingExitState()
         {
             // Final processing phase - wait a moment then complete
@@ -1388,6 +1497,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Completes release ownership when the officer reaches its assigned post.</summary>
         private void HandleReturningToPostState()
         {
             // Monitor return to post
@@ -1416,8 +1526,12 @@ namespace Behind_Bars.Systems.NPCs
         #region Navigation Methods
 
         /// <summary>
-        /// Start release process (called by ReleaseManager) - now uses state machine
+        /// Acquires the exact player for the canonical release escort, resets
+        /// door/destination tracking, and starts the movement-to-player phase.
+        /// Duplicate or unavailable release requests are rejected before state
+        /// ownership changes.
         /// </summary>
+        /// <param name="player">Player to retain for the release session.</param>
         public void StartReleaseEscort(Player player)
         {
             if (player == null)
@@ -1477,6 +1591,7 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>Retries a rejected escort after the supplied real-time delay.</summary>
         private IEnumerator RetryEscortAfterDelay(Player player, float delay)
         {
             yield return new WaitForSeconds(delay);
@@ -1494,6 +1609,11 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Chooses the releasee's cell-door exterior when the player is in a cell;
+        /// otherwise it navigates to the player's current position.  This preserves
+        /// the escort safety boundary instead of sending the officer into the cell.
+        /// </summary>
         private void NavigateToPlayer()
         {
             ModLogger.Info($"ReleaseOfficer {badgeNumber}: NavigateToPlayer() called - determining player location");
@@ -1548,9 +1668,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        /// <summary>
-        /// Navigate to a specific cell door point (used when player is in a cell)
-        /// </summary>
+        /// <summary>Moves to the exterior side of the assigned cell door.</summary>
         private void NavigateToCellDoor(int cellNumber)
         {
             var jailController = Core.JailController;
@@ -1597,6 +1715,11 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Computes a safe exterior point from the cell-door/bounds hierarchy.
+        /// The result is false when no authored doorway or bounds can establish an
+        /// outside direction.
+        /// </summary>
         private bool TryGetExteriorCellDoorPosition(CellDetail cell, out Vector3 exteriorDoorPosition)
         {
             exteriorDoorPosition = Vector3.zero;
@@ -1646,6 +1769,7 @@ namespace Behind_Bars.Systems.NPCs
             return true;
         }
 
+        /// <summary>Starts navigation toward the authored prison-entry transition.</summary>
         private void NavigateToPrisonDoor()
         {
             var jailController = Core.JailController;
@@ -1663,6 +1787,7 @@ namespace Behind_Bars.Systems.NPCs
             MoveTo(doorEntryPoint);
         }
 
+        /// <summary>Moves to the inventory-pickup station used by the release flow.</summary>
         private void NavigateToStorage()
         {
             var storageLocation = GetStorageLocation();
@@ -1686,6 +1811,7 @@ namespace Behind_Bars.Systems.NPCs
             MoveTo(storageLocation);
         }
 
+        /// <summary>Moves to the authored exit-scanner station for final release.</summary>
         private void NavigateToExitScanner()
         {
             // Navigate to the exit scanner GUARD POINT, not the scanner itself!
@@ -1759,6 +1885,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Enables the shared inventory-pickup interaction and marks the storage
+        /// destination as processed so repeated state ticks do not duplicate it.
+        /// </summary>
         private void EnableInventoryPickupStation()
         {
             if (currentReleasee == null) return;
@@ -1824,9 +1954,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        /// <summary>
-        /// Enable the guard interaction for "ready to leave" confirmation
-        /// </summary>
+        /// <summary>Enables the ready-to-leave acknowledgement interaction.</summary>
         private void EnableGuardReadyInteraction()
         {
             if (readyInteractionEnabled) return;
@@ -1844,8 +1972,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Enables the ready-to-leave dialogue container override
-        /// Attempts lazy initialization if components weren't ready during setup
+        /// Activates the ready-to-leave container and suppresses competing greetings
+        /// until the player explicitly acknowledges it.
         /// </summary>
         private void EnableReadyToLeaveDialogue()
         {
@@ -2038,9 +2166,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
         
-        /// <summary>
-        /// Helper method to get container names for debugging
-        /// </summary>
+        /// <summary>Returns the currently available dialogue-container names for diagnostics.</summary>
         private string GetContainerNames()
         {
             if (dialogueHandler?.dialogueContainers == null)
@@ -2057,9 +2183,7 @@ namespace Behind_Bars.Systems.NPCs
             return string.Join(", ", names);
         }
 
-        /// <summary>
-        /// Disables the ready-to-leave dialogue container override
-        /// </summary>
+        /// <summary>Removes the ready-to-leave override and restores normal greetings.</summary>
         private void DisableReadyToLeaveDialogue()
         {
             if (baseDialogueController == null) return;
@@ -2075,9 +2199,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        /// <summary>
-        /// Enable the exit scanner for release process
-        /// </summary>
+        /// <summary>Enables the exit scanner interaction for the active releasee.</summary>
         private void EnableExitScanner()
         {
             try
@@ -2105,9 +2227,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        /// <summary>
-        /// Disable the guard interaction
-        /// </summary>
+        /// <summary>Disables the ready interaction and clears its callback ownership.</summary>
         private void DisableGuardReadyInteraction()
         {
             if (!readyInteractionEnabled) return;
@@ -2125,8 +2245,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Called by ReleaseManager when inventory processing is complete
+        /// Accepts the storage pickup completion only for the active releasee, then
+        /// finalizes station cleanup and advances toward the exit scanner.
         /// </summary>
+        /// <param name="player">Player reported by the pickup station.</param>
         public void OnInventoryPickupComplete(Player player)
         {
             if (!IsCurrentReleasee(player))
@@ -2150,6 +2272,7 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>Delays exit-scanner setup to allow the prior interaction to unwind.</summary>
         private IEnumerator DelayedExitScanner(float delay)
         {
             PlayVoiceCommand("Good. Time to leave. Follow me.", "Escorting");
@@ -2163,7 +2286,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Called when player confirms they are ready to leave via guard interaction
+        /// Advances a ready-confirmed release only when the officer is in the
+        /// waiting-for-player phase and the exact releasee is still valid.
         /// </summary>
         public void OnPlayerConfirmedReady()
         {
@@ -2186,7 +2310,8 @@ namespace Behind_Bars.Systems.NPCs
 
 
         /// <summary>
-        /// Called when exit scan is completed (NEW)
+        /// Accepts exit-scan completion for the active session and advances to the
+        /// final processing state; duplicate callbacks are ignored by state gates.
         /// </summary>
         public void OnExitScanCompleted()
         {
@@ -2204,6 +2329,10 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Utility Methods
 
+        /// <summary>
+        /// Legacy coroutine that waits for a destination using a real-time timeout.
+        /// Current movement completion normally arrives through BaseJailNPC instead.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -2233,6 +2362,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Legacy cell-opening helper retained for compatibility; normal release
+        /// flow uses the state-specific cell-door handler and safety close.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -2266,6 +2399,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Resolves the assigned cell transform position for a player.</summary>
         private Vector3 GetPlayerCellLocation(Player player)
         {
             try
@@ -2284,6 +2418,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Resolves the player's assigned cell through CellAssignmentManager and
+        /// returns -1 when no assignment is available.
+        /// </summary>
         private int GetPlayerCellNumber(Player player)
         {
             try
@@ -2310,6 +2448,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Checks object identity and runtime key against the active release session.</summary>
         private bool IsCurrentReleasee(Player player)
         {
             if (player == null || string.IsNullOrEmpty(currentReleaseeKey))
@@ -2320,6 +2459,7 @@ namespace Behind_Bars.Systems.NPCs
             return currentReleaseeKey == GetPlayerRuntimeKey(player);
         }
 
+        /// <summary>Builds the stable runtime identity used to reject stale callbacks.</summary>
         private static string GetPlayerRuntimeKey(Player player)
         {
             if (player == null)
@@ -2330,6 +2470,7 @@ namespace Behind_Bars.Systems.NPCs
             return Core.ResolvePlayerKey(player);
         }
 
+        /// <summary>Resolves the authored inventory-pickup location with the current fallback chain.</summary>
         private Vector3 GetStorageLocation()
         {
             try
@@ -2366,6 +2507,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Routes a release instruction through the optional audio/dialogue controller.</summary>
         private void PlayVoiceCommand(string message, string context)
         {
             try
@@ -2387,6 +2529,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Stops release movement and returns the officer to its assigned post.</summary>
         public void ReturnToPost()
         {
             if (guardPost != null)
@@ -2396,6 +2539,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Resolves the shared security-door component on this officer.</summary>
         private SecurityDoorBehavior GetSecurityDoor()
         {
             // Try to get SecurityDoor component from this GameObject first
@@ -2408,6 +2552,10 @@ namespace Behind_Bars.Systems.NPCs
                 : null;
         }
 
+        /// <summary>
+        /// Accepts a completed SecurityDoor operation and resumes the waiting
+        /// release transition only when the door belongs to the active route.
+        /// </summary>
         private void HandleSecurityDoorOperationComplete(string doorName)
         {
             ModLogger.Info($"ReleaseOfficer {badgeNumber}: ✅ SecurityDoor operation completed for {doorName} during {currentReleaseState} state");
@@ -2431,6 +2579,10 @@ namespace Behind_Bars.Systems.NPCs
             delayedNavigationResumeCoroutine = MelonCoroutines.Start(DelayedNavigationResume()) as Coroutine;
         }
 
+        /// <summary>
+        /// Handles a failed SecurityDoor operation by selecting the current direct
+        /// door fallback/retry path without losing releasee identity.
+        /// </summary>
         private void HandleSecurityDoorOperationFailed(string doorName)
         {
             ModLogger.Error($"ReleaseOfficer {badgeNumber}: SecurityDoor operation FAILED for {doorName} - attempting fallback");
@@ -2459,6 +2611,7 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>Resumes navigation after the door callback stack has unwound.</summary>
         private IEnumerator DelayedNavigationResume()
         {
             // Allow the completed-door callback to return before the release state
@@ -2493,6 +2646,10 @@ namespace Behind_Bars.Systems.NPCs
             delayedNavigationResumeCoroutine = null;
         }
 
+        /// <summary>
+        /// Attempts the legacy direct-door controller when the shared security-door
+        /// component cannot operate the requested route.
+        /// </summary>
         private bool FallbackDirectDoorControl(string doorType)
         {
             // Fallback to direct door control if SecurityDoor is not available
@@ -2538,6 +2695,11 @@ namespace Behind_Bars.Systems.NPCs
             return false;
         }
 
+        /// <summary>
+        /// Retained compatibility hook for door proximity.  It currently performs
+        /// no polling; the dedicated release states start SecurityDoorBehavior and
+        /// its callbacks remain the operation-completion signal.
+        /// </summary>
         private void CheckForDoorTriggers()
         {
             // Door handling is now done via dedicated MovingToPrisonDoor state
@@ -2548,9 +2710,7 @@ namespace Behind_Bars.Systems.NPCs
         }
 
 
-        /// <summary>
-        /// Check if officer and player are near the prison door (for opening before escort)
-        /// </summary>
+        /// <summary>Checks proximity to the authored prison-entry door.</summary>
         private bool IsNearPrisonDoor()
         {
             try
@@ -2574,9 +2734,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        /// <summary>
-        /// Check if officer and player are near the booking door (for opening before escort)
-        /// </summary>
+        /// <summary>Checks proximity to the authored booking door.</summary>
         private bool IsNearBookingDoor()
         {
             try
@@ -2600,9 +2758,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        /// <summary>
-        /// Check if both player and officer are in the storage area (for closing doors behind them)
-        /// </summary>
+        /// <summary>Checks whether both release participants are inside storage bounds.</summary>
         private bool ArePlayerAndOfficerInStorageArea()
         {
             try
@@ -2625,9 +2781,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        /// <summary>
-        /// Check if both player and officer are at the exit scanner (for closing doors behind them)
-        /// </summary>
+        /// <summary>Checks whether both release participants are at the exit scanner.</summary>
         private bool ArePlayerAndOfficerAtExitScanner()
         {
             try
@@ -2651,6 +2805,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Clears per-session door request and clearance markers.</summary>
         private void ResetDoorTracking()
         {
             triggeredDoorOperations.Clear();
@@ -2662,6 +2817,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
 
+        /// <summary>
+        /// Waits until the guard is outside the cell bounds before closing the
+        /// assigned cell door, retrying through the shared controller as needed.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -2720,6 +2879,7 @@ namespace Behind_Bars.Systems.NPCs
             ChangeReleaseState(ReleaseState.MovingToPrisonDoor);
         }
 
+        /// <summary>Starts the waiting-state look coroutine toward the active player.</summary>
         private void StartContinuousPlayerLooking()
         {
             // Stop any existing continuous looking
@@ -2730,6 +2890,7 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Debug($"ReleaseOfficer {badgeNumber}: Started continuous player looking");
         }
 
+        /// <summary>Stops the waiting-state look coroutine and clears its handle.</summary>
         private void StopContinuousPlayerLooking()
         {
             if (continuousLookingCoroutine != null)
@@ -2750,6 +2911,7 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>Continuously rotates the officer toward the active releasee while waiting.</summary>
         private IEnumerator ContinuousPlayerLookingCoroutine()
         {
             while (true)
@@ -2762,6 +2924,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Applies the immediate horizontal player-facing rotation used before dialogue.</summary>
         private void ApplyInstantPlayerRotation()
         {
             try
@@ -2794,6 +2957,7 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>Interpolates horizontal facing over the requested real-time duration.</summary>
         private IEnumerator SmoothRotateToTarget(Quaternion targetRotation, float duration)
         {
             Quaternion startRotation = transform.rotation;
@@ -2832,6 +2996,11 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Completes the release session, closes owned doors, notifies listeners/
+        /// ReleaseManager, unregisters coordinator ownership, and clears the exact
+        /// releasee so the officer can return to its idle/post state.
+        /// </summary>
         private void CompleteReleaseProcess()
         {
             if (currentReleasee != null)
@@ -2866,9 +3035,7 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Info($"ReleaseOfficer {badgeNumber}: Release officer now available for new assignments");
         }
 
-        /// <summary>
-        /// Close all doors that were opened during release escort - mirrors IntakeOfficer's CloseAllIntakeDoors
-        /// </summary>
+        /// <summary>Closes release-owned doors before session identity is cleared.</summary>
         private void CloseAllReleaseDoors()
         {
             var jailController = Core.JailController;
@@ -2901,8 +3068,12 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Override MoveTo to add debug logging and stop continuous looking
+        /// Routes movement through the base NavMesh implementation while updating
+        /// release destination tracking and escort coordination.
         /// </summary>
+        /// <param name="destination">World-space destination for the officer.</param>
+        /// <param name="tolerance">Arrival tolerance, or the base default when negative.</param>
+        /// <returns>Whether the base navigation request was accepted.</returns>
         public override bool MoveTo(Vector3 destination, float tolerance = -1f)
         {
             // Stop continuous looking when starting to move
@@ -2926,11 +3097,14 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Public Interface
 
+        /// <summary>Returns whether this officer may accept a new release session.</summary>
         public bool IsAvailable()
         {
             return isAvailable && currentReleaseState == ReleaseState.Idle;
         }
 
+        /// <summary>Sets release availability without changing an active state.</summary>
+        /// <param name="available">Whether a new release request may be accepted.</param>
         public void SetAvailable(bool available)
         {
             isAvailable = available;
@@ -2945,16 +3119,19 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Returns the release officer's display badge identifier.</summary>
         public string GetBadgeNumber()
         {
             return badgeNumber;
         }
 
+        /// <summary>Returns the release-specific state, including cleanup phases.</summary>
         public new ReleaseState GetCurrentState()
         {
             return currentReleaseState;
         }
 
+        /// <summary>Returns the exact player retained by the active release session, if any.</summary>
         public Player GetCurrentReleasee()
         {
             return currentReleasee;
@@ -2973,6 +3150,13 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Cleanup
 
+        /// <summary>
+        /// Stops coroutines, detaches the ready-choice and security-door listeners,
+        /// disposes the dialogue wrapper, unregisters the officer from the NPC
+        /// manager, and clears the releasee identity before destruction. Explicit
+        /// completion/cancellation paths own door closing and coordinator release;
+        /// this hook does not perform those operations itself.
+        /// </summary>
         protected override void OnDestroy()
         {
             // Stop any active continuous looking
@@ -3009,6 +3193,10 @@ namespace Behind_Bars.Systems.NPCs
             base.OnDestroy();
         }
 
+        /// <summary>
+        /// Forwards a base navigation arrival into the release-state handler while
+        /// preserving destination identity for stale-callback rejection.
+        /// </summary>
         protected override void NotifyDestinationReached(Vector3 destination)
         {
             base.NotifyDestinationReached(destination);

@@ -21,13 +21,24 @@ namespace Behind_Bars.Systems.Testing
     /// Test system for saving test data using Alt + letter keybinds.
     /// Provides unit testing capabilities for the saveable system.
     /// </summary>
+    /// <remarks>
+    /// This component is available only when developer shortcuts are enabled. Its hotkeys
+    /// write/load saveables and Alt+C permanently deletes the mod's BehindBars save folder;
+    /// use only with a disposable/test save and after confirming the loaded game path.
+    /// </remarks>
     public class SaveableTestSystem : MonoBehaviour
     {
 #if !MONO
+        /// <summary>Creates the IL2CPP component wrapper for Unity.</summary>
+        /// <param name="ptr">Native object pointer supplied by IL2CPP.</param>
         public SaveableTestSystem(System.IntPtr ptr) : base(ptr) { }
 #endif
 
         private static SaveableTestSystem? _instance;
+        /// <summary>
+        /// Gets the developer-only singleton, creating its persistent host on first access.
+        /// Returns null when developer shortcuts are disabled.
+        /// </summary>
         public static SaveableTestSystem? Instance
         {
             get
@@ -63,6 +74,9 @@ namespace Behind_Bars.Systems.Testing
 
         private void Update()
         {
+            // Manual hotkeys are intentionally gated on IsGameLoaded. Alt+S writes all
+            // registered saveables, Alt+L reloads them, Alt+R/P add test records, Alt+D
+            // dumps metadata, and Alt+C deletes only BehindBars save data.
             // Check for Alt + letter combinations
             // Only process if game is loaded to avoid errors
 #if !MONO
@@ -121,6 +135,8 @@ namespace Behind_Bars.Systems.Testing
         {
             try
             {
+                // This writes every registered saveable under the active save folder;
+                // it is a destructive test of serialization and can overwrite changes.
                 ModLogger.Info("=== TEST: Saving All Saveables ===");
                 
 #if !MONO
@@ -172,6 +188,8 @@ namespace Behind_Bars.Systems.Testing
         {
             try
             {
+                // Loading replaces each registered object's state from disk. Unsaved
+                // runtime changes are intentionally discarded by this manual test.
                 ModLogger.Info("=== TEST: Loading All Saveables ===");
                 
 #if !MONO
@@ -227,6 +245,8 @@ namespace Behind_Bars.Systems.Testing
         {
             try
             {
+                // This deliberately appends a synthetic crime to the local player's
+                // RapSheet before saving; run only against a test/disposable save.
                 ModLogger.Info("=== TEST: Saving RapSheet Test Data ===");
                 
                 var player = Player.Local;
@@ -292,6 +312,8 @@ namespace Behind_Bars.Systems.Testing
         {
             try
             {
+                // This deliberately starts a 1,440 game-minute parole term on the local
+                // player and persists it; it is not a read-only diagnostic.
                 ModLogger.Info("=== TEST: Saving ParoleRecord Test Data ===");
                 
                 var player = Player.Local;
@@ -383,6 +405,9 @@ namespace Behind_Bars.Systems.Testing
         {
             try
             {
+                // Destructive operation: Directory.Delete(..., true) removes the entire
+                // BehindBars save subtree. The path is rooted at the active game's
+                // LoadedGameFolderPath and is not recoverable by this component.
                 ModLogger.Info("=== TEST: Clearing Behind Bars Save Data ===");
                 
 #if !MONO

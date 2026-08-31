@@ -31,15 +31,24 @@ namespace Behind_Bars.Systems.NPCs
     /// </summary>
     internal static class JailNpcPrefabLifecycle
     {
+        /// <summary>Persistent scene root that keeps the prepared native template out of live jail geometry.</summary>
         private const string TemplateRootName = "@BehindBars_NpcTemplates";
+        /// <summary>Stable name used to identify the registered native NPC template.</summary>
         private const string TemplateName = "BehindBars_NativeNpcTemplate";
+        /// <summary>Stable native schedule-action name provisioned on the prepared template.</summary>
         internal const string CourthouseHomeScheduleActionName = "BehindBars_CourthouseHome";
 
+        /// <summary>Persistent root that owns the prepared template across scene changes.</summary>
         private static GameObject templateRoot;
+        /// <summary>Inactive registered native NPC template reused for live instances.</summary>
         private static GameObject preparedTemplate;
+        /// <summary>Prevents repeated donor-missing errors until the spawnable list changes.</summary>
         private static bool loggedDonorFailure;
+        /// <summary>Live instances waiting for server readiness and delayed FishNet spawn.</summary>
         private static readonly List<PendingNetworkSpawn> pendingNetworkSpawns = new();
+        /// <summary>Whether the global pending-spawn pump currently owns a coroutine.</summary>
         private static bool spawnPumpRunning;
+        /// <summary>Opaque global handle for the pending FishNet spawn pump.</summary>
         private static Coroutine spawnPumpCoroutine;
 
         /// <summary>
@@ -67,6 +76,10 @@ namespace Behind_Bars.Systems.NPCs
             pendingNetworkSpawns.Clear();
         }
 
+        /// <summary>
+        /// Attempts to prepare and register the shared native template for a bounded period. A timeout leaves
+        /// jail NPC spawning blocked; this routine does not clone a live NPC as a fallback.
+        /// </summary>
         internal static IEnumerator Prewarm()
         {
             const int attempts = 20;
@@ -83,6 +96,15 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Error("[NPC Spawn] Native NPC template prewarm timed out; jail NPC spawning remains blocked until a donor prefab is available.");
         }
 
+        /// <summary>
+        /// Instantiates the inactive registered template, initializes fresh native data/identity, and normalizes
+        /// navigation before handing the inactive object to the caller. No live NPC object is used as a donor.
+        /// </summary>
+        /// <param name="role">Role encoded into the generated object name and identity key.</param>
+        /// <param name="firstName">Native identity first name.</param>
+        /// <param name="lastName">Native identity last name.</param>
+        /// <param name="npcObject">Receives an inactive prepared instance when successful.</param>
+        /// <returns>True when a fresh native instance is ready for activation.</returns>
         internal static bool TryCreatePreparedInstance(
             BaseNPCSpawner.NPCRole role,
             string firstName,
@@ -139,6 +161,14 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Activates and validates a prepared instance, places it on the NavMesh, and queues its NetworkObject
+        /// for server-side FishNet spawning. Returning true means queueing succeeded; it does not mean the
+        /// asynchronous network spawn has completed.
+        /// </summary>
+        /// <param name="npcObject">Inactive prepared instance to activate.</param>
+        /// <param name="position">Requested world-space spawn position.</param>
+        /// <returns>True when validation passed and the instance was queued, not when FishNet has finished spawning.</returns>
         internal static bool TryActivateAndSpawn(GameObject npcObject, Vector3 position)
         {
             if (npcObject == null)
@@ -190,11 +220,19 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Returns the registered inactive template, preparing it on demand when possible.</summary>
+        /// <returns>The prepared template, or null when no donor/network prefab is available.</returns>
         internal static GameObject GetPreparedTemplateOrNull()
         {
             return TryGetPreparedTemplate(out var template) ? template : null;
         }
 
+        /// <summary>
+        /// Returns the cached template or builds one from FishNet spawnables. Donor selection deliberately
+        /// prefers a plain native NPC and never inspects live scene NPCs.
+        /// </summary>
+        /// <param name="template">Receives the cached or newly registered template.</param>
+        /// <returns>True when a registered inactive template is available.</returns>
         private static bool TryGetPreparedTemplate(out GameObject template)
         {
             template = preparedTemplate;
@@ -229,6 +267,12 @@ namespace Behind_Bars.Systems.NPCs
             return TryBuildTemplate(donor, spawnables, out template);
         }
 
+        /// <summary>
+        /// Selects a native FishNet donor, preferring a plain NPC and retaining generic/employee donors only
+        /// when no plain donor exists. The returned object must be a registered prefab, not a live instance.
+        /// </summary>
+        /// <param name="spawnables">FishNet spawnable prefab collection.</param>
+        /// <returns>Preferred donor NetworkObject, or null when no native NPC donor exists.</returns>
         private static NetworkObject FindDonorPrefab(PrefabObjects spawnables)
         {
             NetworkObject employeeDonor = null;
@@ -269,6 +313,14 @@ namespace Behind_Bars.Systems.NPCs
             return genericNpcDonor ?? employeeDonor;
         }
 
+        /// <summary>
+        /// Clones a registered donor while inactive, converts employee donors to the plain native NPC surface,
+        /// initializes navigation/schedule data, registers the template, and keeps it inactive for reuse.
+        /// </summary>
+        /// <param name="donor">Registered FishNet donor prefab.</param>
+        /// <param name="spawnables">FishNet collection to update with the prepared template.</param>
+        /// <param name="template">Receives the inactive registered template when successful.</param>
+        /// <returns>True when the native template graph is prepared and registered.</returns>
         private static bool TryBuildTemplate(NetworkObject donor, PrefabObjects spawnables, out GameObject template)
         {
             template = null;
@@ -368,6 +420,9 @@ namespace Behind_Bars.Systems.NPCs
         /// parole roster management enables it at runtime, but provisioning it here keeps
         /// its network component index stable for every spawned NPC.
         /// </summary>
+        /// <param name="template">Inactive native template receiving the schedule surface.</param>
+        /// <param name="nativeNpc">Plain native NPC assigned to the action.</param>
+        /// <returns>True when the action is present and bound to the template NPC.</returns>
         private static bool EnsureCourthouseHomeScheduleSurface(GameObject template, NPC nativeNpc)
         {
             try
@@ -413,6 +468,12 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Converts an employee-derived donor into a plain native NPC surface. This intentionally destroys all
+        /// Employee components on the private template; it must never be applied to a live scene employee.
+        /// </summary>
+        /// <param name="template">Inactive template being normalized.</param>
+        /// <returns>True when no Employee component remains and a plain NPC is available.</returns>
         private static bool TryConvertEmployeeDonor(GameObject template)
         {
             try
@@ -453,6 +514,9 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Finds an exact plain native NPC component in an inactive template graph.</summary>
+        /// <param name="gameObject">Template root to search.</param>
+        /// <returns>Plain native NPC, or null when only derived/missing NPC types exist.</returns>
         private static NPC FindPlainNpc(GameObject gameObject)
         {
             if (gameObject == null)
@@ -477,6 +541,8 @@ namespace Behind_Bars.Systems.NPCs
         /// Employee prefabs can carry a worker-only agent type; its NavMeshAgent can sample the
         /// world mesh yet cannot bind to it, which leaves every cloned jail NPC off-mesh.
         /// </summary>
+        /// <param name="npcObject">Prepared template or live instance whose native movement surface is normalized.</param>
+        /// <returns>True when native movement and root agent bindings are valid.</returns>
         private static bool NormalizeNativeNavigation(GameObject npcObject)
         {
             var npc = FindPlainNpc(npcObject);
@@ -512,6 +578,12 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Adds the prepared NetworkObject to FishNet spawnables once. Registration must precede live activation
+        /// so the native network component index remains stable.
+        /// </summary>
+        /// <param name="spawnables">FishNet spawnable prefab collection.</param>
+        /// <param name="templateNetworkObject">Prepared template network object.</param>
         private static void RegisterTemplate(PrefabObjects spawnables, NetworkObject templateNetworkObject)
         {
             var count = spawnables.GetObjectCount();
@@ -528,6 +600,8 @@ namespace Behind_Bars.Systems.NPCs
             spawnables.AddObject(templateNetworkObject);
         }
 
+        /// <summary>Parents and deactivates the prepared template under its persistent non-gameplay root.</summary>
+        /// <param name="template">Prepared template to organize.</param>
         private static void OrganizeTemplate(GameObject template)
         {
             if (templateRoot == null)
@@ -540,6 +614,13 @@ namespace Behind_Bars.Systems.NPCs
             template.SetActive(false);
         }
 
+        /// <summary>
+        /// Verifies the native graph required before activation/network spawn: plain NPC, NPCData, Avatar,
+        /// Movement, Inventory, Health, Awareness, Responses, Actions, Behaviour, and root NavMeshAgent.
+        /// </summary>
+        /// <param name="npcObject">Prepared or queued NPC object to validate.</param>
+        /// <param name="diagnostic">Receives a comma-separated missing-surface report.</param>
+        /// <returns>True only when every required native surface is present.</returns>
         private static bool TryValidateNativeGraph(GameObject npcObject, out string diagnostic)
         {
             var npc = FindPlainNpc(npcObject);
@@ -565,6 +646,13 @@ namespace Behind_Bars.Systems.NPCs
             return missing.Count == 0;
         }
 
+        /// <summary>
+        /// Samples within eight world units of the requested position and warps the root agent onto the mesh.
+        /// FishNet may restore a prefab transform, so this is repeated after network spawn.
+        /// </summary>
+        /// <param name="npcObject">NPC object with a root NavMeshAgent.</param>
+        /// <param name="position">Requested world-space location.</param>
+        /// <returns>True when the root agent is enabled and on a NavMesh.</returns>
         private static bool PositionOnNavMesh(GameObject npcObject, Vector3 position)
         {
             var agent = npcObject.GetComponent<NavMeshAgent>();
@@ -593,8 +681,13 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Defers the FishNet spawn until native Awake has completed and the local server is ready.
         /// A newly activated native NPC cannot safely be spawned in the same call stack that creates
-        /// its data object: native components hydrate their references during activation.
+        /// its data object: native components hydrate their references during activation. On a client or
+        /// before a NetworkManager exists, this method intentionally leaves the object unqueued; callers may
+        /// still report activation success because the public contract is queue/validation success only.
         /// </summary>
+        /// <param name="npcObject">Activated native NPC waiting for FishNet spawn.</param>
+        /// <param name="networkObject">Registered NetworkObject on the NPC.</param>
+        /// <param name="requestedPosition">Position to restore after FishNet spawn.</param>
         private static void QueueNetworkSpawn(GameObject npcObject, NetworkObject networkObject, Vector3 requestedPosition)
         {
             var networkManager = InstanceFinder.NetworkManager;
@@ -620,6 +713,11 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Pumps queued native instances until the local FishNet server is ready, then validates and spawns each
+        /// object. The realtime timeout is bounded; failures are destroyed rather than converted to non-networked
+        /// NPCs, preserving canonical network behavior.
+        /// </summary>
         private static IEnumerator ProcessPendingNetworkSpawns()
         {
             const float nativeActivationDelay = 0.10f;
@@ -701,14 +799,24 @@ namespace Behind_Bars.Systems.NPCs
             spawnPumpCoroutine = null;
         }
 
+        /// <summary>State captured for one deferred server-side FishNet spawn.</summary>
         private sealed class PendingNetworkSpawn
         {
+            /// <summary>Live prepared NPC object awaiting spawn.</summary>
             internal GameObject NpcObject { get; }
+            /// <summary>FishNet NetworkObject that must be spawned by the local server.</summary>
             internal NetworkObject NetworkObject { get; }
+            /// <summary>Requested position reapplied after FishNet spawn.</summary>
             internal Vector3 RequestedPosition { get; }
+            /// <summary>Realtime enqueue timestamp used by the bounded timeout.</summary>
             internal float QueuedAt { get; }
+            /// <summary>Prevents repeated warnings while FishNet startup is still incomplete.</summary>
             internal bool SpawnFailureLogged { get; set; }
 
+            /// <summary>Captures a live prepared instance and its requested network-spawn position.</summary>
+            /// <param name="npcObject">Prepared NPC object.</param>
+            /// <param name="networkObject">NPC's FishNet network object.</param>
+            /// <param name="requestedPosition">Requested world-space spawn position.</param>
             internal PendingNetworkSpawn(GameObject npcObject, NetworkObject networkObject, Vector3 requestedPosition)
             {
                 NpcObject = npcObject;

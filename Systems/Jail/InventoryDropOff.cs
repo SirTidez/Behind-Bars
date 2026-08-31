@@ -24,13 +24,17 @@ using ScheduleOne.ItemFramework;
 namespace Behind_Bars.Systems.Jail
 {
     /// <summary>
-    /// Handles player inventory confiscation and jail gear assignment during booking
+    /// Legacy booking interaction that stages a simulated personal-item confiscation and
+    /// jail-gear handoff. It currently records/logs fixed item names; it does not perform
+    /// a native inventory transfer or provide a real storage container.
     /// </summary>
     public class InventoryDropOff : InteractableObject
     {
 #if !MONO
         public InventoryDropOff(System.IntPtr ptr) : base(ptr) { }
 #endif
+        // These settings describe the legacy simulation. allowedItems and the storage
+        // fields are retained for compatibility and are not authoritative inventory data.
         public bool confiscateAllItems = true;
         public List<string> allowedItems = new List<string> { "BasicClothing", "Shoes" };
         public List<string> jailGearItems = new List<string> { "PrisonUniform", "PrisonShoes" };
@@ -38,6 +42,8 @@ namespace Behind_Bars.Systems.Jail
         public Transform storageContainer;
         public int maxStorageSlots = 50;
 
+        // processingInventory gates repeat interaction while the coroutine is active;
+        // confiscatedItems is a volatile name snapshot, not a recoverable item store.
         private BookingProcess bookingProcess;
         private List<string> confiscatedItems = new List<string>();
         private bool processingInventory = false;
@@ -104,6 +110,10 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info("InventoryDropOff initialized");
         }
 
+        /// <summary>
+        /// Starts the legacy simulated inventory phase only after booking requirements are
+        /// complete. The phase marks BookingProcess inventory state after its timed effects.
+        /// </summary>
         public override void StartInteract()
         {
             if (processingInventory)
@@ -146,6 +156,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Orchestrates the legacy delay -> simulated confiscation -> simulated gear sequence
+        // and publishes completion to BookingProcess; it does not move native item stacks.
         private IEnumerator ProcessPlayerInventory(Player player)
         {
             processingInventory = true;
@@ -223,6 +235,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Current behavior intentionally records a fixed simulated list. Keep this warning
+        // adjacent to the method so future docs do not mistake the log for item removal.
         private IEnumerator ConfiscatePlayerItems(Player player)
         {
             confiscatedItems.Clear();
@@ -262,6 +276,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Logs each configured gear item and re-enables player inventory before marking the
+        // booking checkpoint; no native gear item is created by this legacy routine.
         private IEnumerator IssueJailGear(Player player)
         {
             ModLogger.Info("Issuing jail gear to player");
@@ -322,8 +338,10 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Return confiscated items on player release
+        /// Logs the simulated confiscated-item names and clears the volatile list. Despite
+        /// the legacy method name, this implementation does not restore native inventory.
         /// </summary>
+        /// <param name="player">Player associated with the simulated record.</param>
         public void ReturnPlayerItems(Player player)
         {
             try
@@ -346,6 +364,10 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Returns whether the associated BookingProcess has marked inventory processing
+        /// complete. It does not prove that native items were stored or restored.
+        /// </summary>
         public bool IsComplete()
         {
             return bookingProcess != null && bookingProcess.inventoryProcessed;

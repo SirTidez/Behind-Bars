@@ -43,9 +43,11 @@ namespace Behind_Bars.Systems.Jail
         public ScannerStation(System.IntPtr ptr) : base(ptr) { }
 #endif
 
-        // The scanner must use the player's live right-hand IK.  The old palm
-        // route renders the authored MockHand placeholder (the white rectangle
-        // seen in-game) and completes without an alignment interaction.
+        // The active scanner path poses the player, bakes a temporary right-arm snapshot, and then
+        // drives that snapshot from the drag target.  Start currently forces this value false, so
+        // the legacy palm route is retained only for compatibility and is not selected by the
+        // active interaction entry point; that route renders the authored MockHand placeholder and
+        // completes without the snapshot alignment interaction.
         public bool useNewPalmScanner = false;
 
         // InteractableObject component for IL2CPP compatibility
@@ -86,6 +88,8 @@ namespace Behind_Bars.Systems.Jail
             hasCachedInteractionState = true;
         }
 
+        // Authored scanner references.  scanTarget/ikTarget define the physical platen and hand
+        // workspace; the effect/audio references are optional presentation hooks.
         public Transform scanTarget;        // The ScanTarget in Unity hierarchy
         public Transform ikTarget;          // The IkTarget that will be draggable
         public Image scanEffect;            // The scanning effect image
@@ -121,6 +125,7 @@ namespace Behind_Bars.Systems.Jail
         public float scanDuration = 5f;     // Max 5 seconds scanning
         public float validRange = 0.08f;    // World-space fallback range around scanTarget
 
+        // Optional audio clips for scan start, success, and failure feedback.
         public AudioClip scanningSound;
         public AudioClip successSound;
         public AudioClip errorSound;
@@ -133,7 +138,8 @@ namespace Behind_Bars.Systems.Jail
         private Coroutine scanCoroutine;
         private Coroutine handScanProcessCoroutine;
 
-        // Palm scanner state
+        // Palm scanner state.  These fields belong to the retained camera/palm route; the current
+        // live-hand route keeps its own interaction state in the IK and snapshot groups below.
         private bool inScannerView = false;
         private bool isPalmScanning = false;
         private Vector3 originalPalmPosition;
@@ -141,7 +147,8 @@ namespace Behind_Bars.Systems.Jail
         private Vector3 mouseStartPos;
         private GameObject punchContainer;
 
-        // IK System
+        // IK system state.  EnterHandScanInteraction captures every value that it changes, and
+        // ExitHandScanInteraction/cleanup restores those values before releasing the input seam.
         private AvatarIKController ikController;
         private Transform originalRightHandTarget;
         private float originalRightHandRotationWeight;
@@ -213,14 +220,12 @@ namespace Behind_Bars.Systems.Jail
             SetupInteractableComponent();
             ModLogger.Debug("ScannerStation interaction setup completed");
 
-            // The booking scanner is intentionally an actual-hand minigame.
-            // Keep the legacy mock-palm route disabled so it cannot leave a
-            // placeholder mesh over the scanner.
+            // The booking scanner is intentionally driven by the player's posed right-arm snapshot.
+            // Keep the legacy mock-palm route disabled so it cannot leave a placeholder mesh over
+            // the scanner.
             useNewPalmScanner = false;
-            // The old IK path had stopped calling this setup routine.  That
-            // left interactionCamera null, so the scan never claimed the
-            // player camera and only appeared framed if the player manually
-            // stood in the correct spot.
+            // Resolve the authored scanner camera and target before the active flow claims the live
+            // player camera; without this setup the interaction cannot frame the scanner reliably.
             SetupPalmScannerComponents();
             HideLegacyPalmPlaceholder();
 
@@ -441,6 +446,11 @@ namespace Behind_Bars.Systems.Jail
             return ProjectToScannerSurface(scanTarget.position + surfaceRight * lateral + surfaceAway * foreAft);
         }
 
+        /// <summary>
+        /// Claim player movement, punch input, camera framing, HUD crosshair, and the exit listener
+        /// for the live-hand scan.  The method is idempotent while the interaction is locked and
+        /// records only the seams that it actually changes.
+        /// </summary>
         private void EnterHandScanInteraction()
         {
             if (handScanControlsLocked)
@@ -497,6 +507,11 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Wait for the live player camera to settle on the authored scanner camera transform,
+        /// bounded by the supplied unscaled-time timeout.  A timeout logs and continues with the
+        /// locked scanner frame rather than aborting the scan.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -542,6 +557,11 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Warn($"[Fingerprint Scan] Scanner camera framing did not fully settle before timeout (position-error={finalPositionError:F3}m, facing={finalFacingAlignment:F4}); continuing with authored scanner frame");
         }
 
+        /// <summary>
+        /// Release scanner-owned movement, HUD, camera, input-listener, IK, pose, viewmodel, and
+        /// snapshot state.  Repeated calls still hide the status indicator but otherwise return
+        /// without disturbing an unrelated player interaction.
+        /// </summary>
         private void ExitHandScanInteraction()
         {
             if (!handScanControlsLocked)
@@ -646,6 +666,10 @@ namespace Behind_Bars.Systems.Jail
             CancelForSceneExit();
         }
 
+        /// <summary>
+        /// Move and rotate the local player behind the scanner camera so the real right hand can
+        /// reach the platen while the torso stays out of the scanner composition.
+        /// </summary>
         private void SnapPlayerToHandScanPose()
         {
             var localPlayer = currentPlayer ?? Player.Local;
@@ -676,6 +700,9 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info($"[Fingerprint Scan] Anchored real player avatar at {posePosition} for scanner reach");
         }
 
+        /// <summary>
+        /// Lock the game's native punch-input seam for the duration of the hand scan.
+        /// </summary>
         private void DisablePunchInputForHandScan()
         {
             // The current game keeps PunchController on a different hierarchy
@@ -685,6 +712,9 @@ namespace Behind_Bars.Systems.Jail
             handScanPunchInputDisabled = true;
         }
 
+        /// <summary>
+        /// Release the native punch-input lock acquired for the hand scan.
+        /// </summary>
         private void RestorePunchInputAfterHandScan()
         {
             Behind_Bars.Harmony.HarmonyPatches.SetFingerprintScanInputLocked(false);
@@ -692,6 +722,10 @@ namespace Behind_Bars.Systems.Jail
             handScanPunchInputDisabled = false;
         }
 
+        /// <summary>
+        /// Apply the dedicated right-arm animation override to the local avatar and trigger its
+        /// pose.  Returns false when the avatar, animator, controller, or bundled clip is missing.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -740,6 +774,10 @@ namespace Behind_Bars.Systems.Jail
             return true;
         }
 
+        /// <summary>
+        /// Restore the avatar's original animator controller after a scanner pose, tolerating a
+        /// destroyed player/animator and clearing the captured pose references in all cases.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -775,6 +813,11 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Bake the local avatar's right-arm geometry into a temporary world-space snapshot aligned
+        /// to the immutable scanner frame.  Existing snapshot meshes are destroyed first; failure
+        /// to resolve the right arm or any required authored reference returns false.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -1072,6 +1115,10 @@ namespace Behind_Bars.Systems.Jail
             return true;
         }
 
+        /// <summary>
+        /// Filter a baked skinned mesh down to vertices influenced by the resolved right forearm and
+        /// hand bones, preserving the source renderer's skinning data for the temporary snapshot.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -1284,6 +1331,11 @@ namespace Behind_Bars.Systems.Jail
             return count;
         }
 
+        /// <summary>
+        /// Read source skinning weights through the active runtime API.  Mono exposes classic
+        /// <c>BoneWeight</c> data directly; IL2CPP reconstructs that shape from Unity's compact
+        /// variable-length native buffers and returns <c>null</c> when the source cannot be read.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -1357,6 +1409,11 @@ namespace Behind_Bars.Systems.Jail
 #endif
         }
 
+        /// <summary>
+        /// Build a geometric right-arm mesh from baked vertices when bone-weight filtering is not
+        /// sufficient.  The resulting mesh is a temporary snapshot-space fallback, not a replacement
+        /// for the avatar's native skinned renderer.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -1478,6 +1535,11 @@ namespace Behind_Bars.Systems.Jail
             return radialDistance <= 0.32f;
         }
 
+        /// <summary>
+        /// Animate the temporary right-arm snapshot from its captured start point onto the scanner
+        /// platen, then refresh its final placement.  A missing snapshot exits without changing
+        /// scanner state.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -1502,6 +1564,10 @@ namespace Behind_Bars.Systems.Jail
             UpdateScannerArmSnapshotPosition();
         }
 
+        /// <summary>
+        /// Follow the clamped scanner target with the temporary right-arm snapshot after its arrival
+        /// animation has finished.
+        /// </summary>
         private void UpdateScannerArmSnapshotPosition()
         {
             if (scannerArmSnapshotRoot != null && !scannerArmArrivalActive && ikTarget != null)
@@ -1510,6 +1576,9 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Show or lazily create the scanner-specific alignment status panel.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -1524,6 +1593,10 @@ namespace Behind_Bars.Systems.Jail
             scannerStatusVisible = true;
         }
 
+        /// <summary>
+        /// Create the persistent scanner alignment panel under the active HUD canvas, or return
+        /// false when the canvas/font prerequisites are unavailable.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -1578,6 +1651,10 @@ namespace Behind_Bars.Systems.Jail
             return true;
         }
 
+        /// <summary>
+        /// Resolve the active HUD canvas through the runtime-appropriate UI wrapper; unavailable or
+        /// invalid IL2CPP pointers are reported as <c>null</c>.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -1605,6 +1682,10 @@ namespace Behind_Bars.Systems.Jail
 #endif
         }
 
+        /// <summary>
+        /// Update the alignment panel's red/green state unless the success presentation has locked
+        /// it.  Repeated identical states are ignored to avoid unnecessary UI writes.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -1643,6 +1724,9 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Lock the alignment panel in its green captured state until the success animation ends.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -1668,6 +1752,9 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info("[Fingerprint Scan] Locked green completion indicator until scanner animation ends");
         }
 
+        /// <summary>
+        /// Hide the alignment panel and clear its transient/locked state for the next scan.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -1684,6 +1771,11 @@ namespace Behind_Bars.Systems.Jail
             scannerStatusLocked = false;
         }
 
+        /// <summary>
+        /// Measure the nearest current palm-to-guide distance in scanner surface space, preferring
+        /// the rendered snapshot's palm anchor and coverage and falling back to the target transform
+        /// only when no snapshot exists.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -1720,6 +1812,10 @@ namespace Behind_Bars.Systems.Jail
             return float.PositiveInfinity;
         }
 
+        /// <summary>
+        /// Measure the nearest rendered snapshot triangle center within the palm footprint around
+        /// the visible palm anchor.  Missing geometry returns positive infinity.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -1820,6 +1916,10 @@ namespace Behind_Bars.Systems.Jail
             return Vector3.Distance(point, a + ab * faceV + ac * faceW);
         }
 
+        /// <summary>
+        /// Return the configured world-space fallback range, widened to at least the current
+        /// 0.10-meter visual-guide minimum.
+        /// </summary>
         private float GetFingerprintValidRange()
         {
             // The printed hand guide is larger than the prior 8cm wrist
@@ -1828,6 +1928,11 @@ namespace Behind_Bars.Systems.Jail
             return Mathf.Max(validRange, 0.10f);
         }
 
+        /// <summary>
+        /// Validate the visible right-hand snapshot against the printed scanner guide, falling back
+        /// to the world-space alignment test only when no snapshot exists.  Outputs describe the
+        /// current measured distance and presentation-space source used by the status UI.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -1879,6 +1984,11 @@ namespace Behind_Bars.Systems.Jail
             return distance <= validDistance;
         }
 
+        /// <summary>
+        /// Measure normalized viewport distance between the rendered right-arm guide point and the
+        /// rendered palm anchor.  An unavailable snapshot, target, camera, or behind-camera target
+        /// yields positive infinity so the caller rejects alignment.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -2209,6 +2319,10 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info($"[Fingerprint Scan] Snapshot render diagnostic: layer={scannerArmSnapshotRoot.layer}, camera-sees-layer={layerVisible}, enabled={meshRenderer.enabled}, bounds-viewport=({viewport.x:F2}, {viewport.y:F2}, {viewport.z:F2}), target-viewport=({targetViewport.x:F2}, {targetViewport.y:F2}, {targetViewport.z:F2}), palm-viewport=({palmViewport.x:F2}, {palmViewport.y:F2}, {palmViewport.z:F2}), bounds={meshRenderer.bounds.size}{authoredCameraDiagnostic}");
         }
 
+        /// <summary>
+        /// Destroy the temporary right-arm snapshot and its meshes, then clear arrival and display
+        /// offsets so the next scanner entry starts from a clean frame.
+        /// </summary>
         private void RestoreScannerArmSnapshot()
         {
             if (scannerArmSnapshotRoot != null)
@@ -2449,6 +2563,11 @@ namespace Behind_Bars.Systems.Jail
             return plane.ClosestPointOnPlane(position);
         }
 
+        /// <summary>
+        /// Show the native first-person viewmodel and isolate it to a right-arm mesh for the scan.
+        /// The authored parent/orientation and camera culling mask are captured before changes; a
+        /// failed isolation hides the viewmodel again instead of exposing the full body.
+        /// </summary>
         private void ShowNativeViewmodelHands()
         {
             if (!Singleton<ViewmodelAvatar>.InstanceExists)
@@ -2515,6 +2634,10 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info($"[Fingerprint Scan] Showing native first-person hand viewmodel (controller={controllerName})");
         }
 
+        /// <summary>
+        /// Restore native viewmodel meshes, visibility, parent/offset/orientation, and the captured
+        /// player-camera culling mask after the scanner interaction.
+        /// </summary>
         private void RestoreNativeViewmodelHands()
         {
             if (handScanViewmodelAvatar != null)
@@ -2544,6 +2667,11 @@ namespace Behind_Bars.Systems.Jail
             handScanCameraCullingMaskCaptured = false;
         }
 
+        /// <summary>
+        /// Replace each available native viewmodel skinned mesh with a temporary right-arm-only
+        /// mesh.  Returns false when no renderer yields a usable arm mesh and restores any partial
+        /// substitutions before returning.
+        /// </summary>
         private bool FilterNativeViewmodelToRightArm()
         {
             RestoreNativeViewmodelMeshes();
@@ -2592,6 +2720,10 @@ namespace Behind_Bars.Systems.Jail
             return true;
         }
 
+        /// <summary>
+        /// Build a temporary native-viewmodel mesh containing triangles with sufficient influence
+        /// from right shoulder/arm/forearm/hand bones, preserving the source skinning layout.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -2702,6 +2834,10 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>
+        /// Restore all native viewmodel renderer meshes captured by the filtering pass and destroy
+        /// the temporary right-arm meshes.
+        /// </summary>
         private void RestoreNativeViewmodelMeshes()
         {
             for (int i = 0; i < handScanBodyRenderers.Count; i++)
@@ -2724,6 +2860,11 @@ namespace Behind_Bars.Systems.Jail
             handScanRightArmMeshes.Clear();
         }
 
+        /// <summary>
+        /// Start the scanner flow when no scan is already active and the booking is incomplete.  The
+        /// current route enters the camera/pose/snapshot coroutine directly; retained live-IK and
+        /// legacy palm helpers are not selected here.
+        /// </summary>
         private void OnInteractStart()
         {
             if (isScanning || isPalmScanning)
@@ -2753,6 +2894,9 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        // Legacy animation-only palm route retained for compatibility with older station prefabs.
+        // The current OnInteractStart path starts StartScanProcess instead, so this helper is not
+        // part of the live scanner interaction and does not provide the current drag/alignment UI.
         private void StartSimplePalmScan()
         {
             ModLogger.Info("Starting palm scan with camera lock");
@@ -3153,6 +3297,12 @@ namespace Behind_Bars.Systems.Jail
 #endif
         }
 
+        /// <summary>
+        /// Run the current scanner lifecycle: settle the camera, pose and bake the player's right
+        /// arm, animate the temporary snapshot, accept 2D drag input, and clean up on completion,
+        /// failure, cancellation, or scene teardown.  The snapshot is what moves during the active
+        /// scan; SetupHandIK and native-viewmodel helpers are retained but not called from this path.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -3280,6 +3430,11 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info("Fingerprint scan process completed");
         }
 
+        /// <summary>
+        /// Bind the player's body-avatar right-hand solver to the scanner target and capture the
+        /// original solver values for cleanup.  This helper is retained for the direct-IK route but
+        /// the current StartScanProcess path uses a baked snapshot and does not call it.
+        /// </summary>
         private bool SetupHandIK(Player player)
         {
             try
@@ -3509,6 +3664,10 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Restore the captured body-avatar right-hand solver target, rotation, weights, and IK
+        /// activation state.  It is a no-op unless SetupHandIK previously activated the solver.
+        /// </summary>
         private void CleanupHandIK()
         {
             try
@@ -3534,6 +3693,11 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Convert free-cursor movement into a clamped two-dimensional scanner-surface target and
+        /// return whether the target moved.  Pointer input cannot change the target's platen height
+        /// or normal-axis position.
+        /// </summary>
         private bool HandleMouseDrag()
         {
             // The free cursor drives the live-hand IK target on the scanner plane.
@@ -3605,6 +3769,11 @@ namespace Behind_Bars.Systems.Jail
             return false;
         }
 
+        /// <summary>
+        /// Count down the scan duration while repeatedly validating the displayed palm snapshot.
+        /// Alignment starts the visual scan and consumes time at double speed; losing alignment
+        /// pauses the visual scan but continues the timer until success or expiry.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -3736,6 +3905,10 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Stop scan presentation, play success feedback, mark the booking fingerprint complete,
+        /// and leave the outer scan coroutine to restore interaction state.
+        /// </summary>
         private void CompleteScan()
         {
             ModLogger.Info("Fingerprint scan completed successfully!");
@@ -3769,6 +3942,10 @@ namespace Behind_Bars.Systems.Jail
             isScanning = false;
         }
 
+        /// <summary>
+        /// Stop scan presentation, play failure feedback, and leave the booking fingerprint
+        /// incomplete so the station can be tried again.
+        /// </summary>
         private void FailScan()
         {
             ModLogger.Info("Fingerprint scan failed - time expired or hand not in position");
@@ -3796,6 +3973,10 @@ namespace Behind_Bars.Systems.Jail
             isScanning = false;
         }
 
+        /// <summary>
+        /// Return the booking process's fingerprint-complete flag, or false when no booking process
+        /// is currently available.
+        /// </summary>
         public bool IsComplete()
         {
             return bookingProcess != null && bookingProcess.fingerprintComplete;
@@ -3818,7 +3999,9 @@ namespace Behind_Bars.Systems.Jail
                 }
             }
 
-            // Palm scanner no longer requires dragging - it just plays animation and completes
+            // Active scans use the free-cursor drag/alignment loop in StartScanProcess.  This Update
+            // method only refreshes the idle interaction prompt; the retained legacy palm helpers
+            // are not invoked here.
         }
 
         private void SetupIkTargetVisualizer()
@@ -3985,12 +4168,9 @@ namespace Behind_Bars.Systems.Jail
         {
             if (palmModel == null || interactionCamera == null) return;
 
-            // TODO: Palm scanner plane positioning needs refinement
-            // The palm should follow the cursor on the correct scanning plane for proper interaction.
-            // Current implementation may need adjustments to:
-            // - Better align with scanner surface orientation
-            // - Handle different camera angles
-            // - Improve depth calculation accuracy
+            // Legacy palm-route positioning.  The current StartScanProcess path uses the scanner
+            // surface frame and temporary right-arm snapshot instead; this helper remains for older
+            // prefabs and retains its camera-perpendicular plane/depth approximation.
 
             // Always update palm position to follow cursor directly (no drag requirement)
             Vector3 mousePos = Input.mousePosition;

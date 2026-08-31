@@ -10,11 +10,24 @@ namespace Behind_Bars.Utils
     /// Manual setup helper for adding DoorTriggerHandler to specific door triggers by name
     /// Use this in-game to add the script to your existing trigger colliders
     /// </summary>
+    /// <remarks>
+    /// Name-based operations mutate active scene objects and do not provide an
+    /// undo path. Lookups are exact and use Unity's active-object search unless
+    /// otherwise noted; existing handlers are generally left as-is.
+    /// </remarks>
     public static class ManualDoorTriggerSetup
     {
         /// <summary>
         /// Find and setup a specific door trigger by its GameObject name
         /// </summary>
+        /// <param name="triggerName">The exact active-scene GameObject name to find.</param>
+        /// <param name="doorName">Optional exact jail-door name to associate manually.</param>
+        /// <returns><c>true</c> when the trigger exists and already has or receives
+        /// a handler; otherwise <c>false</c>.</returns>
+        /// <remarks>Requires an active trigger collider. If a handler already
+        /// exists, the method returns true without changing its association or
+        /// auto-detection setting. A requested door that cannot be found falls
+        /// back to auto-detection on a newly added handler.</remarks>
         public static bool SetupDoorTriggerByName(string triggerName, string doorName = null)
         {
             ModLogger.Info($"Looking for door trigger: {triggerName}");
@@ -74,6 +87,10 @@ namespace Behind_Bars.Utils
         /// <summary>
         /// Setup the specific jail door triggers under PatrolPoints
         /// </summary>
+        /// <remarks>Looks up the active object named <c>PatrolPoints</c>, then
+        /// uses direct child paths and three fixed trigger/door-name mappings.
+        /// It adds handlers only where missing; existing handlers are counted
+        /// as already configured and are not re-associated.</remarks>
         public static void SetupJailDoorTriggers()
         {
             ModLogger.Info("=== SETTING UP JAIL DOOR TRIGGERS ===");
@@ -124,6 +141,13 @@ namespace Behind_Bars.Utils
         /// <summary>
         /// Setup a specific trigger GameObject with door association
         /// </summary>
+        /// <param name="triggerGO">The trigger GameObject to validate and mutate.</param>
+        /// <param name="doorName">The exact jail-door name to associate, with auto-detection as fallback.</param>
+        /// <returns><c>true</c> when the object has or receives a handler;
+        /// otherwise <c>false</c>.</returns>
+        /// <remarks>An existing handler returns true without changing it. A new
+        /// handler receives a manual association only when the door lookup
+        /// succeeds; otherwise auto-detection is enabled.</remarks>
         private static bool SetupSpecificTrigger(GameObject triggerGO, string doorName)
         {
             if (triggerGO == null) return false;
@@ -169,6 +193,10 @@ namespace Behind_Bars.Utils
         /// <summary>
         /// Find all GameObjects with "DoorTrigger" in their name and set them up
         /// </summary>
+        /// <remarks>Scans active scene GameObjects only, matches names containing
+        /// <c>Trigger</c> case-sensitively in either of the two explicit forms,
+        /// and adds auto-detecting handlers to trigger colliders that lack one.
+        /// It does not associate a discovered door or revisit existing handlers.</remarks>
         public static void SetupAllDoorTriggersInScene()
         {
             ModLogger.Info("=== FINDING ALL DOOR TRIGGERS IN SCENE ===");
@@ -208,6 +236,12 @@ namespace Behind_Bars.Utils
         /// <summary>
         /// Find a JailDoor by name
         /// </summary>
+        /// <param name="doorName">The exact <see cref="JailDoor.doorName"/> to find.</param>
+        /// <returns>The first matching configured booking, holding-cell, or jail-cell door;
+        /// otherwise <c>null</c>.</returns>
+        /// <remarks>Searches through <see cref="Core.JailController"/> only and
+        /// returns null when no active jail controller or matching reference is
+        /// available.</remarks>
         private static JailDoor FindDoorByName(string doorName)
         {
             var jailController = Core.JailController;
@@ -254,6 +288,9 @@ namespace Behind_Bars.Utils
         /// <summary>
         /// Debug method to list all potential door triggers in the scene
         /// </summary>
+        /// <remarks>Read-only diagnostic: scans active GameObjects, logs every
+        /// trigger collider and whether a handler is present, and performs no
+        /// component mutation.</remarks>
         public static void ListAllPotentialDoorTriggers()
         {
             ModLogger.Info("=== LISTING ALL POTENTIAL DOOR TRIGGERS ===");

@@ -28,64 +28,102 @@ namespace Behind_Bars.Systems.NPCs
         public InmateBehavior(System.IntPtr ptr) : base(ptr) { }
 #endif
 
-        // Movement parameters
+        // Movement parameters are expressed in Unity world units and seconds.
+        /// <summary>Base NavMesh speed for temporary and scheduled inmate movement, in world units per second.</summary>
         private float moveSpeed = 1.5f; // Slow wandering speed
+        /// <summary>Lower bound for post-arrival idle time, in Unity seconds.</summary>
         private float minWaitTime = 2f;
+        /// <summary>Upper bound for post-arrival idle time, in Unity seconds.</summary>
         private float maxWaitTime = 8f;
+        /// <summary>Minimum candidate displacement accepted for a movement request, in world units.</summary>
         private float minMoveDistance = 0.5f;
+        /// <summary>Maximum local candidate displacement used by temporary wandering, in world units.</summary>
         private float maxMoveDistance = 2.5f;
 
         // Cell ownership/home bounds. These are intentionally not used to
         // constrain temporary wandering: the prison NavMesh does not align
         // exactly with individual cell colliders.
+        /// <summary>Resolved bounds used only for editor visualization and cell ownership diagnostics.</summary>
         private Bounds cellBounds;
+        /// <summary>Assigned jail-cell index, or -1 until a canonical inmate assignment is available.</summary>
         private int assignedCellNumber = -1;
+        /// <summary>Whether a real or approximate cell bounds volume was resolved.</summary>
         private bool hasCellBounds = false;
 
         // Movement state
+        /// <summary>Native agent used by both scheduled recreation and return-to-cell movement.</summary>
         private NavMeshAgent navAgent;
+        /// <summary>Reusable path object used to reject incomplete routes before assignment.</summary>
         private NavMeshPath reusablePath;
 #if !MONO
+        /// <summary>IL2CPP-compatible reusable corner buffer for path completeness checks.</summary>
         private readonly Il2CppStructArray<Vector3> reusablePathCorners = new Il2CppStructArray<Vector3>(2);
 #else
+        /// <summary>MONO reusable corner buffer for path completeness checks.</summary>
         private readonly Vector3[] reusablePathCorners = new Vector3[2];
 #endif
+        /// <summary>Destination for which <see cref="reusablePath"/> was most recently validated.</summary>
         private Vector3 validatedPathDestination;
+        /// <summary>True only between successful path validation and the matching path assignment.</summary>
         private bool hasValidatedPath;
+        /// <summary>Whether the scheduler currently owns an active movement request.</summary>
         private bool isMoving = false;
+        /// <summary>Next Unity-time at which a non-moving inmate may select a destination.</summary>
         private float nextMoveTime = 0f;
+        /// <summary>Last destination assigned to the NavMesh agent for diagnostics and gizmos.</summary>
         private Vector3 currentDestination;
+        /// <summary>Next Unity-time at which a repeated NavMesh warning may be emitted.</summary>
         private float nextNavMeshDiagnosticTime = 0f;
 
+        /// <summary>Activity selected by the jail lifecycle for this inmate's current custody schedule.</summary>
         private enum ScheduledActivity
         {
+            /// <summary>Startup-safe movement used until a daily schedule selects another activity.</summary>
             TemporaryWander,
+            /// <summary>Movement constrained to the active recreation anchors.</summary>
             Recreation,
+            /// <summary>One-way movement toward the assigned cell before confinement.</summary>
             ReturningToCell,
+            /// <summary>Stationary state after the assigned-cell return completes.</summary>
             Confined
         }
 
+        /// <summary>Current lifecycle-selected activity; initialized to the startup-safe temporary mode.</summary>
         private ScheduledActivity scheduledActivity = ScheduledActivity.TemporaryWander;
+        /// <summary>Filtered, live recreation anchors supplied by the jail lifecycle.</summary>
         private readonly List<Transform> scheduledRecreationAnchors = new List<Transform>();
 
         // Animation variations
+        /// <summary>Legacy variation seed retained for compatibility; current movement code does not consume it.</summary>
         private float animationVariation = 0f;
+        /// <summary>Whether post-arrival timing uses the shorter pacing profile.</summary>
         private bool isPacing = false;
+        /// <summary>Legacy pacing direction retained for compatibility; current movement does not consume it.</summary>
         private int paceDirection = 1;
 
         // References
+        /// <summary>Native NPC component resolved for the inmate object.</summary>
         private NPC npcComponent;
+        /// <summary>Native prisoner component supplying the assigned cell index.</summary>
         private PrisonInmate inmateComponent;
+        /// <summary>Opaque global handle for the scheduled movement coroutine.</summary>
         private Coroutine inmateBehaviorCoroutine;
+        /// <summary>Opaque global handle for the optional look-around coroutine.</summary>
         private Coroutine lookAroundCoroutine;
+        /// <summary>Stops global Melon coroutines from touching a disabled/destroyed native inmate.</summary>
         private bool isShuttingDown;
 
+        /// <summary>Initializes the inmate and starts its global scheduled movement loop.</summary>
         void Start()
         {
             isShuttingDown = false;
             Initialize();
         }
 
+        /// <summary>
+        /// Resolves native components, configures the NavMesh agent, loads the assigned cell, and starts the
+        /// scheduler. The native agent must be on a NavMesh before the global coroutine is allowed to move it.
+        /// </summary>
         void Initialize()
         {
             // Get components
@@ -133,6 +171,11 @@ namespace Behind_Bars.Systems.NPCs
             inmateBehaviorCoroutine = MelonCoroutines.Start(InmateWanderBehavior()) as Coroutine;
         }
 
+        /// <summary>
+        /// Resolves cell bounds from authored colliders, falling back to an approximate cell volume only for
+        /// diagnostics. Cell bounds do not constrain temporary wandering because jail NavMesh/collider edges
+        /// are not guaranteed to align.
+        /// </summary>
         void InitializeCellBounds()
         {
             if (assignedCellNumber < 0)
@@ -188,6 +231,11 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Runs the global scheduled movement loop. Recreation and cell-return activities use supplied
+        /// authored anchors/cell points, while temporary wandering is only the startup-safe fallback; every
+        /// candidate must pass NavMesh placement and complete-path validation before assignment.
+        /// </summary>
         private IEnumerator InmateWanderBehavior()
         {
             yield return new WaitForSeconds(UnityEngine.Random.Range(0.5f, 2f)); // Initial random delay
@@ -282,8 +330,16 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        // Removed - no longer needed with simple movement
+        // Legacy point-validation helpers remain below for compatibility; the active scheduler uses the
+        // complete-path validation seam instead.
 
+        /// <summary>
+        /// Selects a temporary jail-local destination from authored patrol anchors or a local fallback sample.
+        /// The fallback remains constrained to a complete jail NavMesh path and is not a substitute for a
+        /// lifecycle-selected recreation/cell schedule.
+        /// </summary>
+        /// <param name="destination">Receives a reachable sampled destination when successful.</param>
+        /// <returns>True when a complete-path candidate was found.</returns>
         private bool TryGetTemporaryJailWanderDestination(out Vector3 destination)
         {
             destination = Vector3.zero;
@@ -347,6 +403,12 @@ namespace Behind_Bars.Systems.NPCs
             return false;
         }
 
+        /// <summary>
+        /// Selects a sampled destination around one of the lifecycle-provided recreation anchors and rejects
+        /// candidates that are too close or lack a complete NavMesh path.
+        /// </summary>
+        /// <param name="destination">Receives a reachable recreation destination when successful.</param>
+        /// <returns>True when a complete-path recreation candidate was found.</returns>
         private bool TryGetScheduledRecreationDestination(out Vector3 destination)
         {
             destination = Vector3.zero;
@@ -380,6 +442,12 @@ namespace Behind_Bars.Systems.NPCs
             return false;
         }
 
+        /// <summary>
+        /// Selects the first complete-path cell return target, preferring authored spawn points over cell
+        /// bounds and finally the cell transform.
+        /// </summary>
+        /// <param name="destination">Receives a reachable assigned-cell destination when successful.</param>
+        /// <returns>True when an assigned-cell candidate has a complete path.</returns>
         private bool TryGetCellReturnDestination(out Vector3 destination)
         {
             destination = Vector3.zero;
@@ -429,6 +497,11 @@ namespace Behind_Bars.Systems.NPCs
             return false;
         }
 
+        /// <summary>
+        /// Ensures the agent is enabled and on a NavMesh, warping to a nearby sampled point when native spawn
+        /// placement left it off-mesh. It does not invent a destination or alter the assigned activity.
+        /// </summary>
+        /// <returns>True when the agent can safely calculate/receive a path.</returns>
         private bool EnsureAgentOnNavMesh()
         {
             if (navAgent == null)
@@ -456,6 +529,12 @@ namespace Behind_Bars.Systems.NPCs
             return false;
         }
 
+        /// <summary>
+        /// Calculates a complete path into the reusable path buffer and records the exact destination for a
+        /// subsequent <see cref="TrySetValidatedWanderDestination"/> call. A path is not assigned here.
+        /// </summary>
+        /// <param name="destination">Candidate destination to validate.</param>
+        /// <returns>True only when the agent is on-mesh and a complete path with at least two corners exists.</returns>
         private bool HasCompletePathTo(Vector3 destination)
         {
             hasValidatedPath = false;
@@ -481,6 +560,12 @@ namespace Behind_Bars.Systems.NPCs
             return true;
         }
 
+        /// <summary>
+        /// Legacy convenience wrapper that validates and immediately assigns a temporary movement path.
+        /// Active scheduled movement uses the explicit two-phase validation methods instead.
+        /// </summary>
+        /// <param name="destination">Candidate destination to validate and assign.</param>
+        /// <returns>True when the path was validated and assigned.</returns>
         private bool TrySetWanderDestination(Vector3 destination)
         {
             if (!HasCompletePathTo(destination))
@@ -491,6 +576,12 @@ namespace Behind_Bars.Systems.NPCs
             return TrySetValidatedWanderDestination(destination);
         }
 
+        /// <summary>
+        /// Assigns the previously validated reusable path only when the destination and agent state still
+        /// match. Clearing <see cref="hasValidatedPath"/> after the attempt prevents stale-path reuse.
+        /// </summary>
+        /// <param name="destination">Destination that must match the validated path.</param>
+        /// <returns>True when the reusable path was assigned to the agent.</returns>
         private bool TrySetValidatedWanderDestination(Vector3 destination)
         {
             if (!hasValidatedPath || navAgent == null || !navAgent.enabled || !navAgent.isOnNavMesh ||
@@ -505,6 +596,8 @@ namespace Behind_Bars.Systems.NPCs
             return pathAssigned;
         }
 
+        /// <summary>Rate-limits diagnostic warnings for failed placement/path selection.</summary>
+        /// <param name="reason">Short explanation of the current navigation failure.</param>
         private void LogNavMeshDiagnostic(string reason)
         {
             if (Time.time < nextNavMeshDiagnosticTime)
@@ -518,6 +611,12 @@ namespace Behind_Bars.Systems.NPCs
                 $"Position={transform.position}, AgentEnabled={navAgent?.enabled}, OnNavMesh={navAgent?.isOnNavMesh}, Cell={assignedCellNumber}");
         }
 
+        /// <summary>
+        /// Legacy cell-bounds/NavMesh point check retained for compatibility. It is not used by the active
+        /// scheduled movement loop, which requires a complete path instead of bounds membership alone.
+        /// </summary>
+        /// <param name="point">World-space point to inspect.</param>
+        /// <returns>True when the point is inside resolved bounds and samples onto any NavMesh area.</returns>
         bool IsPointValid(Vector3 point)
         {
             // Check if point is within cell bounds
@@ -536,6 +635,11 @@ namespace Behind_Bars.Systems.NPCs
             return false;
         }
 
+        /// <summary>
+        /// Legacy destination setter retained for compatibility. The active scheduler uses validated path
+        /// assignment directly so callers cannot accidentally bypass its destination invariant.
+        /// </summary>
+        /// <param name="destination">Destination to validate and assign.</param>
         void SetDestination(Vector3 destination)
         {
             if (TrySetWanderDestination(destination))
@@ -548,6 +652,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Completes the current scheduler movement. Cell-return transitions to permanent confinement; other
+        /// activities perform an idle action and schedule the next movement window.
+        /// </summary>
         void OnReachedDestination()
         {
             isMoving = false;
@@ -584,6 +692,7 @@ namespace Behind_Bars.Systems.NPCs
             nextMoveTime = Time.time + waitTime;
         }
 
+        /// <summary>Performs an optional look-around or random facing action after scheduled movement stops.</summary>
         void PerformIdleAction()
         {
             if (isShuttingDown)
@@ -609,6 +718,10 @@ namespace Behind_Bars.Systems.NPCs
             // Otherwise just stand
         }
 
+        /// <summary>
+        /// Runs the optional left/right/return rotation sequence and clears its global coroutine handle on
+        /// completion or shutdown.
+        /// </summary>
         IEnumerator LookAround()
         {
             if (isShuttingDown)
@@ -673,6 +786,7 @@ namespace Behind_Bars.Systems.NPCs
             lookAroundCoroutine = null;
         }
 
+        /// <summary>Draws resolved cell bounds and the active scheduler destination in the Unity editor.</summary>
         void OnDrawGizmosSelected()
         {
             if (hasCellBounds)
@@ -691,11 +805,13 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Stops global movement/look coroutines before a pooled inmate is disabled.</summary>
         void OnDisable()
         {
             StopBehaviorCoroutines();
         }
 
+        /// <summary>Stops global movement/look coroutines before the native inmate object is destroyed.</summary>
         void OnDestroy()
         {
             StopBehaviorCoroutines();
@@ -704,6 +820,10 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
 #endif
+        /// <summary>
+        /// Marks this behavior shutting down, stops both opaque Melon coroutine handles, and clears any
+        /// component-owned Unity coroutines so scene unload cannot resume stale inmate work.
+        /// </summary>
         private void StopBehaviorCoroutines()
         {
             isShuttingDown = true;
@@ -723,17 +843,23 @@ namespace Behind_Bars.Systems.NPCs
             StopAllCoroutines();
         }
 
+        /// <summary>Updates the assigned cell index and re-resolves its diagnostic bounds.</summary>
+        /// <param name="cellNumber">Assigned jail-cell index, or a negative value when unassigned.</param>
         public void SetCellNumber(int cellNumber)
         {
             assignedCellNumber = cellNumber;
             InitializeCellBounds();
         }
 
+        /// <summary>Chooses the shorter post-arrival wait profile when true.</summary>
+        /// <param name="shouldPace">Whether this inmate should use pacing timing.</param>
         public void SetPacingBehavior(bool shouldPace)
         {
             isPacing = shouldPace;
         }
 
+        /// <summary>Clamps and applies the inmate NavMesh speed in world units per second.</summary>
+        /// <param name="speed">Requested movement speed; accepted range is 0.5 to 3 world units per second.</param>
         public void SetMovementSpeed(float speed)
         {
             moveSpeed = Mathf.Clamp(speed, 0.5f, 3f);
@@ -746,6 +872,12 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
 #endif
+        /// <summary>
+        /// Replaces recreation anchors, switches the scheduler to recreation, and clears the current path.
+        /// Null anchors are filtered; this method is hidden from IL2CPP because the generic list is an internal
+        /// lifecycle bridge rather than an injected public surface.
+        /// </summary>
+        /// <param name="recreationAnchors">Candidate recreation anchors supplied by the jail lifecycle.</param>
         public void BeginScheduledRecreation(List<Transform> recreationAnchors)
         {
             scheduledRecreationAnchors.Clear();
@@ -769,6 +901,7 @@ namespace Behind_Bars.Systems.NPCs
             nextMoveTime = Time.time + UnityEngine.Random.Range(0.2f, 1.5f);
         }
 
+        /// <summary>Clears recreation anchors and schedules a complete-path return to the assigned cell.</summary>
         public void ReturnToAssignedCell()
         {
             scheduledActivity = ScheduledActivity.ReturningToCell;
@@ -781,11 +914,16 @@ namespace Behind_Bars.Systems.NPCs
             nextMoveTime = Time.time;
         }
 
+        /// <summary>Returns the assigned jail-cell index, or -1 when no assignment is known.</summary>
         public int GetAssignedCellNumber()
         {
             return assignedCellNumber;
         }
 
+        /// <summary>
+        /// Reports confinement only after the return-to-cell state has completed and the inmate remains within
+        /// 3.5 world units of the assigned cell bounds/transform.
+        /// </summary>
         public bool IsConfinedToAssignedCell()
         {
             if (scheduledActivity != ScheduledActivity.Confined)

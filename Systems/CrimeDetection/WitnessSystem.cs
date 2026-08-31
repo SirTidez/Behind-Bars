@@ -32,17 +32,26 @@ namespace Behind_Bars.Systems.CrimeDetection
     /// </summary>
     public class WitnessSystem
     {
+        // Keys are native NPC IDs. The references and their crime lists are scene-local;
+        // ResetSceneRuntimeState clears them before a newly loaded save can reuse an ID.
         private Dictionary<string, WitnessState> _witnesses = new Dictionary<string, WitnessState>();
+
+        // Delayed Melon coroutines capture this generation. Incrementing it invalidates work
+        // scheduled by an earlier Main scene without requiring unsafe coroutine enumeration.
         private int _sceneGeneration;
 
+        /// <summary>Creates an empty, scene-local witness state store.</summary>
         public WitnessSystem()
         {
             ModLogger.Info("Witness system initialized");
         }
 
         /// <summary>
-        /// Called when an NPC witnesses a crime
+        /// Records an NPC's observation and dispatches the appropriate police/civilian response.
         /// </summary>
+        /// <param name="witness">NPC that observed the crime.</param>
+        /// <param name="crime">Local crime instance being observed.</param>
+        /// <param name="perpetrator">Player attributed with the crime.</param>
         public void NPCWitnessesCrime(NPC witness, CrimeInstance crime, Player perpetrator)
         {
             if (witness == null || crime == null || perpetrator == null)
@@ -50,6 +59,9 @@ namespace Behind_Bars.Systems.CrimeDetection
 
             ModLogger.Info($"NPC {witness.name} witnessed crime: {crime.GetCrimeName()}");
 
+            // State is keyed by the native witness ID. A blank/duplicate ID therefore
+            // shares one state under the current implementation; native IDs are expected
+            // to be populated by the game.
             // Create or update witness state
             string witnessId = witness.ID;
             if (!_witnesses.ContainsKey(witnessId))
@@ -84,7 +96,8 @@ namespace Behind_Bars.Systems.CrimeDetection
         {
             ModLogger.Info($"Police officer {police.name} witnessed {crime.GetCrimeName()} - initiating immediate pursuit");
 
-            // Police respond immediately
+            // The diagnostic message uses "pursuit" broadly; current behavior sends serious
+            // crimes to foot pursuit while minor crimes use the native body-search response.
             if (crime.Severity >= 2.0f) // Serious crimes
             {
                 NetworkHelper.TryBeginFootPursuit(police, perpetrator);
@@ -229,6 +242,9 @@ namespace Behind_Bars.Systems.CrimeDetection
 
         private static void TrySetPanicked(NPC witness)
         {
+            // SetPanicked is not exposed consistently across runtime/API shapes. Reflection is
+            // intentionally best-effort: failure affects presentation only, not witness memory
+            // or the delayed police-call contract.
             if (witness == null)
             {
                 return;
@@ -250,6 +266,9 @@ namespace Behind_Bars.Systems.CrimeDetection
         /// </summary>
         private void SchedulePoliceCall(NPC witness, CrimeInstance crime, Player perpetrator, float delay)
         {
+            // delay is a Unity WaitForSeconds duration (seconds), while the captured
+            // crime timestamp remains game-clock minutes. The generation token is the
+            // cancellation mechanism for scene transitions.
             ModLogger.Info($"Scheduling police call from {witness.name} in {delay} seconds");
 
             MelonCoroutines.Start(DelayedPoliceCall(witness, crime, perpetrator, delay, _sceneGeneration));
@@ -262,6 +281,9 @@ namespace Behind_Bars.Systems.CrimeDetection
         {
             yield return new WaitForSeconds(delay);
 
+            // Validate in order from cheapest/lifecycle checks to game-state checks before
+            // touching LawManager. A crime with no native object reaches the final guard
+            // and is intentionally logged but not mirrored into native law.
             // Melon coroutines are process-owned. A stale witness must never reach into
             // a newly loaded save after the scene that scheduled it has gone away.
             if (generation != _sceneGeneration || !Core.IsGameplaySceneActive)
@@ -323,6 +345,8 @@ namespace Behind_Bars.Systems.CrimeDetection
 
         private bool ShouldSuppressPoliceCall(Player perpetrator)
         {
+            // A delayed civilian call must not re-enter the native law system after arrest or
+            // jail intake has already taken ownership of the incident.
             if (perpetrator == null)
             {
                 return true;
@@ -340,12 +364,18 @@ namespace Behind_Bars.Systems.CrimeDetection
             }
             catch
             {
+                // Current failure policy is fail-open when the jail tracker cannot be
+                // resolved; the caller may proceed unless the native IsArrested flag says
+                // otherwise.
                 return false;
             }
         }
 
         private bool ShouldSkipDuplicatePoliceCall(Player perpetrator, CrimeInstance crimeInstance)
         {
+            // Native pursuit state is treated as evidence that the offense is already active.
+            // Otherwise compare both native type/display name and the assault-family alias so
+            // differently represented assault charges cannot schedule duplicate calls.
             if (perpetrator == null || crimeInstance == null || crimeInstance.Crime == null)
             {
                 return false;
@@ -399,10 +429,13 @@ namespace Behind_Bars.Systems.CrimeDetection
         }
 
         /// <summary>
-        /// Mark a witness as intimidated (attacked after witnessing a crime)
+        /// Marks an already tracked witness as intimidated.
         /// </summary>
+        /// <param name="witnessId">Native witness identifier.</param>
         public void MarkWitnessIntimidated(string witnessId)
         {
+            // Intimidation does not create witness state. It only changes the delayed-call
+            // odds for an NPC that has already observed at least one crime.
             if (_witnesses.ContainsKey(witnessId))
             {
                 _witnesses[witnessId].WasIntimidated = true;
@@ -411,16 +444,20 @@ namespace Behind_Bars.Systems.CrimeDetection
         }
 
         /// <summary>
-        /// Check if an NPC has witnessed any crimes
+        /// Checks whether a tracked witness has at least one observed crime.
         /// </summary>
+        /// <param name="witnessId">Native witness identifier.</param>
+        /// <returns>True when a witness state exists with a non-empty crime list.</returns>
         public bool HasWitnessedCrimes(string witnessId)
         {
             return _witnesses.ContainsKey(witnessId) && _witnesses[witnessId].WitnessedCrimes.Count > 0;
         }
 
         /// <summary>
-        /// Get all crimes witnessed by a specific NPC
+        /// Gets a detached list of crimes witnessed by a specific NPC.
         /// </summary>
+        /// <param name="witnessId">Native witness identifier.</param>
+        /// <returns>A copied list, or an empty list when no state exists.</returns>
         public List<CrimeInstance> GetWitnessedCrimes(string witnessId)
         {
             if (_witnesses.ContainsKey(witnessId))
@@ -436,6 +473,8 @@ namespace Behind_Bars.Systems.CrimeDetection
         /// </summary>
         public void ResetSceneRuntimeState()
         {
+            // Existing coroutines are not enumerated or stopped; incrementing the token
+            // makes each one self-cancel after its wait, while clearing references now.
             _sceneGeneration++;
             _witnesses.Clear();
         }
@@ -446,19 +485,37 @@ namespace Behind_Bars.Systems.CrimeDetection
     /// </summary>
     public class WitnessState
     {
+        /// <summary>Gets or sets the scene NPC represented by this witness state.</summary>
         public NPC Witness { get; set; }
+
+        /// <summary>Gets or sets the unique local crime instances observed by the witness.</summary>
         public List<CrimeInstance> WitnessedCrimes { get; set; } = new List<CrimeInstance>();
+
+        /// <summary>Gets or sets whether this witness has identified the perpetrator.</summary>
         public bool HasSeenPerpetrator { get; set; } = false;
+
+        /// <summary>Gets or sets the player identity recorded when the perpetrator was seen.</summary>
         public string PerpetratorId { get; set; } = "";
+
+        /// <summary>Gets or sets whether intimidation reduced this witness's willingness to call.</summary>
         public bool WasIntimidated { get; set; } = false;
+
+        /// <summary>Gets or sets the wall-clock time at which this witness first recorded a crime.</summary>
         public System.DateTime FirstWitnessTime { get; set; }
 
+        /// <summary>Creates scene-local state for the specified witness NPC.</summary>
+        /// <param name="witness">NPC whose observations are tracked.</param>
         public WitnessState(NPC witness)
         {
             Witness = witness;
             FirstWitnessTime = System.DateTime.Now;
         }
 
+        /// <summary>
+        /// Adds a crime reference once. Repeated witness notifications for the same instance do
+        /// not create duplicate entries in this witness's history.
+        /// </summary>
+        /// <param name="crime">Crime instance observed by the witness.</param>
         public void AddWitnessedCrime(CrimeInstance crime)
         {
             if (!WitnessedCrimes.Contains(crime))

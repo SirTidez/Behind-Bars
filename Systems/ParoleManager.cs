@@ -36,10 +36,15 @@ namespace Behind_Bars.Systems
 
         private sealed class DailyCheckInRequirement
         {
+            /// <summary>Persisted/native day index on which this appointment is valid.</summary>
             public int DayIndex { get; set; }
+            /// <summary>Inclusive appointment-window start in minutes after midnight.</summary>
             public int WindowStartMinuteOfDay { get; set; }
+            /// <summary>Appointment-window end in minutes after midnight.</summary>
             public int WindowEndMinuteOfDay { get; set; }
+            /// <summary>Whether the one-hour reminder has already been sent.</summary>
             public bool ReminderSent { get; set; }
+            /// <summary>Whether this transient requirement has been completed by the player.</summary>
             public bool Completed { get; set; }
         }
 
@@ -81,8 +86,14 @@ namespace Behind_Bars.Systems
         /// </summary>
         public HomeVisitSystem? HomeVisitSystem { get; private set; }
 
+        // Transient in-memory requirements keyed by the shared player identity. The
+        // authoritative schedule is mirrored to the current RapSheet parole record.
         private readonly System.Collections.Generic.Dictionary<string, DailyCheckInRequirement> dailyCheckInRequirements = new();
+        // Prevents scheduling the same player more than once during a native day, including
+        // when a requirement is temporarily absent from the in-memory map.
         private readonly System.Collections.Generic.Dictionary<string, int> dailyCheckInScheduledDay = new();
+        // Guards the check-in interaction so day-pass processing does not mark an active
+        // session as missed while the player is completing it.
         private readonly System.Collections.Generic.HashSet<string> activeCheckInSessions = new();
 
         /// <summary>
@@ -116,6 +127,12 @@ namespace Behind_Bars.Systems
         /// Resets collaborator references to a clean scaffold state.
         /// The owned parole system remains valid and untouched.
         /// </summary>
+        /// <remarks>
+        /// The current shutdown only drops optional service references. It does not clear
+        /// daily requirements, scheduled-day guards, active sessions, or their persisted
+        /// RapSheet schedules, so this manager should not be reused across lifetimes without
+        /// an explicit state-clear operation.
+        /// </remarks>
         public void Shutdown()
         {
             ConditionManager = null;
@@ -189,6 +206,14 @@ namespace Behind_Bars.Systems
             ParoleSystem.EnsureRuntimeParoleTrackingForLoadedPlayer(player);
         }
 
+        /// <summary>
+        /// Process check-in expiry and scheduling for active parole records at a day-pass boundary.
+        /// </summary>
+        /// <remarks>
+        /// Only the authority proceeds. Players without an active record or currently in jail
+        /// are skipped; each remaining player is checked for an expired requirement before a
+        /// new window is scheduled.
+        /// </remarks>
         internal void HandleDayPassForParoleCheckIns()
         {
             if (!IsAuthorityForParoleActions())
@@ -221,6 +246,18 @@ namespace Behind_Bars.Systems
             }
         }
 
+        /// <summary>
+        /// Ensure that one daily check-in requirement exists for the supplied native day.
+        /// </summary>
+        /// <param name="player">Active parolee for whom the window is being scheduled.</param>
+        /// <param name="currentDayIndex">Current native day index.</param>
+        /// <param name="currentMinuteOfDay">Current native minute of day.</param>
+        /// <remarks>
+        /// Scheduling is idempotent per player/day. A persisted RapSheet schedule is restored
+        /// before a new random window is built; newly built requirements are persisted before
+        /// the officer instruction is sent. The first appointment is delayed by the separate
+        /// four-game-hour release rule when no prior check-in exists.
+        /// </remarks>
         internal void ScheduleDailyCheckIn(Player player, int currentDayIndex, int currentMinuteOfDay)
         {
             string playerKey = GetPlayerRuntimeKey(player);
@@ -276,6 +313,16 @@ namespace Behind_Bars.Systems
             ModLogger.Info($"ParoleManager: Scheduled daily check-in for {player.name} (day index {currentDayIndex}, {FormatMinuteOfDay(windowStartMinuteOfDay)} - {FormatMinuteOfDay(windowEndMinuteOfDay)})");
         }
 
+        /// <summary>
+        /// Send the one-hour reminder when a scheduled check-in window is approaching.
+        /// </summary>
+        /// <param name="player">Active parolee to notify.</param>
+        /// <param name="currentDayIndex">Current native day index.</param>
+        /// <param name="currentMinuteOfDay">Current native minute of day.</param>
+        /// <remarks>
+        /// The reminder is de-duplicated by <see cref="DailyCheckInRequirement.ReminderSent"/>
+        /// and persisted before the officer text is queued.
+        /// </remarks>
         internal void ProcessUpcomingCheckInReminder(Player player, int currentDayIndex, int currentMinuteOfDay)
         {
             if (player == null)
@@ -314,6 +361,17 @@ namespace Behind_Bars.Systems
             SendSupervisingOfficerText(player, message);
         }
 
+        /// <summary>
+        /// Apply consequences and clear a daily requirement whose appointment window has passed.
+        /// </summary>
+        /// <param name="player">Active parolee whose window is being evaluated.</param>
+        /// <param name="currentDayIndex">Current native day index.</param>
+        /// <param name="currentMinuteOfDay">Current native minute of day.</param>
+        /// <remarks>
+        /// An active check-in session is protected from expiry processing. Completed schedules
+        /// are simply cleared; missed schedules go through <see cref="HandleMissedDailyCheckIn"/>
+        /// before transient and persisted state is removed.
+        /// </remarks>
         internal void ProcessExpiredDailyCheckIn(Player player, int currentDayIndex, int currentMinuteOfDay)
         {
             string playerKey = GetPlayerRuntimeKey(player);
@@ -476,6 +534,10 @@ namespace Behind_Bars.Systems
             return CheckInStatus.Allowed;
         }
 
+        /// <summary>
+        /// Clear transient and persisted daily check-in state for one player.
+        /// </summary>
+        /// <param name="player">Player whose requirement, day guard, session, and RapSheet schedule are cleared.</param>
         internal void ClearCheckInState(Player player)
         {
             if (player == null)
@@ -498,6 +560,12 @@ namespace Behind_Bars.Systems
             ParoleSystem.EvaluateLSIStepDown(player);
         }
 
+        /// <summary>
+        /// Rehydrate a check-in requirement from the current RapSheet parole record, when present.
+        /// </summary>
+        /// <param name="player">Player whose persisted parole schedule should be read.</param>
+        /// <param name="requirement">Rehydrated requirement, or <see langword="null"/> when none is persisted.</param>
+        /// <returns><see langword="true"/> when a persisted schedule was available.</returns>
         private bool TryRestorePersistedDailyCheckIn(Player player, out DailyCheckInRequirement requirement)
         {
             requirement = null;
@@ -523,6 +591,15 @@ namespace Behind_Bars.Systems
             return true;
         }
 
+        /// <summary>
+        /// Mirror an in-memory requirement to the player's current RapSheet parole record.
+        /// </summary>
+        /// <param name="player">Player whose persisted record should be updated.</param>
+        /// <param name="requirement">Requirement values to persist.</param>
+        /// <remarks>
+        /// Missing RapSheet/parole records are treated as a no-op. The reminder flag is
+        /// persisted separately through the record's marker method.
+        /// </remarks>
         private void PersistDailyCheckInRequirement(Player player, DailyCheckInRequirement requirement)
         {
             if (player == null || requirement == null)
@@ -549,6 +626,11 @@ namespace Behind_Bars.Systems
             Core.ResolveRapSheetManager().MarkRapSheetChanged(player);
         }
 
+        /// <summary>
+        /// Remove the persisted daily check-in schedule from the current parole record.
+        /// </summary>
+        /// <param name="player">Player whose persisted schedule should be cleared.</param>
+        /// <remarks>Missing RapSheet/parole records are treated as a no-op.</remarks>
         private void ClearPersistedDailyCheckIn(Player player)
         {
             if (player == null)
@@ -566,6 +648,11 @@ namespace Behind_Bars.Systems
             Core.ResolveRapSheetManager().MarkRapSheetChanged(player);
         }
 
+        /// <summary>
+        /// Resolve the appointment-window length from the player's current LSI level.
+        /// </summary>
+        /// <param name="player">Parolee whose RapSheet LSI level should be read.</param>
+        /// <returns>60 game minutes for high/severe LSI, otherwise 180 game minutes.</returns>
         private float GetDailyCheckInWindowMinutes(Player player)
         {
             var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
@@ -582,6 +669,18 @@ namespace Behind_Bars.Systems
             };
         }
 
+        /// <summary>
+        /// Build a random same-day check-in window inside the 10:00 AM-8:00 PM schedule.
+        /// </summary>
+        /// <param name="currentMinuteOfDay">Earliest minute at which the window may begin.</param>
+        /// <param name="windowMinutes">Required window length in game minutes.</param>
+        /// <param name="windowStartMinuteOfDay">Selected start minute when successful.</param>
+        /// <param name="windowEndMinuteOfDay">Selected end minute when successful.</param>
+        /// <returns><see langword="false"/> when no same-day window can fit.</returns>
+        /// <remarks>
+        /// The random start is inclusive at both bounds after rounding the requested length;
+        /// windows do not wrap past midnight.
+        /// </remarks>
         private bool TryBuildDailyCheckInWindow(int currentMinuteOfDay, float windowMinutes, out int windowStartMinuteOfDay, out int windowEndMinuteOfDay)
         {
             windowStartMinuteOfDay = 0;
@@ -629,6 +728,12 @@ namespace Behind_Bars.Systems
             return earliestMinute;
         }
 
+        /// <summary>
+        /// Send the first officer instruction describing a newly scheduled appointment window.
+        /// </summary>
+        /// <param name="player">Parolee receiving the instruction.</param>
+        /// <param name="windowStartMinuteOfDay">Window start in minutes after midnight.</param>
+        /// <param name="windowEndMinuteOfDay">Window end in minutes after midnight.</param>
         private void SendDailyCheckInInstructionText(Player player, int windowStartMinuteOfDay, int windowEndMinuteOfDay)
         {
             string playerName = GetPlayerDisplayName(player);
@@ -641,11 +746,20 @@ namespace Behind_Bars.Systems
             SendSupervisingOfficerText(player, message);
         }
 
+        /// <summary>
+        /// Delegate the authority decision to the owned parole system.
+        /// </summary>
+        /// <returns>The parole system's current authority result.</returns>
         private bool IsAuthorityForParoleActions()
         {
             return ParoleSystem.IsAuthorityForParoleActionsInternal();
         }
 
+        /// <summary>
+        /// Resolve the shared runtime key used by all manager-owned per-player maps.
+        /// </summary>
+        /// <param name="player">Player whose key should be resolved.</param>
+        /// <returns>A stable key, or an empty string for a null player.</returns>
         private string GetPlayerRuntimeKey(Player player)
         {
             if (player == null)
@@ -656,6 +770,11 @@ namespace Behind_Bars.Systems
             return Core.ResolvePlayerKey(player);
         }
 
+        /// <summary>
+        /// Normalize the display name used in supervising-officer messages.
+        /// </summary>
+        /// <param name="player">Player whose name should be formatted.</param>
+        /// <returns>The trimmed name without a trailing numeric runtime suffix.</returns>
         private string GetPlayerDisplayName(Player player)
         {
             string rawName = player?.name ?? "Parolee";
@@ -678,6 +797,11 @@ namespace Behind_Bars.Systems
             return trimmedName;
         }
 
+        /// <summary>
+        /// Format a minute-of-day value as a normalized 12-hour clock time.
+        /// </summary>
+        /// <param name="minuteOfDay">Minute value, normalized across a 24-hour day.</param>
+        /// <returns>A player-facing time such as <c>10:05 AM</c>.</returns>
         private string FormatMinuteOfDay(int minuteOfDay)
         {
             int normalized = minuteOfDay % GameMinutesPerDay;
@@ -698,6 +822,10 @@ namespace Behind_Bars.Systems
             return $"{hour12}:{minute:00} {designator}";
         }
 
+        /// <summary>
+        /// Read the current native day index, falling back to the mod clock if unavailable.
+        /// </summary>
+        /// <returns>The native day index, or the fallback clock's zero-based day.</returns>
         private int GetCurrentDayIndex()
         {
             try
@@ -715,6 +843,10 @@ namespace Behind_Bars.Systems
             return Mathf.Max(0, GameTimeManager.Instance.GetCurrentGameDay() - 1);
         }
 
+        /// <summary>
+        /// Read the current native minute of day, falling back to the mod clock if unavailable.
+        /// </summary>
+        /// <returns>The current minute after midnight from the native or fallback clock.</returns>
         private int GetCurrentMinuteOfDay()
         {
             try
@@ -737,6 +869,16 @@ namespace Behind_Bars.Systems
             return Mathf.Clamp(fallbackHour, 0, 23) * 60 + Mathf.Clamp(fallbackMinute, 0, 59);
         }
 
+        /// <summary>
+        /// Record the current missed-check-in consequence and escalate supervision when required.
+        /// </summary>
+        /// <param name="player">Parolee who missed the appointment.</param>
+        /// <param name="requirement">Expired requirement used to describe the missed window.</param>
+        /// <remarks>
+        /// The first missed check-in lowers rapport, resets the high-compliance streak, and
+        /// raises LSI without adding a formal violation. The second and later misses add a
+        /// formal violation and issue an agent warrant through the parole system.
+        /// </remarks>
         private void HandleMissedDailyCheckIn(Player player, DailyCheckInRequirement requirement)
         {
             var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
@@ -783,6 +925,11 @@ namespace Behind_Bars.Systems
             ModLogger.Warn($"ParoleManager: Escalated missed check-in violation for {player.name}");
         }
 
+        /// <summary>
+        /// Move an LSI level up one step, clamping at severe supervision.
+        /// </summary>
+        /// <param name="currentLevel">Current supervision level.</param>
+        /// <returns>The next level, or severe when already at the maximum.</returns>
         private LSILevel EscalateLSILevel(LSILevel currentLevel)
         {
             return currentLevel switch

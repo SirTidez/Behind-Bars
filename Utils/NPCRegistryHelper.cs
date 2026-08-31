@@ -14,15 +14,25 @@ using ScheduleOne.AvatarFramework;
 namespace Behind_Bars.Utils
 {
     /// <summary>
-    /// Helper class for accessing the game's NPCRegistry (O(1) access instead of O(n) FindObjectsOfType)
-    /// Based on decompiled game code: NPCManager.NPCRegistry
+    /// Helper class for accessing the game's NPCRegistry without a
+    /// scene-wide <c>FindObjectsOfType</c> search.
     /// </summary>
+    /// <remarks>
+    /// The registry reference itself is direct, but each public query allocates
+    /// a new managed list and enumerates the registry, so the overall work is
+    /// still O(n). Destroyed/null registry entries are filtered where the
+    /// individual query can observe them.
+    /// </remarks>
     public static class NPCRegistryHelper
     {
         /// <summary>
-        /// Get all NPCs from the game's NPCRegistry (O(1) access)
+        /// Get all NPCs from the game's NPCRegistry through direct registry access.
         /// Filters out null entries (NPCs that were destroyed but not removed from registry)
         /// </summary>
+        /// <returns>A newly allocated managed list of non-null registry entries,
+        /// or an empty list when the registry is unavailable or access fails.</returns>
+        /// <remarks>Registry enumeration is O(n), despite the direct registry
+        /// access, and exceptions are logged before returning an empty list.</remarks>
         public static List<NPC> GetAllNPCs()
         {
             try
@@ -60,6 +70,14 @@ namespace Behind_Bars.Utils
         /// <summary>
         /// Find an NPC by ID from the registry
         /// </summary>
+        /// <param name="id">The identifier to compare case-insensitively.</param>
+        /// <returns>The first matching NPC, or <c>null</c> when none matches or
+        /// the query throws.</returns>
+        /// <remarks>Every call first allocates the list returned by
+        /// <see cref="GetAllNPCs"/>. Comparison uses the current
+        /// <c>ToLower()</c> behavior, is not trimmed, and a null input currently
+        /// throws inside the predicate before being logged and converted to
+        /// <c>null</c>.</remarks>
         public static NPC GetNPCById(string id)
         {
             try
@@ -77,6 +95,10 @@ namespace Behind_Bars.Utils
         /// <summary>
         /// Find NPCs with working Avatar components
         /// </summary>
+        /// <returns>A newly allocated list of NPCs with both Avatar and
+        /// Avatar.CurrentSettings non-null; an empty list on query failure.</returns>
+        /// <remarks>Starts from a newly allocated registry snapshot and logs
+        /// exceptions before returning an empty list.</remarks>
         public static List<NPC> GetNPCsWithWorkingAvatars()
         {
             try
@@ -94,6 +116,10 @@ namespace Behind_Bars.Utils
         /// <summary>
         /// Get all conscious NPCs from the registry
         /// </summary>
+        /// <returns>A newly allocated list containing registry NPCs whose
+        /// <c>IsConscious</c> property is true, or an empty list on failure.</returns>
+        /// <remarks>The registry snapshot and filtered result are both newly
+        /// allocated; filtering exceptions are logged.</remarks>
         public static List<NPC> GetConsciousNPCs()
         {
             try
@@ -111,6 +137,14 @@ namespace Behind_Bars.Utils
         /// <summary>
         /// Get NPCs excluding those with certain name patterns (e.g., exclude mod-spawned NPCs)
         /// </summary>
+        /// <param name="excludePatterns">Case-sensitive substrings that exclude
+        /// an NPC GameObject name.</param>
+        /// <returns>A newly allocated filtered list, or an empty list when the
+        /// query throws.</returns>
+        /// <remarks>NPCs without a GameObject are excluded. A null pattern
+        /// array or null element can throw during LINQ evaluation; no trimming,
+        /// case folding, or pattern normalization is performed. Exceptions are
+        /// logged and converted to an empty list.</remarks>
         public static List<NPC> GetNPCsExcluding(params string[] excludePatterns)
         {
             try

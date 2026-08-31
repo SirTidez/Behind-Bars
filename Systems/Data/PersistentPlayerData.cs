@@ -27,11 +27,13 @@ namespace Behind_Bars.Systems.Data
     /// </summary>
     public class Vector3JsonConverter : JsonConverter
     {
+        /// <inheritdoc />
         public override bool CanConvert(Type objectType)
         {
             return objectType == typeof(Vector3);
         }
 
+        /// <inheritdoc />
         public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)
         {
             if (value is Vector3 vector)
@@ -47,8 +49,10 @@ namespace Behind_Bars.Systems.Data
             }
         }
 
+        /// <inheritdoc />
         public override object ReadJson(JsonReader reader, Type objectType, object existingValue, JsonSerializer serializer)
         {
+            // Missing coordinates remain zero, matching the converter's legacy fallback.
             float x = 0, y = 0, z = 0;
 
             while (reader.Read())
@@ -85,6 +89,7 @@ namespace Behind_Bars.Systems.Data
     /// </summary>
     public class Vector3ContractResolver : JsonSerialization.DefaultContractResolver
     {
+        /// <inheritdoc />
         protected override JsonSerialization.JsonProperty CreateProperty(
             System.Reflection.MemberInfo member,
             Newtonsoft.Json.MemberSerialization memberSerialization)
@@ -115,18 +120,33 @@ namespace Behind_Bars.Systems.Data
     {
         #region Data Structures
 
+        /// <summary>In-memory representation of one item held in custody.</summary>
         [System.Serializable]
         public class StoredItem
         {
+            /// <summary>Runtime item identifier captured at arrest.</summary>
             public string itemId;
+            /// <summary>Display name captured at arrest.</summary>
             public string itemName;
+            /// <summary>Captured stack quantity.</summary>
             public int stackCount;
+            /// <summary>Whether this item was classified as contraband.</summary>
             public bool isContraband;
+            /// <summary>Runtime type name used for classification and diagnostics.</summary>
             public string itemType;
+            /// <summary>Local timestamp at which the item entered custody.</summary>
             public DateTime confiscationTime;
+            /// <summary>Special handling marker, such as an empty weapon.</summary>
             public string specialHandling; // For special processing like empty weapons
+            /// <summary>Cash amount represented by a cash item; other items use zero.</summary>
             public float cashBalance; // For CashInstance - stores dollar amount
 
+            /// <summary>Creates an in-memory confiscated-item record.</summary>
+            /// <param name="id">Item identifier.</param>
+            /// <param name="name">Display name.</param>
+            /// <param name="count">Captured stack quantity.</param>
+            /// <param name="contraband">Whether the item is contraband.</param>
+            /// <param name="type">Runtime item type name.</param>
             public StoredItem(string id, string name, int count, bool contraband, string type)
             {
                 itemId = id;
@@ -140,20 +160,35 @@ namespace Behind_Bars.Systems.Data
             }
         }
 
+        /// <summary>In-memory custody snapshot for one player and arrest.</summary>
         [System.Serializable]
         public class PlayerInventorySnapshot
         {
+            /// <summary>Stable player identifier used to find the active snapshot.</summary>
             public string playerId;
+            /// <summary>Player name captured for display and legacy lookup.</summary>
             public string playerName;
+            /// <summary>Items held in custody for this arrest.</summary>
             public List<StoredItem> items = new List<StoredItem>();
+            /// <summary>Last known position at snapshot creation.</summary>
             public Vector3 lastPosition;
+            /// <summary>Local timestamp at which the arrest snapshot was created.</summary>
             public DateTime arrestTime;
+            /// <summary>Unique arrest/custody identifier returned to callers.</summary>
             public string arrestId;
+            /// <summary>Opaque crime payload retained for compatibility with existing callers.</summary>
             public object crimeData; // Serialized crime data
+            /// <summary>Whether this snapshot is eligible for active-player lookup.</summary>
             public bool isActive; // Whether this data is still relevant
+            /// <summary>Civilian body layers captured before prison attire is applied.</summary>
             public List<ClothingLayer> originalClothing = new List<ClothingLayer>(); // Player's civilian clothing
+            /// <summary>Civilian accessories captured before prison attire is applied.</summary>
             public List<ClothingAccessory> originalAccessories = new List<ClothingAccessory>(); // Civilian accessories, shoes, hair, and headwear
 
+            /// <summary>Creates an active custody snapshot with a local arrest timestamp.</summary>
+            /// <param name="id">Stable player identifier.</param>
+            /// <param name="name">Player display name.</param>
+            /// <param name="arrestGuid">Arrest/custody identifier.</param>
             public PlayerInventorySnapshot(string id, string name, string arrestGuid)
             {
                 playerId = id;
@@ -164,36 +199,53 @@ namespace Behind_Bars.Systems.Data
             }
         }
 
+        /// <summary>Serializable civilian avatar body-layer record.</summary>
         [System.Serializable]
         public class ClothingLayer
         {
+            /// <summary>Avatar layer/resource path.</summary>
             public string layerPath;
+            /// <summary>RGBA values in array form for save serialization.</summary>
             public float[] colorRGBA; // Color as array for JSON serialization
 
+            /// <summary>Creates a serializable clothing layer from an avatar layer.</summary>
+            /// <param name="path">Avatar layer/resource path.</param>
+            /// <param name="color">Layer tint.</param>
             public ClothingLayer(string path, Color color)
             {
                 layerPath = path;
                 colorRGBA = new float[] { color.r, color.g, color.b, color.a };
             }
 
+            /// <summary>Reconstructs the layer tint from its RGBA array.</summary>
             public Color GetColor()
             {
                 return new Color(colorRGBA[0], colorRGBA[1], colorRGBA[2], colorRGBA[3]);
             }
         }
 
+        /// <summary>Serializable civilian avatar accessory record.</summary>
         [System.Serializable]
         public class ClothingAccessory
         {
+            /// <summary>Avatar accessory/resource path.</summary>
             public string path;
+            /// <summary>RGBA values in array form for save serialization.</summary>
             public float[] colorRGBA;
 
+            /// <summary>Creates a serializable accessory from an avatar accessory.</summary>
+            /// <param name="accessoryPath">Avatar accessory/resource path.</param>
+            /// <param name="color">Accessory tint.</param>
             public ClothingAccessory(string accessoryPath, Color color)
             {
                 path = accessoryPath;
                 colorRGBA = new[] { color.r, color.g, color.b, color.a };
             }
 
+            /// <summary>
+            /// Reconstructs the accessory tint, defaulting missing channels to opaque white
+            /// for older or partially populated save data.
+            /// </summary>
             public Color GetColor()
             {
                 return new Color(
@@ -204,12 +256,20 @@ namespace Behind_Bars.Systems.Data
             }
         }
 
+        /// <summary>Root in-memory data graph for persistent player records.</summary>
         [System.Serializable]
         public class PersistentGameData
         {
+            /// <summary>All arrest snapshots retained by the mod.</summary>
             public List<PlayerInventorySnapshot> playerSnapshots = new List<PlayerInventorySnapshot>();
+            /// <summary>Exit positions keyed by the current stable player identifier.</summary>
             public Dictionary<string, Vector3> storedExitPositions = new Dictionary<string, Vector3>();
+            /// <summary>
+            /// Wall-clock time recorded when a save starts. The value is updated before
+            /// serialization, so it may advance even when the save later fails.
+            /// </summary>
             public DateTime lastSaveTime;
+            /// <summary>Current save schema version.</summary>
             public int version = 1;
         }
 
@@ -222,12 +282,18 @@ namespace Behind_Bars.Systems.Data
         [System.Serializable]
         private class SerializableVector3
         {
+            /// <summary>Serialized X coordinate.</summary>
             public float x;
+            /// <summary>Serialized Y coordinate.</summary>
             public float y;
+            /// <summary>Serialized Z coordinate.</summary>
             public float z;
 
+            /// <summary>Creates an empty DTO for the serializer.</summary>
             public SerializableVector3() { }
 
+            /// <summary>Copies Unity position components into the DTO.</summary>
+            /// <param name="vector">Position to flatten.</param>
             public SerializableVector3(Vector3 vector)
             {
                 x = vector.x;
@@ -235,6 +301,7 @@ namespace Behind_Bars.Systems.Data
                 z = vector.z;
             }
 
+            /// <summary>Reconstructs the Unity position represented by this DTO.</summary>
             public Vector3 ToVector3()
             {
                 return new Vector3(x, y, z);
@@ -244,6 +311,9 @@ namespace Behind_Bars.Systems.Data
         #region Singleton Pattern
 
         private static PersistentPlayerData _instance;
+        /// <summary>
+        /// Gets the process-wide data store, loading persisted state on first access.
+        /// </summary>
         public static PersistentPlayerData Instance
         {
             get
@@ -261,9 +331,13 @@ namespace Behind_Bars.Systems.Data
 
         #region Fields
 
+        // Runtime object graph. Serialization is routed through SaveData/LoadData rather
+        // than exposing this instance directly to the native save system.
         private PersistentGameData gameData = new PersistentGameData();
+        // Legacy save key retained for compatibility with the original JsonHelper path.
         private const string SAVE_KEY = "BehindBars_PlayerData";
-        private const float AUTO_SAVE_INTERVAL = 30f; // Auto-save every 30 seconds
+        // Unity real-time seconds between opportunistic AutoSave calls.
+        private const float AUTO_SAVE_INTERVAL = 30f;
         private float lastAutoSave = 0f;
 
         #endregion
@@ -272,6 +346,8 @@ namespace Behind_Bars.Systems.Data
 
         private PersistentPlayerData()
         {
+            // Construction is private so all callers share one loaded data set through
+            // Instance; LoadData is deliberately deferred until first access.
             ModLogger.Info("PersistentPlayerData initialized");
         }
 
@@ -280,8 +356,10 @@ namespace Behind_Bars.Systems.Data
         #region Inventory Snapshot Management
 
         /// <summary>
-        /// Create a complete inventory snapshot for a player during arrest
+        /// Creates or upgrades the active inventory snapshot for a player during arrest.
         /// </summary>
+        /// <param name="player">Player whose inventory, appearance, and crime payload are captured.</param>
+        /// <returns>The arrest identifier, or null when capture fails or <paramref name="player"/> is null.</returns>
         public string CreateInventorySnapshot(Player player)
         {
             if (player == null)
@@ -303,6 +381,9 @@ namespace Behind_Bars.Systems.Data
                 var capturedAccessories = CapturePlayerAccessories(player);
                 if (existingSnapshot != null)
                 {
+                    // An active snapshot is reused by arrest ID. Empty item/appearance
+                    // sections are upgraded from this capture, but non-empty sections are
+                    // treated as authoritative to avoid duplicate callback accumulation.
                     bool upgradedAppearance = false;
                     if (existingSnapshot.items != null && existingSnapshot.items.Count > 0)
                     {
@@ -375,8 +456,10 @@ namespace Behind_Bars.Systems.Data
         }
 
         /// <summary>
-        /// Retrieve legal items for a player (filters out contraband)
+        /// Retrieves items in the active snapshot that were not marked as contraband.
         /// </summary>
+        /// <param name="player">Player whose active snapshot should be queried.</param>
+        /// <returns>A new list of legal stored items, or an empty list when unavailable.</returns>
         public List<StoredItem> GetLegalItemsForPlayer(Player player)
         {
             if (player == null) return new List<StoredItem>();
@@ -401,8 +484,10 @@ namespace Behind_Bars.Systems.Data
         }
 
         /// <summary>
-        /// Get contraband items for a player (for evidence/records)
+        /// Retrieves items in the active snapshot that were marked as contraband.
         /// </summary>
+        /// <param name="player">Player whose active snapshot should be queried.</param>
+        /// <returns>A new list of contraband stored items, or an empty list when unavailable.</returns>
         public List<StoredItem> GetContrabandItemsForPlayer(Player player)
         {
             if (player == null) return new List<StoredItem>();
@@ -427,8 +512,9 @@ namespace Behind_Bars.Systems.Data
         }
 
         /// <summary>
-        /// Clear a player's inventory snapshot (on release)
+        /// Marks a player's active inventory snapshot inactive, normally on release.
         /// </summary>
+        /// <param name="player">Player whose active snapshot should be deactivated.</param>
         public void ClearPlayerSnapshot(Player player)
         {
             if (player == null) return;
@@ -455,8 +541,10 @@ namespace Behind_Bars.Systems.Data
         #region Position Storage
 
         /// <summary>
-        /// Store a player's exit position
+        /// Stores a player's exit position under the stable player key.
         /// </summary>
+        /// <param name="player">Player whose exit position is being recorded.</param>
+        /// <param name="position">World position to persist.</param>
         public void StorePlayerExitPosition(Player player, Vector3 position)
         {
             if (player == null)
@@ -489,8 +577,10 @@ namespace Behind_Bars.Systems.Data
         }
 
         /// <summary>
-        /// Get a player's stored exit position
+        /// Gets a player's stored exit position, migrating a legacy name-keyed entry when needed.
         /// </summary>
+        /// <param name="player">Player whose position should be queried.</param>
+        /// <returns>The stored position, or null when none is available.</returns>
         public Vector3? GetPlayerExitPosition(Player player)
         {
             if (player == null)
@@ -697,6 +787,9 @@ namespace Behind_Bars.Systems.Data
 
             try
             {
+                // Vehicle contents are included only for the 30-second window after
+                // leaving a vehicle. The current reflection path requires ItemSlots to
+                // implement managed IList; a native-only IL2CPP collection is skipped.
                 // Check if player recently exited a vehicle
                 if (player.LastDrivenVehicle != null && player.TimeSinceVehicleExit < 30f)
                 {
@@ -747,6 +840,9 @@ namespace Behind_Bars.Systems.Data
         {
             try
             {
+                // Product instances follow the dedicated product path below and are
+                // currently always contraband. Other item types are classified only by
+                // Definition.legalStatus; inability to read that shape defaults to legal.
                 // Check if it's a product (drug) with packaging stealth
                 if (IsProductInstance(itemInstance))
                 {
@@ -801,6 +897,9 @@ namespace Behind_Bars.Systems.Data
         {
             try
             {
+                // AppliedPackaging is inspected for runtime compatibility, but the
+                // current policy deliberately does not honor stealth level: every product
+                // reaches the true return below. Exceptions also fail closed as contraband.
                 // Check the AppliedPackaging stealth level
                 var appliedPackagingProperty = productInstance.GetType().GetProperty("AppliedPackaging");
                 if (appliedPackagingProperty != null)
@@ -963,11 +1062,16 @@ namespace Behind_Bars.Systems.Data
 
         private string GetPlayerUniqueId(Player player)
         {
+            // Core is the single source of truth for the stable key. This helper does
+            // not fall back to the display name; callers explicitly decide when legacy
+            // name lookup/migration is appropriate.
             return Behind_Bars.Core.ResolvePlayerKey(player);
         }
 
         private List<string> GetLegacySnapshotLookupKeys(Player player, string primaryKey = null)
         {
+            // Older saves keyed snapshots and positions by player.name. Keep that name
+            // as a read/migration candidate only when it differs from the stable key.
             var lookupKeys = new List<string>();
 
             if (player != null && !string.IsNullOrEmpty(player.name) && !lookupKeys.Contains(player.name))
@@ -988,6 +1092,8 @@ namespace Behind_Bars.Systems.Data
                 return null;
             }
 
+            // Prefer the stable key; only if it has no active record do we search and
+            // rewrite a legacy display-name keyed snapshot.
             string primaryKey = GetPlayerUniqueId(player);
             if (!string.IsNullOrEmpty(primaryKey))
             {
@@ -1003,11 +1109,15 @@ namespace Behind_Bars.Systems.Data
 
         private PlayerInventorySnapshot GetActiveSnapshotByPlayerId(string playerId)
         {
+            // There is at most one intended active snapshot per key, but Find preserves
+            // the current first-match behavior if older saves contain duplicates.
             return gameData.playerSnapshots.Find(s => s.playerId == playerId && s.isActive);
         }
 
         private Vector3? GetPlayerExitPositionByKey(string playerKey)
         {
+            // This is a pure key lookup. Legacy fallback and write-back are handled by
+            // TryMigrateLegacyExitPosition so reads remain easy to reason about.
             try
             {
                 if (!string.IsNullOrEmpty(playerKey) && gameData.storedExitPositions.ContainsKey(playerKey))
@@ -1030,6 +1140,8 @@ namespace Behind_Bars.Systems.Data
                 return null;
             }
 
+            // Migration is eager: copy the value to the stable key, remove the legacy
+            // entry, and save immediately so the next load no longer depends on name.
             foreach (string legacyKey in GetLegacySnapshotLookupKeys(player, primaryKey))
             {
                 var exitPosition = GetPlayerExitPositionByKey(legacyKey);
@@ -1055,6 +1167,8 @@ namespace Behind_Bars.Systems.Data
                 return null;
             }
 
+            // Update the existing object in place so any current caller keeps its
+            // reference, then persist the stable identity and current display name.
             foreach (string legacyKey in GetLegacySnapshotLookupKeys(player, primaryKey))
             {
                 var snapshot = GetActiveSnapshotByPlayerId(legacyKey);
@@ -1079,6 +1193,10 @@ namespace Behind_Bars.Systems.Data
             {
                 if (crimeData != null)
                 {
+                    // Do not serialize the native crime graph directly: it contains Unity
+                    // references/cycles. Persist only the current diagnostic projection
+                    // (crime labels/counts, evasion, and pursuit level); failures return
+                    // null and leave the rest of the inventory snapshot usable.
                     // Create a sanitized version without Unity object references
                     var sanitized = new
                     {
@@ -1106,6 +1224,8 @@ namespace Behind_Bars.Systems.Data
             var crimesList = new List<string>();
             try
             {
+                // The native Crimes value is read by shape and flattened to display text;
+                // this is intentionally not a round-trip representation of native crimes.
                 var crimesProperty = crimeData.GetType().GetProperty("Crimes");
                 if (crimesProperty != null)
                 {
@@ -1136,6 +1256,8 @@ namespace Behind_Bars.Systems.Data
         {
             try
             {
+                // Reflection keeps this compatible with Mono/IL2CPP data shapes. Missing,
+                // incompatible, or throwing properties intentionally resolve to T's default.
                 var property = obj.GetType().GetProperty(propertyName);
                 if (property != null)
                 {
@@ -1212,6 +1334,9 @@ namespace Behind_Bars.Systems.Data
         {
             try
             {
+                // PlayerPrefs remains the outer persistence boundary. The payload is
+                // flattened before serialization so Vector3/native object graphs do not
+                // leak into JsonHelper; a failed save is logged without replacing memory.
                 gameData.lastSaveTime = DateTime.Now;
 
 #if MONO
@@ -1220,7 +1345,9 @@ namespace Behind_Bars.Systems.Data
                     new Vector3ContractResolver()
                 );
 
-                // In Mono mode, settings is null, so we need to convert Vector3 to serializable format
+                // Mono can serialize the runtime graph when converter settings exist; the
+                // no-settings path uses the explicit DTO. IL2CPP uses the DTO path here as
+                // well, keeping the on-disk shape consistent across runtimes.
                 object dataToSerialize = gameData;
                 if (settings == null)
                 {
@@ -1247,6 +1374,9 @@ namespace Behind_Bars.Systems.Data
         {
             try
             {
+                // Read the legacy PlayerPrefs key and rebuild a fresh runtime graph on
+                // missing, empty, incompatible, or failed data. Mono tries both the DTO
+                // shape and the older direct graph shape; IL2CPP uses the DTO shape.
                 if (PlayerPrefs.HasKey(SAVE_KEY))
                 {
                     string jsonData = PlayerPrefs.GetString(SAVE_KEY);
@@ -1258,7 +1388,9 @@ namespace Behind_Bars.Systems.Data
                             new Vector3ContractResolver()
                         );
 
-                        // If settings is null (Mono mode), try to deserialize as SerializablePersistentGameData first
+                        // If settings is null (Mono mode), try the current explicit DTO
+                        // shape first, then the older direct graph shape for saves written
+                        // with Vector3JsonConverter.
                         if (settings == null)
                         {
                             try
@@ -1275,8 +1407,8 @@ namespace Behind_Bars.Systems.Data
                             }
                             catch
                             {
-                                // If deserialization as SerializablePersistentGameData fails, try PersistentGameData
-                                // This handles old save files that were saved with Vector3JsonConverter
+                                // If the DTO shape fails, try the older direct graph shape.
+                                // This preserves saves written with Vector3JsonConverter.
                                 try
                                 {
                                     gameData = JsonHelper.DeserializeObject<PersistentGameData>(jsonData, settings);
@@ -1293,7 +1425,8 @@ namespace Behind_Bars.Systems.Data
                         }
                         else
                         {
-                            // IL2CPP mode - use normal deserialization with converter
+                            // A non-null settings object uses the runtime graph directly
+                            // with the active converter configuration.
                             gameData = JsonHelper.DeserializeObject<PersistentGameData>(jsonData, settings);
                             if (gameData == null)
                             {
@@ -1334,6 +1467,8 @@ namespace Behind_Bars.Systems.Data
         {
             try
             {
+                // Retention is wall-clock based and applies to all snapshots, active or
+                // inactive. Position entries are not aged out by this cleanup pass.
                 // Remove snapshots older than 7 days
                 var cutoffTime = DateTime.Now.AddDays(-7);
                 int removedCount = gameData.playerSnapshots.RemoveAll(s => s.arrestTime < cutoffTime);
@@ -1351,9 +1486,12 @@ namespace Behind_Bars.Systems.Data
         }
 
         /// <summary>
-        /// Converts PersistentGameData to a serializable format when JsonSerializerSettings are not available (Mono mode)
-        /// Converts Vector3 to SerializableVector3 to avoid circular reference issues
+        /// Flattens runtime persistent data into a Vector3-safe serialization DTO.
         /// </summary>
+        /// <remarks>
+        /// This conversion is used by the current IL2CPP save path and by the Mono
+        /// fallback when converter settings are unavailable; the method is not Mono-only.
+        /// </remarks>
         private SerializablePersistentGameData ConvertGameDataToSerializable(PersistentGameData data)
         {
             var serializableData = new SerializablePersistentGameData
@@ -1364,7 +1502,8 @@ namespace Behind_Bars.Systems.Data
                 version = data.version
             };
 
-            // Convert snapshots
+            // Copy snapshot fields without changing the in-memory object graph. The
+            // current DTO intentionally carries the same object-valued crime payload.
             foreach (var snapshot in data.playerSnapshots)
             {
                 var serializableSnapshot = new SerializablePlayerInventorySnapshot
@@ -1377,12 +1516,15 @@ namespace Behind_Bars.Systems.Data
                     arrestId = snapshot.arrestId,
                     crimeData = snapshot.crimeData,
                     isActive = snapshot.isActive,
+                    // Current compatibility DTO copies body layers only; accessories are
+                    // absent from this legacy shape and therefore cannot be restored here.
                     originalClothing = snapshot.originalClothing
                 };
                 serializableData.playerSnapshots.Add(serializableSnapshot);
             }
 
-            // Convert stored exit positions
+            // Convert stored exit positions to Vector3 DTOs so dictionary values remain
+            // primitive/serializer-safe.
             foreach (var kvp in data.storedExitPositions)
             {
                 serializableData.storedExitPositions[kvp.Key] = new SerializableVector3(kvp.Value);
@@ -1392,8 +1534,10 @@ namespace Behind_Bars.Systems.Data
         }
 
         /// <summary>
-        /// Converts SerializablePersistentGameData back to PersistentGameData after deserialization
+        /// Rehydrates runtime persistent data from the explicit serialization DTO.
         /// </summary>
+        /// <param name="serializableData">DTO or already-runtime data returned by a loader.</param>
+        /// <returns>A runtime data graph, or the input when it is already PersistentGameData.</returns>
         private PersistentGameData ConvertSerializableToGameData(object serializableData)
         {
             if (serializableData is SerializablePersistentGameData serializable)
@@ -1406,7 +1550,9 @@ namespace Behind_Bars.Systems.Data
                     version = serializable.version
                 };
 
-                // Convert snapshots
+                // Recreate snapshots so Vector3 values become Unity structs again. Null
+                // nested DTOs are not normalized here; the current loader relies on its
+                // surrounding exception fallback for malformed payloads.
                 foreach (var snapshot in serializable.playerSnapshots)
                 {
                     var gameSnapshot = new PlayerInventorySnapshot(snapshot.playerId, snapshot.playerName, snapshot.arrestId)
@@ -1416,12 +1562,13 @@ namespace Behind_Bars.Systems.Data
                         arrestTime = snapshot.arrestTime,
                         crimeData = snapshot.crimeData,
                         isActive = snapshot.isActive,
+                        // The legacy DTO has no accessory collection to hydrate.
                         originalClothing = snapshot.originalClothing
                     };
                     gameData.playerSnapshots.Add(gameSnapshot);
                 }
 
-                // Convert stored exit positions
+                // Recreate the dictionary keyed by the serialized player/exit key.
                 foreach (var kvp in serializable.storedExitPositions)
                 {
                     gameData.storedExitPositions[kvp.Key] = kvp.Value.ToVector3();
@@ -1440,9 +1587,14 @@ namespace Behind_Bars.Systems.Data
         [System.Serializable]
         private class SerializablePersistentGameData
         {
+            // Mirror of PersistentGameData with Vector3 values replaced by explicit DTOs.
+            /// <summary>Serialized snapshot DTO collection.</summary>
             public List<SerializablePlayerInventorySnapshot> playerSnapshots = new List<SerializablePlayerInventorySnapshot>();
+            /// <summary>Serialized exit-position DTO map.</summary>
             public Dictionary<string, SerializableVector3> storedExitPositions = new Dictionary<string, SerializableVector3>();
+            /// <summary>Round-trip save timestamp.</summary>
             public DateTime lastSaveTime;
+            /// <summary>Save schema version.</summary>
             public int version = 1;
         }
 
@@ -1452,17 +1604,33 @@ namespace Behind_Bars.Systems.Data
         [System.Serializable]
         private class SerializablePlayerInventorySnapshot
         {
+            // Mirror of PlayerInventorySnapshot used only at the serializer boundary.
+            // The current legacy DTO has no originalAccessories field, so accessories do
+            // not round-trip through ConvertGameDataToSerializable/ConvertSerializableToGameData.
+            /// <summary>Stable player identifier.</summary>
             public string playerId;
+            /// <summary>Player display name.</summary>
             public string playerName;
+            /// <summary>Stored item records.</summary>
             public List<StoredItem> items = new List<StoredItem>();
+            /// <summary>Flattened last known position.</summary>
             public SerializableVector3 lastPosition;
+            /// <summary>Arrest timestamp.</summary>
             public DateTime arrestTime;
+            /// <summary>Arrest/custody identifier.</summary>
             public string arrestId;
+            /// <summary>Opaque crime payload.</summary>
             public object crimeData;
+            /// <summary>Whether this snapshot remains active.</summary>
             public bool isActive;
+            /// <summary>Civilian body layers captured at arrest.</summary>
             public List<ClothingLayer> originalClothing = new List<ClothingLayer>();
         }
 
+        /// <summary>
+        /// Saves data at most once per configured Unity <c>Time.time</c> interval
+        /// (normally seconds; subject to the engine's time scale).
+        /// </summary>
         public void AutoSave()
         {
             if (Time.time - lastAutoSave > AUTO_SAVE_INTERVAL)
@@ -1477,8 +1645,9 @@ namespace Behind_Bars.Systems.Data
         #region Public Interface
 
         /// <summary>
-        /// Get statistics about stored data
+        /// Gets a compact count summary of active snapshots and stored exit positions.
         /// </summary>
+        /// <returns>Human-readable counts from the current in-memory data.</returns>
         public string GetDataStats()
         {
             var activeSnapshots = gameData.playerSnapshots.FindAll(s => s.isActive);
@@ -1486,7 +1655,7 @@ namespace Behind_Bars.Systems.Data
         }
 
         /// <summary>
-        /// Force save all data
+        /// Forces the current in-memory data to the PlayerPrefs save boundary.
         /// </summary>
         public void ForceSave()
         {
@@ -1494,7 +1663,8 @@ namespace Behind_Bars.Systems.Data
         }
 
         /// <summary>
-        /// Clear all stored data (for testing)
+        /// Replaces all in-memory persistent data with an empty schema and saves it.
+        /// Primarily intended for test/reset flows.
         /// </summary>
         public void ClearAllData()
         {
@@ -1626,6 +1796,11 @@ namespace Behind_Bars.Systems.Data
             return accessories;
         }
 
+        /// <summary>
+        /// Restores the active snapshot's civilian body layers and accessories to a player.
+        /// The full avatar settings object is committed through LoadAvatarSettings.
+        /// </summary>
+        /// <param name="player">Player whose active custody appearance should be restored.</param>
         public void RestorePlayerClothing(Player player)
         {
             try
@@ -1714,7 +1889,12 @@ namespace Behind_Bars.Systems.Data
             }
         }
 
-        /// <summary>Returns a detached view of the civilian clothing saved for the active custody record.</summary>
+        /// <summary>
+        /// Returns a detached view of the active custody record's civilian appearance.
+        /// Accessories are represented as ClothingLayer entries for the legacy caller shape.
+        /// </summary>
+        /// <param name="player">Player whose active snapshot should be queried.</param>
+        /// <returns>Copied body layers followed by accessory paths converted to layers.</returns>
         public List<ClothingLayer> GetOriginalClothingForPlayer(Player player)
         {
             var snapshot = GetActiveSnapshotForPlayer(player);

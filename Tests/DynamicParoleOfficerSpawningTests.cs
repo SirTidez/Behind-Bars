@@ -18,17 +18,32 @@ using ScheduleOne.PlayerScripts;
 namespace Behind_Bars.Tests
 {
     /// <summary>
-    /// Test scaffolding for Dynamic Parole Officer Spawning System
-    /// Run these tests manually in-game to verify functionality
+    /// Manual diagnostic scaffolding for the dynamic parole-officer spawning system.
+    /// The methods carry <c>Conditional("DEBUG")</c> and are intended to be
+    /// invoked in a live game session rather than an isolated automated runner.
     /// </summary>
+    /// <remarks>
+    /// These checks log observations and a few expected-count outcomes; they do
+    /// not expose an assertion result to a test framework. Several tests mutate
+    /// the local player's live parole state, and the harness does not snapshot or
+    /// restore that state. Timing is coroutine-based, so a reported result also
+    /// depends on the current scene, manager readiness, and game runtime state.
+    /// </remarks>
     public class DynamicParoleOfficerSpawningTests : MonoBehaviour
     {
 #if !MONO
+        /// <summary>
+        /// IL2CPP constructor required for an injected <see cref="MonoBehaviour"/>
+        /// component to receive its native object pointer.
+        /// </summary>
+        /// <param name="ptr">Native IL2CPP object pointer supplied by Unity.</param>
         public DynamicParoleOfficerSpawningTests(System.IntPtr ptr) : base(ptr) { }
 #endif
 
         #region Test Configuration
 
+        // Reserved for a future toggle/result aggregation flow; neither flag is
+        // currently consulted by the manual test methods.
         private bool testsEnabled = false;
         private bool testResultsLogged = false;
 
@@ -38,6 +53,8 @@ namespace Behind_Bars.Tests
 
         private void Start()
         {
+            // Start only advertises the manual harness. It intentionally does not
+            // invoke tests or alter parole/officer state automatically.
             ModLogger.Info("=== Dynamic Parole Officer Spawning Tests ===");
             ModLogger.Info("Tests are scaffolded but not auto-running.");
             ModLogger.Info("Use console commands or UI buttons to run tests.");
@@ -48,9 +65,14 @@ namespace Behind_Bars.Tests
         #region Test Methods
 
         /// <summary>
-        /// Test 1: Verify no officers spawn when player is not on parole
-        /// Expected: No officers should be spawned
+        /// Test 1: Checks that no active officers are reported while the player
+        /// is not on parole.
         /// </summary>
+        /// <remarks>
+        /// This test skips rather than changing the player's parole state when a
+        /// parole record is already active. It observes the manager's current
+        /// active count only; it does not prove that no delayed spawn is pending.
+        /// </remarks>
         [System.Diagnostics.Conditional("DEBUG")]
         public void Test_NoOfficersWhenNotOnParole()
         {
@@ -99,9 +121,14 @@ namespace Behind_Bars.Tests
         }
 
         /// <summary>
-        /// Test 2: Verify supervising officer spawns when parole starts
-        /// Expected: Supervising officer should spawn immediately
+        /// Test 2: Starts parole when needed and checks for a supervising officer.
         /// </summary>
+        /// <remarks>
+        /// When no active parole exists, this test mutates the live player state by
+        /// starting a ten-game-minute parole with UI suppressed. The check is
+        /// asynchronous and delayed by two scaled seconds; invoking the method
+        /// does not synchronously prove that the officer spawned.
+        /// </remarks>
         [System.Diagnostics.Conditional("DEBUG")]
         public void Test_SupervisingOfficerSpawnsOnParoleStart()
         {
@@ -146,6 +173,14 @@ namespace Behind_Bars.Tests
             }
         }
 
+        /// <summary>
+        /// Delayed observer for the supervising-officer spawn check.
+        /// </summary>
+        /// <returns>Coroutine that waits briefly, then logs the manager's spawn state.</returns>
+        /// <remarks>
+        /// The delay uses Unity's scaled wait and the result is log-only; no test
+        /// framework assertion or cleanup is performed.
+        /// </remarks>
         private IEnumerator CheckSupervisingOfficerAfterDelay()
         {
             yield return new WaitForSeconds(2f);
@@ -170,9 +205,15 @@ namespace Behind_Bars.Tests
         }
 
         /// <summary>
-        /// Test 3: Verify patrol officers spawn within 200m of player
-        /// Expected: Patrol officers should spawn when player is near their routes
+        /// Test 3: Observes patrol officers currently reported near the player.
         /// </summary>
+        /// <remarks>
+        /// The method forces one manager update and then logs each spawned patrol
+        /// assignment's nearest-route distance. Despite the historical 200m title,
+        /// the current implementation does not assert a distance threshold; it
+        /// reports success whenever at least one patrol officer is spawned.
+        /// It requires an already-active parole record and does not move the player.
+        /// </remarks>
         [System.Diagnostics.Conditional("DEBUG")]
         public void Test_PatrolOfficersSpawnNearPlayer()
         {
@@ -214,6 +255,17 @@ namespace Behind_Bars.Tests
             }
         }
 
+        /// <summary>
+        /// Delayed observer for patrol assignments and their route distances.
+        /// </summary>
+        /// <param name="player">Live local player whose position is sampled after the delay.</param>
+        /// <returns>Coroutine that waits three scaled seconds before logging observations.</returns>
+        /// <remarks>
+        /// A missing manager is treated as an error and stops the observer. The
+        /// caller is expected to supply a live, non-null player. A zero spawned
+        /// count is informational (the player may be far from every route), not a
+        /// hard failure.
+        /// </remarks>
         private IEnumerator CheckPatrolOfficersAfterDelay(Player player)
         {
             yield return new WaitForSeconds(3f);
@@ -249,9 +301,15 @@ namespace Behind_Bars.Tests
         }
 
         /// <summary>
-        /// Test 4: Verify officers despawn when parole ends
-        /// Expected: All officers should despawn when parole ends
+        /// Test 4: Attempts to end active parole and checks whether officers are later removed.
         /// </summary>
+        /// <remarks>
+        /// This test mutates the live parole record by calling
+        /// <c>CompleteParoleForPlayer</c> when the parole system is available. It
+        /// logs the count before the attempt, then performs an asynchronous count
+        /// check after two scaled seconds; it does not restore parole or isolate
+        /// unrelated active officers.
+        /// </remarks>
         [System.Diagnostics.Conditional("DEBUG")]
         public void Test_OfficersDespawnOnParoleEnd()
         {
@@ -300,6 +358,15 @@ namespace Behind_Bars.Tests
             }
         }
 
+        /// <summary>
+        /// Delayed observer for officer cleanup after parole completion.
+        /// </summary>
+        /// <returns>Coroutine that waits two scaled seconds, then logs the active count.</returns>
+        /// <remarks>
+        /// The current observer assumes the manager is still available when the
+        /// delay completes and treats any remaining active officer as a failure;
+        /// no framework assertion or retry is used.
+        /// </remarks>
         private IEnumerator CheckOfficersDespawnedAfterDelay()
         {
             yield return new WaitForSeconds(2f);
@@ -318,9 +385,14 @@ namespace Behind_Bars.Tests
         }
 
         /// <summary>
-        /// Test 5: Verify region change triggers officer updates
-        /// Expected: Officers should spawn/despawn when player changes regions
+        /// Test 5: Forces one player-region check and logs that the check ran.
         /// </summary>
+        /// <remarks>
+        /// The current method does not move the player or synthesize a region
+        /// transition, so it cannot prove that a region change causes officer
+        /// updates. It is a log-only diagnostic that requires an active parole
+        /// record and a ready <c>PlayerLocationTracker</c>.
+        /// </remarks>
         [System.Diagnostics.Conditional("DEBUG")]
         public void Test_RegionChangeTriggersUpdates()
         {
@@ -365,9 +437,13 @@ namespace Behind_Bars.Tests
         }
 
         /// <summary>
-        /// Test 6: Verify distance calculations
-        /// Expected: Distance calculations should be accurate
+        /// Test 6: Logs the nearest waypoint distance for every patrol route.
         /// </summary>
+        /// <remarks>
+        /// This is a diagnostic printout rather than an assertion: no expected
+        /// coordinates, tolerance, or threshold is checked. Missing routes and
+        /// calculation errors are represented by <see cref="float.MaxValue"/>.
+        /// </remarks>
         [System.Diagnostics.Conditional("DEBUG")]
         public void Test_DistanceCalculations()
         {
@@ -404,8 +480,14 @@ namespace Behind_Bars.Tests
         }
 
         /// <summary>
-        /// Run all tests in sequence
+        /// Starts the manual diagnostic sequence in a separate coroutine.
         /// </summary>
+        /// <remarks>
+        /// The sequence is DEBUG-conditional and asynchronous. It runs tests 1, 2, 3, 6,
+        /// and 5 in that order; the current harness intentionally does not invoke
+        /// test 4 from this aggregate entry point. Results are written to the game
+        /// log and live player state is not restored between steps.
+        /// </remarks>
         [System.Diagnostics.Conditional("DEBUG")]
         public void RunAllTests()
         {
@@ -413,6 +495,14 @@ namespace Behind_Bars.Tests
             MelonCoroutines.Start(RunAllTestsCoroutine());
         }
 
+        /// <summary>
+        /// Executes the currently wired manual test sequence with fixed delays.
+        /// </summary>
+        /// <returns>Coroutine that yields between log-based test invocations.</returns>
+        /// <remarks>
+        /// Delays use scaled Unity time and are scheduling gaps, not completion
+        /// signals for the nested checks started by tests 2 and 3.
+        /// </remarks>
         private IEnumerator RunAllTestsCoroutine()
         {
             Test_NoOfficersWhenNotOnParole();
@@ -438,6 +528,15 @@ namespace Behind_Bars.Tests
 
         #region Helper Methods
 
+        /// <summary>
+        /// Resolves the current runtime's local player singleton.
+        /// </summary>
+        /// <returns>The local player, or null when the singleton is unavailable or access fails.</returns>
+        /// <remarks>
+        /// The compile-time runtime split selects the Mono or IL2CPP player type;
+        /// exceptions are logged and converted to a null result for the manual
+        /// callers.
+        /// </remarks>
         private Player GetLocalPlayer()
         {
             try
@@ -455,6 +554,20 @@ namespace Behind_Bars.Tests
             }
         }
 
+        /// <summary>
+        /// Computes the minimum Euclidean distance from a position to a patrol route waypoint.
+        /// </summary>
+        /// <param name="assignment">Patrol assignment whose mapped route is queried.</param>
+        /// <param name="position">World position from which to measure.</param>
+        /// <returns>
+        /// Minimum waypoint distance in world units, or <see cref="float.MaxValue"/>
+        /// when the route is missing, empty, or cannot be read.
+        /// </returns>
+        /// <remarks>
+        /// This helper measures straight-line distance to discrete waypoints; it
+        /// does not measure distance along the route, account for obstacles, or
+        /// establish the 200m spawning policy.
+        /// </remarks>
         private float GetDistanceToRouteForTest(ParoleOfficerAssignment assignment, Vector3 position)
         {
             try

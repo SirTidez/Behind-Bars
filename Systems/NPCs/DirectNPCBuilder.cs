@@ -40,57 +40,72 @@ using ScheduleOne.DevUtilities;
 namespace Behind_Bars.Systems.NPCs
 {
     /// <summary>
-    /// Creates NPCs from scratch using Schedule One's native components in proper order.
-    /// Based on S1API analysis but without dependencies. Fixes physics issues with cloning approach.
+    /// Legacy experimental NPC builder that creates objects from individual Schedule I
+    /// components. It is retained for diagnostics and older callers; the active runtime
+    /// should use <see cref="BaseNPCSpawner"/> and <see cref="JailNpcPrefabLifecycle"/>,
+    /// which preserve the registered native prefab graph and FishNet spawn contract.
+    /// The construction and appearance-copy fallbacks here are not a final IL2CPP parity path.
     /// </summary>
     public static class DirectNPCBuilder
     {
         public enum NPCType
         {
+            /// <summary>Legacy guard construction path; not the canonical native template path.</summary>
             JailGuard,
+            /// <summary>Legacy inmate construction path; it does not attach the full inmate workflow here.</summary>
             JailInmate,
+            /// <summary>Legacy generic staff construction path.</summary>
             GenericJailStaff,
+            /// <summary>Legacy parole-officer construction path.</summary>
             ParoleOfficer,
+            /// <summary>Minimal diagnostic object intended only for pathfinding experiments.</summary>
             TestNPC
         }
 
         /// <summary>
-        /// Creates a jail guard NPC with proper Schedule One component initialization
+        /// Legacy convenience wrapper for component-by-component guard construction. Prefer
+        /// <see cref="BaseNPCSpawner.SpawnGuard"/> so the canonical native template and guard
+        /// behavior attachment are used.
         /// </summary>
         /// <param name="position">World position to spawn the NPC</param>
         /// <param name="firstName">NPC first name</param>
         /// <param name="lastName">NPC last name</param>
-        /// <returns>The created GameObject with all components properly initialized</returns>
+        /// <returns>A legacy component-built object, or null when construction fails.</returns>
         public static GameObject CreateJailGuard(Vector3 position, string firstName = "Officer", string lastName = "Smith")
         {
             return CreateNPC(NPCType.JailGuard, position, firstName, lastName);
         }
 
         /// <summary>
-        /// Creates a parole officer NPC with proper Schedule One component initialization
+        /// Legacy convenience wrapper for component-by-component parole-officer construction.
+        /// Prefer the dynamic parole manager's canonical native spawn path.
         /// </summary>
+        /// <param name="position">World position to spawn the NPC.</param>
         /// <param name="firstName">NPC first name</param>
         /// <param name="lastName">NPC last name</param>
-        /// <returns>The created GameObject with all components properly initialized</returns>
+        /// <returns>A legacy component-built object, or null when construction fails.</returns>
         public static GameObject CreateParoleOfficer(Vector3 position, string firstName = "Officer", string lastName = "Johnson")
         {
             return CreateNPC(NPCType.ParoleOfficer, position, firstName, lastName);
         }
 
         /// <summary>
-        /// Creates a jail inmate NPC with proper Schedule One component initialization
+        /// Legacy convenience wrapper for reduced component-by-component inmate construction.
+        /// This method does not itself prove that the resulting object has the canonical
+        /// inmate behavior graph.
         /// </summary>
         /// <param name="position">World position to spawn the NPC</param>
         /// <param name="firstName">NPC first name</param>
         /// <param name="lastName">NPC last name</param>
-        /// <returns>The created GameObject with all components properly initialized</returns>
+        /// <returns>A legacy component-built object, or null when construction fails.</returns>
         public static GameObject CreateJailInmate(Vector3 position, string firstName = "Inmate", string lastName = "Prisoner")
         {
             return CreateNPC(NPCType.JailInmate, position, firstName, lastName);
         }
 
         /// <summary>
-        /// Creates a simple test NPC for debugging pathfinding
+        /// Creates a minimal legacy test object for pathfinding diagnostics. It is deliberately
+        /// not representative of a networked or canonical jail NPC.
         /// </summary>
         /// <param name="name">NPC name</param>
         /// <param name="position">World position to spawn the NPC</param>
@@ -111,13 +126,16 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Core NPC creation method that builds NPCs from scratch using Schedule One components
+        /// Legacy component-by-component construction pipeline. It adds native components to a
+        /// fresh object, then applies reduced jail behavior and local NavMesh helpers; it does
+        /// not reproduce every serialized/native template dependency required by the current
+        /// IL2CPP NPC graph.
         /// </summary>
         /// <param name="npcType">Type of NPC to create</param>
         /// <param name="position">World position to spawn</param>
         /// <param name="firstName">First name</param>
         /// <param name="lastName">Last name</param>
-        /// <returns>Fully configured NPC GameObject</returns>
+        /// <returns>A reduced component-built object, or null when construction fails.</returns>
         private static GameObject CreateNPC(NPCType npcType, Vector3 position, string firstName, string lastName)
         {
             try
@@ -129,7 +147,8 @@ namespace Behind_Bars.Systems.NPCs
                 npcObject.SetActive(false);
                 npcObject.transform.position = position;
 
-                // 2. Add Schedule One's core NPC component directly
+                // Legacy path: adding the native component directly does not recreate the
+                // registered prefab's serialized dependency graph.
 #if !MONO
                 var npcComponent = npcObject.AddComponent<Il2CppScheduleOne.NPCs.NPC>();
 #else
@@ -158,7 +177,8 @@ namespace Behind_Bars.Systems.NPCs
                     AddTestNPCNavigation(npcObject);
                 }
 
-                // 4. Add visual components and avatar FIRST (most important for appearance)
+                // Legacy visual construction; the current spawner expects a native Avatar on
+                // its prepared template instead of repairing a blank object here.
                 AddVisualComponents(npcObject, npcComponent, npcType);
 
                 // 5. Add Schedule One's health system (with proper component detection)
@@ -171,16 +191,17 @@ namespace Behind_Bars.Systems.NPCs
                 // 6.5. Add voice and audio system
                 AddAudioSystem(npcObject, npcComponent, npcType);
 
-                // 7. Add basic interaction system only (skip complex networked components for now)
+                // Reduced interaction setup; complex native/networked dependencies are
+                // intentionally skipped in this legacy builder.
                 AddBasicInteractionSystem(npcObject, npcComponent);
 
-                // 10. Add jail-specific behavior LAST
+                // This marker/helper is not the canonical behavior attachment seam.
                 AddJailSpecificBehavior(npcObject, npcType);
 
                 // 11. CRITICAL: Activate after everything is set up
                 npcObject.SetActive(true);
 
-                // 12. Add jail-specific behavior components for guards
+                // Legacy post-activation behavior additions retained for old experiments.
                 if (npcType == NPCType.JailGuard)
                 {
                     // Add new GuardBehavior component instead of old GuardStateMachine
@@ -773,7 +794,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Creates a proper multi-part avatar system like the player has (12+ components)
+        /// Legacy avatar construction fallback. It first clones a live NPC/player avatar and
+        /// eventually falls back to a basic avatar/mesh; none of those fallbacks establish the
+        /// native template graph required for final IL2CPP NPC parity.
         /// </summary>
         private static void CreateProperAvatar(GameObject npc, object npcComponent, NPCType npcType)
         {
@@ -781,7 +804,8 @@ namespace Behind_Bars.Systems.NPCs
             {
                 ModLogger.Info($"Creating full avatar structure for {npc.name}");
 
-                // Try to find an existing NPC with a working avatar to copy from (use original working method)
+                // Legacy appearance fallback: a live NPC is used only as a source of visual
+                // data. The active template path intentionally does not clone live objects.
                 var existingNPC = FindExistingNPCWithAvatar();
                 if (existingNPC != null)
                 {
@@ -789,7 +813,8 @@ namespace Behind_Bars.Systems.NPCs
                     return;
                 }
 
-                // Fallback: Try to find the player's avatar structure
+                // Legacy fallback: copying the player's avatar may provide visuals but does
+                // not provide the role's native NPC dependencies.
                 var player = UnityEngine.Object.FindObjectOfType<
 #if !MONO
                     Il2CppScheduleOne.PlayerScripts.Player
@@ -805,20 +830,23 @@ namespace Behind_Bars.Systems.NPCs
                     return;
                 }
 
-                // Final fallback: Create basic avatar
+                // Last-resort reduced visual fallback. This is diagnostic only and is not a
+                // substitute for a valid native Avatar/template graph.
                 CreateBasicAvatar(npc, npcComponent);
                 
             }
             catch (Exception e)
             {
                 ModLogger.Error($"Error creating proper avatar: {e.Message}");
-                // Fallback to basic visual
+                // Preserve the legacy diagnostic fallback after an avatar-copy failure; this
+                // path is intentionally not treated as canonical NPC construction.
                 AddBasicVisualMesh(npc);
             }
         }
 
         /// <summary>
-        /// Find an existing NPC in the scene that has a working avatar, with preference for specific types
+        /// Legacy live-object avatar-source lookup. The preferred-name pass only chooses a
+        /// visual source; it does not validate the source as a FishNet-registered NPC prefab.
         /// </summary>
         private static GameObject FindExistingNPCWithAvatar(NPCType? preferredType = null)
         {
@@ -875,7 +903,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Simple method to find any existing NPC with avatar (original working version)
+        /// Older live-object avatar lookup retained for compatibility with the original
+        /// cloning experiment. It is not used by the canonical template spawner.
         /// </summary>
         private static GameObject FindExistingNPCWithAvatar()
         {
@@ -1034,7 +1063,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Copy the complete avatar structure from a source NPC/Player
+        /// Legacy live-avatar cloning helper. It copies a visual hierarchy and may attach a
+        /// test controller, but it cannot copy serialized/native network dependencies and must
+        /// not be treated as a final IL2CPP behavior path.
         /// </summary>
         private static void CopyAvatarStructure(GameObject source, GameObject target, object npcComponent)
         {
@@ -1085,7 +1116,8 @@ namespace Behind_Bars.Systems.NPCs
 
                 ModLogger.Info($"Found avatar component on {sourceAvatar.gameObject.name} (parent: {source.name})");
 
-                // Copy the entire avatar GameObject hierarchy
+                // Legacy visual-only clone. Do not use this to infer that the target has the
+                // source NPC's native behavior or network graph.
                 GameObject avatarCopy = UnityEngine.Object.Instantiate(sourceAvatar.gameObject);
                 avatarCopy.name = "Avatar";
                 avatarCopy.transform.SetParent(target.transform);
@@ -1144,7 +1176,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Create a basic avatar when we can't copy from existing sources
+        /// Reduced last-resort avatar used only when legacy live-source cloning fails. The
+        /// generated object has no authored clothing/body graph beyond what this method adds.
         /// </summary>
         private static void CreateBasicAvatar(GameObject npc, object npcComponent)
         {
@@ -1189,7 +1222,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Creates default avatar settings for jail NPCs
+        /// Legacy settings fallback that reuses another live NPC's settings or creates a
+        /// minimal ScriptableObject. It is not runtime validation of an authored avatar asset.
         /// </summary>
         private static object CreateDefaultAvatarSettings(string npcName)
         {
@@ -1285,7 +1319,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Attempts to clone an existing NPC's visual representation
+        /// Legacy visual-only cloning helper. It is retained for old construction experiments
+        /// and falls back to a capsule mesh when no live source is available; it does not add
+        /// canonical NPC behavior or network dependencies.
         /// </summary>
         private static void AddNPCModel(GameObject npc)
         {
@@ -1334,7 +1370,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Copies visual components from source NPC to target NPC
+        /// Copies only renderer/mesh data from a live source. Bone references remain source
+        /// references where present, so this reduced helper is unsuitable as a canonical
+        /// avatar/template replacement.
         /// </summary>
         private static void CopyVisualComponents(GameObject sourceNPC, GameObject targetNPC)
         {
@@ -1403,7 +1441,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Adds basic visual mesh representation as fallback
+        /// Adds a capsule/material diagnostic visual when legacy visual sources are absent.
+        /// This is intentionally a reduced fallback and does not establish avatar parity.
         /// </summary>
         private static void AddBasicVisualMesh(GameObject npc)
         {
@@ -1446,9 +1485,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Adds jail-specific behavior components based on NPC type
-        /// Note: The actual behavior components will be added after NPC creation in Core.cs
-        /// This is just a placeholder for future behavior additions
+        /// Legacy marker for later behavior assignment. It only appends the type to the object
+        /// name; it does not attach or initialize the canonical jail behavior components.
         /// </summary>
         private static void AddJailSpecificBehavior(GameObject npc, NPCType npcType)
         {
@@ -1497,7 +1535,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Initialize NavMesh positioning and ensure NPC is on the NavMesh
+        /// Legacy local NavMesh positioning entry point. Current native-template spawning uses
+        /// the lifecycle's validation/positioning contract; this helper only starts the old
+        /// component-built object's coroutine.
         /// </summary>
         private static void InitializeNavMeshPositioning(GameObject npc)
         {
@@ -1520,7 +1560,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Coroutine to ensure NPC is properly positioned on NavMesh
+        /// Legacy NavMesh positioning coroutine. It samples a local/distant point and can start
+        /// the reduced patrol loop; success here does not establish canonical NPC navigation.
         /// </summary>
 #if MONO
         private static System.Collections.IEnumerator InitializeNavMeshCoroutine(GameObject npc, UnityEngine.AI.NavMeshAgent navAgent)
@@ -1598,7 +1639,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Basic patrol behavior for NPCs using NavMesh
+        /// Reduced diagnostic patrol loop for component-built objects. It is not the canonical
+        /// guard, inmate, parole, or intake schedule/state machine.
         /// </summary>
 #if MONO
         private static System.Collections.IEnumerator BasicPatrolBehavior(GameObject npc, UnityEngine.AI.NavMeshAgent navAgent)

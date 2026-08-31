@@ -29,36 +29,66 @@ namespace Behind_Bars.Systems.NPCs
 
         #region State Machine Definition
 
+        /// <summary>
+        /// Detailed intake workflow state. This state is authoritative for booking progression; the
+        /// inherited <see cref="BaseJailNPC.NPCState"/> is retained only for shared movement plumbing.
+        /// </summary>
         public enum IntakeState
         {
+            /// <summary>Officer is available at the booking post.</summary>
             Idle,                    // At Booking/GuardPoint[0]
+            /// <summary>Officer is waiting for the booking process to announce a prisoner.</summary>
             WaitingForBooking,       // Monitoring for booking event
+            /// <summary>Officer waits the configured short delay before fetching the prisoner.</summary>
             DelayBeforeFetch,        // 5-10 second random delay
+            /// <summary>Officer navigates to the tracked holding cell.</summary>
             EscortToHolding,         // Walk to holding cell
+            /// <summary>Officer is requesting the tracked holding-cell door to open.</summary>
             OpeningHoldingDoor,      // Open holding cell door
+            /// <summary>Officer waits until the prisoner clears the holding-cell doorway.</summary>
             WaitingForPlayerExit,    // Check holding cell bounds
+            /// <summary>Officer is securing the holding-cell door before the next station.</summary>
             ClosingHoldingDoor,      // Close holding cell door
+            /// <summary>Officer navigates to the mugshot station.</summary>
             EscortToMugshot,         // Navigate to mugshot station
+            /// <summary>Officer waits for the booking process to complete the mugshot.</summary>
             WaitingForMugshot,       // BookingProcess.mugshotComplete
+            /// <summary>Officer navigates to the fingerprint scanner.</summary>
             EscortToScanner,         // Navigate to scanner station
+            /// <summary>Officer waits for the booking process to complete fingerprinting.</summary>
             WaitingForScan,          // BookingProcess.fingerprintComplete
+            /// <summary>Officer navigates to the storage area.</summary>
             EscortToStorage,         // Navigate to storage area
+            /// <summary>Officer waits for prison-gear pickup to complete.</summary>
             WaitingForStorage,       // BookingProcess.inventoryDropOffComplete
+            /// <summary>Officer navigates to the assigned cell.</summary>
             EscortToCell,            // Navigate to assigned cell
+            /// <summary>Officer is requesting the assigned cell door to open.</summary>
             OpeningCellDoor,         // Open jail cell door
+            /// <summary>Officer waits until the prisoner enters the assigned cell bounds.</summary>
             WaitingForCellEntry,     // Check cell bounds
+            /// <summary>Officer is securing the assigned cell door.</summary>
             ClosingCellDoor,         // Close jail cell door
+            /// <summary>Officer returns to the booking/guard post after the workflow finishes.</summary>
             ReturningToPost          // Back to guard point
         }
 
         [System.Serializable]
         public class IntakeStation
         {
+            /// <summary>Stable key used to select this station from the intake state machine.</summary>
             public string stationName;
+            /// <summary>Name used to resolve the station's door/navigation point.</summary>
             public string doorPointName;
+            /// <summary>Instruction sent before the officer waits or escorts at this station.</summary>
             public string guardMessage;
+            /// <summary>World-space dialogue display duration, in seconds.</summary>
             public float messageDuration = 3f;
 #if MONO
+            /// <summary>
+            /// Optional MONO-only completion predicate. IL2CPP intentionally does not expose this delegate
+            /// surface; IL2CPP completion is driven by the native booking flags handled by this class.
+            /// </summary>
             public System.Func<bool> completionCheck;
 #endif
         }
@@ -67,6 +97,7 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Component References
 
+        /// <summary>Native booking process whose completion flags and events drive intake progression.</summary>
         private BookingProcess bookingProcess;
 
         #endregion
@@ -76,48 +107,77 @@ namespace Behind_Bars.Systems.NPCs
 #if MONO
         [SerializeField]
 #endif
+        /// <summary>
+        /// Authoritative detailed intake state. The <c>new</c> declaration intentionally shadows the base
+        /// coarse state; <see cref="Start"/> saves/restores it around base initialization.
+        /// </summary>
         private new IntakeState currentState = IntakeState.Idle;
+        /// <summary>The prisoner currently owned by this intake workflow, or null while idle.</summary>
         private Player currentPrisoner;
+        /// <summary>Resolved booking/guard post used when returning the officer after intake.</summary>
         private Transform guardPostTransform;
+        /// <summary>Assigned jail-cell number for the current prisoner, or -1 until assignment succeeds.</summary>
         private int assignedCellNumber = -1;
+        /// <summary>Runtime holding-cell index containing the current prisoner, or -1 when none is tracked.</summary>
         private int currentHoldingCellIndex = -1;  // Which holding cell contains the current prisoner
+        /// <summary>Stable holding-cell name retained for logs and disciplinary resume decisions.</summary>
         private string currentHoldingCellName = "";
+        /// <summary>Prisoner reserved for a disciplinary repeat intake from a specific holding cell.</summary>
         private Player requiredHoldingCellPrisoner;
+        /// <summary>Holding-cell name required by the pending disciplinary repeat intake.</summary>
         private string requiredHoldingCellName = "";
+        /// <summary>True while resuming a prior booking and preserving completed station flags.</summary>
         private bool resumingDisciplinaryIntake;
         // A punishment-cell repeat starts on the booking side of the inner corridor door.
         // A direct cell escort must therefore traverse that door before the prison-entry door.
+        /// <summary>
+        /// Indicates that a disciplinary repeat must cross the booking inner door before the prison-entry
+        /// door. This route-specific flag is cleared when the repeat checkpoint is resumed.
+        /// </summary>
         private bool requiresBookingInnerDoorBeforeCellEscort;
 
-        // State tracking to prevent spam
+        /// <summary>Prevents repeated holding-cell exit handling before the door is secured.</summary>
         private bool playerExitDetected = false;
+        /// <summary>Tracks whether the current holding/cell door close request has already begun.</summary>
         private bool doorCloseInitiated = false;
 
-        // Timing variables
+        /// <summary>Unity-time start of the detailed intake state; shadows the base state timestamp.</summary>
         private new float stateStartTime;
+        /// <summary>Randomized delay used by <see cref="IntakeState.DelayBeforeFetch"/>.</summary>
         private float delayDuration;
+        /// <summary>Next Unity-time retry for cell assignment after booking data is not ready.</summary>
         private float nextCellAssignmentRetryTime;
+        /// <summary>Minimum interval between cell-assignment retries, in Unity seconds.</summary>
         private const float CellAssignmentRetryInterval = 2f;
 
-        // Station definitions
+        /// <summary>Station definitions keyed by the names used by navigation and dialogue mapping.</summary>
         private Dictionary<string, IntakeStation> intakeStations;
+        /// <summary>Current station key used for destination and UI command de-duplication.</summary>
         private string currentTargetStation = "";
 
-        // Dialogue system
+        /// <summary>Optional dialogue surface initialized after the native NPC graph is ready.</summary>
         private JailNPCDialogueController dialogueController;
+        /// <summary>Legacy escort marker retained for current state/UI distance decisions.</summary>
         private bool isEscorting = false;
+        /// <summary>Last station/cell destination used by escort distance checks.</summary>
         private Vector3 destinationPosition;
 
-        // Continuous rotation system
+        /// <summary>Opaque handle for the global continuous-looking coroutine.</summary>
         private object continuousLookingCoroutine;
+        /// <summary>Opaque handle for the delayed player-facing command coroutine.</summary>
         private object playerFacingCommandCoroutine;
+        /// <summary>Opaque handle for the mugshot announcement/escort coroutine.</summary>
         private object mugshotEscortCoroutine;
+        /// <summary>Opaque handle reserved for delayed door closure work.</summary>
         private object delayedDoorCloseCoroutine;
+        /// <summary>Opaque handle for resuming navigation after a native door operation.</summary>
         private object delayedNavigationResumeCoroutine;
+        /// <summary>Opaque handle for a deferred retry of the booking event.</summary>
         private object retryIntakeCoroutine;
+        /// <summary>Opaque handle for fallback direct-door closure after escort clearance.</summary>
         private object fallbackDoorCloseCoroutine;
 
-        // Destination tracking to prevent duplicate events
+        /// <summary>Tracks which station destinations have already fired their arrival transition.</summary>
         private Dictionary<string, bool> stationDestinationProcessed = new Dictionary<string, bool>();
 
         #endregion
@@ -125,9 +185,13 @@ namespace Behind_Bars.Systems.NPCs
         #region Events
 
 #if MONO
+        /// <summary>Raised after the detailed intake state changes; MONO-only delegate surface.</summary>
         public new System.Action<IntakeState> OnStateChanged;
+        /// <summary>Raised when a prisoner enters the intake workflow; MONO-only.</summary>
         public System.Action<Player> OnIntakeStarted;
+        /// <summary>Raised after the prisoner is secured and intake state is reset; MONO-only.</summary>
         public System.Action<Player> OnIntakeCompleted;
+        /// <summary>Raised when the officer confirms arrival at a named station; MONO-only.</summary>
         public System.Action<string> OnStationReached;
 #endif
 
@@ -135,12 +199,21 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Initialization
 
+        /// <summary>
+        /// Runs the base component discovery. Security-door lookup is intentionally deferred until the
+        /// JailController is available, so startup does not cache a stale scene reference.
+        /// </summary>
         protected override void Awake()
         {
             base.Awake(); // Initialize BaseJailNPC
             // SecurityDoor will be retrieved from JailController when needed
         }
 
+        /// <summary>
+        /// Completes intake initialization after the base class has resolved shared components. The detailed
+        /// intake state is saved around <see cref="BaseJailNPC.Start"/> because this class intentionally
+        /// shadows the base coarse state field.
+        /// </summary>
         protected override void Start()
         {
             // Save current intake state before base initialization
@@ -160,6 +233,10 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Debug($"IntakeOfficerStateMachine initialized for {gameObject.name}");
         }
 
+        /// <summary>
+        /// Installs the security-door surface and enters the authoritative detailed idle state after base
+        /// component/avatar initialization has completed.
+        /// </summary>
         protected override void InitializeNPC()
         {
             // Ensure SecurityDoorBehavior component is attached
@@ -169,6 +246,10 @@ namespace Behind_Bars.Systems.NPCs
             ChangeIntakeState(IntakeState.Idle);
         }
 
+        /// <summary>
+        /// Ensures exactly one safe <see cref="SecurityDoorBehavior"/> is attached. Door references remain
+        /// resolved by the JailController when operations are requested.
+        /// </summary>
         private void EnsureSecurityDoorComponent()
         {
             // Check if SecurityDoorBehavior is already attached
@@ -185,6 +266,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Builds the canonical station table used by escort navigation, guard messages, and state-to-UI
+        /// command mapping. Station keys are workflow identifiers, not scene object names by themselves.
+        /// </summary>
         private void InitializeStations()
         {
             intakeStations = new Dictionary<string, IntakeStation>
@@ -220,6 +305,7 @@ namespace Behind_Bars.Systems.NPCs
             };
         }
 
+        /// <summary>Resolves the first booking guard spawn as the officer's return post.</summary>
         private void FindGuardPost()
         {
             // Find the guard's assigned post (Booking/GuardPoint[0])
@@ -235,6 +321,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Subscribes once to booking and security-door completion/failure events. Matching removal occurs in
+        /// <see cref="OnDestroy"/>; movement completion is delivered by the base destination hook.
+        /// </summary>
         private void SubscribeToEvents()
         {
             // Subscribe to booking process events
@@ -264,6 +354,7 @@ namespace Behind_Bars.Systems.NPCs
             // Movement completion is handled via BaseJailNPC.NotifyDestinationReached override.
         }
 
+        /// <summary>Starts bounded retry initialization for the optional dialogue controller.</summary>
         private void InitializeDialogueSystem()
         {
             // Use a coroutine to retry getting the dialogue controller
@@ -271,6 +362,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
 #if MONO
+        /// <summary>
+        /// Waits briefly for <see cref="JailNPCDialogueController"/>, then installs intake-specific dialogue
+        /// states. The retry is bounded so a missing controller cannot leave an untracked global coroutine.
+        /// </summary>
         private System.Collections.IEnumerator WaitForDialogueController()
 #else
 #if !MONO
@@ -352,13 +447,18 @@ namespace Behind_Bars.Systems.NPCs
         #region State Machine Core
 
         /// <summary>
-        /// Performance: Override OnEnable to use custom state update handler
+        /// Re-registers the intake officer with the base throttled update manager. Intake-specific work is
+        /// appended by <see cref="OnStateUpdateTick"/> after the base movement/state tick.
         /// </summary>
         protected override void OnEnable()
         {
             base.OnEnable();
         }
 
+        /// <summary>
+        /// Stops pending intake commands and then unregisters from the base update manager. This prevents a
+        /// disabled officer from retaining door, escort, or dialogue coroutine work.
+        /// </summary>
         protected override void OnDisable()
         {
             AbortPendingIntakeActions();
@@ -366,8 +466,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Custom state update handler that includes intake state machine logic
+        /// Runs the base throttled tick, then the authoritative detailed intake state machine and escort-door
+        /// trigger polling. The detailed state—not the inherited coarse state—determines booking progression.
         /// </summary>
+        /// <param name="currentTime">Unity-time value supplied by the base update manager.</param>
         protected override void OnStateUpdateTick(float currentTime)
         {
             base.OnStateUpdateTick(currentTime);
@@ -382,6 +484,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Dispatches each detailed intake state to its handler. Escort states share movement completion,
+        /// while waiting/door states advance only from their corresponding native booking or door condition.
+        /// </summary>
         private void UpdateStateMachine()
         {
             switch (currentState)
@@ -442,6 +548,11 @@ namespace Behind_Bars.Systems.NPCs
 
         }
 
+        /// <summary>
+        /// Performs an intake-state transition in the fixed order: assign timestamp, notify MONO listeners,
+        /// update dialogue/UI, then execute state-entry side effects. Re-entering the same state is ignored.
+        /// </summary>
+        /// <param name="newState">Detailed workflow state to enter.</param>
         private void ChangeIntakeState(IntakeState newState)
         {
             if (currentState == newState) return;
@@ -466,6 +577,11 @@ namespace Behind_Bars.Systems.NPCs
             OnStateEnter(newState);
         }
 
+        /// <summary>
+        /// Maps the detailed intake state to the exact dialogue state shown to the player. Escort and action
+        /// labels are intentionally state-specific so an old generic instruction cannot outlive a transition.
+        /// </summary>
+        /// <param name="state">Detailed intake state whose dialogue should be selected.</param>
         private void UpdateDialogueForState(IntakeState state)
         {
             if (dialogueController == null)
@@ -508,6 +624,10 @@ namespace Behind_Bars.Systems.NPCs
             dialogueController.UpdateGreetingForState(dialogueState);
         }
 
+        /// <summary>
+        /// Reports whether the officer is in an escort-adjacent state and still more than three world units
+        /// from its tracked destination. This feeds command wording, not workflow progression.
+        /// </summary>
         private bool IsCurrentlyEscorting()
         {
             // Check if we're in an escort state
@@ -528,8 +648,11 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Update officer command notification based on current state
+        /// Updates the officer-command surface for states that require a player instruction. This surface is
+        /// the authoritative higher-priority instruction channel; the tier-status UI must yield while it is
+        /// visible rather than replacing these state-specific commands.
         /// </summary>
+        /// <param name="state">Detailed intake state to render.</param>
         private void UpdateOfficerCommandNotification(IntakeState state)
         {
             // Check if we should show a command notification for this state
@@ -552,9 +675,8 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        /// <summary>
-        /// Determine if this state should display a command notification
-        /// </summary>
+        /// <summary>Returns whether the supplied intake state has a player-facing officer command.</summary>
+        /// <param name="state">Detailed intake state to test.</param>
         private bool ShouldShowCommandNotification(IntakeState state)
         {
             return state switch
@@ -573,8 +695,11 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Get command data for the current state
+        /// Creates command data for the supplied state, including whether the player is still being escorted.
+        /// This helper is hidden from IL2CPP because its nullable/value-object surface is consumed internally.
         /// </summary>
+        /// <param name="state">Detailed intake state to translate.</param>
+        /// <returns>Command data for instruction-bearing states; null for states without an instruction.</returns>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -633,9 +758,7 @@ namespace Behind_Bars.Systems.NPCs
             };
         }
 
-        /// <summary>
-        /// Hide officer command notification
-        /// </summary>
+        /// <summary>Hides the higher-priority officer-command surface when intake returns to its post.</summary>
         private void HideOfficerCommandNotification()
         {
             try
@@ -648,6 +771,11 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Performs state-entry side effects such as station navigation, cell-door opening, return-to-post,
+        /// and command cleanup. Waiting states intentionally do not start new navigation here.
+        /// </summary>
+        /// <param name="state">Detailed state just entered.</param>
         private void OnStateEnter(IntakeState state)
         {
             switch (state)
@@ -692,6 +820,7 @@ namespace Behind_Bars.Systems.NPCs
 
         #region State Handlers
 
+        /// <summary>Holds the officer at the booking post while the booking event subscription remains active.</summary>
         private new void HandleIdleState()
         {
             // Stay at guard post and monitor for booking events
@@ -707,6 +836,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Advances from the short fetch delay to the holding-cell escort when its Unity-time window expires.</summary>
         private void HandleDelayState()
         {
             if (Time.time - stateStartTime >= delayDuration)
@@ -716,6 +846,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Waits for the current prisoner to clear the tracked holding-cell doorway, then permits the
+        /// holding door to close exactly once. A missing prisoner returns the officer to idle.
+        /// </summary>
         private void HandleWaitingForPlayerExitState()
         {
             if (currentPrisoner == null)
@@ -745,6 +879,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Waits for the native booking process to set its mugshot-complete flag.</summary>
         private void HandleWaitingForMugshotState()
         {
             if (bookingProcess != null && bookingProcess.mugshotComplete)
@@ -753,6 +888,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Waits for the native booking process to set its fingerprint-complete flag.</summary>
         private void HandleWaitingForScanState()
         {
             if (bookingProcess != null && bookingProcess.fingerprintComplete)
@@ -761,6 +897,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Waits for prison-gear pickup, periodically logging the pending native completion condition.</summary>
         private void HandleWaitingForStorageState()
         {
             if (bookingProcess != null)
@@ -784,6 +921,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Waits for the prisoner to enter the assigned cell bounds before securing its door.</summary>
         private void HandleWaitingForCellEntryState()
         {
             if (currentPrisoner == null)
@@ -804,6 +942,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Opens the tracked holding-cell door and transitions to the doorway-exit wait.</summary>
         private void HandleOpeningHoldingDoorState()
         {
             // Use the stored holding cell index from when intake started
@@ -837,6 +976,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Revalidates disciplinary-cell exit, closes the holding door, and continues at the first unfinished
+        /// booking station or the normal mugshot route.
+        /// </summary>
         private void HandleClosingHoldingDoorState()
         {
             if (currentHoldingCellIndex < 0)
@@ -918,6 +1061,7 @@ namespace Behind_Bars.Systems.NPCs
             BeginCellEscortAfterAssignment();
         }
 
+        /// <summary>Announces the cell-entry instruction and begins waiting for the prisoner to enter.</summary>
         private void HandleOpeningCellDoorState()
         {
             // Door opening should complete quickly, then wait for player entry
@@ -925,6 +1069,10 @@ namespace Behind_Bars.Systems.NPCs
             ChangeIntakeState(IntakeState.WaitingForCellEntry);
         }
 
+        /// <summary>
+        /// Secures the assigned cell, finalizes native booking after the prisoner is actually inside, and
+        /// returns the officer to the post workflow.
+        /// </summary>
         private void HandleClosingCellDoorState()
         {
             // Door closing should complete quickly, then return to post
@@ -938,6 +1086,10 @@ namespace Behind_Bars.Systems.NPCs
             ChangeIntakeState(IntakeState.ReturningToPost);
         }
 
+        /// <summary>
+        /// Monitors escort movement using direct distance or NavMesh remaining distance. There is deliberately
+        /// no timeout: long routes from distant cells must not be abandoned by this state machine.
+        /// </summary>
         private void HandleEscortState()
         {
             // Monitor movement progress during escort states
@@ -960,6 +1112,11 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Navigation and Escort
 
+        /// <summary>
+        /// Resolves a named station door point, records it as the state-owned destination, and starts the
+        /// escort. Mugshot navigation is delayed so its instruction remains visible before movement begins.
+        /// </summary>
+        /// <param name="stationName">Canonical key from <see cref="intakeStations"/>.</param>
         private void NavigateToStation(string stationName)
         {
             if (!intakeStations.ContainsKey(stationName))
@@ -1009,6 +1166,13 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>
+        /// Holds the mugshot officer long enough to deliver the instruction, then starts movement only if the
+        /// intake state and destination are still valid. The handle is cleared on both success and cancellation.
+        /// </summary>
+        /// <param name="doorPoint">Resolved mugshot navigation point.</param>
+        /// <param name="message">Instruction to deliver before movement.</param>
+        /// <param name="duration">Instruction display duration in seconds.</param>
         private IEnumerator AnnounceMugshotThenStartEscort(Transform doorPoint, string message, float duration)
         {
             yield return WaitForPlayerFacingThenSendGuardMessage(message, duration);
@@ -1028,6 +1192,10 @@ namespace Behind_Bars.Systems.NPCs
             mugshotEscortCoroutine = null;
         }
 
+        /// <summary>
+        /// Resolves the assigned cell door point and starts the cell escort. If the door point is unavailable,
+        /// it attempts native door opening and finally falls back to the cell transform as a position-only route.
+        /// </summary>
         private void NavigateToAssignedCell()
         {
             if (assignedCellNumber < 0)
@@ -1096,6 +1264,10 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Info($"IntakeOfficer: Distance to cell: {Vector3.Distance(transform.position, cell.cellDoor.doorPoint.position):F2}m");
         }
 
+        /// <summary>
+        /// Moves the officer back to the booking post while securing intake doors. If no post exists, completes
+        /// the workflow immediately after door cleanup rather than leaving the prisoner/coordinator state live.
+        /// </summary>
         private void ReturnToGuardPost()
         {
             if (guardPostTransform != null)
@@ -1120,7 +1292,9 @@ namespace Behind_Bars.Systems.NPCs
         #region Door Management
 
         /// <summary>
-        /// Get the centralized SecurityDoor system from JailController
+        /// Resolves the officer-local security-door component first, then the centralized JailController
+        /// component. The result may be null during startup, in which case callers use their documented
+        /// recovery path.
         /// </summary>
         private SecurityDoorBehavior GetSecurityDoor()
         {
@@ -1135,6 +1309,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
 
+        /// <summary>
+        /// Secures every door this workflow may have opened, including the tracked holding cell and the
+        /// assigned cell when recreation is inactive. It must run before intake references are reset.
+        /// </summary>
         private void CloseAllIntakeDoors()
         {
             var jailController = Core.JailController;
@@ -1168,6 +1346,10 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Door Integration
 
+        /// <summary>
+        /// Polls escort states for the next required SecurityDoor operation. A disciplinary direct-cell route
+        /// crosses the booking inner door before the prison-entry door; duplicate triggers are suppressed.
+        /// </summary>
         private void CheckForDoorTriggers()
         {
             // SecurityDoor integration - trigger appropriate door operations based on escort state
@@ -1191,18 +1373,33 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Receives a direct door-trigger notification but currently performs no door operation. The security
+        /// door state machine remains the active owner; this public hook is retained for compatibility and its
+        /// no-op status must not be mistaken for completed trigger handling.
+        /// </summary>
+        /// <param name="triggerName">Compatibility trigger name received from an external door surface.</param>
         public void HandleDoorTrigger(string triggerName)
         {
-            // Note: Direct door trigger handling will be implemented in future version
+            // Direct trigger handling remains intentionally disabled; SecurityDoorBehavior owns operations.
             ModLogger.Debug($"IntakeOfficer: Door trigger received: {triggerName}");
         }
 
+        /// <summary>
+        /// Compatibility callback for a generic door completion notification. It currently records the event
+        /// only; stateful continuation is handled by <see cref="HandleSecurityDoorOperationComplete"/>.
+        /// </summary>
+        /// <param name="doorName">Door identifier reported by the generic callback.</param>
         private void HandleDoorOperationComplete(string doorName)
         {
             ModLogger.Debug($"IntakeOfficer: Door operation complete for {doorName}");
-            // Continue with current objective after door operation
         }
 
+        /// <summary>
+        /// Returns navigation ownership to the intake state machine after the centralized security door has
+        /// physically completed. Resumption is deferred one frame to avoid re-entering from the event stack.
+        /// </summary>
+        /// <param name="doorName">Door identifier reported by the native security-door system.</param>
         private void HandleSecurityDoorOperationComplete(string doorName)
         {
             ModLogger.Info($"IntakeOfficer: SecurityDoor operation completed for {doorName}");
@@ -1222,6 +1419,10 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
 #endif
+        /// <summary>
+        /// Performs the one-frame handoff from SecurityDoorBehavior back to the state-owned escort route.
+        /// The coroutine is intentionally frame-based, not a gameplay delay, and clears its opaque handle.
+        /// </summary>
         private IEnumerator DelayedNavigationResume()
         {
             // Let the completed-door event return before transferring NavMesh
@@ -1250,6 +1451,11 @@ namespace Behind_Bars.Systems.NPCs
             delayedNavigationResumeCoroutine = null;
         }
 
+        /// <summary>
+        /// Clears centralized-door ownership, attempts a recovery-only direct-door operation, and schedules
+        /// the normal escort route to resume. Direct fallback does not replace canonical SecurityDoor behavior.
+        /// </summary>
+        /// <param name="doorName">Door identifier reported by the native security-door system.</param>
         private void HandleSecurityDoorOperationFailed(string doorName)
         {
             ModLogger.Error($"IntakeOfficer: SecurityDoor operation FAILED for {doorName} - attempting fallback");
@@ -1288,12 +1494,13 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Info($"IntakeOfficer: SecurityDoor fallback complete for {doorName}; scheduling escort route resume");
         }
 
-        // Track which SecurityDoor operations have been triggered to prevent re-triggering
+        /// <summary>Door operation keys already issued for the current escort route.</summary>
         private HashSet<string> triggeredDoorOperations = new HashSet<string>();
 
-        // Track when SecurityDoor is active to pause destination checking
+        /// <summary>True while SecurityDoorBehavior owns the agent at a door threshold.</summary>
         private bool isSecurityDoorActive = false;
 
+        /// <summary>Requests the booking inner-door operation once for storage or disciplinary cell routes.</summary>
         private void TriggerBookingInnerDoorIfNeeded()
         {
             // Check if we've already triggered the booking inner door operation
@@ -1329,6 +1536,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Requests the prison-entry door once for a cell escort after its prerequisite route is clear.</summary>
         private void TriggerPrisonEntryDoorIfNeeded()
         {
             // Check if we've already triggered the prison entry door operation
@@ -1364,6 +1572,12 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Performs a recovery-only direct door operation when SecurityDoorBehavior is unavailable or fails.
+        /// This path opens the named door but does not move the officer or provide native completion events.
+        /// </summary>
+        /// <param name="doorType">Canonical fallback door key.</param>
+        /// <returns>True when the direct door operation was accepted.</returns>
         private bool FallbackDirectDoorControl(string doorType)
         {
             // Fallback to direct door control if SecurityDoor is not available
@@ -1397,6 +1611,11 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>
+        /// Starts the recovery-only closure coroutine for a directly opened door after the escort clears its
+        /// threshold. The stored position is used to detect clearance without a SecurityDoor callback.
+        /// </summary>
+        /// <param name="doorType">Canonical fallback door key.</param>
         private void ScheduleFallbackDoorClosure(string doorType)
         {
             StopPendingFallbackDoorClosure();
@@ -1406,6 +1625,12 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>
+        /// Waits for both escort participants to clear a fallback door threshold, then closes the direct door.
+        /// The coroutine is a recovery path only and must not be treated as canonical door synchronization.
+        /// </summary>
+        /// <param name="doorType">Canonical fallback door key.</param>
+        /// <param name="fallbackStartPosition">Officer position captured when fallback opened the door.</param>
         private IEnumerator CloseFallbackDoorAfterEscortClears(string doorType, Vector3 fallbackStartPosition)
         {
             const float clearanceMeters = 1.15f;
@@ -1438,6 +1663,7 @@ namespace Behind_Bars.Systems.NPCs
                 fallbackDoorCloseCoroutine = null;
             }
         }
+        /// <summary>Clears per-intake door operation keys and ownership flags before a new workflow begins.</summary>
         private void ResetDoorTracking()
         {
             // Clear triggered door operations when starting new intake process
@@ -1446,6 +1672,12 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Debug("IntakeOfficer: Door operation and destination tracking reset for new intake process");
         }
 
+        /// <summary>
+        /// Converts a validated navigation arrival into the next detailed intake state. Arrivals are ignored
+        /// while SecurityDoorBehavior owns movement, while a waiting state is already active, or when the
+        /// destination does not match the state-owned station/cell target.
+        /// </summary>
+        /// <param name="destination">World-space destination reported by base navigation.</param>
         private void HandleDestinationReached(Vector3 destination)
         {
             // Ignore destination events when SecurityDoor is actively controlling the guard
@@ -1520,6 +1752,13 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Validates an arrival against the station/cell target for the current escort state and suppresses
+        /// duplicate station events. Missing JailController/door-point data is treated as permissive only where
+        /// the existing recovery path explicitly allows it.
+        /// </summary>
+        /// <param name="destination">World-space destination reported by base navigation.</param>
+        /// <returns>True when the arrival may advance the detailed intake state.</returns>
         private bool IsAtCorrectDestinationForState(Vector3 destination)
         {
             var jailController = Core.JailController;
@@ -1567,6 +1806,9 @@ namespace Behind_Bars.Systems.NPCs
             return true; // Allow for other states
         }
 
+        /// <summary>Maps station escort states to their canonical JailController guard-point keys.</summary>
+        /// <param name="state">Detailed intake state to map.</param>
+        /// <returns>Station key, or null for non-station states.</returns>
         private string GetStationNameForState(IntakeState state)
         {
             switch (state)
@@ -1579,6 +1821,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Checks whether an arrival is inside the requested station door-point tolerance.</summary>
+        /// <param name="stationName">JailController station key.</param>
+        /// <param name="destination">Reported world-space arrival.</param>
+        /// <param name="tolerance">Maximum acceptable distance in world units.</param>
         private bool IsNearDoorPoint(string stationName, Vector3 destination, float tolerance)
         {
             var doorPoint = FindDoorPoint(stationName);
@@ -1589,7 +1835,10 @@ namespace Behind_Bars.Systems.NPCs
             return distance <= tolerance;
         }
 
-        // Override base class movement handling to prevent NPCState.Idle interference
+        /// <summary>
+        /// Handles base movement completion without transitioning the inherited coarse state to idle. The
+        /// detailed intake state machine owns the next transition and must not be interrupted by the base hook.
+        /// </summary>
         protected override void HandleMovingState()
         {
             // Instead of calling base.HandleMovingState(), handle movement ourselves
@@ -1602,17 +1851,27 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        // Override base class ChangeState to prevent interference with our intake state machine
+        /// <summary>
+        /// Intentionally ignores coarse <see cref="BaseJailNPC.NPCState"/> changes. Intake progression is
+        /// owned by <see cref="ChangeIntakeState"/>; this no-op prevents base navigation completion from
+        /// collapsing an escort into idle. It is not a substitute for detailed state transitions.
+        /// </summary>
+        /// <param name="newState">Ignored coarse state requested by base/other callers.</param>
         public override void ChangeState(NPCState newState)
         {
-            // Completely ignore base class state changes - we manage our own state
-            // (Removed spammy logging)
+            // Intentionally empty: the detailed intake state machine owns progression.
         }
 
         #endregion
 
         #region Event Handlers
 
+        /// <summary>
+        /// Claims an idle officer for a booking event, resolves the prisoner's actual holding cell, resets
+        /// per-intake tracking, and starts the delayed fetch state. Coordination failure schedules one bounded
+        /// retry instead of allowing two officers to escort the same prisoner.
+        /// </summary>
+        /// <param name="player">Prisoner announced by the booking process.</param>
         private void HandleBookingStarted(Player player)
         {
             if (currentState != IntakeState.Idle)
@@ -1693,6 +1952,12 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>
+        /// Retries a coordination-blocked booking only if the officer is still idle and the prisoner remains
+        /// valid. The opaque coroutine handle is cleared before retrying.
+        /// </summary>
+        /// <param name="player">Prisoner whose booking should be retried.</param>
+        /// <param name="delay">Retry delay in Unity seconds.</param>
         private IEnumerator RetryIntakeAfterDelay(Player player, float delay)
         {
             yield return new WaitForSeconds(delay);
@@ -1707,6 +1972,8 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Records a mugshot completion event; the state tick performs the actual transition.</summary>
+        /// <param name="player">Player associated with the booking event.</param>
         private void HandleMugshotCompleted(Player player)
         {
             if (currentState == IntakeState.WaitingForMugshot)
@@ -1715,6 +1982,8 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Records a fingerprint completion event; the state tick performs the actual transition.</summary>
+        /// <param name="player">Player associated with the booking event.</param>
         private void HandleFingerprintCompleted(Player player)
         {
             if (currentState == IntakeState.WaitingForScan)
@@ -1723,6 +1992,11 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Advances storage completion to cell assignment only when the officer is waiting at storage; events
+        /// from another booking phase are logged and ignored.
+        /// </summary>
+        /// <param name="player">Player associated with the booking event.</param>
         private void HandleInventoryCompleted(Player player)
         {
             ModLogger.Info($"HandleInventoryCompleted called for {player?.name} while in state {currentState}");
@@ -1742,6 +2016,8 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Utility Methods
 
+        /// <summary>Returns whether a detailed state represents active station/cell escort movement.</summary>
+        /// <param name="state">State to test.</param>
         private bool IsEscortState(IntakeState state)
         {
             return state == IntakeState.EscortToHolding ||
@@ -1752,6 +2028,12 @@ namespace Behind_Bars.Systems.NPCs
         }
 
 
+        /// <summary>
+        /// Resolves a JailController guard point, targeted holding-cell point, or cell hierarchy door point.
+        /// Holding-cell lookup is intentionally keyed by the tracked runtime cell rather than traversal order.
+        /// </summary>
+        /// <param name="stationName">Canonical station or jail-cell key.</param>
+        /// <returns>Resolved navigation point, or null when the scene graph has no matching point.</returns>
         private Transform FindDoorPoint(string stationName)
         {
             var jailController = Core.JailController;
@@ -1850,6 +2132,10 @@ namespace Behind_Bars.Systems.NPCs
             return null;
         }
 
+        /// <summary>
+        /// Attempts assignment after storage completion and enters cell escort only when a canonical cell is
+        /// returned. Failed assignment leaves the prisoner at storage and retries at the configured interval.
+        /// </summary>
         private void BeginCellEscortAfterAssignment()
         {
             if (Time.time < nextCellAssignmentRetryTime)
@@ -1868,6 +2154,11 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Warn($"IntakeOfficer: Cell assignment unavailable; retaining {currentPrisoner?.name} at storage and retrying in {CellAssignmentRetryInterval:F0}s");
         }
 
+        /// <summary>
+        /// Requests a cell from the central assignment manager. No fallback cell is selected when the manager
+        /// is unavailable or returns failure; the caller owns the retry schedule.
+        /// </summary>
+        /// <returns>True when an assigned cell number is available.</returns>
         private bool TryAssignPrisonerCell()
         {
             if (currentPrisoner == null)
@@ -1897,6 +2188,10 @@ namespace Behind_Bars.Systems.NPCs
             return false;
         }
 
+        /// <summary>
+        /// Closes the assigned cell unless its tier is currently in active recreation. Recreation ownership
+        /// belongs to the jail lifecycle manager, so intake must preserve an intentionally open recreation cell.
+        /// </summary>
         private void CloseCellDoor()
         {
             if (assignedCellNumber < 0) return;
@@ -1929,6 +2224,11 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>
+        /// Closes the assigned cell during generic intake cleanup only when recreation is inactive. This
+        /// helper is hidden from IL2CPP because it is an internal lifecycle bridge, not an injected API.
+        /// </summary>
+        /// <param name="jailController">Current jail controller used for lifecycle and door lookup.</param>
         private void CloseAssignedCellDoorIfRecreationIsInactive(JailController jailController)
         {
             if (assignedCellNumber < 0)
@@ -1948,6 +2248,9 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>Checks the jail lifecycle manager before intake changes the assigned cell door.</summary>
+        /// <param name="jailController">Current jail controller, if available.</param>
+        /// <returns>True when the assigned cell's tier is in active recreation.</returns>
         private bool IsAssignedCellInActiveRecreation(JailController jailController)
         {
             if (jailController == null || assignedCellNumber < 0)
@@ -1959,6 +2262,10 @@ namespace Behind_Bars.Systems.NPCs
             return lifecycle != null && lifecycle.IsCellInActiveRecreation(assignedCellNumber);
         }
 
+        /// <summary>
+        /// Starts continuous player-facing rotation and requests the assigned cell door to open. The next
+        /// state waits for cell-boundary entry; this method does not complete booking by itself.
+        /// </summary>
         private void OpenJailCellDoor()
         {
             if (assignedCellNumber < 0) return;
@@ -1986,6 +2293,12 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Queues one explicit guard instruction after a short optional player-facing turn. Existing pending
+        /// command work is stopped first so an old station message cannot contradict the current state.
+        /// </summary>
+        /// <param name="message">Instruction text to emit.</param>
+        /// <param name="duration">Native dialogue display duration in seconds.</param>
         private void SendGuardMessage(string message, float duration)
         {
             // A command must be emitted once. The previous follow-up contextual
@@ -2001,6 +2314,7 @@ namespace Behind_Bars.Systems.NPCs
                 WaitForPlayerFacingThenSendGuardMessage(message, duration));
         }
 
+        /// <summary>Stops and clears the pending player-facing command handle, if any.</summary>
         private void StopPendingPlayerFacingCommand()
         {
             if (playerFacingCommandCoroutine == null)
@@ -2012,6 +2326,7 @@ namespace Behind_Bars.Systems.NPCs
             playerFacingCommandCoroutine = null;
         }
 
+        /// <summary>Stops and clears the delayed mugshot escort handle, if any.</summary>
         private void StopPendingMugshotEscort()
         {
             if (mugshotEscortCoroutine == null)
@@ -2023,6 +2338,7 @@ namespace Behind_Bars.Systems.NPCs
             mugshotEscortCoroutine = null;
         }
 
+        /// <summary>Stops and clears the reserved delayed-door-close handle, if any.</summary>
         private void StopPendingDelayedDoorClose()
         {
             if (delayedDoorCloseCoroutine == null)
@@ -2034,6 +2350,7 @@ namespace Behind_Bars.Systems.NPCs
             delayedDoorCloseCoroutine = null;
         }
 
+        /// <summary>Stops and clears the one-frame SecurityDoor navigation-resume handle, if any.</summary>
         private void StopPendingDelayedNavigationResume()
         {
             if (delayedNavigationResumeCoroutine == null)
@@ -2045,6 +2362,7 @@ namespace Behind_Bars.Systems.NPCs
             delayedNavigationResumeCoroutine = null;
         }
 
+        /// <summary>Stops and clears the coordination retry handle, if any.</summary>
         private void StopPendingRetryIntake()
         {
             if (retryIntakeCoroutine == null)
@@ -2056,6 +2374,7 @@ namespace Behind_Bars.Systems.NPCs
             retryIntakeCoroutine = null;
         }
 
+        /// <summary>Stops and clears the recovery-only fallback-door closure handle, if any.</summary>
         private void StopPendingFallbackDoorClosure()
         {
             if (fallbackDoorCloseCoroutine == null)
@@ -2101,6 +2420,12 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>
+        /// Gives the prisoner a brief horizontal turn toward the officer before emitting the explicit command.
+        /// The command still emits when the prisoner reference disappears during the turn.
+        /// </summary>
+        /// <param name="message">Instruction text to emit.</param>
+        /// <param name="duration">Native dialogue display duration in seconds.</param>
         private IEnumerator WaitForPlayerFacingThenSendGuardMessage(string message, float duration)
         {
             if (currentPrisoner != null)
@@ -2148,6 +2473,12 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>
+        /// Emits through the configured dialogue controller when available, otherwise uses the base native
+        /// world-space message path. The fallback reports native availability rather than fabricating UI state.
+        /// </summary>
+        /// <param name="message">Instruction text to emit.</param>
+        /// <param name="duration">Native dialogue display duration in seconds.</param>
         private void EmitGuardMessage(string message, float duration)
         {
 
@@ -2164,6 +2495,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
 
+        /// <summary>
+        /// Completes the intake session after the prisoner is secured, unregisters the officer from
+        /// coordination, clears all prisoner/cell/door flags, and returns the detailed state to idle.
+        /// </summary>
         private void CompleteIntakeProcess()
         {
 #if MONO
@@ -2196,9 +2531,13 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Public Interface
 
+        /// <summary>Returns the authoritative detailed intake state.</summary>
         public new IntakeState GetCurrentState() => currentState;
+        /// <summary>Returns the prisoner currently owned by the intake workflow, or null.</summary>
         public Player GetCurrentPrisoner() => currentPrisoner;
+        /// <summary>Returns whether the detailed intake state is anything other than idle.</summary>
         public bool IsProcessingIntake() => currentState != IntakeState.Idle;
+        /// <summary>Returns the current canonical station key, or an empty string when none is active.</summary>
         public string GetCurrentTargetStation() => currentTargetStation;
 
         /// <summary>
@@ -2206,6 +2545,9 @@ namespace Behind_Bars.Systems.NPCs
         /// cell. Used after a disciplinary hold so the canonical intake state machine fetches
         /// the player from the actual punishment cell rather than the first holding-cell door.
         /// </summary>
+        /// <param name="player">Prisoner who must remain in the named holding cell.</param>
+        /// <param name="holdingCellName">Canonical punishment/holding cell name.</param>
+        /// <returns>True when the officer is idle and the player is confirmed inside that cell.</returns>
         public bool PrepareDisciplinaryRepeatIntake(Player player, string holdingCellName)
         {
             var jailController = Core.JailController;
@@ -2226,8 +2568,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Force start intake process (for testing)
+        /// Invokes the normal booking-start path for testing. It does not bypass coordination, holding-cell
+        /// resolution, or the detailed state transitions used by live booking.
         /// </summary>
+        /// <param name="player">Prisoner to pass to the normal booking-start path.</param>
         public void ForceStartIntake(Player player)
         {
             if (player != null)
@@ -2237,7 +2581,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Emergency stop intake process
+        /// Requests a return-to-post transition for the current intake. This is not the same as
+        /// <see cref="CancelIntake"/>: it does not immediately clear every field or stop every pending action.
         /// </summary>
         public void StopIntakeProcess()
         {
@@ -2246,7 +2591,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Cancel active intake process for new arrest (clears state completely)
+        /// Cancels the active intake, stops owned coroutines and SecurityDoor work, secures tracked doors, and
+        /// clears prisoner/cell/route state so the officer can accept a new booking.
         /// </summary>
         public void CancelIntake()
         {
@@ -2286,6 +2632,7 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Info("IntakeOfficer: Intake canceled - now available for new prisoner");
         }
 
+        /// <summary>Clears the pending disciplinary-repeat holding-cell reservation.</summary>
         private void ClearRequiredHoldingCell()
         {
             requiredHoldingCellPrisoner = null;
@@ -2293,12 +2640,13 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Override base attack handling to interrupt intake process
-        /// TEMPORARILY DISABLED FOR TESTING
+        /// Attack handling is currently disabled for testing: the event is logged and ignored, and no intake
+        /// interruption or arrest is performed. The commented legacy branch is not an active parity path.
         /// </summary>
+        /// <param name="attacker">Player whose attack was received.</param>
         public override void OnAttackedByPlayer(Player attacker)
         {
-            // DISABLED FOR TESTING - no more annoying arrest on accidental punch
+            // Intentionally disabled for testing; do not treat this as production assault handling.
             ModLogger.Debug($"IntakeOfficer: Attack by {attacker?.name} ignored during testing");
             return;
 
@@ -2337,6 +2685,10 @@ namespace Behind_Bars.Systems.NPCs
         #region Utility Methods
 
 
+        /// <summary>
+        /// Replaces any existing continuous-looking coroutine with a new two-second polling loop. This is
+        /// presentation support for waiting at stations/cells and is stopped whenever movement resumes.
+        /// </summary>
         private void StartContinuousPlayerLooking()
         {
             // Stop any existing continuous looking
@@ -2347,6 +2699,9 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Debug("IntakeOfficer: Started continuous player looking");
         }
 
+        /// <summary>
+        /// Stops the continuous-looking coroutine and returns NavMeshAgent rotation ownership to navigation.
+        /// </summary>
         private void StopContinuousPlayerLooking()
         {
             if (continuousLookingCoroutine != null)
@@ -2365,6 +2720,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
 #if MONO
+        /// <summary>
+        /// Periodically rotates the officer toward the current booking player until the handle is stopped by
+        /// movement, cancellation, disable, or destruction.
+        /// </summary>
         private System.Collections.IEnumerator ContinuousPlayerLookingCoroutine()
 #else
 #if !MONO
@@ -2383,6 +2742,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>Samples the booking player and starts a short smooth horizontal turn toward them.</summary>
         private void ApplyInstantPlayerRotation()
         {
             try
@@ -2419,6 +2779,12 @@ namespace Behind_Bars.Systems.NPCs
         }
 
 #if MONO
+        /// <summary>
+        /// Temporarily disables NavMeshAgent rotation while interpolating to an exact target rotation, then
+        /// leaves both the officer transform and agent transform aligned.
+        /// </summary>
+        /// <param name="targetRotation">Horizontal rotation to reach.</param>
+        /// <param name="duration">Turn duration in Unity seconds.</param>
         private System.Collections.IEnumerator SmoothRotateToTarget(Quaternion targetRotation, float duration)
 #else
 #if !MONO
@@ -2464,11 +2830,12 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Override MoveTo to add debug logging
+        /// Stops station-facing rotation before delegating to the base NavMesh route. Intake still owns the
+        /// detailed destination transition after the base movement request succeeds.
         /// </summary>
-        /// <param name="destination">Target position</param>
-        /// <param name="tolerance">Distance tolerance</param>
-        /// <returns>True if navigation started successfully</returns>
+        /// <param name="destination">Target position.</param>
+        /// <param name="tolerance">Distance tolerance in world units.</param>
+        /// <returns>True if navigation started successfully.</returns>
         public override bool MoveTo(Vector3 destination, float tolerance = -1f)
         {
             // Stop continuous looking when starting to move
@@ -2486,9 +2853,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Rotates to face the guard point for a specific station using JailController direct references
+        /// Starts continuous player-facing rotation while the officer waits at a named station. The current
+        /// implementation validates JailController presence but obtains the player from booking state.
         /// </summary>
-        /// <param name="stationName">Name of the station to face</param>
+        /// <param name="stationName">Name used for diagnostics.</param>
         private void RotateToFaceStationTarget(string stationName)
         {
             try
@@ -2514,6 +2882,11 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Cleanup
 
+        /// <summary>
+        /// Stops all intake-owned asynchronous work and unsubscribes booking/security-door listeners. This
+        /// intentionally hides the base lifecycle method; pending actions are explicitly aborted here, but
+        /// base cleanup is not invoked by the current implementation.
+        /// </summary>
         new void OnDestroy()
         {
             AbortPendingIntakeActions();
@@ -2538,6 +2911,11 @@ namespace Behind_Bars.Systems.NPCs
             // Movement completion is handled via BaseJailNPC.NotifyDestinationReached override.
         }
 
+        /// <summary>
+        /// Forwards base destination notification and then lets the detailed intake machine validate and
+        /// transition the state-owned route.
+        /// </summary>
+        /// <param name="destination">World-space destination reported by base navigation.</param>
         protected override void NotifyDestinationReached(Vector3 destination)
         {
             base.NotifyDestinationReached(destination);

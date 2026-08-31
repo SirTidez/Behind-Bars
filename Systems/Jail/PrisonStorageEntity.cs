@@ -39,12 +39,20 @@ namespace Behind_Bars.Systems.Jail
         public PrisonStorageEntity(System.IntPtr ptr) : base(ptr) { }
 #endif
 
+        // Population state is a local presentation snapshot for the current storage session.  The
+        // item slots are rebuilt from persisted legal-item data; failedItemsCache only suppresses
+        // repeated diagnostics and is deliberately retained until a full release reset.
         private Player targetPlayer;
         private List<PersistentPlayerData.StoredItem> playerLegalItems;
         private bool isPopulated = false;
         private HashSet<string> failedItemsCache = new HashSet<string>(); // Cache failed items to prevent log spam
         private bool _awakeInitialized;
 
+        /// <summary>
+        /// Configure the storage entity once, create its local item slots, and attach the close
+        /// callback used to notify the owning pickup station.  The Mono and IL2CPP base-Awake
+        /// paths intentionally differ; see the runtime-specific comments below.
+        /// </summary>
         public override void Awake()
         {
             if (_awakeInitialized)
@@ -76,7 +84,9 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Debug("Added NetworkObject component to PrisonStorageEntity");
             }
 
-            // Set as local-only (no actual networking)
+            // The component must remain enabled for StorageEntity's local Open/Close API, but this
+            // entity is used as a local-only pickup surface; no multiplayer storage synchronization
+            // is established here.
             try
             {
                 networkObject.enabled = true;
@@ -146,10 +156,9 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Populate storage with player's legal items for retrieval
-        /// </summary>
-        /// <summary>
-        /// Reset storage for a new release (clear all items and flags)
+        /// Reset the storage for a new release.  This clears slot contents, population ownership,
+        /// the persisted-item snapshot, failed-item diagnostics, and an open storage menu when the
+        /// game's storage-menu singleton is available.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -176,6 +185,12 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info("PrisonStorageEntity: Reset complete");
         }
 
+        /// <summary>
+        /// Populate the local storage view from the player's currently persisted legal-item
+        /// snapshot.  Repeated calls for the same player are ignored; a different player clears
+        /// the previous contents.  An empty or null item result still marks the view as
+        /// populated, while item-conversion failures are logged and skipped.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -596,7 +611,8 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Get count of items still in storage
+        /// Return the sum of quantities in occupied storage slots, rather than the number of
+        /// occupied slots.  Slots whose item instance cannot be read are not counted.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -616,7 +632,9 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Clear all storage and reset state
+        /// Clear the current slot contents and population snapshot.  This reduced reset leaves the
+        /// failed-item diagnostic cache and any open storage menu untouched; use
+        /// <see cref="ResetForNewRelease"/> for the complete release-session reset.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]

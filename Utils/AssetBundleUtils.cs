@@ -14,18 +14,53 @@ namespace Behind_Bars.Utils
 
     public static class AssetBundleUtils
     {
+        /// <summary>
+        /// The active mod instance used for embedded-resource access and fatal
+        /// asset lookup diagnostics. It is resolved once when this type is
+        /// initialized, so using the helper before <see cref="Core"/> exists
+        /// can make the static initialization unavailable.
+        /// </summary>
         private static readonly Core mod = MelonAssembly.FindMelonInstance<Core>();
+
+        /// <summary>
+        /// Assembly wrapper used to open embedded AssetBundle resources. This
+        /// is also resolved once at type initialization and assumes that the
+        /// owning <see cref="Core"/> instance has a valid assembly reference.
+        /// </summary>
         private static readonly MelonAssembly melonAssembly = mod.MelonAssembly;
 
-        // Asset bundle cache for O(1) lookups instead of O(n) searches
+        /// <summary>
+        /// Maps an asset-name flag to the loaded bundle that contains it. The
+        /// key is an asset name, not an embedded bundle filename; a stale null
+        /// entry is removed when it is encountered.
+        /// </summary>
         private static Dictionary<string, RuntimeAssetBundle> _bundleCache = new Dictionary<string, RuntimeAssetBundle>();
 
-        // Keep each embedded bundle alive for the lifetime of the gameplay
-        // session. Re-reading the same payload for every interaction creates
-        // competing IL2CPP LoadFromFile calls against one fixed temporary
-        // filename, which can leave a later attempt with an invalid bundle.
+        /// <summary>
+        /// Keeps each embedded bundle alive for the gameplay session. The key
+        /// is the exact embedded resource filename and the value is never
+        /// explicitly unloaded by this helper; clearing the dictionary only
+        /// releases this helper's reference.
+        /// </summary>
+        /// <remarks>
+        /// Re-reading the same payload for every interaction creates competing
+        /// IL2CPP load calls and can leave a later attempt with an invalid
+        /// bundle, so this process-wide cache is intentionally retained.
+        /// </remarks>
         private static readonly Dictionary<string, RuntimeAssetBundle> loadedResourceBundles = new();
 
+        /// <summary>
+        /// Loads an embedded AssetBundle using the requested resource filename.
+        /// </summary>
+        /// <param name="bundleFileName">The exact manifest-resource name of the embedded bundle.</param>
+        /// <returns>The cached or newly loaded bundle, or <c>null</c> when the resource or load is unavailable.</returns>
+        /// <remarks>
+        /// Successful loads are cached by <paramref name="bundleFileName"/>.
+        /// Mono loads from memory; IL2CPP first uses a unique temporary file and
+        /// falls back to its memory wrapper when that load returns null. A
+        /// temporary file may remain after an IL2CPP failure because cleanup is
+        /// only attempted after a successful load.
+        /// </remarks>
         public static RuntimeAssetBundle LoadAssetBundle(string bundleFileName)
         {
             Stream? bundleStream = null;
@@ -112,6 +147,18 @@ namespace Behind_Bars.Utils
             }
         }
 
+        /// <summary>
+        /// Finds the loaded bundle containing an asset and caches that mapping.
+        /// </summary>
+        /// <param name="asset_name_flag">The exact asset path/name to search for.</param>
+        /// <returns>The containing loaded bundle, or <c>null</c> when no bundle contains the asset or lookup fails.</returns>
+        /// <remarks>
+        /// A cache hit is O(1); a miss scans all currently loaded bundles. The
+        /// current missing-asset path logs through <see cref="Core.Unregister"/>
+        /// and returns null, so a lookup failure has a mod-lifecycle side effect.
+        /// An exception while obtaining the loaded-bundle list occurs before
+        /// the guarded search and can therefore escape this method.
+        /// </remarks>
         public static RuntimeAssetBundle GetLoadedAssetBundle(string asset_name_flag)
         {
             // Check cache first - O(1) lookup
@@ -184,6 +231,16 @@ namespace Behind_Bars.Utils
 
         }
 
+        /// <summary>
+        /// Loads a <see cref="GameObject"/> using an exact asset path.
+        /// </summary>
+        /// <param name="asset_name">The exact asset path/name used by the bundle.</param>
+        /// <returns>The loaded object, or <c>null</c> when no containing bundle is found.</returns>
+        /// <remarks>
+        /// This method does not perform the type-scanning fallback used by the
+        /// animation and audio helpers. Errors raised by the underlying bundle
+        /// load are not caught here.
+        /// </remarks>
         public static GameObject LoadAssetFromBundle(string asset_name)
         {
             var bundle = GetLoadedAssetBundle(asset_name);
@@ -202,6 +259,14 @@ namespace Behind_Bars.Utils
         /// Loads the scanner's animation-only bundle without relying on a generic
         /// AssetBundle wrapper surface on IL2CPP.
         /// </summary>
+        /// <param name="bundleFileName">The exact embedded bundle resource name.</param>
+        /// <param name="assetName">The preferred exact animation asset path.</param>
+        /// <returns>The exact or first type-matching animation clip, or <c>null</c> if none can be loaded.</returns>
+        /// <remarks>
+        /// If the exact path is unavailable, every asset name is tried as an
+        /// <see cref="AnimationClip"/> and the first successful match is used.
+        /// The embedded bundle remains held in the process-wide bundle cache.
+        /// </remarks>
         public static AnimationClip LoadAnimationClipFromBundle(string bundleFileName, string assetName)
         {
             RuntimeAssetBundle bundle = LoadAssetBundle(bundleFileName);
@@ -260,6 +325,14 @@ namespace Behind_Bars.Utils
         /// scanner animation loader while keeping audio assets independent of
         /// the jail geometry bundle.
         /// </summary>
+        /// <param name="bundleFileName">The exact embedded bundle resource name.</param>
+        /// <param name="assetName">The preferred exact audio asset path.</param>
+        /// <returns>The exact or first type-matching audio clip, or <c>null</c> if none can be loaded.</returns>
+        /// <remarks>
+        /// If the exact path is unavailable, every asset name is tried as an
+        /// <see cref="AudioClip"/> and the first successful match is used. The
+        /// embedded bundle remains held in the process-wide bundle cache.
+        /// </remarks>
         public static AudioClip LoadAudioClipFromBundle(string bundleFileName, string assetName)
         {
             RuntimeAssetBundle bundle = LoadAssetBundle(bundleFileName);
@@ -309,9 +382,18 @@ namespace Behind_Bars.Utils
         }
 
         /// <summary>
-        /// Clear the asset bundle cache (call when unloading bundles)
+        /// Drops cached bundle references maintained by this helper.
         /// </summary>
-        /// <param name="bundleFileName">Optional: Clear specific bundle, or null to clear all</param>
+        /// <param name="bundleFileName">Optional exact embedded bundle filename; <c>null</c> clears both caches.</param>
+        /// <remarks>
+        /// This method does not call the Unity/IL2CPP unload API, so loaded
+        /// assets are not destroyed here. The all-cache path clears the asset
+        /// and embedded-bundle dictionaries. The specific path removes the
+        /// embedded-bundle entry by filename but also attempts to remove an
+        /// asset-cache entry using that same filename, even though asset-cache
+        /// keys are normally asset names; callers should not assume that all
+        /// mappings for the bundle are removed.
+        /// </remarks>
         public static void ClearBundleCache(string bundleFileName = null)
         {
             if (bundleFileName == null)

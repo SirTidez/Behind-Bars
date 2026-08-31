@@ -16,6 +16,11 @@ namespace Behind_Bars.Systems.Parole
     /// Manages unannounced home visits by parole officers.
     /// Visit frequency scales with LSI level.
     /// </summary>
+    /// <remarks>
+    /// Visit timestamps use the lightweight mod clock's game-minute values and are persisted
+    /// on the current RapSheet parole record. The service methods do not check authority
+    /// themselves; the authoritative parole monitor is expected to call them.
+    /// </remarks>
     public class HomeVisitSystem
     {
         private static HomeVisitSystem _instance;
@@ -104,6 +109,8 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Get the home visit interval in game minutes based on LSI level
         /// </summary>
+        /// <param name="lsiLevel">LSI level selecting the fixed visit interval.</param>
+        /// <returns>Three, two, one, or one-half game day in game minutes.</returns>
         public static float GetVisitIntervalGameMinutes(LSILevel lsiLevel)
         {
             // Game day = 1440 game minutes
@@ -120,6 +127,13 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Schedule the next home visit for a player
         /// </summary>
+        /// <param name="player">Parolee whose schedule change should be marked.</param>
+        /// <param name="rapSheet">RapSheet containing the active parole record.</param>
+        /// <remarks>
+        /// The next visit is set to the current fallback game time plus the LSI interval and
+        /// a random offset between minus and plus 25 percent. Calling this method again resets
+        /// the prior timestamp and consumes a new random offset.
+        /// </remarks>
         public void ScheduleNextVisit(Player player, RapSheet rapSheet)
         {
             if (rapSheet?.CurrentParoleRecord == null) return;
@@ -140,6 +154,9 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Check if it's time for a home visit and process it
         /// </summary>
+        /// <param name="player">Parolee whose visit schedule should be evaluated.</param>
+        /// <param name="rapSheet">RapSheet containing visit state and parole status.</param>
+        /// <remarks>At most one due visit is processed per call; the next visit is scheduled after processing.</remarks>
         public void CheckAndProcessHomeVisit(Player player, RapSheet rapSheet)
         {
             if (rapSheet?.CurrentParoleRecord == null) return;
@@ -158,6 +175,16 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Process a home visit check
         /// </summary>
+        /// <summary>
+        /// Apply the current home-visit result, persist consequences, and schedule the next visit.
+        /// </summary>
+        /// <param name="player">Parolee whose presence is checked.</param>
+        /// <param name="rapSheet">RapSheet receiving rapport, violation, and schedule changes.</param>
+        /// <remarks>
+        /// Being home resets missed visits and adds rapport. Being away increments the missed
+        /// counter and reduces rapport; the third consecutive absence adds a formal violation
+        /// and resets that counter. This path does not issue a warrant directly.
+        /// </remarks>
         private void ProcessHomeVisit(Player player, RapSheet rapSheet)
         {
             var paroleRecord = rapSheet.CurrentParoleRecord;

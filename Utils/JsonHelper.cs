@@ -14,26 +14,42 @@ using JsonSerialization = Newtonsoft.Json.Serialization;
 namespace Behind_Bars.Utils
 {
     /// <summary>
-    /// Helper class for safely creating JsonSerializerSettings in Mono domain
-    /// Handles TypeLoadException issues with StreamingContext after game updates
-    /// In Mono, completely avoids JsonSerializerSettings to prevent type loading
+    /// Cross-runtime JSON compatibility helpers.
+    ///
+    /// Mono avoids constructing <see cref="JsonSerializerSettings"/> because the
+    /// game's Newtonsoft dependency can fail to load <c>StreamingContext</c>
+    /// after updates. IL2CPP can construct the settings type, but the public
+    /// serialize, deserialize, and populate methods currently use their runtime
+    /// defaults instead of applying the optional settings argument. The factory
+    /// methods remain as compatibility surfaces for callers that share code
+    /// between the two runtimes.
     /// </summary>
     public static class JsonHelper
     {
 #if MONO
-        // In Mono, use object to avoid type loading issues with JsonSerializerSettings
+        // In Mono, use object to avoid type loading issues with JsonSerializerSettings.
+        // The value remains null; callers fall back to JsonConvert defaults.
         private static object _cachedSettings = null;
         private static object _cachedSettingsFormatted = null;
 #else
         private static JsonSerializerSettings _cachedSettings = null;
         private static JsonSerializerSettings _cachedSettingsFormatted = null;
 #endif
+        // Prevent repeated settings-construction attempts after a runtime load failure.
         private static bool _initializationAttempted = false;
+
+        // Records whether IL2CPP settings construction succeeded. The current
+        // serializer methods do not consult this flag, but it preserves the
+        // result for the compatibility factory surface.
         private static bool _canUseSettings = false;
 
         /// <summary>
-        /// Attempts to create JsonSerializerSettings using reflection to avoid type loading issues
-        /// In Mono, we avoid using JsonSerializerSettings entirely due to StreamingContext type loading issues
+        /// Attempts to create the runtime's optional serializer settings object.
+        ///
+        /// The method name is retained for compatibility with the original
+        /// reflection-based implementation. The current implementation creates
+        /// settings directly on IL2CPP and returns null on Mono; it is not used by
+        /// the public serialization operations.
         /// </summary>
 #if MONO
         private static object TryCreateSettingsReflection()
@@ -57,9 +73,18 @@ namespace Behind_Bars.Utils
         }
 
         /// <summary>
-        /// Gets default JSON serializer settings, handling TypeLoadException gracefully
-        /// Returns null in Mono if settings can't be created (will use JsonConvert defaults)
+        /// Gets the default optional JSON serializer settings.
         /// </summary>
+        /// <returns>
+        /// An IL2CPP <see cref="JsonSerializerSettings"/> instance when it can be
+        /// constructed; <c>null</c> on Mono or after construction fails. A null
+        /// result means callers should use the serializer's defaults.
+        /// </returns>
+        /// <remarks>
+        /// The result is cached as a one-time construction attempt. The public
+        /// serialization methods currently do not apply this object to their
+        /// underlying serializer calls.
+        /// </remarks>
 #if MONO
         public static object GetDefaultSettings()
 #else
@@ -113,8 +138,16 @@ namespace Behind_Bars.Utils
         }
 
         /// <summary>
-        /// Gets formatted JSON serializer settings (with indentation), handling TypeLoadException gracefully
+        /// Gets optional indented JSON serializer settings.
         /// </summary>
+        /// <returns>
+        /// An IL2CPP settings object with indentation when construction succeeds;
+        /// <c>null</c> on Mono or when the default settings cannot be created.
+        /// </returns>
+        /// <remarks>
+        /// This factory describes a compatibility surface only. The current
+        /// public serialization methods do not consume the returned settings.
+        /// </remarks>
 #if MONO
         public static object GetFormattedSettings()
 #else
@@ -162,8 +195,19 @@ namespace Behind_Bars.Utils
         }
 
         /// <summary>
-        /// Gets JSON serializer settings with custom converters, handling TypeLoadException gracefully
+        /// Gets optional indented settings for callers that request custom converters.
         /// </summary>
+        /// <param name="converters">Converters requested by the caller.</param>
+        /// <returns>
+        /// An IL2CPP settings object, or <c>null</c> on Mono or when settings cannot
+        /// be created.
+        /// </returns>
+        /// <remarks>
+        /// The current implementation does not attach <paramref name="converters"
+        /// /> to the returned IL2CPP settings, and Mono intentionally returns null.
+        /// This method must not be documented as applying converters to a JSON
+        /// operation until the implementation changes.
+        /// </remarks>
 #if MONO
         public static object GetSettingsWithConverters(List<JsonConverter> converters)
 #else
@@ -204,8 +248,19 @@ namespace Behind_Bars.Utils
         }
 
         /// <summary>
-        /// Gets JSON serializer settings with custom converters and contract resolver, handling TypeLoadException gracefully
+        /// Gets optional settings for callers that request converters and a contract resolver.
         /// </summary>
+        /// <param name="converters">Converters requested by the caller.</param>
+        /// <param name="contractResolver">Contract resolver requested by the caller.</param>
+        /// <returns>
+        /// An IL2CPP settings object, or <c>null</c> on Mono or when settings cannot
+        /// be created.
+        /// </returns>
+        /// <remarks>
+        /// The current implementation does not attach either supplied argument to
+        /// the returned IL2CPP settings, and Mono intentionally returns null. The
+        /// parameters are retained for source compatibility.
+        /// </remarks>
 #if MONO
         public static object GetSettingsWithConvertersAndResolver(
             List<JsonConverter> converters, 
@@ -250,8 +305,20 @@ namespace Behind_Bars.Utils
         }
 
         /// <summary>
-        /// Gets JSON serializer settings with reference loop handling, handling TypeLoadException gracefully
+        /// Gets optional settings that request ignored reference loops.
         /// </summary>
+        /// <param name="maxDepth">
+        /// Compatibility parameter retained from the original API. It is not
+        /// applied by the current implementation.
+        /// </param>
+        /// <returns>
+        /// An IL2CPP settings object with reference-loop handling, or <c>null</c> on
+        /// Mono or when settings cannot be created.
+        /// </returns>
+        /// <remarks>
+        /// The current implementation does not set a maximum depth and the public
+        /// serialization methods do not consume the returned settings.
+        /// </remarks>
 #if MONO
         public static object GetSettingsWithReferenceLoopHandling(int maxDepth = 5)
 #else
@@ -289,8 +356,19 @@ namespace Behind_Bars.Utils
         }
 
         /// <summary>
-        /// Safely serializes an object to JSON string
+        /// Serializes an object to a JSON string using the current runtime's default serializer.
         /// </summary>
+        /// <param name="value">The value to serialize.</param>
+        /// <param name="settings">
+        /// Compatibility settings argument. It is currently ignored by both
+        /// runtime implementations.
+        /// </param>
+        /// <returns>The serialized JSON string.</returns>
+        /// <remarks>
+        /// Mono uses Newtonsoft.Json and IL2CPP uses System.Text.Json. Exceptions
+        /// are logged and rethrown; this method does not convert failures to an
+        /// empty JSON document.
+        /// </remarks>
 #if MONO
         public static string SerializeObject(object value, object settings = null)
 #else
@@ -304,7 +382,10 @@ namespace Behind_Bars.Utils
                     settings = GetDefaultSettings();
                 }
 
-                // If settings is still null, use JsonConvert without settings (uses defaults)
+                // Settings are resolved for API compatibility, but the current
+                // runtime calls below intentionally use serializer defaults.
+                // Do not claim that caller-provided settings affect this method
+                // until both branches pass them through.
                 if (settings == null)
                 {
 #if !MONO
@@ -330,8 +411,20 @@ namespace Behind_Bars.Utils
         }
 
         /// <summary>
-        /// Safely deserializes JSON string to object
+        /// Deserializes a JSON string to the requested type using the current runtime's default serializer.
         /// </summary>
+        /// <typeparam name="T">The target type.</typeparam>
+        /// <param name="json">The JSON text to deserialize.</param>
+        /// <param name="settings">
+        /// Compatibility settings argument. It is currently ignored by both
+        /// runtime implementations.
+        /// </param>
+        /// <returns>The deserialized value, or the serializer's default null value.</returns>
+        /// <remarks>
+        /// IL2CPP uses System.Text.Json because the Il2CppNewtonsoft generic
+        /// surface is not safe for managed types; Mono uses Newtonsoft.Json.
+        /// Exceptions are logged and rethrown.
+        /// </remarks>
 #if MONO
         public static T DeserializeObject<T>(string json, object settings = null)
 #else
@@ -367,8 +460,21 @@ namespace Behind_Bars.Utils
         }
 
         /// <summary>
-        /// Safely populates an object from JSON string
+        /// Populates an existing object from JSON using the current runtime's default serializer behavior.
         /// </summary>
+        /// <param name="json">The JSON text to apply.</param>
+        /// <param name="target">The object to populate.</param>
+        /// <param name="settings">
+        /// Compatibility settings argument. It is currently ignored by both
+        /// runtime implementations.
+        /// </param>
+        /// <remarks>
+        /// Mono delegates to Newtonsoft.Json. IL2CPP uses a fallback that
+        /// deserializes a temporary object and copies only public writable
+        /// properties and public fields whose values are non-null; it cannot
+        /// clear an existing member with a JSON null. Exceptions are logged and
+        /// rethrown.
+        /// </remarks>
 #if MONO
         public static void PopulateObject(string json, object target, object settings = null)
 #else
@@ -414,6 +520,14 @@ namespace Behind_Bars.Utils
         /// Fallback for PopulateObject under IL2CPP using System.Text.Json
         /// Deserializes JSON and copies matching properties to the target object
         /// </summary>
+        /// <remarks>
+        /// This is intentionally a reduced PopulateObject implementation. Private
+        /// members and read-only properties are skipped, null values are not
+        /// copied, and individual assignment failures are swallowed so one
+        /// incompatible member does not abort the rest of the merge.
+        /// </remarks>
+        /// <param name="json">JSON object used to create the temporary source instance.</param>
+        /// <param name="target">Existing object whose public writable members receive non-null values.</param>
         private static void PopulateObjectFallback(string json, object target)
         {
             if (target == null) return;

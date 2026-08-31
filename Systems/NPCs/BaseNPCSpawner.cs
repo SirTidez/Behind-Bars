@@ -37,10 +37,15 @@ namespace Behind_Bars.Systems.NPCs
     {
         public enum NPCRole
         {
+            /// <summary>Canonical guard role; receives <see cref="GuardBehavior"/>.</summary>
             PrisonGuard,
+            /// <summary>Canonical inmate role; receives the current inmate behavior path.</summary>
             PrisonInmate,
+            /// <summary>Role label routed through <see cref="GuardBehavior"/>; this helper does not add the intake state machine.</summary>
             IntakeOfficer,
+            /// <summary>Canonical parole role; receives <see cref="ParoleOfficerBehavior"/>.</summary>
             ParoleOfficer,
+            /// <summary>Minimal pathfinding/test role with no canonical jail workflow.</summary>
             TestNPC
         }
 
@@ -76,13 +81,18 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Spawn a BaseNPC and configure it for jail use
+        /// Creates a prepared native NPC, attaches the role-specific Behind Bars behavior,
+        /// then finalizes it through <see cref="JailNpcPrefabLifecycle"/>. This is the current
+        /// canonical spawner path; the older helper methods below remain compatibility paths
+        /// and are not part of this flow.
         /// </summary>
         /// <param name="role">Type of NPC to create</param>
         /// <param name="position">World position to spawn</param>
         /// <param name="firstName">NPC first name</param>
         /// <param name="lastName">NPC last name</param>
         /// <param name="badgeNumber">Badge number for guards</param>
+        /// <param name="guardAssignment">Guard post assigned to a guard or intake officer.</param>
+        /// <param name="paroleAssignment">Parole assignment used for a parole officer.</param>
         /// <returns>Spawned GameObject or null if failed</returns>
         public static GameObject SpawnJailNPC(
             NPCRole role,
@@ -133,8 +143,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Fix the "marshmallow man" appearance issue
-        /// Try to find and copy a working Avatar component to our NPC
+        /// Applies role appearance settings to the prepared NPC's own native Avatar. The
+        /// canonical template must already contain an Avatar; live-avatar cloning is not
+        /// attempted here. Missing appearance settings are logged and leave the native
+        /// component in its existing state.
         /// </summary>
         private static void FixNPCAppearance(GameObject npcInstance, NPCRole role, string firstName)
         {
@@ -232,7 +244,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Apply predefined customizations for special characters like "Dre"
+        /// Applies optional name-based customization for special inmate identities. A name
+        /// without a registered customization is intentionally a no-op; this helper does not
+        /// create a replacement avatar or alter the role's behavior graph.
         /// </summary>
         private static void ApplyPredefinedCharacterCustomizations(object npcAvatar, string firstName, NPCRole role)
         {
@@ -272,7 +286,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Apply Dre's specific customizations - arm tattoos and distinctive look
+        /// Applies the currently supported Dre tattoo customization to the native Avatar
+        /// settings. Height/build customization remains disabled because the required API is
+        /// unavailable in this branch.
         /// </summary>
         private static void ApplyDreCustomizations(object npcAvatar)
         {
@@ -400,7 +416,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Find an existing NPC with a working Avatar component
+        /// Legacy search helper for finding a live NPC with a usable Avatar. The canonical
+        /// spawner does not use this method to clone a live NPC; it is retained only for old
+        /// appearance experiments and diagnostics.
         /// </summary>
         private static GameObject FindWorkingNPCWithAvatar()
         {
@@ -443,7 +461,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Add jail-specific behavior components based on NPC role
+        /// Attaches the role-specific behavior to the prepared native object. Guards and
+        /// intake officers receive <see cref="GuardBehavior"/>, parole officers receive
+        /// <see cref="ParoleOfficerBehavior"/>, and test NPCs receive only their minimal
+        /// test controller. This method does not replace the native NPC component.
         /// </summary>
         private static void AddJailBehaviorComponents(
             GameObject npcInstance,
@@ -486,7 +507,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Add guard-specific behavior components
+        /// Attaches the canonical <see cref="GuardBehavior"/> and immediately applies its
+        /// assignment/badge configuration. The guard behavior owns subsequent movement and
+        /// state transitions; this helper only performs initial attachment.
         /// </summary>
         private static void AddGuardBehavior(
             GameObject npcInstance,
@@ -511,6 +534,10 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Debug($"✓ GuardBehavior added to {npcInstance.name} with assignment {assignment}");
         }
 
+        /// <summary>
+        /// Attaches and initializes the canonical parole-officer behavior. A failed component
+        /// attachment is logged and does not silently downgrade the object to a static guard.
+        /// </summary>
         private static void AddParoleOfficerBehavior(
             GameObject npcInstance,
             ParoleOfficerBehavior.ParoleOfficerAssignment assignment,
@@ -528,7 +555,11 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Add inmate-specific behavior components
+        /// Handles the inmate role's current attachment seam. In this branch the method only
+        /// verifies/logs a <see cref="BaseJailNPC"/> component; it does not add an
+        /// <see cref="InmateBehavior"/> component. The current runtime adds that component
+        /// later through the prison-NPC manager, so this helper must not be read as a promise
+        /// that a full inmate state machine was attached here.
         /// </summary>
         private static void AddInmateBehavior(GameObject npcInstance)
         {
@@ -545,7 +576,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Add minimal components for test NPCs
+        /// Adds only the minimal test controller used by the explicit TestNPC role. This is a
+        /// diagnostic path and is not a substitute for canonical guard, intake, parole, or
+        /// inmate behavior.
         /// </summary>
         private static void AddTestNPCBehavior(GameObject npcInstance)
         {
@@ -565,7 +598,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Check if we should spawn the NPC on the network
+        /// Legacy server check retained for callers from the pre-template spawner. The
+        /// current canonical path delegates network ownership to
+        /// <see cref="JailNpcPrefabLifecycle"/> and does not call this helper.
         /// </summary>
         private static bool ShouldSpawnOnNetwork()
         {
@@ -584,7 +619,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Spawn the NPC on the network for multiplayer compatibility
+        /// Legacy direct FishNet spawn helper. It remains available for old callers but is
+        /// not the canonical activation path; it does not perform the native graph checks or
+        /// asynchronous spawn contract enforced by <see cref="JailNpcPrefabLifecycle"/>.
         /// </summary>
         private static void SpawnOnNetwork(GameObject npcInstance)
         {
@@ -610,10 +647,13 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        // Removed ValidateAvatarComponents and fallback methods - no longer needed with MugshotRig approach
+        // Historical avatar-validation/fallback helpers were removed. The current template
+        // path requires a native Avatar and intentionally does not restore live-object cloning.
 
         /// <summary>
-        /// Finalize NPC spawn - positioning, NavMesh, activation
+        /// Legacy local finalization helper for the pre-template path. Current callers should
+        /// use <see cref="TryFinalizePreparedNativeNPC"/> so native graph validation and the
+        /// FishNet server/client contract are preserved.
         /// </summary>
         private static void FinalizeNPCSpawn(GameObject npcInstance, Vector3 position)
         {
@@ -667,7 +707,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Quick test method to spawn a BaseNPC and see if it works
+        /// Diagnostic convenience wrapper that requests the minimal TestNPC role. It is not
+        /// evidence that a canonical jail NPC behavior graph was spawned.
         /// </summary>
         public static GameObject TestSpawnBaseNPC(Vector3 position)
         {
@@ -676,7 +717,7 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Convenience method for spawning guards
+        /// Convenience wrapper for the canonical guard role.
         /// </summary>
         public static GameObject SpawnGuard(Vector3 position, string firstName = "Officer", string lastName = "Guard", string badgeNumber = "")
         {
@@ -684,7 +725,7 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Convenience method for spawning intake officers
+        /// Convenience wrapper for the guard behavior configured as an intake officer.
         /// </summary>
         public static GameObject SpawnIntakeOfficer(Vector3 position, string firstName = "Officer", string lastName = "Intake", string badgeNumber = "")
         {
@@ -692,7 +733,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Convenience method for spawning inmates
+        /// Convenience wrapper for the current inmate role attachment path. Callers should
+        /// verify the resulting object has the expected canonical inmate behavior.
         /// </summary>
         public static GameObject SpawnInmate(Vector3 position, string firstName = "Inmate", string lastName = "Prisoner")
         {

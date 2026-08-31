@@ -26,57 +26,92 @@ namespace Behind_Bars.Systems.NPCs
 
         [Header("Audio Components")]
 #endif
+        /// <summary>Primary source used for custom guard voice clips.</summary>
         public AudioSource mainVoiceSource;
+        /// <summary>Short source used for radio start/stop beeps.</summary>
         public AudioSource radioBeepSource;
+        /// <summary>Looping source used for radio static while a command is spoken.</summary>
         public AudioSource radioStaticSource;
 
 #if MONO
         [Header("Voice Settings")]
 #endif
+        /// <summary>Multiplier applied to custom voice clip volume.</summary>
         public float volumeMultiplier = 1.0f;
+        /// <summary>Random pitch range applied around a neutral pitch.</summary>
         public float pitchVariation = 0.1f;
+        /// <summary>Minimum Unity seconds between accepted guard commands.</summary>
         public float commandCooldown = 3.0f;
 
 #if MONO
         [Header("Radio Effect Settings")]
 #endif
+        /// <summary>Whether commands may use the radio beep/static presentation path.</summary>
         public bool useRadioEffect = true;
+        /// <summary>Delay between the radio start beep/static and the voice command, in Unity seconds.</summary>
         public float radioBeepDelay = 0.25f;
+        /// <summary>Default volume for the generated radio static source.</summary>
         public float staticVolume = 0.3f;
 
         // Voice database configuration
+        /// <summary>Command clip database selected during startup.</summary>
         private JailVoiceDatabase voiceDatabase;
+        /// <summary>Optional native VOEmitter used after custom clips are unavailable.</summary>
         private VOEmitter voiceEmitter;
+        /// <summary>True after delayed component positioning has completed or failed closed.</summary>
         private bool isInitialized = false;
+        /// <summary>Unity-time timestamp of the last accepted guard command.</summary>
         private float lastCommandTime = 0f;
+        /// <summary>Opaque global handle for the active command/radio coroutine.</summary>
         private Coroutine currentVoiceRoutine;
+        /// <summary>Opaque global handle for delayed startup completion.</summary>
         private Coroutine delayedInitializationRoutine;
 
-        // Guard voice line types
+        /// <summary>Semantic guard command categories used to select clips and radio presentation.</summary>
         public enum GuardCommandType
         {
+            /// <summary>Stop instruction.</summary>
             Stop,
+            /// <summary>Move instruction.</summary>
             Move,
+            /// <summary>Follow instruction.</summary>
             Follow,
+            /// <summary>Stay-back instruction.</summary>
             StayBack,
+            /// <summary>Hands-up instruction.</summary>
             HandsUp,
+            /// <summary>Get-down instruction.</summary>
             GetDown,
+            /// <summary>Don't-move instruction.</summary>
             DontMove,
+            /// <summary>Escort instruction.</summary>
             Escort,
+            /// <summary>Cell-check patrol announcement.</summary>
             CellCheck,
+            /// <summary>Alert/incident response announcement.</summary>
             Alert,
+            /// <summary>All-clear announcement.</summary>
             AllClear,
+            /// <summary>Backup request.</summary>
             Backup,
+            /// <summary>Greeting.</summary>
             Greeting,
+            /// <summary>Warning instruction.</summary>
             Warning,
+            /// <summary>Instruction to spread prisoners apart.</summary>
             SpreadThem
         }
 
+        /// <summary>Resolves or creates audio sources before delayed voice setup.</summary>
         protected virtual void Awake()
         {
             InitializeAudioComponents();
         }
 
+        /// <summary>
+        /// Creates the command database and optional native VOEmitter, then defers final readiness so native
+        /// avatar/audio references have time to hydrate.
+        /// </summary>
         protected virtual void Start()
         {
             SetupVoiceDatabase();
@@ -174,7 +209,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Setup the voice database for this NPC
+        /// Creates the default runtime voice database. Bundle loading is currently a reduced/placeholder path;
+        /// if it remains unavailable, command playback falls through to VOEmitter or diagnostic audio paths.
         /// </summary>
         private void SetupVoiceDatabase()
         {
@@ -191,6 +227,7 @@ namespace Behind_Bars.Systems.NPCs
                 if (Behind_Bars.Core.CachedJailBundle != null)
                 {
                     voiceDatabase.LoadVoiceClipsFromBundle("behind_bars", "voices");
+                    // The loader is currently a reduced placeholder; default command entries remain authoritative.
                     ModLogger.Debug("Voice clips loading temporarily disabled - testing bundle redundancy");
                 }
 
@@ -246,7 +283,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Setup VODatabase for the VOEmitter
+        /// Copies an existing native VOEmitter database through its private field when available. Missing or
+        /// inaccessible databases are allowed to fall through to direct audio playback.
         /// </summary>
         private void SetupVODatabase()
         {
@@ -295,7 +333,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Delayed initialization coroutine to ensure all components are ready
+        /// Completes delayed readiness after native components hydrate. The current implementation positions
+        /// this component at the avatar head bone; errors are logged and readiness is still marked true so the
+        /// command surface does not remain permanently blocked.
         /// </summary>
         private IEnumerator DelayedInitialization()
         {
@@ -323,7 +363,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Play a guard command with optional radio effect
+        /// Accepts a command when cooldown/readiness permits, replacing any prior command routine. The global
+        /// Melon coroutine handle is stored for cancellation; on IL2CPP this cast is an interop-sensitive seam.
         /// </summary>
         /// <param name="commandType">Type of command to play</param>
         /// <param name="useRadio">Whether to use radio effect (beeps + static)</param>
@@ -345,7 +386,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Coroutine to play guard command with radio effects
+        /// Plays optional radio effects, selects the command fallback chain, waits an estimated duration, and
+        /// stops radio effects. The estimate is not clip-length introspection and cleanup clears the handle.
         /// </summary>
         private IEnumerator PlayGuardCommandCoroutine(GuardCommandType commandType, bool useRadio)
         {
@@ -434,7 +476,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Play the actual voice command audio
+        /// Attempts custom database audio first, then native VOEmitter playback, then the diagnostic simple
+        /// command path. A fallback indicates reduced presentation, not a replacement native voice graph.
         /// </summary>
         private void PlayVoiceCommand(GuardCommandType commandType)
         {
@@ -529,7 +572,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Play a simple sound effect as final fallback when voice systems fail
+        /// Records the final reduced audio fallback and configures pitch/volume. The current implementation
+        /// does not call <see cref="AudioSource.Play"/> because no fallback clip is assigned.
         /// </summary>
         private void PlaySimpleCommandSound(GuardCommandType commandType)
         {
@@ -643,7 +687,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Get estimated duration for different command types
+        /// Returns a scheduler estimate for radio cleanup timing; it is not the actual duration of a selected
+        /// voice clip.
         /// </summary>
         private float GetEstimatedCommandDuration(GuardCommandType commandType)
         {
@@ -672,9 +717,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        /// <summary>
-        /// Stop any currently playing voice command
-        /// </summary>
+        /// <summary>Stops the global command routine and active voice/static sources.</summary>
         public void StopVoiceCommand()
         {
             try
@@ -701,9 +744,7 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        /// <summary>
-        /// Set voice database for this audio controller
-        /// </summary>
+        /// <summary>Replaces the command database used for future voice selection.</summary>
 #if !MONO
         [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
 #endif
@@ -712,17 +753,13 @@ namespace Behind_Bars.Systems.NPCs
             voiceDatabase = database;
         }
 
-        /// <summary>
-        /// Check if audio controller is ready to play commands
-        /// </summary>
+        /// <summary>Returns whether delayed initialization and cooldown permit a command.</summary>
         public bool IsReady()
         {
             return isInitialized && mainVoiceSource != null && Time.time - lastCommandTime >= commandCooldown;
         }
 
-        /// <summary>
-        /// Cleanup when component is destroyed
-        /// </summary>
+        /// <summary>Stops command/audio coroutines and releases pending delayed initialization on destruction.</summary>
         protected virtual void OnDestroy()
         {
             StopVoiceCommand();

@@ -26,9 +26,15 @@ namespace Behind_Bars.UI
     public class ParoleConditionsUI : MonoBehaviour
     {
 #if !MONO
+        /// <summary>
+        /// Creates the IL2CPP wrapper instance for the runtime-created parole modal.
+        /// </summary>
         public ParoleConditionsUI(System.IntPtr ptr) : base(ptr) { }
 #endif
 
+        // Runtime-created hierarchy and cached component references. The overlay is
+        // parented to the current HUD canvas, so these references belong to one
+        // gameplay-scene presentation and must not be reused after that canvas unloads.
         private GameObject _overlayPanel;
         private GameObject _mainPanel;
         private Image _overlayImage;
@@ -75,11 +81,17 @@ namespace Behind_Bars.UI
         private TextMeshProUGUI _dismissalInstructionText;
         private CanvasGroup _canvasGroup;
 
+        // Presentation state and coroutine handles. Both routines are explicitly
+        // stopped during hide/scene teardown so no callback writes into a destroyed HUD.
         private bool _isInitialized = false;
         private bool _isVisible = false;
         private Coroutine _keyDetectionCoroutine;
         private Coroutine _fadeCoroutine;
 
+        /// <summary>
+        /// Initializes the modal once the component is attached; HUD lookup may defer
+        /// construction until the gameplay canvas exists.
+        /// </summary>
         public void Start()
         {
             if (!_isInitialized)
@@ -89,7 +101,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Create the parole conditions UI elements
+        /// Creates the parole conditions modal, or schedules a bounded retry when the
+        /// player HUD has not finished loading. Creation is idempotent after success.
         /// </summary>
         public void CreateUI()
         {
@@ -115,7 +128,9 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Get the player's HUD canvas
+        /// Resolves the active player HUD canvas using the runtime-specific singleton
+        /// access path. A missing or not-yet-bound HUD returns null so callers can
+        /// retry without constructing an orphaned overlay.
         /// </summary>
         private Canvas GetPlayerHUDCanvas()
         {
@@ -149,8 +164,11 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Create UI with a known canvas
+        /// Builds the full-screen overlay and centered release-summary panel under a
+        /// known HUD canvas. The initialized guard prevents duplicate hierarchies when
+        /// the deferred canvas retry races with the normal startup path.
         /// </summary>
+        /// <param name="mainCanvas">The gameplay HUD canvas that owns this presentation.</param>
         private void CreateUIWithCanvas(Canvas mainCanvas)
         {
             try
@@ -622,7 +640,9 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Wait for HUD canvas to be available and then create UI
+        /// Waits up to ten half-second polls for the HUD canvas, then creates the modal
+        /// once it is available. The bounded retry avoids an unending coroutine when
+        /// this component is created outside a gameplay scene.
         /// </summary>
         private IEnumerator WaitForCanvasAndCreate()
         {
@@ -648,7 +668,9 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Show the parole conditions UI with specified data
+        /// Populates and presents the release summary, then waits for the configured
+        /// bailout key before dismissing it. Bail/fine amounts are currency values,
+        /// while the parole term and jail comparison use the game's minute units.
         /// </summary>
 #if !MONO
         [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
@@ -869,7 +891,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Get human-readable description of LSI level
+        /// Maps an LSI enum value to the risk/supervision wording shown in the modal.
+        /// Unknown values intentionally produce a neutral fallback label.
         /// </summary>
 #if !MONO
         [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
@@ -894,7 +917,9 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Hide the parole conditions UI
+        /// Stops dismissal polling and begins the normal fade-out for the parole
+        /// modal. Scene teardown should use <see cref="CancelForSceneExit"/> instead
+        /// so no fade coroutine survives HUD destruction.
         /// </summary>
         public void Hide()
         {
@@ -928,7 +953,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Check if UI is currently visible
+        /// Reports whether the initialized overlay is active, opaque enough to present,
+        /// and still marked visible by the dismissal lifecycle.
         /// </summary>
         public bool IsVisible()
         {
@@ -936,7 +962,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Stops the dismissal and fade routines before the gameplay HUD unloads.
+        /// Stops dismissal and fade routines synchronously before the gameplay HUD
+        /// unloads, then hides the overlay without waiting for a frame or fade callback.
         /// </summary>
         public void CancelForSceneExit()
         {
@@ -965,7 +992,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Wait for dismissal key press
+        /// Polls the configured bailout key while the modal is visible. Edge detection
+        /// prevents a held key from immediately triggering repeated dismissals.
         /// </summary>
         private IEnumerator WaitForDismissal()
         {
@@ -993,7 +1021,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Fade in animation
+        /// Fades the overlay in over scaled game time; the final alpha is assigned
+        /// explicitly so interrupted frames cannot leave a partially visible modal.
         /// </summary>
         private IEnumerator FadeIn()
         {
@@ -1011,7 +1040,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Fade out animation
+        /// Fades the overlay out over scaled game time and deactivates its root once
+        /// the animation completes.
         /// </summary>
         private IEnumerator FadeOut()
         {

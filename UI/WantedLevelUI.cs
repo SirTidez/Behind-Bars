@@ -25,15 +25,27 @@ namespace Behind_Bars.UI
     public class WantedLevelUI : MonoBehaviour
     {
 #if !MONO
+        /// <summary>
+        /// Creates the IL2CPP wrapper instance for the wanted-level overlay.
+        /// </summary>
         public WantedLevelUI(System.IntPtr ptr) : base(ptr) { }
 #endif
 
+        // Runtime-created panel and text references. They are invalidated together
+        // when ReleaseScenePresentation detaches the old scene canvas.
         private GameObject _wantedPanel;
         private TextMeshProUGUI _wantedLevelText;
         private TextMeshProUGUI _crimeCountText;
+
+        // The overlay polls at a coarse cadence rather than from Update so wanted
+        // display refreshes do not add a per-frame timer check.
         private bool _isInitialized = false;
         private const float UPDATE_INTERVAL = 1f; // Update every second
 
+        /// <summary>
+        /// Starts one-time overlay construction; the component can also be initialized
+        /// manually when the HUD is created after Unity's normal lifecycle callback.
+        /// </summary>
         public void Start()
         {
             // Only create if not already initialized (allows manual initialization)
@@ -44,8 +56,9 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Performance: Use OnEnable/OnDisable with InvokeRepeating instead of Update()
-        /// Eliminates per-frame timer checks
+        /// Starts the repeating display poll when an already-initialized overlay is
+        /// enabled. Construction itself starts a poll, so this is safe only because
+        /// Unity invokes it after the component's enabled state changes.
         /// </summary>
         void OnEnable()
         {
@@ -56,6 +69,10 @@ namespace Behind_Bars.UI
             }
         }
 
+        /// <summary>
+        /// Stops the repeating display poll while the overlay is disabled, preventing
+        /// InvokeRepeating from retaining a callback during scene transitions.
+        /// </summary>
         void OnDisable()
         {
             // Stop repeating updates when disabled
@@ -65,7 +82,8 @@ namespace Behind_Bars.UI
         /// <summary>
         /// Releases the old scene canvas presentation while retaining the registered
         /// component for the next gameplay scene. The panel is parented to the game's
-        /// HUD canvas, which is destroyed when returning to Menu.
+        /// HUD canvas, which is destroyed when returning to Menu; cached child
+        /// references are therefore cleared along with the destroyed root.
         /// </summary>
         public void ReleaseScenePresentation()
         {
@@ -83,7 +101,9 @@ namespace Behind_Bars.UI
         }
         
         /// <summary>
-        /// Create the wanted level UI elements (can be called manually for IL2CPP compatibility)
+        /// Creates the wanted overlay (manually callable for IL2CPP compatibility),
+        /// resolving the gameplay HUD canvas first and falling back to a dedicated
+        /// overlay canvas only when no scene canvas is available.
         /// </summary>
         public void CreateWantedLevelUI()
         {
@@ -220,6 +240,11 @@ namespace Behind_Bars.UI
             }
         }
         
+        /// <summary>
+        /// Refreshes the wanted level and crime count, hiding the panel when the crime
+        /// system is unavailable, the player is in custody, or the current wanted value
+        /// is below the display threshold.
+        /// </summary>
         private void UpdateWantedDisplay()
         {
             try
@@ -257,7 +282,8 @@ namespace Behind_Bars.UI
                     totalCrimes += crimeCount;
                 }
                 
-                // Show panel only if player has crimes or wanted level
+                // Current behavior gates visibility only on wanted level; the crime
+                // count is supporting text and does not independently show the panel.
                 bool shouldShow = wantedLevel > 0.1f;
                 
                 if (_wantedPanel != null)
@@ -338,7 +364,10 @@ namespace Behind_Bars.UI
         }
         
         /// <summary>
-        /// Find existing overlay canvas or create a new one for UI
+        /// Finds an existing overlay canvas or creates a persistent fallback canvas
+        /// when the gameplay HUD cannot be resolved. The fallback is intentionally
+        /// retained across scenes by DontDestroyOnLoad; the scene-owned panel still
+        /// needs ReleaseScenePresentation when its parent HUD is unloaded.
         /// </summary>
         private Canvas FindOrCreateCanvas()
         {

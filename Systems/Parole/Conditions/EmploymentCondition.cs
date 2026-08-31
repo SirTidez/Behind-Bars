@@ -16,12 +16,22 @@ namespace Behind_Bars.Systems.Parole.Conditions
     /// Checks if player owns any business or income-generating property.
     /// Graduated consequences: warnings before formal violations.
     /// </summary>
+    /// <remarks>
+    /// The condition exposes the ownership predicate only; check-in warning/escalation state
+    /// is applied by callers. The current predicate treats any owned Property component as
+    /// employment and does not inspect a player-specific income stream.
+    /// </remarks>
     public class EmploymentCondition : IParoleCondition
     {
+        /// <inheritdoc cref="IParoleCondition.ConditionId" />
         public string ConditionId => "employment";
+        /// <inheritdoc cref="IParoleCondition.ConditionName" />
         public string ConditionName => "Employment Verification";
+        /// <inheritdoc cref="IParoleCondition.ConditionDescription" />
         public string ConditionDescription => "Maintain employment or income-generating activity";
+        /// <inheritdoc cref="IParoleCondition.ViolationType" />
         public ViolationType ViolationType => ViolationType.Other;
+        /// <inheritdoc cref="IParoleCondition.CompliancePenalty" />
         public float CompliancePenalty => 5f;
 
         /// <summary>
@@ -29,6 +39,8 @@ namespace Behind_Bars.Systems.Parole.Conditions
         /// </summary>
         public const int WARNINGS_BEFORE_VIOLATION = 3;
 
+        /// <inheritdoc cref="IParoleCondition.IsApplicable" />
+        /// <remarks>Returns true for Medium, High, or Severe LSI and false for null/lower levels.</remarks>
         public bool IsApplicable(RapSheet rapSheet)
         {
             if (rapSheet == null) return false;
@@ -39,6 +51,11 @@ namespace Behind_Bars.Systems.Parole.Conditions
         /// <summary>
         /// Check if the player is currently employed (owns a business or income-generating property)
         /// </summary>
+        /// <returns><see langword="true"/> when any scene <c>Property</c> is owned; false when none or lookup fails.</returns>
+        /// <remarks>
+        /// The current implementation searches all scene properties, so the result is global
+        /// rather than explicitly filtered by the player parameter (there is no parameter here).
+        /// </remarks>
         public static bool IsPlayerEmployed()
         {
             try

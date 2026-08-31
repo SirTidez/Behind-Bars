@@ -25,32 +25,59 @@ namespace Behind_Bars.Systems.NPCs
         public SecurityDoorBehavior(System.IntPtr ptr) : base(ptr) { }
 #endif
 
+        /// <summary>
+        /// Describes one directed transit through a jail door.  Holding-cell and
+        /// jail-cell transitions intentionally use the same physical point for
+        /// entry and exit; the resolved references are populated at startup.
+        /// </summary>
         [System.Serializable]
         public class DoorTransition
         {
+            /// <summary>Hierarchy name used to resolve the approach point.</summary>
             public string entryPointName;
+            /// <summary>Hierarchy name used to resolve the departure point.</summary>
             public string exitPointName;
+            /// <summary>Centralized JailController/BookingArea door name.</summary>
             public string doorName;
+            /// <summary>Resolved approach point; null when hierarchy lookup failed.</summary>
             public Transform entryPoint;
+            /// <summary>Resolved departure point; null when hierarchy lookup failed.</summary>
             public Transform exitPoint;
+            /// <summary>Resolved native door used for open/close operations.</summary>
             public JailDoor door;
+            /// <summary>Legacy per-transition pause value; the current sequence uses the shared timing config.</summary>
             public float securityDelay = 1.0f; // Time to wait at each point for security
         }
 
+        /// <summary>
+        /// Tunable real-time delays and distances for an automated door transit.
+        /// The values are applied to the NavMesh/animation sequence at startup.
+        /// </summary>
         [System.Serializable]
         public class SecurityTimingConfig
         {
+            /// <summary>NavMesh approach speed in world units per second.</summary>
             public float approachSpeed = 3.0f;          // Faster movement
+            /// <summary>Real-time pause at each authored door point.</summary>
             public float doorPointWaitTime = 0.3f;      // Quick security check at door point
+            /// <summary>Maximum real-time wait for an escorted player to clear the doorway.</summary>
             public float escortWaitTime = 4.0f;         // Reduced wait time for inmate
+            /// <summary>Real-time pause between transit and the close request.</summary>
             public float doorCloseDelay = 0.5f;         // Quick close after passing through
+            /// <summary>Horizontal arrival tolerance for authored door points, in world units.</summary>
             public float positionTolerance = 0.8f;      // How close to get to door points
+            /// <summary>Legacy following-distance setting; doorway clearance uses the authored plane.</summary>
             public float escortCheckDistance = 0.8f;    // Distance to check for inmate following
         }
 
+        /// <summary>Runtime timing configuration used by this door component.</summary>
         public SecurityTimingConfig timingConfig = new SecurityTimingConfig();
 
         // Door State Machine
+        /// <summary>
+        /// Phases of one directed door operation.  Completion is driven by
+        /// JailDoor animation events; the watchdog is recovery-only.
+        /// </summary>
         public enum DoorState
         {
             Idle,
@@ -66,7 +93,9 @@ namespace Behind_Bars.Systems.NPCs
             DoorOperationComplete
         }
 
-        // Current operation state
+        // Current operation state.  currentTransition, escortedInmate, and the
+        // success flags belong to one operation and are cleared together by both
+        // completion and failure paths.
         private DoorState currentState = DoorState.Idle;
         private DoorTransition currentTransition;
         private bool isEscorting = false;
@@ -88,7 +117,8 @@ namespace Behind_Bars.Systems.NPCs
         private BaseJailNPC npcController;
         private UnityEngine.AI.NavMeshAgent navAgent;
 
-        // Door mapping - matches the hierarchy structure from the image
+        // Door mapping mirrors the authored jail hierarchy and is resolved through
+        // JailController/BookingArea; it is not a runtime scene-wide discovery map.
         private Dictionary<string, DoorTransition> doorTransitions = new Dictionary<string, DoorTransition>();
 
         // Managed-only callbacks must remain off the IL2CPP-injected type surface.
@@ -98,6 +128,11 @@ namespace Behind_Bars.Systems.NPCs
         private System.Action<string> onDoorOperationComplete;
         private System.Action<string> onDoorOperationFailed;
 
+        /// <summary>
+        /// Adds a managed listener for state changes.  This helper is hidden from
+        /// IL2CPP because its Action signature is not injection-safe; callers must
+        /// retain the same delegate instance to remove it later.
+        /// </summary>
 #if !MONO
         [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
 #endif
@@ -106,6 +141,7 @@ namespace Behind_Bars.Systems.NPCs
             onDoorStateChanged += listener;
         }
 
+        /// <summary>Removes a previously added managed state-change listener.</summary>
 #if !MONO
         [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
 #endif
@@ -114,6 +150,10 @@ namespace Behind_Bars.Systems.NPCs
             onDoorStateChanged -= listener;
         }
 
+        /// <summary>
+        /// Adds a managed listener invoked with the transition door name after a
+        /// successful operation; the delegate surface remains hidden from IL2CPP.
+        /// </summary>
 #if !MONO
         [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
 #endif
@@ -122,6 +162,7 @@ namespace Behind_Bars.Systems.NPCs
             onDoorOperationComplete += listener;
         }
 
+        /// <summary>Removes a previously added managed completion listener.</summary>
 #if !MONO
         [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
 #endif
@@ -130,6 +171,10 @@ namespace Behind_Bars.Systems.NPCs
             onDoorOperationComplete -= listener;
         }
 
+        /// <summary>
+        /// Adds a managed listener invoked with a formatted failure reason when a
+        /// transit cannot complete; the delegate surface remains hidden from IL2CPP.
+        /// </summary>
 #if !MONO
         [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
 #endif
@@ -138,6 +183,7 @@ namespace Behind_Bars.Systems.NPCs
             onDoorOperationFailed += listener;
         }
 
+        /// <summary>Removes a previously added managed failure listener.</summary>
 #if !MONO
         [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
 #endif
@@ -146,12 +192,21 @@ namespace Behind_Bars.Systems.NPCs
             onDoorOperationFailed -= listener;
         }
 
+        /// <summary>
+        /// Caches the NPC controller and native NavMeshAgent before mappings are
+        /// resolved.  Missing components are handled by the later operation
+        /// guards rather than by injecting replacement behavior here.
+        /// </summary>
         void Awake()
         {
             npcController = BBHelpers.GetComponentSafe<BaseJailNPC>(gameObject);
             navAgent = GetComponent<UnityEngine.AI.NavMeshAgent>();
         }
 
+        /// <summary>
+        /// Builds the directed door map, resolves native door references, and
+        /// applies the configured approach speed to the NavMeshAgent.
+        /// </summary>
         void Start()
         {
             InitializeDoorMappings();
@@ -305,6 +360,11 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Resolves a holding-cell transition through JailController rather than
+        /// searching the scene.  Both points intentionally resolve to the native
+        /// cell door point because the cell door has no separate corridor waypoint.
+        /// </summary>
         private void ResolveHoldingCellDoor(DoorTransition transition, JailController jailController)
         {
             // Extract holding cell index from trigger name
@@ -330,6 +390,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Resolves one of the authored jail-cell doors by parsing its transition
+        /// name and asking JailController for the corresponding cell index.
+        /// </summary>
         private void ResolveJailCellDoor(DoorTransition transition, JailController jailController)
         {
             // Extract jail cell index from trigger name
@@ -351,7 +415,9 @@ namespace Behind_Bars.Systems.NPCs
 
 
         /// <summary>
-        /// Check if NPC is actually moving towards this door
+        /// Checks whether the NPC is approaching the transition from its entry
+        /// side.  Explicit integrations currently bypass this heuristic, so it
+        /// should not be treated as the authorization gate for a triggered door.
         /// </summary>
         private bool IsMovingTowardsDoor(DoorTransition transition)
         {
@@ -384,7 +450,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Main door operation coroutine - implements the smooth, secure door transition
+        /// Runs the directed door sequence: approach, entry pause, open event,
+        /// optional escort clearance, exit traversal, exit pause, close event,
+        /// and completion.  Any failed step routes through the shared failure
+        /// cleanup so the owning escort can recover control.
         /// </summary>
         private IEnumerator ExecuteDoorOperation()
         {
@@ -458,7 +527,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Move to a specific door point with proper positioning
+        /// Moves to an authored door point using only its horizontal coordinates,
+        /// waits up to fifteen real seconds for the configured tolerance, and
+        /// leaves the success flag false when NavMesh movement cannot be started.
         /// </summary>
         private IEnumerator MoveToDoorPoint(Transform targetPoint)
         {
@@ -620,6 +691,11 @@ namespace Behind_Bars.Systems.NPCs
             return HasCrossedDoorwayPlane(doorwayMidpoint, out signedDoorwayDistance, out lateralDoorwayDistance);
         }
 
+        /// <summary>
+        /// Evaluates the fixed doorway plane and lateral opening width used to
+        /// protect the player from a premature close.  The direction comes from
+        /// the authored transition, not the animated door transform.
+        /// </summary>
         private bool HasCrossedDoorwayPlane(
             Vector3 doorwayPosition,
             out float signedDoorwayDistance,
@@ -660,6 +736,11 @@ namespace Behind_Bars.Systems.NPCs
                    lateralDoorwayDistance <= maximumDoorwayLateralMeters;
         }
 
+        /// <summary>
+        /// Requests the mapped door to unlock/open and waits for its native opened
+        /// event.  The animation watchdog only bounds malformed/missing events;
+        /// it is not the normal sequencing signal.
+        /// </summary>
         private IEnumerator OpenDoorAndWaitForEvent()
         {
             lastDoorOpenSucceeded = false;
@@ -703,6 +784,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Requests a door close and waits for the native closed event, retaining a
+        /// failure flag if the animation watchdog expires.
+        /// </summary>
         private IEnumerator CloseDoorAndWaitForEvent()
         {
             lastDoorCloseSucceeded = false;
@@ -749,6 +834,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Subscribes to the currently operated native door, first removing any
+        /// prior door subscription so an operation has one event source only.
+        /// </summary>
         private void SubscribeToDoorEvents(JailDoor door)
         {
             if (observedDoor == door)
@@ -762,6 +851,10 @@ namespace Behind_Bars.Systems.NPCs
             observedDoor.Closed += HandleDoorClosed;
         }
 
+        /// <summary>
+        /// Removes native door listeners and clears the observed-door guard used
+        /// to reject late events from a previous operation.
+        /// </summary>
         private void UnsubscribeFromDoorEvents()
         {
             if (observedDoor == null)
@@ -774,6 +867,10 @@ namespace Behind_Bars.Systems.NPCs
             observedDoor = null;
         }
 
+        /// <summary>
+        /// Accepts an opened event only from the currently observed door and marks
+        /// the open wait as complete.
+        /// </summary>
         private void HandleDoorOpened(JailDoor door)
         {
             if (door != observedDoor)
@@ -785,6 +882,10 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Debug($"SecurityDoorBehavior: Received opened event for {currentTransition?.doorName ?? door.doorName}");
         }
 
+        /// <summary>
+        /// Accepts a closed event only from the currently observed door and marks
+        /// the close wait as complete.
+        /// </summary>
         private void HandleDoorClosed(JailDoor door)
         {
             if (door != observedDoor)
@@ -797,7 +898,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Complete the door operation and reset state
+        /// Completes the active operation, notifies managed listeners, unsubscribes
+        /// from the native door, and clears all operation-owned state.
         /// </summary>
         private void CompleteDoorOperation()
         {
@@ -815,6 +917,11 @@ namespace Behind_Bars.Systems.NPCs
             currentDoorOperation = null;
         }
 
+        /// <summary>
+        /// Fails the active operation, attempts to close the door, notifies managed
+        /// listeners, and clears operation state so the owning escort can retry or
+        /// choose its fallback path.
+        /// </summary>
         private void FailDoorOperation(string reason)
         {
             string doorName = currentTransition?.doorName ?? "Unknown";
@@ -834,7 +941,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Change door state and notify listeners
+        /// Changes the observable door phase, timestamps it with real Unity time,
+        /// and notifies managed listeners.  It does not start or stop the coroutine.
         /// </summary>
         private void ChangeState(DoorState newState)
         {
@@ -872,7 +980,10 @@ namespace Behind_Bars.Systems.NPCs
             return jailController.booking.GetDoorByName(doorName);
         }
 
+        /// <summary>Returns whether a door operation is currently active.</summary>
         public bool IsBusy() => currentState != DoorState.Idle;
+
+        /// <summary>Returns the current phase of the door operation state machine.</summary>
         public DoorState GetCurrentState() => currentState;
 
         /// <summary>
@@ -895,8 +1006,11 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// IntakeOfficer integration - Open holding cell door with automated security handling
+        /// Requests the automated security sequence for a holding-cell door.
         /// </summary>
+        /// <param name="cellIndex">The authored holding-cell index.</param>
+        /// <param name="prisoner">Optional player whose doorway clearance should be awaited.</param>
+        /// <returns>True when the transition was accepted while the component was idle.</returns>
         public bool OpenHoldingCellDoor(int cellIndex, Player prisoner = null)
         {
             string triggerName = $"HoldingCellDoorTrigger_{cellIndex}";
@@ -904,8 +1018,11 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// IntakeOfficer integration - Open jail cell door with automated security handling
+        /// Requests the automated security sequence for a jail-cell door.
         /// </summary>
+        /// <param name="cellIndex">The authored jail-cell index.</param>
+        /// <param name="prisoner">Optional player whose doorway clearance should be awaited.</param>
+        /// <returns>True when the transition was accepted while the component was idle.</returns>
         public bool OpenJailCellDoor(int cellIndex, Player prisoner = null)
         {
             string triggerName = $"JailCellDoorTrigger_{cellIndex}";
@@ -913,8 +1030,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// IntakeOfficer integration - Open booking doors with automated security handling
+        /// Requests the automated security sequence for the booking inner door.
         /// </summary>
+        /// <param name="prisoner">Optional player whose doorway clearance should be awaited.</param>
+        /// <returns>True when the transition was accepted while the component was idle.</returns>
         public bool OpenBookingInnerDoor(Player prisoner = null)
         {
             string triggerName = "BookingDoorTrigger_FromBooking";
@@ -922,8 +1041,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// IntakeOfficer integration - Open prison entry door with automated security handling
+        /// Requests the automated security sequence for the prison-entry door.
         /// </summary>
+        /// <param name="prisoner">Optional player whose doorway clearance should be awaited.</param>
+        /// <returns>True when the transition was accepted while the component was idle.</returns>
         public bool OpenPrisonEntryDoor(Player prisoner = null)
         {
             string triggerName = "PrisonDoorTrigger_FromHall";
@@ -931,8 +1052,14 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Enhanced HandleDoorTrigger that returns success/failure for IntakeOfficer integration
+        /// Accepts a named authored transition and starts the shared automated
+        /// door sequence.  Release and intake escorts both use this entry point;
+        /// a busy component, unknown trigger, or unresolved door rejects it.
         /// </summary>
+        /// <param name="triggerName">The authored trigger/transition key.</param>
+        /// <param name="escorting">Whether the sequence must await a player's doorway clearance.</param>
+        /// <param name="inmate">The player to track when <paramref name="escorting"/> is true.</param>
+        /// <returns>True when the operation was accepted and started.</returns>
         public bool HandleDoorTrigger(string triggerName, bool escorting = false, Player inmate = null)
         {
             if (currentState != DoorState.Idle)
@@ -974,6 +1101,10 @@ namespace Behind_Bars.Systems.NPCs
 
         #endregion
 
+        /// <summary>
+        /// Stops any active coroutine and removes native door listeners so late
+        /// animation events cannot reach a destroyed NPC component.
+        /// </summary>
         void OnDestroy()
         {
             if (currentDoorOperation != null)
@@ -985,7 +1116,8 @@ namespace Behind_Bars.Systems.NPCs
             UnsubscribeFromDoorEvents();
         }
 
-        // Debug visualization
+        // Debug visualization only; it has no bearing on door authorization or
+        // operation sequencing.
         void OnDrawGizmos()
         {
             if (currentTransition == null) return;

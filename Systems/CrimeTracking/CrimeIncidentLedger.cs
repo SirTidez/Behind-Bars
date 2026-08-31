@@ -21,17 +21,37 @@ namespace Behind_Bars.Systems.CrimeTracking
     /// </summary>
     internal sealed class CrimeIncidentLedger
     {
+        // Correlations are process/scene-local and keyed by the best player identity
+        // available. They are deliberately not a second persistence store.
         private readonly Dictionary<string, List<LedgerEntry>> _entriesByPlayer = new(StringComparer.Ordinal);
 
         private sealed class LedgerEntry
         {
+            // NativeObjectKey is lifetime-local identity; IncidentId on Charge is the
+            // persisted identity. The remaining fields retain diagnostic context for the
+            // short correlation window.
+            /// <summary>Process-local key for the native crime object.</summary>
             public string NativeObjectKey = string.Empty;
+            /// <summary>Native runtime type name captured for diagnostics.</summary>
             public string NativeTypeName = string.Empty;
+            /// <summary>Native display name captured for diagnostics.</summary>
             public string NativeCrimeName = string.Empty;
+            /// <summary>Realtime expiration boundary for this correlation.</summary>
             public float ExpiresAt;
+            /// <summary>Persisted/local charge associated with the native event.</summary>
             public CrimeInstance Charge = null!;
         }
 
+        /// <summary>
+        /// Records one native AddCrime event and assigns a persisted incident identity while
+        /// retaining the native object key for later custody correlation.
+        /// </summary>
+        /// <param name="player">Player whose native crime collection emitted the event.</param>
+        /// <param name="crime">Native crime object being correlated.</param>
+        /// <param name="location">World location captured for the local charge.</param>
+        /// <param name="severity">Severity captured for wanted and penalty calculations.</param>
+        /// <param name="enhancement">Optional contextual enhancement attached to this charge.</param>
+        /// <returns>The new local charge, or null when either required native object is absent.</returns>
         internal CrimeInstance RecordNativeCrime(
             Player player,
             Crime crime,
@@ -77,6 +97,17 @@ namespace Behind_Bars.Systems.CrimeTracking
             return charge;
         }
 
+        /// <summary>
+        /// Resolves custody-time native crime quantities against the short-lived AddCrime
+        /// ledger. Matching entries are reused; missing or expired entries become explicit
+        /// native fallback charges so authoritative crimes are never silently discarded.
+        /// </summary>
+        /// <param name="player">Player entering custody.</param>
+        /// <param name="crime">Native crime object reported at custody entry.</param>
+        /// <param name="quantity">Number of native charges to resolve.</param>
+        /// <param name="location">Location used for fallback charge instances.</param>
+        /// <param name="severity">Severity used for fallback charge instances.</param>
+        /// <returns>Exactly the requested number of charges when inputs are valid; otherwise an empty list.</returns>
         internal List<CrimeInstance> ResolveArrestCharges(Player player, Crime crime, int quantity, Vector3 location, float severity)
         {
             var resolved = new List<CrimeInstance>();
@@ -95,6 +126,9 @@ namespace Behind_Bars.Systems.CrimeTracking
                 .Take(quantity)
                 .ToList() ?? new List<LedgerEntry>();
 
+            // Matching entries are read/reused, not consumed. The native custody quantity
+            // is the authoritative bound for this call; repeated callers can resolve the
+            // same short-lived correlation until it expires.
             foreach (var entry in matchingEntries)
             {
                 resolved.Add(entry.Charge);
@@ -116,6 +150,7 @@ namespace Behind_Bars.Systems.CrimeTracking
             return resolved;
         }
 
+        /// <summary>Clears all scene-local native incident correlations.</summary>
         internal void Clear()
         {
             _entriesByPlayer.Clear();
@@ -123,6 +158,8 @@ namespace Behind_Bars.Systems.CrimeTracking
 
         private void PruneExpiredEntries()
         {
+            // Cleanup is opportunistic at AddCrime/arrest-resolution boundaries. Expiry
+            // uses Unity realtimeSinceStartup, so game-clock pauses do not extend it.
             float now = Time.realtimeSinceStartup;
             foreach (var playerKey in _entriesByPlayer.Keys.ToList())
             {
@@ -142,6 +179,8 @@ namespace Behind_Bars.Systems.CrimeTracking
                 return string.Empty;
             }
 
+            // PlayerCode is preferred because display names can change; name is only a
+            // compatibility fallback for runtimes/saves without the code.
             return !string.IsNullOrWhiteSpace(player.PlayerCode) ? player.PlayerCode : player.name ?? string.Empty;
         }
 

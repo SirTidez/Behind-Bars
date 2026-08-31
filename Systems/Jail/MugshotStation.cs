@@ -22,7 +22,9 @@ using ScheduleOne.UI;
 namespace Behind_Bars.Systems.Jail
 {
     /// <summary>
-    /// Handles player mugshot capture during booking process
+    /// Runs the booking mugshot interaction and records completion on BookingProcess.
+    /// The station positions the player and temporarily owns camera/input state, but the
+    /// saved image is a cropped screen capture rather than a dedicated mugshot-camera render.
     /// </summary>
     public class MugshotStation : MonoBehaviour
     {
@@ -30,6 +32,8 @@ namespace Behind_Bars.Systems.Jail
         public MugshotStation(System.IntPtr ptr) : base(ptr) { }
 #endif
         
+        // Authored presentation references. mugshotCamera supplies the temporary view pose;
+        // CapturePhoto currently captures the display screen instead of this camera directly.
         public Camera mugshotCamera;
         public RawImage displayMonitor;
         public Transform attachmentPoint;
@@ -75,14 +79,19 @@ namespace Behind_Bars.Systems.Jail
             hasCachedInteractionState = true;
         }
         
-        // Camera switching support
+        // Camera/input ownership during the interaction. These flags must be cleared on
+        // completion, disable, and scene exit so the player is not left frozen or hidden.
         private bool inMugshotView = false;
         
+        // Timing and positioning settings for the booking presentation. They are wall-clock
+        // WaitForSeconds delays, not game-minute values.
         public float positioningDuration = 0.5f; // Quick positioning
         public float holdDuration = 0.5f; // Quick hold
         public Vector3 cameraOffset = new Vector3(0, 1f, -3f); // Position camera in front of and slightly above player
         
         private bool isCapturing = false;
+        // Completion is delegated to the BookingProcess discovered at Start; a missing
+        // process allows the visual capture but makes IsComplete return false.
         private BookingProcess bookingProcess;
         private Player currentPlayer;
         private Coroutine mugshotCaptureCoroutine;
@@ -394,8 +403,9 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Restores camera/input ownership if the Main scene unloads during a mugshot.
+        /// Cancel an in-progress mugshot and restore camera/input ownership.
         /// </summary>
+        /// <remarks>Safe to call during disable/destroy; it stops the managed capture coroutine and hides the flash.</remarks>
         public void CancelForSceneExit()
         {
             if (mugshotCaptureCoroutine != null)
@@ -426,6 +436,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Capture owns the temporary mugshot interaction. It records BookingProcess completion
+        // only when both a screen texture and display monitor are available.
         private IEnumerator CaptureMugshot(Player player)
         {
             isCapturing = true;
@@ -528,6 +540,9 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info("Mugshot capture completed successfully");
         }
         
+        // The current capture path hides the HUD, captures the rendered screen, and crops its
+        // center 512x512 region. It does not render mugshotCamera to a dedicated texture, so
+        // the result can contain whatever is centered on the screen at capture time.
         private Texture2D CapturePhoto()
         {
             try
@@ -610,6 +625,10 @@ namespace Behind_Bars.Systems.Jail
             }
         }
         
+        /// <summary>
+        /// Return whether BookingProcess has accepted a mugshot texture.
+        /// </summary>
+        /// <remarks>A visible monitor image alone is not completion; the booking process flag is authoritative.</remarks>
         public bool IsComplete()
         {
             return bookingProcess != null && bookingProcess.mugshotComplete;

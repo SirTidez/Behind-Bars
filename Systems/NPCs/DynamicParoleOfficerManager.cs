@@ -27,8 +27,10 @@ using ScheduleOne.PlayerScripts;
 namespace Behind_Bars.Systems.NPCs
 {
     /// <summary>
-    /// Manages dynamic spawning/despawning of parole officers based on player location and parole status.
-    /// Uses event-driven architecture for responsive player movement tracking.
+    /// Owns the dynamic parole-officer roster and its canonical native behavior instances.
+    /// Spawning/despawning responds to parole status, player location, schedule windows, and
+    /// release/check-in bridges; it does not replace a missing canonical officer with a static
+    /// guard or manager-only teleport path.
     /// </summary>
     public class DynamicParoleOfficerManager : MonoBehaviour
     {
@@ -38,6 +40,10 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Singleton
 
+        /// <summary>
+        /// Scene-local manager instance used by parole and release callers. It is cleared during
+        /// <see cref="Cleanup"/>/destruction and is not a persistent save authority.
+        /// </summary>
         public static DynamicParoleOfficerManager Instance { get; private set; }
 
         #endregion
@@ -78,9 +84,17 @@ namespace Behind_Bars.Systems.NPCs
         /// state prevents the roster pump from resetting an in-progress doorway transition.
         /// </summary>
         private HashSet<ParoleOfficerAssignment> officersAtCourthouse;
+
+        /// <summary>
+        /// Prevents repeated duplicate-supervisor scans once the tracked native supervisor has
+        /// been validated for the current manager lifetime. Despawning the supervisor resets it.
+        /// </summary>
         private bool supervisingOfficerRosterValidated;
 
+        /// <summary>Cached native courthouse building used by the supervisor's home action.</summary>
         private NPCEnterableBuilding courthouseHomeBuilding;
+
+        /// <summary>Suppresses repeated logs while the native courthouse building is unavailable.</summary>
         private bool loggedCourthouseHomeLookupFailure;
 
         /// <summary>
@@ -120,16 +134,25 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private bool isInitializing = false;
 
-        // A release begins before the parole record becomes active. Retain the
-        // supervising officer only for that narrow bridge so they can walk to the
-        // police-station release point instead of appearing after the summary closes.
+        /// <summary>
+        /// Player retained for the narrow release bridge that begins before the parole record
+        /// becomes active. It is cleared when the meeting is consumed, cancelled, or cleaned up.
+        /// </summary>
         private Player preparedReleaseParolee;
+
+        /// <summary>World-space point where the canonical release/intake handoff should begin.</summary>
         private Vector3 preparedReleaseMeetingPoint;
-        // MelonCoroutines returns an opaque handle on IL2CPP.  Treating it as a
-        // Unity Coroutine made the cast return null, so overlapping release-prep
-        // coroutines could be started and the supervisor was not reliably staged.
+
+        /// <summary>
+        /// Opaque Melon coroutine handle for release staging. It is intentionally not typed as
+        /// <see cref="Coroutine"/> because IL2CPP returns a different handle representation.
+        /// </summary>
         private object preparedReleaseMeetingCoroutine;
+
+        /// <summary>Unity coroutine used while waiting for manager initialization dependencies.</summary>
         private Coroutine retryInitializeCoroutine;
+
+        /// <summary>Unity coroutine used for the delayed canonical intake handoff.</summary>
         private Coroutine delayedIntakeNotificationCoroutine;
 
         #endregion
@@ -141,12 +164,7 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private PlayerLocationTracker locationTracker;
 
-        /// <summary>
-        /// Reference to parole system
-        /// </summary>
-        /// <summary>
-        /// Reference to NPC manager for spawning
-        /// </summary>
+        /// <summary>Reference to the native NPC manager used for canonical officer spawning.</summary>
         private NpcManager npcManager;
 
         #endregion
@@ -528,7 +546,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Handle a parole-start lifecycle notification forwarded through the manager graph.
+        /// Handles a parole-start lifecycle notification forwarded through the manager graph.
+        /// A release-prepared player is deliberately not queued for a second generic intake:
+        /// the release bridge already owns the supervisor's meeting point and canonical intake
+        /// state machine.
         /// </summary>
         internal void HandleParoleStarted(Player player)
         {
@@ -661,7 +682,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Handle a parole-end lifecycle notification forwarded through the manager graph.
+        /// Handles a parole-end lifecycle notification forwarded through the manager graph.
+        /// Pending release staging is cancelled before tracked officers are removed so no
+        /// delayed coroutine can re-stage a supervisor after parole has ended.
         /// </summary>
         internal void HandleParoleEnded(Player player)
         {
@@ -714,7 +737,9 @@ namespace Behind_Bars.Systems.NPCs
         #region Spawning Logic
 
         /// <summary>
-        /// Update officer spawning based on current state
+        /// Reconciles the current parole/release state into the supervising and patrol rosters.
+        /// The supervisor roster is resolved first, followed by the rotating patrol roster;
+        /// when no parole or pending release exists, all tracked officers are despawned.
         /// </summary>
         private void UpdateOfficerSpawning()
         {
@@ -752,6 +777,8 @@ namespace Behind_Bars.Systems.NPCs
         /// Keeps the supervisor inside the courthouse unless the release bridge, an active
         /// supervising interaction, a queued initial intake, or a parolee approaching the
         /// valid report point requires a visible officer at the existing front-apron station.
+        /// A resident officer remains fully live so the native building/knock graph can own
+        /// entry behavior; roster reconciliation must not disable that graph.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -787,7 +814,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Ensure supervising officer is spawned
+        /// Resolves or spawns exactly one tracked supervising officer. Existing native
+        /// supervisors are adopted into the manager, duplicate supervising objects are removed,
+        /// and a missing canonical behavior is reported through the normal spawn failure path.
         /// </summary>
         private void EnsureSupervisingOfficer()
         {
@@ -822,8 +851,12 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Starts the supervising officer's walk to a pending release point before parole
         /// becomes active. The canonical intake state machine remains responsible for the
-        /// greeting and escort once the release summary is dismissed.
+        /// greeting and escort once the release summary is dismissed. The pending player and
+        /// meeting point are retained across first-frame initialization so the bridge cannot
+        /// lose an early release signal.
         /// </summary>
+        /// <param name="player">Player whose release handoff is being staged.</param>
+        /// <param name="meetingPoint">World-space police-station point for the handoff.</param>
         internal void PrepareSupervisingOfficerForRelease(Player player, Vector3 meetingPoint)
         {
             if (player == null)
@@ -879,6 +912,13 @@ namespace Behind_Bars.Systems.NPCs
             return existingSupervisor;
         }
 
+        /// <summary>
+        /// Cancels a matching pending release bridge, stops its opaque staging coroutine, and
+        /// asks the canonical parole-intake state machine to stop. It clears only the pending
+        /// bridge marker; it does not itself despawn the supervisor or reverse a completed
+        /// parole transition.
+        /// </summary>
+        /// <param name="player">Player whose pending bridge should be cancelled; null matches the retained player.</param>
         internal void CancelPreparedSupervisingOfficerForRelease(Player player)
         {
             if (preparedReleaseParolee == null || (player != null && preparedReleaseParolee != player))
@@ -904,6 +944,12 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>
+        /// Waits up to 90 real-time seconds for the canonical supervisor and its intake state
+        /// machine, polling every 0.5 seconds. On success it delegates release movement to
+        /// <see cref="ParoleIntakeStateMachine.PrepareForReleaseMeeting"/>; it never completes
+        /// the workflow by direct teleport or manager-only state mutation.
+        /// </summary>
         private IEnumerator PrepareSupervisingOfficerForReleaseCoroutine()
         {
             const float timeoutSeconds = 90f;
@@ -944,6 +990,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Returns whether a live player currently owns the pending release bridge. A true
+        /// result means staging is requested, not that the officer has reached the meeting point.
+        /// </summary>
         private bool HasPreparedReleaseMeeting()
         {
             return preparedReleaseParolee != null && preparedReleaseParolee.gameObject != null;
@@ -952,6 +1002,7 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>Checks whether <paramref name="player"/> is the live owner of the pending bridge.</summary>
         private bool HasPreparedReleaseMeetingFor(Player player)
         {
             return player != null && preparedReleaseParolee == player && HasPreparedReleaseMeeting();
@@ -960,6 +1011,11 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>
+        /// Finds a live native supervising officer already present in the scene, adopts the
+        /// first valid one, and lets the duplicate cleanup pass remove additional supervisors.
+        /// Partially initialized or non-supervising officers are ignored.
+        /// </summary>
         private ParoleOfficerBehavior FindExistingSupervisingOfficer()
         {
             var allParoleOfficers = BBHelpers.FindObjectsOfTypeSafe<ParoleOfficerBehavior>();
@@ -1007,6 +1063,11 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>
+        /// Removes duplicate live supervising officers while preserving the selected native
+        /// keeper. This is roster hygiene only; it does not synthesize a replacement behavior
+        /// when the keeper is invalid.
+        /// </summary>
         private void DeduplicateSupervisingOfficers(ParoleOfficerBehavior keeper)
         {
             if (keeper == null)
@@ -1055,7 +1116,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Update patrol officers based on player distance to routes
+        /// Reconciles the rotating patrol roster against player distance and active shift.
+        /// Spawn/despawn uses the configured hysteresis thresholds; active officers resume
+        /// their canonical patrol behavior, while off-shift officers enter the native
+        /// courthouse home action.
         /// </summary>
         private void UpdatePatrolOfficers()
         {
@@ -1098,7 +1162,7 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Puts an otherwise idle officer inside the native courthouse building event.
         /// The action is pre-created on the registered NPC template and is never added to
-        /// a live network object.
+        /// a live network object. The officer and native graph remain enabled while resident.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -1148,7 +1212,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Ends the native home event before this officer resumes an exterior task.
+        /// Ends the native home event before this officer resumes an exterior task. If the
+        /// officer is already outside, the method only restores on-duty state and does not
+        /// reset a movement target owned by an active check-in or release handoff.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -1193,6 +1259,11 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>
+        /// Resolves the pre-registered native courthouse schedule action and its owning
+        /// <see cref="NPCScheduleManager"/> for an officer. The method only binds existing
+        /// template graph references; it never adds a home action to a live network object.
+        /// </summary>
         private bool TryResolveCourthouseHomeAction(
             ParoleOfficerBehavior officer,
             out NPCScheduleManager scheduleManager,
@@ -1250,6 +1321,11 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>
+        /// Finds and caches the native courthouse <see cref="NPCEnterableBuilding"/> used by
+        /// parole officers. A missing building leaves the officer at its current exterior
+        /// location and is logged once; no synthetic building is created.
+        /// </summary>
         private bool TryResolveCourthouseHomeBuilding(out NPCEnterableBuilding building)
         {
             building = courthouseHomeBuilding;
@@ -1287,6 +1363,10 @@ namespace Behind_Bars.Systems.NPCs
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        /// <summary>
+        /// Checks the parole manager's daily check-in status without applying consequences.
+        /// This predicate is used only to decide whether roster recall may be needed.
+        /// </summary>
         private bool IsCheckInWindowOpen(Player player)
         {
             if (player == null)
@@ -1320,7 +1400,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Spawn an officer with the given assignment
+        /// Spawns one canonical native parole officer through the manager-owned NPC seam and
+        /// records it in both assignment indexes. A failed spawn is left untracked; no static
+        /// guard or manager-only placeholder is substituted.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -1378,7 +1460,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Despawn an officer with the given assignment
+        /// Despawns and removes one assignment from the manager's tracking indexes. The caller
+        /// must not use the removed behavior as an interaction owner afterward.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -1419,7 +1502,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Despawn all officers
+        /// Despawns every currently tracked assignment using a snapshot so the tracking set
+        /// can be mutated safely during each individual despawn.
         /// </summary>
         private void DespawnAllOfficers()
         {
@@ -1431,7 +1515,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Spawn supervising officer (always at police station)
+        /// Requests the canonical supervising-officer assignment. The actual location may be
+        /// the native courthouse home action until a release/check-in roster condition recalls
+        /// the officer to the validated report point.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -1639,7 +1725,9 @@ namespace Behind_Bars.Systems.NPCs
         #region Public API
 
         /// <summary>
-        /// Get count of active officers
+        /// Returns the number of assignments currently tracked as spawned. This is roster
+        /// bookkeeping and does not guarantee that every native object has completed its
+        /// network spawn callback.
         /// </summary>
         public int GetActiveOfficerCount()
         {
@@ -1647,7 +1735,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Check if an assignment is currently spawned
+        /// Checks the manager's assignment bookkeeping for a spawned officer. It does not
+        /// perform a scene search or verify that the object is currently active/connected.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -1658,7 +1747,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Force update of officer spawning (useful for testing)
+        /// Runs one immediate roster reconciliation for diagnostics/tests. It uses the same
+        /// canonical spawning and courthouse transitions as the periodic update.
         /// </summary>
         public void ForceUpdate()
         {
@@ -1666,8 +1756,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Gate a supervising-officer interaction through the private coordinator.
-        /// Used by intake handoff and check-in initiation to prevent duplicate controller starts.
+        /// Gates a supervising-officer interaction through the private coordinator. This is a
+        /// predicate/reservation boundary only; the downstream canonical controller must mark
+        /// the interaction started after it accepts the workflow.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -1678,7 +1769,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Reserve a supervising-officer check-in session before the downstream controller accepts it.
+        /// Reserves check-in ownership before the downstream controller accepts it. A true
+        /// result does not mean the check-in has started until the matching mark method runs.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -1689,7 +1781,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Mark a supervising-officer interaction as actively started after the downstream controller accepts it.
+        /// Commits the accepted intake/check-in interaction to the coordinator's ownership
+        /// indexes. The interaction kind selects the corresponding commit path.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -1708,7 +1801,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// End a supervising-officer interaction through the private coordinator.
+        /// Releases one matching coordinator session. It does not complete or cancel the
+        /// downstream dialogue/state machine by itself.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -1719,7 +1813,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Complete a supervising-officer check-in session through the private coordinator.
+        /// Completes/releases a check-in coordinator session and then returns a supervising
+        /// officer to the native courthouse home action.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -1787,7 +1882,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Commit a supervising-officer check-in after the parole system has admitted the parolee.
+        /// Commits a supervising-officer check-in after the parole system has admitted the
+        /// parolee. This records ownership only; the downstream check-in controller owns its
+        /// review/consequence flow.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -1798,7 +1895,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Cancel a supervising-officer intake reservation through the private coordinator.
+        /// Cancels/releases a supervising-officer intake reservation through the private
+        /// coordinator. It does not cancel a completed parole record.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -1809,7 +1907,11 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Cancel a supervising-officer check-in reservation through the private coordinator.
+        /// Releases the current supervising-officer check-in session through the coordinator.
+        /// Despite the method name, the current implementation forwards to
+        /// <c>CompleteCheckIn</c>, which uses the coordinator's normal session-removal path;
+        /// it does not roll back parole consequences, stop the downstream controller, or
+        /// reposition the officer. This documents current behavior without changing it.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]

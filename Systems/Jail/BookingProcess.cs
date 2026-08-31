@@ -30,27 +30,43 @@ namespace Behind_Bars.Systems.Jail
         public BookingProcess(System.IntPtr ptr) : base(ptr) { }
 #endif
         
+        // Completion invariant: a normal booking is complete only when the required
+        // mugshot, fingerprint, and prison-gear flags are all true. The legacy
+        // inventoryDropOffComplete flag remains for compatibility and is not the
+        // authoritative prison-gear checkpoint.
         public bool mugshotComplete = false;
         public bool fingerprintComplete = false;
         public bool inventoryDropOffComplete = false; // Deprecated - kept for compatibility
-        public bool prisonGearPickupComplete = false; // NEW: Required step
+        public bool prisonGearPickupComplete = false; // Required active booking step
         public bool inventoryProcessed = false;
 
-        private bool prisonGearEventFired = false; // Prevent duplicate event firing
-        
+        // Prison-gear completion reuses the legacy inventory event for officer-state
+        // compatibility, so this guard prevents a repeated station callback from
+        // advancing the canonical intake flow twice.
+        private bool prisonGearEventFired = false;
+
+        // Booking artifacts are volatile scene state. They are cleared when a new
+        // booking starts or the Main scene exits; they are not persistence records.
         public Texture2D mugshotImage;
         public string fingerprintData;
         public List<string> confiscatedItems = new List<string>();
-        
+
+        // Station references are discovered at startup when not assigned in the
+        // scene. inventoryDropOff is retained for the legacy waypoint phase.
         public MugshotStation mugshotStation;
         public ScannerStation scannerStation;
         public InventoryDropOffStation inventoryDropOffStation;
         public Transform inventoryDropOff;
-        
+
+        // Completion policy for the two identity stations. Prison gear is checked
+        // separately by IsBookingComplete and is required by the active flow.
         public bool requireBothStations = true;
         public bool allowAnyOrder = true;
         public float notificationDuration = 4f;
-        
+
+        // A booking owns these references only while bookingInProgress is true.
+        // Escort flags describe requests to the canonical officer flow; they do not
+        // themselves prove that the player reached the assigned cell.
         private Player currentPlayer;
         private JailSystem.JailSentence currentSentence;
         public bool bookingInProgress = false;
@@ -59,6 +75,9 @@ namespace Behind_Bars.Systems.Jail
         public bool storageInteractionAllowed = false;
         private DisciplinaryResumeStage disciplinaryResumeStage = DisciplinaryResumeStage.None;
         private static BookingProcess _instance;
+
+        // Only coroutines started through StartManagedCoroutine belong to this
+        // booking instance and are stopped together during scene teardown.
         private readonly List<Coroutine> sceneCoroutineHandles = new List<Coroutine>();
 
         /// <summary>
@@ -92,6 +111,10 @@ namespace Behind_Bars.Systems.Jail
         internal System.Action<Player> OnBookingCompleted;
 #endif
 
+        /// <summary>
+        /// Gets the active booking process, resolving it from the jail controller
+        /// when the local singleton has not been initialized yet.
+        /// </summary>
         public static BookingProcess Instance
         {
             get
@@ -125,6 +148,9 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Debug($"BookingProcess initialized - Mugshot: {mugshotStation != null}, Scanner: {scannerStation != null}, InventoryDropOff: {inventoryDropOffStation != null}");
         }
         
+        // Station discovery is intentionally best-effort: missing stations are
+        // logged/left null so the controller can report incomplete booking state
+        // instead of manufacturing completion.
         void FindBookingStations()
         {
             if (mugshotStation == null)
@@ -158,8 +184,12 @@ namespace Behind_Bars.Systems.Jail
         }
         
         /// <summary>
-        /// Start booking process for a player
+        /// Starts a fresh booking for the supplied player and sentence. Any prior
+        /// active booking is cleared first, including its cell assignment, and all
+        /// completion flags/artifacts are reset before the new player is bound.
         /// </summary>
+        /// <param name="player">Player entering the booking flow.</param>
+        /// <param name="sentence">Sentence record to associate with the booking.</param>
         public void StartBooking(Player player, JailSystem.JailSentence sentence = null)
         {
             // CRITICAL: Clean up any previous booking state first
@@ -296,7 +326,9 @@ namespace Behind_Bars.Systems.Jail
         }
         
         /// <summary>
-        /// Complete booking process and proceed to next phase
+        /// Raises the booking-complete signal after all required station work is
+        /// complete. The canonical intake officer owns the escort and final-cell
+        /// handoff; this method does not by itself start a sentence.
         /// </summary>
         public void CompleteBooking()
         {
@@ -608,6 +640,8 @@ namespace Behind_Bars.Systems.Jail
             CheckBookingCompletion();
         }
 
+        // Keep the completion check centralized so station callbacks cannot disagree
+        // about whether prison gear is the active final checkpoint.
         void CheckBookingCompletion()
         {
             ModLogger.Info($"CheckBookingCompletion() - IsBookingComplete: {IsBookingComplete()}");
@@ -988,7 +1022,10 @@ namespace Behind_Bars.Systems.Jail
         }
         
         /// <summary>
-        /// Complete the escort process
+        /// Completes the legacy escort monitor only after booking requirements and a
+        /// confirmed assigned-cell/in-cell check succeed. The canonical officer path
+        /// may already have finalized the booking, in which case this is a stale poll
+        /// and must be ignored.
         /// </summary>
         private void CompleteEscortProcess()
         {
@@ -1023,7 +1060,9 @@ namespace Behind_Bars.Systems.Jail
         }
         
         /// <summary>
-        /// Assign a cell to the current player
+        /// Assigns the current player through CellAssignmentManager and reports
+        /// whether a concrete cell number was returned. A successful assignment is
+        /// required before the legacy escort can start the sentence.
         /// </summary>
         private bool AssignPlayerCell()
         {
@@ -1056,6 +1095,8 @@ namespace Behind_Bars.Systems.Jail
             }
         }
         
+        // Legacy delayed escort notification retained for compatibility; the
+        // canonical intake officer normally owns the actual escort transition.
         private IEnumerator DelayedGuardEscort()
         {
             // Wait a moment for the last station to complete
@@ -1210,6 +1251,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Track scene-owned coroutine handles so CancelForSceneExit can stop all
+        // booking work before clearing the player and sentence references.
         private Coroutine StartManagedCoroutine(IEnumerator routine)
         {
             var coroutine = MelonCoroutines.Start(routine) as Coroutine;
@@ -1408,6 +1451,8 @@ namespace Behind_Bars.Systems.Jail
     [System.Serializable]
     public class BookingSummary
     {
+        // This record is a presentation/logging snapshot, not the live completion
+        // state used by BookingProcess.
         public string playerName;
         public bool mugshotCaptured;
         public bool fingerprintScanned;

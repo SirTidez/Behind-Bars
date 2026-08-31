@@ -7,12 +7,21 @@ namespace Behind_Bars.Systems.Parole.Conditions
     /// Severe: 8:00 PM, High: 10:00 PM, Medium: Midnight, Minimum: No curfew.
     /// Grace period of 15 game minutes after curfew hour.
     /// </summary>
+    /// <remarks>
+    /// This implementation supplies condition metadata and a time predicate; the parole
+    /// monitor owns enforcement and violation recording. All times are game-minute values.
+    /// </remarks>
     public class CurfewCondition : IParoleCondition
     {
+        /// <inheritdoc cref="IParoleCondition.ConditionId" />
         public string ConditionId => "curfew";
+        /// <inheritdoc cref="IParoleCondition.ConditionName" />
         public string ConditionName => "Curfew";
+        /// <inheritdoc cref="IParoleCondition.ConditionDescription" />
         public string ConditionDescription => "Maintain curfew hours as assigned by supervision level";
+        /// <inheritdoc cref="IParoleCondition.ViolationType" />
         public ViolationType ViolationType => ViolationType.CurfewViolation;
+        /// <inheritdoc cref="IParoleCondition.CompliancePenalty" />
         public float CompliancePenalty => 5f;
 
         /// <summary>
@@ -20,6 +29,8 @@ namespace Behind_Bars.Systems.Parole.Conditions
         /// </summary>
         public const float GRACE_PERIOD_MINUTES = 15f;
 
+        /// <inheritdoc cref="IParoleCondition.IsApplicable" />
+        /// <remarks>Returns false for null, None, and Minimum LSI; all other LSI levels activate curfew.</remarks>
         public bool IsApplicable(RapSheet rapSheet)
         {
             // Curfew applies to all LSI levels except Minimum
@@ -30,6 +41,8 @@ namespace Behind_Bars.Systems.Parole.Conditions
         /// <summary>
         /// Get the curfew hour (in 24h format) for a given LSI level
         /// </summary>
+        /// <param name="lsiLevel">LSI level selecting the curfew hour.</param>
+        /// <returns>20, 22, or 0 for severe/high/medium; -1 for no curfew.</returns>
         public static int GetCurfewHour(LSILevel lsiLevel)
         {
             switch (lsiLevel)
@@ -45,6 +58,8 @@ namespace Behind_Bars.Systems.Parole.Conditions
         /// Get the curfew start minute-of-day for a given LSI level.
         /// Returns the minute of day (0-1439) when curfew starts, or -1 if no curfew.
         /// </summary>
+        /// <param name="lsiLevel">LSI level selecting the curfew start.</param>
+        /// <returns>Start minute after midnight, or -1 when no curfew applies.</returns>
         public static int GetCurfewStartMinuteOfDay(LSILevel lsiLevel)
         {
             int hour = GetCurfewHour(lsiLevel);
@@ -55,6 +70,14 @@ namespace Behind_Bars.Systems.Parole.Conditions
         /// <summary>
         /// Check if the current game time is past curfew (including grace period)
         /// </summary>
+        /// <param name="lsiLevel">LSI level selecting the curfew rule.</param>
+        /// <param name="currentMinuteOfDay">Current minute after midnight.</param>
+        /// <returns><see langword="true"/> during the post-grace curfew window through 6:00 AM.</returns>
+        /// <remarks>
+        /// A midnight curfew applies from 00:15 through 06:00. Other curfews apply after the
+        /// 15-minute grace period or before 06:00 for the overnight portion; the input is
+        /// expected to already be normalized to a day.
+        /// </remarks>
         public static bool IsPastCurfew(LSILevel lsiLevel, int currentMinuteOfDay)
         {
             int curfewStart = GetCurfewStartMinuteOfDay(lsiLevel);
@@ -81,6 +104,8 @@ namespace Behind_Bars.Systems.Parole.Conditions
         /// <summary>
         /// Get a display string for the curfew time
         /// </summary>
+        /// <param name="lsiLevel">LSI level selecting the display time.</param>
+        /// <returns>A 12-hour display time, or <c>None</c> when no curfew applies.</returns>
         public static string GetCurfewDisplayTime(LSILevel lsiLevel)
         {
             int hour = GetCurfewHour(lsiLevel);

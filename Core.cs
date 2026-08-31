@@ -65,8 +65,14 @@ using Il2CppScheduleOne.DevUtilities;
 
 namespace Behind_Bars
 {
+    /// <summary>
+    /// Melon entry point and lifecycle owner for Behind Bars. The core service graph persists
+    /// across scenes, while gameplay-session state, native loading holds, and HUD presentation
+    /// are explicitly invalidated when the Main scene ends.
+    /// </summary>
     public class Core : MelonMod
     {
+        /// <summary>Gets the currently initialized Behind Bars mod instance, if startup completed.</summary>
         public static Core? Instance { get; private set; }
 
         /// <summary>
@@ -75,7 +81,9 @@ namespace Behind_Bars
         /// </summary>
         public static bool IsGameplaySceneActive => Instance?._gameplaySceneActive == true;
 
-        // Core systems
+        // Core systems. The session version invalidates stale coroutine continuations; the
+        // active/ready flags are separate because a gameplay scene can exist before player
+        // systems finish bootstrapping.
         private BehindBarsSystemManager? _systemManager;
         private Coroutine? _loadModCoroutine;
         private Coroutine? _playerInitializationCoroutine;
@@ -83,11 +91,19 @@ namespace Behind_Bars
         private bool _gameplaySceneActive;
         private bool _playerSystemsReady;
 
-        // Player management
+        // Player management is keyed by native Player wrappers. Bootstrap overwrites an entry
+        // when the same wrapper is seen again; the current scene teardown does not clear this map,
+        // so callers should not treat it as a complete historical/session registry.
         private Dictionary<Player, PlayerHandler> _playerHandlers = new();
 
         // Jail management
+        /// <summary>Gets the jail controller for the active gameplay scene, if it was created.</summary>
         public static JailController? JailController { get; private set; }
+
+        /// <summary>
+        /// Gets the cached jail asset bundle. The concrete type follows the Mono/IL2CPP runtime;
+        /// callers should treat a null value as a load failure and use the idempotent loader.
+        /// </summary>
         public static
 #if !MONO
             Il2CppAssetBundle
@@ -97,20 +113,30 @@ namespace Behind_Bars
             ? CachedJailBundle { get; private set; }
 
         /// <summary>
-        /// Global runtime owner for the manager-led justice-system graph.
-        /// Temporary compatibility accessors below should migrate to this root over time.
+        /// Gets the manager-owned root for the justice-system service graph. Temporary
+        /// compatibility accessors below should migrate to this root over time.
         /// </summary>
         public BehindBarsSystemManager? SystemManager => _systemManager;
 
+        /// <summary>Gets the manager-owned jail system, or null before manager initialization.</summary>
         public JailSystem? JailSystem => _systemManager?.JailSystem;
+        /// <summary>Gets the manager-owned jail manager, or null before manager initialization.</summary>
         public JailManager? JailManager => _systemManager?.JailManager;
+        /// <summary>Gets the manager-owned bail system, or null before manager initialization.</summary>
         public BailSystem? BailSystem => _systemManager?.BailSystem;
+        /// <summary>Gets the manager-owned crime manager, or null before manager initialization.</summary>
         public CrimeManager? CrimeManager => _systemManager?.CrimeManager;
+        /// <summary>Gets the manager-owned NPC manager, or null before manager initialization.</summary>
         public NpcManager? NpcManager => _systemManager?.NpcManager;
+        /// <summary>Gets the manager-owned UI manager, or null before manager initialization.</summary>
         public JusticeUIManager? UIManager => _systemManager?.UIManager;
+        /// <summary>Gets the manager-owned court system, or null before manager initialization.</summary>
         public CourtSystem? CourtSystem => _systemManager?.CourtSystem;
+        /// <summary>Gets the manager-owned parole system, or null before manager initialization.</summary>
         public ParoleSystem? ParoleSystem => _systemManager?.ParoleSystem;
+        /// <summary>Gets the manager-owned parole manager, or null before manager initialization.</summary>
         public ParoleManager? ParoleManager => _systemManager?.ParoleManager;
+        /// <summary>Gets the manager-owned file service, with the compatibility singleton as fallback.</summary>
         public FileUtilities FileUtilities => _systemManager?.FileUtilitiesService ?? Utils.FileUtilities.Instance;
 
         /// <summary>
@@ -127,6 +153,13 @@ namespace Behind_Bars
             return Instance?.GetPlayerKeyService()?.GetPlayerKey(player) ?? player.name;
         }
 
+        /// <summary>
+        /// Loads the jail bundle on demand once and caches the result for the current process.
+        /// A null result is reported but not retried recursively, allowing scene/bootstrap
+        /// callers to fail closed without creating duplicate bundle handles.
+        /// </summary>
+        /// <param name="reason">Diagnostic context for the on-demand load attempt.</param>
+        /// <returns>The cached runtime-specific bundle, or null when loading fails.</returns>
         public static
 #if !MONO
             Il2CppAssetBundle
@@ -505,6 +538,8 @@ namespace Behind_Bars
         // MelonPreferences
         private static MelonPreferences_Category? _prefsCategory;
         private static MelonPreferences_Entry<KeyCode>? _bailoutKeyPreference;
+
+        /// <summary>Gets the configured bailout key, falling back to <see cref="KeyCode.B"/> before preferences load.</summary>
         public static KeyCode BailoutKey => _bailoutKeyPreference?.Value ?? KeyCode.B;
         
         // Update checking preferences
@@ -514,17 +549,23 @@ namespace Behind_Bars
         
         // Debug logging preference
         private static MelonPreferences_Entry<bool>? _enableDebugLoggingEntry;
+
+        /// <summary>Gets whether verbose diagnostic logging was explicitly enabled in preferences.</summary>
         public static bool EnableDebugLogging => _enableDebugLoggingEntry?.Value ?? false;
 
         // Explicitly opt-in developer controls. These manipulate prison doors,
         // lighting, and booking state, so they must never be active in normal
         // play merely because the debug assembly is installed.
         private static MelonPreferences_Entry<bool>? _enableDeveloperShortcutsEntry;
+
+        /// <summary>Gets whether developer shortcuts that mutate jail state are explicitly enabled.</summary>
         public static bool EnableDeveloperShortcuts => _enableDeveloperShortcutsEntry?.Value ?? false;
 
         // Retains native-event correlation metadata long enough for an arrest that occurs
         // well after the crime, while ensuring stale incidents cannot bleed into a later run.
         private static MelonPreferences_Entry<float>? _crimeIncidentRetentionSecondsEntry;
+
+        /// <summary>Gets the real-time retention window used to correlate native crime incidents.</summary>
         public static float CrimeIncidentRetentionSeconds => _crimeIncidentRetentionSecondsEntry?.Value ?? 900f;
 
 #if !MONO
@@ -664,6 +705,11 @@ namespace Behind_Bars
         }
 #endif
 
+        /// <summary>
+        /// Initializes preferences, runtime registrations, Harmony, and the persistent manager
+        /// graph in dependency order. IL2CPP type registration completes before any injected
+        /// component or canonical NPC can be created.
+        /// </summary>
         public override void OnInitializeMelon()
         {
             Instance = this;
@@ -778,6 +824,12 @@ namespace Behind_Bars
             ModLogger.Debug("Behind Bars initialized with all systems");
         }
 
+        /// <summary>
+        /// Begins a new Main-scene gameplay session and holds the native loading surface while
+        /// scene-owned systems bootstrap. Non-gameplay scenes do not start the jail load coroutine.
+        /// </summary>
+        /// <param name="buildIndex">Unity build index reported for the initialized scene.</param>
+        /// <param name="sceneName">Unity scene name used to select gameplay initialization.</param>
         public override void OnSceneWasInitialized(int buildIndex, string sceneName)
         {
             ModLogger.Debug($"Scene initialized: {sceneName} (Build Index: {buildIndex})");
@@ -967,6 +1019,12 @@ namespace Behind_Bars
             ModLogger.Debug("✓ Behind Bars scene startup complete");
         }
 
+        /// <summary>
+        /// Handles the reliable post-load boundary for scene-owned UI and player bootstrap.
+        /// Menu loads force cleanup because they may not emit the outgoing active-scene event.
+        /// </summary>
+        /// <param name="buildIndex">Unity build index reported for the loaded scene.</param>
+        /// <param name="sceneName">Unity scene name used to select cleanup or bootstrap work.</param>
         public override void OnSceneWasLoaded(int buildIndex, string sceneName)
         {
             ModLogger.Debug($"Scene loaded: {sceneName}");
@@ -1007,6 +1065,11 @@ namespace Behind_Bars
             }
         }
 
+        /// <summary>
+        /// Waits for the runtime HUD/player prerequisites, then creates the local PlayerHandler
+        /// and restores persisted parole state. The Mono/IL2CPP readiness checks are deliberately
+        /// separate because IL2CPP wrappers require a valid native pointer before use.
+        /// </summary>
         private IEnumerator InitializePlayerSystems()
         {
             ModLogger.Debug("Waiting for player to be ready...");
@@ -1067,8 +1130,12 @@ namespace Behind_Bars
         }
 
         /// <summary>
-        /// Restore parole tracking if the player is actively on parole when scene loads
+        /// Restores tracking and the runtime parole record if the player is actively on parole
+        /// when the scene loads. The persisted rap-sheet state is authoritative; the private
+        /// runtime dictionary/monitor are repopulated through reflection because no public restore
+        /// API is available.
         /// </summary>
+        /// <param name="player">Local player whose persisted parole state is being restored.</param>
         private IEnumerator RestoreParoleIfActive(Player player)
         {
             // Wait a moment for systems to be ready
@@ -1146,7 +1213,9 @@ namespace Behind_Bars
                     ViolationCount = paroleRecord.GetViolationCount()
                 };
                 
-                // Restore parole runtime record using reflection to access private field
+                // Restore the runtime record through the private field because ParoleSystem does
+                // not expose a public bootstrap API. If that shape is unavailable, persisted
+                // parole remains intact but runtime monitoring cannot be restarted here.
                 var paroleSystemType = typeof(ParoleSystem);
                 var paroleRecordsField = paroleSystemType.GetField("_paroleRecords", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
                 if (paroleRecordsField != null)
@@ -1157,7 +1226,8 @@ namespace Behind_Bars
                         paroleRecords[player] = runtimeRecord;
                         ModLogger.Debug($"Restored parole runtime record for {player.name}");
                         
-                        // Start parole monitoring coroutine using reflection
+                        // Restart the private monitor only after the runtime record is installed;
+                        // otherwise the monitor would observe an incomplete or duplicate record.
                         var monitorMethod = paroleSystemType.GetMethod("MonitorParole", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
                         if (monitorMethod != null)
                         {
@@ -2432,7 +2502,9 @@ namespace Behind_Bars
         }
 
         /// <summary>
-        /// Handle scene changes for cleanup (especially when game is quit)
+        /// Handles active-scene transitions, cancelling a Main gameplay session before Unity
+        /// destroys scene-owned objects. Menu loading also has an explicit post-load cleanup path
+        /// because this event is not guaranteed for every outgoing scene.
         /// </summary>
         private void OnSceneChanged(Scene oldScene, Scene newScene)
         {
@@ -2467,6 +2539,10 @@ namespace Behind_Bars
             }
         }
 
+        /// <summary>
+        /// Opens a new gameplay session, invalidating continuations from any earlier Main scene
+        /// and resetting player-bootstrap readiness before scene-owned trackers are started.
+        /// </summary>
         private void BeginGameplaySceneSession()
         {
             _gameplaySessionVersion++;
@@ -2479,8 +2555,12 @@ namespace Behind_Bars
 
         /// <summary>
         /// Cancels scene-bound gameplay owners without tearing down the persistent mod service graph.
-        /// This is intentionally separate from OnDeinitializeMelon so loading another save can bootstrap cleanly.
+        /// The session is invalidated before coroutines and systems are stopped, then UI fades,
+        /// listeners, and scene hosts are released. This is intentionally separate from
+        /// OnDeinitializeMelon so loading another save can bootstrap cleanly.
         /// </summary>
+        /// <param name="reason">Diagnostic context for the transition or teardown.</param>
+        /// <param name="forceUiCleanup">Whether UI cleanup runs even without an active session.</param>
         private void ShutdownGameplayScene(string reason, bool forceUiCleanup = false)
         {
             var hasActiveGameplaySession = _gameplaySceneActive || _loadModCoroutine != null || _playerInitializationCoroutine != null;
@@ -2543,6 +2623,8 @@ namespace Behind_Bars
             catch (Exception ex) { ModLogger.Warn($"UI shutdown reported an issue: {ex.Message}"); }
         }
 
+        /// <summary>Stops one scene-owned coroutine and clears its handle idempotently.</summary>
+        /// <param name="coroutine">Reference to the coroutine handle owned by the current session.</param>
         private static void StopSceneCoroutine(ref Coroutine? coroutine)
         {
             if (coroutine == null)
@@ -2555,7 +2637,9 @@ namespace Behind_Bars
         }
 
         /// <summary>
-        /// Cleanup when mod is being destroyed
+        /// Performs final mod teardown after scene-owned cleanup has completed. Static scene
+        /// listeners are removed, the persistent UI is released, and the manager service graph
+        /// is shut down; this path is not a substitute for the per-scene session boundary.
         /// </summary>
         public override void OnDeinitializeMelon()
         {
@@ -2572,6 +2656,9 @@ namespace Behind_Bars
 #endif
 
                 // Clean up UI
+                // The public facade is retained here for legacy callers; scene shutdown above
+                // is the authoritative non-creating cleanup path. If the facade initializes a
+                // missing manager, DestroyJailInfoUI immediately removes that final artifact.
                 HideJailInfoUI();
                 var uiManager = ResolveUIManager();
                 if (uiManager != null)
@@ -2589,7 +2676,9 @@ namespace Behind_Bars
         }
 
         /// <summary>
-        /// Setup exit door using GuardDoor prefab like other doors
+        /// Resolves the authored exit-scanner hierarchy, assigns the available steel/jail door
+        /// prefab, and instantiates the door once. Missing hierarchy or prefab data fails closed
+        /// with diagnostics so repeated setup calls do not create duplicate doors.
         /// </summary>
         private static void SetupExitDoor(JailController jailController)
         {
@@ -2705,7 +2794,8 @@ namespace Behind_Bars
         }
         
         /// <summary>
-        /// Initialize NavMesh optimization patches manually (for methods with ref parameters)
+        /// Initializes the NavMesh optimization patch manually because the target method's
+        /// <c>ref NavMeshPath</c> parameter is not reliably discovered by the normal patch scan.
         /// </summary>
         private void InitializeNavMeshOptimizationPatches()
         {

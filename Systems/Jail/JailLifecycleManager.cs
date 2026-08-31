@@ -40,6 +40,10 @@ namespace Behind_Bars.Systems.Jail
         private const float LocalAudioMaxDistance = 55f;
         private const float InmateReturnGraceSeconds = 10f;
 
+        // Schedule state is scene-local and rebuilt from the native clock. The status
+        // clock fields below deliberately preserve fractional real-time progress while
+        // the native game minute remains unchanged, so the player-facing countdown can
+        // move in real seconds without becoming a second schedule authority.
         private JailRecreationTier activeTier = JailRecreationTier.Unknown;
         private int lastWarningScheduleMinute = -1;
         private int lastObservedNativeMinute = -1;
@@ -105,6 +109,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Reconcile only on native-minute changes (or an explicit force) so schedule
+        // transitions are single-shot while the status snapshot can still tick often.
         private void RefreshScheduleFromNativeTime(bool force)
         {
             if (!TryGetCurrentScheduleMinute(out int currentMinute))
@@ -149,6 +155,10 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info($"[JAIL LIFECYCLE] Thirty-minute warning issued for {activeTier} recreation tier; inmates recalled before doors close");
         }
 
+        /// <summary>
+        /// Applies a native schedule transition: recalls the previous tier, opens the
+        /// new tier or bedtime state, and enforces the local player's assigned cell.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -203,6 +213,11 @@ namespace Behind_Bars.Systems.Jail
             EnforcePlayerAtTransition(desiredTier);
         }
 
+        /// <summary>
+        /// Resolves the native Schedule I clock into minutes of day. The legacy
+        /// GameTimeManager path is only a safe construction fallback and is not preferred
+        /// once the native clock is available.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -272,6 +287,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Reapply the already-selected tier to late-spawned inmates without replaying
+        // door/audio transition effects; the canonical manager also calls this directly.
         private void ApplyCurrentTierToInmates()
         {
             if (activeTier == JailRecreationTier.Unknown)
@@ -292,6 +309,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Opening is limited to the cell indices belonging to the selected tier; the
+        // actual schedule decision is made by ApplySchedule, not by the door controller.
         private void OpenTierForRecreation(JailRecreationTier tier)
         {
             foreach (int cellIndex in GetCellIndicesForTier(tier))
@@ -304,6 +323,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Assign only inmates whose authored cell tier is active; every other inmate is
+        // recalled even if the roster arrived after the schedule transition.
         private void CommandScheduledRecreation(JailRecreationTier tier, List<InmateBehavior> inmates)
         {
             List<Transform> anchors = GetRecreationAnchors(tier);
@@ -353,6 +374,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // The grace period is real time so NPC return/door security still completes when
+        // the game clock is paused or running at a different speed.
         private IEnumerator SecureTierAfterReturn(JailRecreationTier tier)
         {
             float deadline = Time.realtimeSinceStartup + InmateReturnGraceSeconds;
@@ -414,6 +437,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Uses CellDetail.cellIndex (authored index), never the compact list position,
+        // because non-cell children may exist under the Cells parent.
         private List<int> GetCellIndicesForTier(JailRecreationTier tier)
         {
             var results = new List<int>();
@@ -437,6 +462,11 @@ namespace Behind_Bars.Systems.Jail
             return results;
         }
 
+        /// <summary>
+        /// Classifies a cell by its authored physical height. Bounds/collider height is
+        /// preferred over the shared cell-root transform and returns None when no usable
+        /// cell geometry is available.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -502,6 +532,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Recreation anchors use a name contract: names containing "Upper" belong to
+        // the upper tier; all other patrol anchors are treated as lower-tier anchors.
         private List<Transform> GetRecreationAnchors(JailRecreationTier tier)
         {
             var anchors = new List<Transform>();
@@ -532,6 +564,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Resolve canonical inmate behaviors through the safe component helper and
+        // return a fresh snapshot so callers can iterate without owning the manager list.
         private static List<InmateBehavior> GetActiveInmateBehaviors()
         {
             var behaviors = new List<InmateBehavior>();
@@ -561,6 +595,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // A transition only returns a tracked player whose assigned tier is not active;
+        // an already-confined player is left alone to avoid a disruptive false lockdown.
         private void EnforcePlayerAtTransition(JailRecreationTier tier)
         {
             if (playerReturnInProgress)
@@ -690,6 +726,9 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Advance fractional schedule progress from wall-clock time while the native
+        // minute is stable. Progress is capped below 1 so the next native tick owns the
+        // actual boundary transition.
         private void UpdateStatusClock(TimeManager nativeTimeManager, int currentMinute)
         {
             float realtimeNow = Time.realtimeSinceStartup;
@@ -714,6 +753,11 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Computes real seconds represented by one game minute from the native time
+        /// manager. When the native clock is paused, the last valid conversion is kept so
+        /// the UI countdown does not advance behind the game's clock.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -736,6 +780,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Game time is intentionally frozen during the overnight 04:00-06:00 window
+        // and whenever Unity/native time is paused; callers then retain the last progress.
         private static bool IsNativeClockAdvancing(TimeManager nativeTimeManager, int currentMinute)
         {
             if (Time.timeScale <= 0f || (currentMinute >= 4 * 60 && currentMinute < 6 * 60))
@@ -749,6 +795,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // NormalizedTimeOfDay supplies fractional day progress; DailyMinSum anchors it
+        // to the current native minute without exposing native time types to the UI.
         private static float ResolveNativeMinuteProgress(TimeManager nativeTimeManager)
         {
             if (nativeTimeManager == null)
@@ -763,6 +811,9 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Schedule recall uses a brief real-time blackout, then the same authored spawn
+        // destination/orientation as custody transfer, and finally restores normal audio
+        // and lighting. Failure is logged rather than treated as a successful return.
         private IEnumerator ForcePlayerToAssignedCell(Player player, int cellIndex)
         {
             playerReturnInProgress = true;
@@ -826,6 +877,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Called once from Start for this scene; it creates separate one-shot and looping
+        // sources because the warning/door cues must not interrupt the lockdown siren.
         private void EnsureAudioSources()
         {
             signalAudioSource = gameObject.AddComponent<AudioSource>();

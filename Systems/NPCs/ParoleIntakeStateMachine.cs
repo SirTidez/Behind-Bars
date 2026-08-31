@@ -28,6 +28,12 @@ namespace Behind_Bars.Systems.NPCs
 
         #region State Machine Definition
 
+        /// <summary>
+        /// Workflow phases used by the supervising officer while accepting a newly
+        /// released parolee.  The machine deliberately keeps the officer at the
+        /// station until the release-summary UI is dismissible, then escorts the
+        /// player through the check-in explanation before returning to the post.
+        /// </summary>
         public enum ParoleIntakeState
         {
             Idle,                    // Waiting at police station entrance
@@ -54,10 +60,20 @@ namespace Behind_Bars.Systems.NPCs
 #if MONO
         [SerializeField]
 #endif
+        // The state is the single source of truth for intake progress.  The
+        // parole officer mirrors it for activity/notification purposes, while
+        // this component owns the explanation freeze and release-summary gates.
         private ParoleIntakeState currentState = ParoleIntakeState.Idle;
+        // The player currently owned by this intake session; null outside an
+        // active intake.  Do not use the nearest player as a substitute here:
+        // cleanup must release the exact player that was acquired.
         private Player currentParolee;
+        // StationaryBehavior's post, or the authored courthouse fallback used
+        // when the component is initialized before that helper is available.
         private Vector3 entrancePosition;
+        // Uses real Unity time for state pacing; it is not parole/game-clock time.
         private float stateStartTime;
+        // Delay used between explanation phases and state transitions.
         private float processingDelay = 2f; // Delay between states for processing
         private const float ParoleeGreetingDistance = 2.25f;
         private const float ApproachRepathInterval = 0.35f;
@@ -81,8 +97,11 @@ namespace Behind_Bars.Systems.NPCs
         #region Events
 
 #if MONO
+        /// <summary>Raised after the intake state changes on the Mono runtime.</summary>
         public System.Action<ParoleIntakeState> OnStateChanged;
+        /// <summary>Raised when a player is accepted into the intake workflow.</summary>
         public System.Action<Player> OnIntakeStarted;
+        /// <summary>Raised when the intake workflow completes normally.</summary>
         public System.Action<Player> OnIntakeCompleted;
 #endif
 
@@ -90,6 +109,11 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Initialization
 
+        /// <summary>
+        /// Caches the supervising-officer and stationary helpers used by the
+        /// state machine.  The base NPC initialization is still responsible for
+        /// registration and the common navigation components.
+        /// </summary>
         protected override void Awake()
         {
             base.Awake();
@@ -97,6 +121,11 @@ namespace Behind_Bars.Systems.NPCs
             stationaryBehavior = BBHelpers.GetComponentSafe<StationaryBehavior>(gameObject);
         }
 
+        /// <summary>
+        /// Restores the serialized/current state after base initialization, then
+        /// starts asynchronous dialogue-controller discovery and resolves the
+        /// officer's return position.
+        /// </summary>
         protected override void Start()
         {
             var savedState = currentState;
@@ -109,11 +138,18 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Debug($"ParoleIntakeStateMachine initialized for {gameObject.name}");
         }
 
+        /// <summary>
+        /// Establishes the idle intake state without starting a player session.
+        /// </summary>
         protected override void InitializeNPC()
         {
             ChangeIntakeState(ParoleIntakeState.Idle);
         }
 
+        /// <summary>
+        /// Resolves the supervising officer's station from StationaryBehavior,
+        /// falling back to the authored courthouse position when necessary.
+        /// </summary>
         private void FindEntrancePosition()
         {
             if (stationaryBehavior != null)
@@ -127,12 +163,21 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Debug($"ParoleIntakeStateMachine: Entrance position set to {entrancePosition}");
         }
 
+        /// <summary>
+        /// Starts the retry coroutine that waits for the jail dialogue controller
+        /// to become available after the native NPC hierarchy finishes loading.
+        /// </summary>
         private void InitializeDialogueSystem()
         {
             MelonLoader.MelonCoroutines.Start(WaitForDialogueController());
         }
 
 #if MONO
+        /// <summary>
+        /// Polls for the dialogue controller for up to ten half-second attempts.
+        /// The coroutine is intentionally tolerant of native hierarchy load order;
+        /// a failed lookup leaves intake available but without state greetings.
+        /// </summary>
         private System.Collections.IEnumerator WaitForDialogueController()
 #else
 #if !MONO
@@ -164,6 +209,12 @@ namespace Behind_Bars.Systems.NPCs
 
         #region State Management
 
+        /// <summary>
+        /// Changes intake phase, stamps the transition with real Unity time, then
+        /// updates dialogue and executes the new state's entry side effects.
+        /// On Mono it also raises the state-changed event; it does not itself
+        /// acquire or release coordinator ownership.
+        /// </summary>
         private void ChangeIntakeState(ParoleIntakeState newState)
         {
             if (currentState == newState) return;
@@ -181,6 +232,11 @@ namespace Behind_Bars.Systems.NPCs
             OnStateEnter(newState);
         }
 
+        /// <summary>
+        /// Maps an intake phase to the dialogue-controller state.  Awaiting the
+        /// release summary and returning to post intentionally reuse the idle
+        /// greeting because neither phase has a dedicated greeting state.
+        /// </summary>
         private void UpdateDialogueForState(ParoleIntakeState state)
         {
             if (dialogueController == null) return;
@@ -201,6 +257,11 @@ namespace Behind_Bars.Systems.NPCs
             dialogueController.UpdateGreetingForState(dialogueState);
         }
 
+        /// <summary>
+        /// Applies phase-entry side effects such as suspending stationary behavior,
+        /// freezing the player for explanations, and restoring the officer to its
+        /// post.  This method does not advance the state machine by itself.
+        /// </summary>
         private void OnStateEnter(ParoleIntakeState state)
         {
             switch (state)
@@ -275,6 +336,11 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Builds the next check-in-window message without applying scheduling
+        /// consequences.  If the parole manager cannot provide a window, the
+        /// current implementation returns a generic return-here instruction.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -293,6 +359,11 @@ namespace Behind_Bars.Systems.NPCs
             return "Your check-in schedule will be sent to you. Return here during your assigned window and speak with me.";
         }
 
+        /// <summary>
+        /// Temporarily disables the player's movement and camera look while the
+        /// officer explains the check-in location.  The flag is set only after
+        /// the control handoff succeeds and is cleared by the matching restore.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -334,6 +405,11 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Restores movement and camera look after an explanation, and always
+        /// clears the local freeze flag even if a runtime lookup fails.  This is
+        /// the authoritative cleanup used when returning to idle or disabling.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -376,13 +452,18 @@ namespace Behind_Bars.Systems.NPCs
         #region Update Loop
 
         /// <summary>
-        /// Performance: Override OnEnable to use custom state update handler
+        /// Enables the base NPC tick path used to dispatch the intake state
+        /// machine.  No intake session is acquired here.
         /// </summary>
         protected override void OnEnable()
         {
             base.OnEnable();
         }
 
+        /// <summary>
+        /// Cleans up explanation controls and escort state before the base NPC is
+        /// disabled.  This does not mark an intake as successfully completed.
+        /// </summary>
         protected override void OnDisable()
         {
             RestorePlayerAfterExplanation();
@@ -391,7 +472,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Custom state update handler that includes parole intake state machine logic
+        /// Dispatches the base NPC tick and then advances the intake state machine.
+        /// State transitions themselves remain responsible for their entry
+        /// side effects and player-control ownership.
         /// </summary>
         protected override void OnStateUpdateTick(float currentTime)
         {
@@ -401,6 +484,11 @@ namespace Behind_Bars.Systems.NPCs
             ProcessIntakeState();
         }
 
+        /// <summary>
+        /// Routes the current intake state to its handler.  Handlers may issue
+        /// navigation or dialogue work, but only a state transition changes the
+        /// authoritative phase timestamp.
+        /// </summary>
         private void ProcessIntakeState()
         {
             switch (currentState)
@@ -443,12 +531,21 @@ namespace Behind_Bars.Systems.NPCs
 
         #region State Handlers
 
+        /// <summary>
+        /// Leaves intake entry to the dynamic manager; idle is intentionally a
+        /// passive state so more than one arrival poller cannot be active.
+        /// </summary>
         private void HandleIdleState()
         {
             // Intake entry is manager-driven so spawn state and officer availability
             // remain the single source of truth.
         }
 
+        /// <summary>
+        /// Approaches either the live parolee or the prepared courthouse meeting
+        /// point, then waits for release-summary acknowledgement before escorting.
+        /// Repathing is throttled to avoid competing navigation requests.
+        /// </summary>
         private void HandleDetectingParoleeState()
         {
             if (currentParolee == null)
@@ -485,6 +582,11 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Holds the officer in place while the release-summary UI remains open.
+        /// Acknowledgement advances to the escort phase; a lost player cancels to
+        /// idle without attempting to infer a replacement target.
+        /// </summary>
         private void HandleAwaitingReleaseSummaryState()
         {
             if (currentParolee == null)
@@ -499,6 +601,11 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Keeps the player within the escort distance while navigating to the
+        /// assigned check-in point.  The officer pauses and reminds the player if
+        /// they fall behind rather than advancing the explanation early.
+        /// </summary>
         private void HandleEscortingToCheckInState()
         {
             if (currentParolee == null)
@@ -538,6 +645,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Faces the player and holds the location explanation for two processing
+        /// delays before entering the schedule explanation phase.
+        /// </summary>
         private void HandleExplainingCheckInLocationState()
         {
             if (currentParolee == null)
@@ -554,6 +665,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Faces the player and holds the schedule explanation for three processing
+        /// delays before finalization.
+        /// </summary>
         private void HandleExplainingCheckInScheduleState()
         {
             if (currentParolee == null)
@@ -570,6 +685,10 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Keeps the final intake message visible for two processing delays, then
+        /// commits the intake and releases the player/control ownership.
+        /// </summary>
         private void HandleFinalizingIntakeState()
         {
             if (currentParolee == null)
@@ -586,6 +705,11 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Applies a horizontal look-at toward the active parolee during the
+        /// explanation phases.  The method is hidden from the IL2CPP surface and
+        /// is called by the scheduler rather than an independent Update loop.
+        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -610,6 +734,11 @@ namespace Behind_Bars.Systems.NPCs
             transform.rotation = Quaternion.RotateTowards(transform.rotation, targetRotation, 2160f * Time.deltaTime);
         }
 
+        /// <summary>
+        /// Waits for StationaryBehavior to report the return position reached,
+        /// then transitions back to idle.  If the helper is absent, this state
+        /// remains pending until external cleanup occurs.
+        /// </summary>
         private void HandleReturningToPostState()
         {
             // Check if we've returned to entrance
@@ -624,8 +753,12 @@ namespace Behind_Bars.Systems.NPCs
         #region Public Methods
 
         /// <summary>
-        /// Start parole intake process for a parolee
+        /// Starts a normal intake for the specified parolee when the machine is
+        /// idle or already approaching that same player.  This resets release
+        /// meeting flags and raises the Mono-only start event; coordinator
+        /// ownership is established by the caller/manager before this entry point.
         /// </summary>
+        /// <param name="parolee">The exact player to retain for this intake session.</param>
         public void StartParoleIntake(Player parolee)
         {
             if (parolee == null)
@@ -662,6 +795,8 @@ namespace Behind_Bars.Systems.NPCs
         /// there. This stays in the canonical intake state machine so normal check-ins still
         /// approach the live player.
         /// </summary>
+        /// <param name="parolee">The player reserved for the upcoming release handoff.</param>
+        /// <param name="meetingPoint">The authored point at which the supervisor should wait.</param>
         internal void PrepareForReleaseMeeting(Player parolee, Vector3 meetingPoint)
         {
             if (parolee == null)
@@ -686,6 +821,8 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Releases the supervisor from the pre-dismissal wait once the player closes the release summary.
         /// </summary>
+        /// <param name="parolee">The player whose summary was dismissed.</param>
+        /// <returns>True only when this machine owns that player and accepts the dismissal.</returns>
         public bool NotifyReleaseSummaryDismissed(Player parolee)
         {
             if (parolee == null || currentParolee != parolee || !IsProcessingIntake())
@@ -712,8 +849,12 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Force start intake (for external calls)
+        /// Bypasses normal idle, pending-request, and release-summary gates and
+        /// sends the supplied player into the detecting phase.  This is intended
+        /// for controlled external/test recovery; normal gameplay should use
+        /// <see cref="StartParoleIntake"/> or the release-meeting preparation path.
         /// </summary>
+        /// <param name="parolee">The exact player to retain for the forced session.</param>
         public void ForceStartIntake(Player parolee)
         {
             currentParolee = parolee;
@@ -722,7 +863,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Complete the intake process
+        /// Commits the completed intake interaction, restores player controls,
+        /// releases escort state, clears the retained player, and hands the
+        /// supervising officer back to the roster manager when applicable.
         /// </summary>
         private void CompleteIntake()
         {
@@ -768,15 +911,21 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Check if intake is currently processing
+        /// Returns true for every active intake phase except idle and the transient
+        /// return-to-post phase.
         /// </summary>
+        /// <returns>Whether this component currently owns an intake workflow.</returns>
         public bool IsProcessingIntake()
         {
             return currentState != ParoleIntakeState.Idle && currentState != ParoleIntakeState.ReturningToPost;
         }
 
         /// <summary>
-        /// Stop intake process
+        /// Aborts the current intake, restores any explanation freeze, releases
+        /// the officer's local escort mirror, and moves the officer toward its
+        /// post.  Coordinator/manager ownership is not cleared here; the owning
+        /// caller or watchdog must release that separate record.  This is
+        /// cancellation cleanup, not a successful intake completion.
         /// </summary>
         public void StopIntakeProcess()
         {

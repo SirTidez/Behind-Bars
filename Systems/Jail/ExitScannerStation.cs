@@ -28,7 +28,9 @@ using ScheduleOne;
 namespace Behind_Bars.Systems.Jail
 {
     /// <summary>
-    /// Exit scanner station for final release - same as fingerprint scanner but teleports player out on completion
+    /// Runs the final release scanner interaction and hands release completion to ReleaseManager.
+    /// The current default path is a fixed palm-scan animation followed by an authored exit
+    /// trigger/timeout handoff; the legacy IK and drag-validation paths remain incomplete.
     /// </summary>
     public class ExitScannerStation : MonoBehaviour
     {
@@ -36,7 +38,9 @@ namespace Behind_Bars.Systems.Jail
         public ExitScannerStation(System.IntPtr ptr) : base(ptr) { }
 #endif
 
-        public bool useNewPalmScanner = true;  // Toggle between old IK system and new palm scanner
+        // Scanner mode switch. The palm path is the only completed path; false selects the
+        // legacy StartIKScanMode stub, which logs but does not complete a scan.
+        public bool useNewPalmScanner = true;
 
         // InteractableObject component for IL2CPP compatibility
         private InteractableObject interactableObject;
@@ -76,27 +80,31 @@ namespace Behind_Bars.Systems.Jail
             hasCachedInteractionState = true;
         }
 
-        public Transform scanTarget;        // The ScanTarget in Unity hierarchy
-        public Transform ikTarget;          // The IkTarget that will be draggable
-        public Image scanEffect;            // The scanning effect image
+        // Authored scanner presentation references. The current simplified sequence uses
+        // scanEffect/Canvas animation but does not validate the palm against scanTarget.
+        public Transform scanTarget;
+        public Transform ikTarget;
+        public Image scanEffect;
         public AudioSource scannerAudio;
 
-        public Camera interactionCamera;     // Camera for palm scanner view
-        public GameObject palmModel;         // The MockHand or palm prefab
-        public Transform palmStartPosition;  // Where palm starts
+        public Camera interactionCamera;
+        public GameObject palmModel;
+        public Transform palmStartPosition;
         public float dragSensitivity = 0.02f;
         public float maxDragDistance = 0.3f;
 
-        public float scanDuration = 5f;     // Max 5 seconds scanning
-        public float validRange = 0.3f;     // Range around scanTarget that's valid
+        // Timing/range values belong to the legacy drag-validation timer. The current fixed
+        // animation uses its own 1.5-second segments and does not consume these values.
+        public float scanDuration = 5f;
+        public float validRange = 0.3f;
 
         public AudioClip scanningSound;
         public AudioClip successSound;
         public AudioClip errorSound;
 
-        // Release teleport position (police station exit)
-        public Vector3 releasePosition = new Vector3(13.7402f, 1.4857f, 38.1558f); // Police station exit coordinates
-        public Vector3 releaseRotation = new Vector3(0f, 80.1529f, 0f); // Release rotation (facing away from wall)
+        // Fallback release transform used only when ReleaseManager cannot be resolved.
+        public Vector3 releasePosition = new Vector3(13.7402f, 1.4857f, 38.1558f);
+        public Vector3 releaseRotation = new Vector3(0f, 80.1529f, 0f);
 
         private bool isScanning = false;
         private bool isDragging = false;
@@ -105,7 +113,8 @@ namespace Behind_Bars.Systems.Jail
         private Camera playerCamera;
         private Coroutine scanCoroutine;
 
-        // Palm scanner state
+        // Palm scanner state. CompletePalmScan sets isCompleted before the player reaches
+        // the exit trigger; IsComplete therefore means scan accepted, not fully released.
         private bool inScannerView = false;
         private bool isPalmScanning = false;
         private Vector3 originalPalmPosition;
@@ -423,8 +432,9 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Main scan process - copied from working ScannerStation
+        /// Run the current palm-scan presentation and accept the scan when the fixed animation ends.
         /// </summary>
+        /// <remarks>This path does not invoke <see cref="PalmScanTimer"/> or validate <see cref="validRange"/>.</remarks>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -505,7 +515,8 @@ namespace Behind_Bars.Systems.Jail
             // Make sure scan image is visible
             imgScanEffect.gameObject.SetActive(true);
 
-            // Animation: Start -> End -> Start (same as working scanner)
+            // Animation: Start -> End -> Start (same as working scanner). This fixed animation
+            // takes three seconds total and is independent of the public scanDuration field.
             float animTime = 1.5f; // Time for each segment
 
             // Phase 1: Start -> End
@@ -541,6 +552,8 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info("Exit scan animation completed: Start -> End -> Start");
         }
 
+        // Legacy mode retained for the old configuration switch. It is currently a log-only
+        // stub and does not set isScanning, start a coroutine, or complete the release.
         private void StartIKScanMode()
         {
             ModLogger.Info("Starting IK scan mode for exit scanner");
@@ -550,6 +563,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Legacy drag-validation loop. The active SimplifiedScanProcess path never starts it;
+        // its scanDuration/validRange behavior is retained only for unfinished IK/palm work.
         private IEnumerator PalmScanTimer()
         {
             float elapsed = 0f;
@@ -735,8 +750,9 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Monitors for player entering the exit trigger area
+        /// Monitor the authored exit trigger after a successful scan and hand off release.
         /// </summary>
+        /// <remarks>Missing/invalid trigger infrastructure falls back to a three-second teleport; a valid trigger also times out after 30 seconds.</remarks>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -900,8 +916,9 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Final teleportation to release location
+        /// Complete the exit-trigger handoff through ReleaseManager or the local fallback transform.
         /// </summary>
+        /// <remarks>When ReleaseManager exists, it owns the actual teleport/release state; direct coordinates are used only when it is unavailable.</remarks>
         private void TeleportPlayerToRelease()
         {
             if (currentPlayer == null) return;
@@ -1076,8 +1093,9 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Enable the scanner for use during release process (called by ReleaseOfficer)
+        /// Enable the interaction surface for the release process.
         /// </summary>
+        /// <remarks>This changes only the InteractableObject message/state; it does not reset a prior completion flag or cancel an active scan.</remarks>
         public void EnableForRelease()
         {
             if (interactableObject != null)
@@ -1089,8 +1107,9 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Disable the scanner after release or when not in release process
+        /// Mark the interaction surface unavailable outside the release process.
         /// </summary>
+        /// <remarks>This changes only the interaction message/state; any running scan coroutine must be stopped by its own completion/reset path.</remarks>
         public void DisableScanner()
         {
             if (interactableObject != null)
@@ -1224,6 +1243,10 @@ namespace Behind_Bars.Systems.Jail
             return names;
         }
 
+        /// <summary>
+        /// Return whether the scanner has accepted a scan.
+        /// </summary>
+        /// <remarks>The flag is set before trigger entry and ReleaseManager completion, so it is not proof that the player has been released.</remarks>
         public bool IsComplete()
         {
             return isCompleted;

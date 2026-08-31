@@ -17,6 +17,10 @@ namespace Behind_Bars.Harmony
     /// <summary>
     /// Patches StorageEntity to make PrisonStorageEntity work locally without network sync
     /// </summary>
+    /// <remarks>
+    /// This compatibility patch is compiled only for the Mono target. IL2CPP does not
+    /// receive these reflection-based local hooks from this class.
+    /// </summary>
     [HarmonyPatch(typeof(StorageEntity))]
     public class StorageEntityPatch
     {
@@ -73,6 +77,13 @@ namespace Behind_Bars.Harmony
             return true; // Allow normal behavior for other StorageEntity types
         }
 
+        /// <summary>
+        /// Invokes the slot's local SetStoredItem operation without going through the
+        /// network RPC. Reflection keeps this helper compatible with the runtime slot
+        /// wrapper; a missing method or invocation failure is logged and ignored.
+        /// </summary>
+        /// <param name="slot">The item-slot object receiving the stored instance.</param>
+        /// <param name="instance">The item instance to store, which may be null.</param>
         private static void SetStoredItemLocally(object slot, object instance)
         {
             if (slot == null)
@@ -94,6 +105,13 @@ namespace Behind_Bars.Harmony
             }
         }
 
+        /// <summary>
+        /// Best-effort diagnostic name lookup for a stored item. It probes a direct
+        /// <c>Name</c>, then <c>Definition.name</c>/<c>Definition.Name</c>, and finally
+        /// falls back to the runtime type name if the shape differs or reflection fails.
+        /// </summary>
+        /// <param name="itemInstance">The item instance being logged, or null.</param>
+        /// <returns>A human-readable item name or a safe type/null fallback.</returns>
         private static string GetItemName(object itemInstance)
         {
             if (itemInstance == null)

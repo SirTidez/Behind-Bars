@@ -14,6 +14,12 @@ namespace Behind_Bars.Systems.Parole
     /// Handles rewards granted upon successful parole completion.
     /// Reward tiers based on final compliance score.
     /// </summary>
+    /// <remarks>
+    /// Reward application is not idempotent: each call can add cash, increase the capped
+    /// sentence-reduction modifier, increment completed-parole count, and send another officer
+    /// message. The normal parole completion path should therefore invoke it once per term;
+    /// this helper does not persist a per-term reward-claimed marker.
+    /// </remarks>
     public static class ParoleCompletionRewards
     {
         /// <summary>
@@ -21,15 +27,21 @@ namespace Behind_Bars.Systems.Parole
         /// </summary>
         public enum ComplianceTier
         {
+            /// <summary>Compliance score below 50.</summary>
             Poor,          // 0-49
+            /// <summary>Compliance score from 50 through 74.</summary>
             Satisfactory,  // 50-74
+            /// <summary>Compliance score from 75 through 89.</summary>
             Good,          // 75-89
+            /// <summary>Compliance score from 90 through 100.</summary>
             Exemplary      // 90-100
         }
 
         /// <summary>
         /// Get the compliance tier for a given score
         /// </summary>
+        /// <param name="complianceScore">Final compliance score used for tier thresholds.</param>
+        /// <returns>The display/reward tier selected by the score.</returns>
         public static ComplianceTier GetComplianceTier(float complianceScore)
         {
             if (complianceScore >= 90f) return ComplianceTier.Exemplary;
@@ -41,6 +53,8 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Get the cash reward for a given compliance tier
         /// </summary>
+        /// <param name="tier">Compliance tier selecting the fixed cash reward.</param>
+        /// <returns>Cash reward amount, or zero for the poor tier.</returns>
         public static float GetCashReward(ComplianceTier tier)
         {
             switch (tier)
@@ -56,6 +70,8 @@ namespace Behind_Bars.Systems.Parole
         /// Get the sentence reduction modifier for a given compliance tier.
         /// This is added to the RapSheet's sentenceReductionModifier.
         /// </summary>
+        /// <param name="tier">Compliance tier selecting the fixed reduction.</param>
+        /// <returns>Reduction fraction, from 0 to 0.25.</returns>
         public static float GetSentenceReduction(ComplianceTier tier)
         {
             switch (tier)
@@ -70,6 +86,13 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Grant completion rewards based on final compliance score
         /// </summary>
+        /// <param name="player">Player receiving cash, RapSheet changes, and officer text.</param>
+        /// <param name="rapSheet">RapSheet containing the current parole record and reward counters.</param>
+        /// <remarks>
+        /// Cash is applied only when the runtime money service is available; RapSheet reduction
+        /// and completed-count mutations continue independently. The reduction is capped at
+        /// 50 percent, but completed count/cash/message effects are otherwise repeatable.
+        /// </remarks>
         public static void GrantCompletionRewards(Player player, RapSheet rapSheet)
         {
             if (rapSheet?.CurrentParoleRecord == null) return;

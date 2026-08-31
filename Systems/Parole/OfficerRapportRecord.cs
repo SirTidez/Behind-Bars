@@ -10,9 +10,13 @@ namespace Behind_Bars.Systems.Parole
     /// </summary>
     public enum RapportTier
     {
+        /// <summary>Score from 0 through 30.</summary>
         Hostile,    // 0-30
+        /// <summary>Score from 31 through 60.</summary>
         Neutral,    // 31-60
+        /// <summary>Score from 61 through 80.</summary>
         Friendly,   // 61-80
+        /// <summary>Score from 81 through 100.</summary>
         Trusted     // 81-100
     }
 
@@ -20,21 +24,31 @@ namespace Behind_Bars.Systems.Parole
     /// Tracks the officer-player rapport score and interaction history.
     /// Persists across save/load via SaveableField attributes.
     /// </summary>
+    /// <remarks>
+    /// Rapport is clamped to 0-100. Score changes increment positive/negative interaction
+    /// counters, while the last-change timestamp is updated only through its explicit setter;
+    /// <see cref="AdjustRapport"/> does not update that timestamp automatically.
+    /// </remarks>
     [Serializable]
     public class OfficerRapportRecord
     {
         [SaveableField("rapportScore")]
+        // Current score, clamped by all public mutation paths.
         private float rapportScore = 50f;
 
         [SaveableField("totalPositiveInteractions")]
+        // Count of calls that supplied a positive rapport delta.
         private int totalPositiveInteractions;
 
         [SaveableField("totalNegativeInteractions")]
+        // Count of calls that supplied a negative rapport delta.
         private int totalNegativeInteractions;
 
         [SaveableField("lastRapportChangeGameTime")]
+        // Explicitly supplied game-time marker; not automatically maintained by AdjustRapport.
         private float lastRapportChangeGameTime;
 
+        /// <summary>Creates a record with neutral rapport and empty interaction history.</summary>
         public OfficerRapportRecord()
         {
             rapportScore = 50f;
@@ -46,6 +60,12 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Adjust rapport score by a delta. Positive = good, negative = bad.
         /// </summary>
+        /// <param name="delta">Score change, clamped to the 0-100 score bounds.</param>
+        /// <remarks>
+        /// A positive or negative delta increments the corresponding interaction count; a zero
+        /// delta changes neither count. This method does not persist or update the game-time
+        /// marker itself.
+        /// </remarks>
         public void AdjustRapport(float delta)
         {
             float oldScore = rapportScore;
@@ -67,6 +87,8 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Set rapport score directly (used for carry-over between parole terms)
         /// </summary>
+        /// <param name="score">New score, clamped to 0-100.</param>
+        /// <remarks>Direct assignment does not change interaction counters or the time marker.</remarks>
         public void SetRapportScore(float score)
         {
             rapportScore = Mathf.Clamp(score, 0f, 100f);
@@ -87,6 +109,7 @@ namespace Behind_Bars.Systems.Parole
         /// Get the search frequency modifier based on rapport tier.
         /// Lower = fewer searches, higher = more searches.
         /// </summary>
+        /// <returns>A tier multiplier: hostile 1.3, neutral 1.0, friendly 0.7, trusted 0.4.</returns>
         public float GetSearchFrequencyModifier()
         {
             switch (GetRapportTier())
@@ -112,6 +135,7 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Update the last rapport change game time
         /// </summary>
+        /// <param name="gameTime">Game-minute timestamp supplied by the caller.</param>
         public void SetLastRapportChangeGameTime(float gameTime)
         {
             lastRapportChangeGameTime = gameTime;
@@ -120,6 +144,7 @@ namespace Behind_Bars.Systems.Parole
         /// <summary>
         /// Get the last time rapport was changed
         /// </summary>
+        /// <returns>The last explicitly stored game-minute timestamp.</returns>
         public float GetLastRapportChangeGameTime() => lastRapportChangeGameTime;
     }
 }
