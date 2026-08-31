@@ -1,6 +1,5 @@
 using System;
 using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.AI;
 using MelonLoader;
@@ -74,15 +73,13 @@ namespace Behind_Bars.Systems.NPCs
         protected bool hasReachedDestination = true;
         protected float lastDestinationTime = 0f;
         protected float positionTolerance = 1.5f;
-        protected float stuckCheckTime = 0f;
+        protected float lastMovementObservedTime = 0f;
         protected Vector3 lastPosition;
         protected const float stuckThreshold = 5f;
         protected const float minMovementDistance = 0.1f;
 
         // State Management
 #if MONO
-        protected Queue<System.Action> actionQueue = new Queue<System.Action>();
-
         // Events
         public System.Action<NPCState, NPCState> OnStateChanged;
         public System.Action<Vector3> OnDestinationReached;
@@ -145,12 +142,6 @@ namespace Behind_Bars.Systems.NPCs
             OnMovementCheckTick(currentTime);
         }
 
-        internal void DispatchActionProcess()
-        {
-            if (!isInitialized) return;
-            OnActionProcessTick();
-        }
-
         protected virtual void OnStateUpdateTick(float currentTime)
         {
             UpdateState();
@@ -158,12 +149,7 @@ namespace Behind_Bars.Systems.NPCs
 
         protected virtual void OnMovementCheckTick(float currentTime)
         {
-            CheckStuckMovement();
-        }
-
-        protected virtual void OnActionProcessTick()
-        {
-            ProcessActionQueue();
+            CheckStuckMovement(currentTime);
         }
 
         #region Initialization
@@ -361,6 +347,8 @@ namespace Behind_Bars.Systems.NPCs
             currentDestination = destination;
             hasReachedDestination = false;
             lastDestinationTime = Time.time;
+            lastMovementObservedTime = lastDestinationTime;
+            lastPosition = transform.position;
 
             if (!navAgent.SetDestination(destination))
             {
@@ -408,17 +396,20 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        protected virtual void CheckStuckMovement()
+        protected virtual void CheckStuckMovement(float currentTime)
         {
-            if (currentState != NPCState.Moving) return;
+            if (currentState != NPCState.Moving)
+            {
+                lastMovementObservedTime = currentTime;
+                lastPosition = transform.position;
+                return;
+            }
 
             float distanceMoved = Vector3.Distance(transform.position, lastPosition);
 
             if (distanceMoved < minMovementDistance)
             {
-                stuckCheckTime += Time.deltaTime;
-
-                if (stuckCheckTime >= stuckThreshold)
+                if (currentTime - lastMovementObservedTime >= stuckThreshold)
                 {
                     // ModLogger.Warn($"NPC {gameObject.name} appears stuck. Attempting to resolve...");
                     NotifyStuck();
@@ -429,12 +420,12 @@ namespace Behind_Bars.Systems.NPCs
                         navAgent.SetDestination(currentDestination);
                     }
 
-                    stuckCheckTime = 0f;
+                    lastMovementObservedTime = currentTime;
                 }
             }
             else
             {
-                stuckCheckTime = 0f;
+                lastMovementObservedTime = currentTime;
             }
 
             lastPosition = transform.position;
@@ -442,38 +433,7 @@ namespace Behind_Bars.Systems.NPCs
 
         #endregion
 
-        #region Action Queue System
-
-#if !MONO
-        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
-#endif
-#if MONO
-        public void QueueAction(System.Action action)
-#else
-        public void QueueAction(object action)
-#endif
-        {
-#if MONO
-            if (action != null)
-            {
-                actionQueue.Enqueue(action);
-            }
-#endif
-        }
-
-#if !MONO
-        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
-#endif
-        protected void ProcessActionQueue()
-        {
-#if MONO
-            if (actionQueue.Count > 0 && currentState == NPCState.Idle)
-            {
-                var action = actionQueue.Dequeue();
-                action?.Invoke();
-            }
-#endif
-        }
+        #region Notifications
 
         protected virtual void NotifyStateChanged(NPCState oldState, NPCState newState)
         {

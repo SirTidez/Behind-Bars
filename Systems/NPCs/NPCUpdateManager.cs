@@ -35,11 +35,9 @@ namespace Behind_Bars.Systems.NPCs
         // Update intervals (in seconds)
         private const float STATE_UPDATE_INTERVAL = 0.1f;      // 10 Hz - State machine updates
         private const float MOVEMENT_CHECK_INTERVAL = 0.5f;    // 2 Hz - Stuck detection
-        private const float ACTION_PROCESS_INTERVAL = 0.033f;  // 30 Hz - Action queue processing
 
         private float _lastStateUpdate;
         private float _lastMovementCheck;
-        private float _lastActionProcess;
 
         void Awake()
         {
@@ -59,9 +57,8 @@ namespace Behind_Bars.Systems.NPCs
 
             bool runStateUpdate = currentTime - _lastStateUpdate >= STATE_UPDATE_INTERVAL;
             bool runMovementCheck = currentTime - _lastMovementCheck >= MOVEMENT_CHECK_INTERVAL;
-            bool runActionProcess = currentTime - _lastActionProcess >= ACTION_PROCESS_INTERVAL;
 
-            if (!runStateUpdate && !runMovementCheck && !runActionProcess)
+            if (!runStateUpdate && !runMovementCheck)
                 return;
 
             for (int i = 0; i < _registeredNPCs.Count; i++)
@@ -75,9 +72,6 @@ namespace Behind_Bars.Systems.NPCs
 
                 if (runMovementCheck)
                     npc.DispatchMovementCheck(currentTime);
-
-                if (runActionProcess)
-                    npc.DispatchActionProcess();
             }
 
             if (runStateUpdate)
@@ -85,9 +79,6 @@ namespace Behind_Bars.Systems.NPCs
 
             if (runMovementCheck)
                 _lastMovementCheck = currentTime;
-
-            if (runActionProcess)
-                _lastActionProcess = currentTime;
         }
 
         private void CleanupNullNpcs()
