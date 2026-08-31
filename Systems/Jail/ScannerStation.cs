@@ -176,6 +176,27 @@ namespace Behind_Bars.Systems.Jail
         private static AnimationClip fingerprintPoseClip;
         private GameObject scannerArmSnapshotRoot;
         private readonly List<Mesh> scannerArmSnapshotMeshes = new List<Mesh>();
+        // Alignment uses the same frozen mesh for the lifetime of one scan. Cache its managed
+        // geometry once, project only topology-referenced vertices, and reuse the result until the
+        // snapshot or camera moves. This preserves the exact triangle acceptance region without
+        // pulling native mesh arrays or projecting duplicate triangle corners every frame.
+        private MeshFilter scannerArmAlignmentFilter;
+        private Vector3[] scannerArmAlignmentVertices;
+        private int[] scannerArmAlignmentTriangles;
+        private int[] scannerArmAlignmentReferencedVertices;
+        private Vector3[] scannerArmAlignmentViewportVertices;
+        private bool[] scannerArmAlignmentVertexVisible;
+        private bool scannerArmAlignmentResultValid;
+        private float scannerArmAlignmentCachedDistance;
+        private Vector2 scannerArmAlignmentCachedGuideViewport;
+        private Vector2 scannerArmAlignmentCachedPalmViewport;
+        private Vector3 scannerArmAlignmentRootPosition;
+        private Quaternion scannerArmAlignmentRootRotation;
+        private Vector3 scannerArmAlignmentCameraPosition;
+        private Quaternion scannerArmAlignmentCameraRotation;
+        private Vector3 scannerArmAlignmentTargetPosition;
+        private float scannerArmAlignmentCameraFieldOfView;
+        private float scannerArmAlignmentCameraAspect;
         private Animator scannerPoseAnimator;
         private RuntimeAnimatorController scannerPoseOriginalController;
         private bool scannerPoseApplied;
@@ -1078,6 +1099,7 @@ namespace Behind_Bars.Systems.Jail
                 renderer.shadowCastingMode = ShadowCastingMode.Off;
                 renderer.receiveShadows = false;
                 scannerArmSnapshotMeshes.Add(rightArmMesh);
+                CacheScannerAlignmentGeometry(filter, rightArmMesh);
                 capturedMeshes++;
                 ModLogger.Info($"[Fingerprint Scan] Snapshot coordinates: {(capturedMeshUsesWorldSpace ? "world" : "renderer-local")}, baked-center={capturedMeshBoundsCenter}, baked-size={capturedMeshBoundsSize}, renderer={source.transform.position}, renderer-scale={source.transform.lossyScale}, wrist={rightHand.position}");
 
@@ -1572,7 +1594,12 @@ namespace Behind_Bars.Systems.Jail
         {
             if (scannerArmSnapshotRoot != null && !scannerArmArrivalActive && ikTarget != null)
             {
-                scannerArmSnapshotRoot.transform.position = ProjectToScannerSurface(ikTarget.position) + scannerArmDisplayOffset + scannerArmSurfaceOffset;
+                Vector3 nextPosition = ProjectToScannerSurface(ikTarget.position) + scannerArmDisplayOffset + scannerArmSurfaceOffset;
+                if ((scannerArmSnapshotRoot.transform.position - nextPosition).sqrMagnitude > 0.00000001f)
+                {
+                    scannerArmSnapshotRoot.transform.position = nextPosition;
+                    scannerArmAlignmentResultValid = false;
+                }
             }
         }
 
@@ -1869,6 +1896,117 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        private void CacheScannerAlignmentGeometry(MeshFilter filter, Mesh mesh)
+        {
+            ClearScannerAlignmentGeometry();
+            if (filter == null || mesh == null)
+            {
+                return;
+            }
+
+            Vector3[] vertices = mesh.vertices;
+            int[] triangles = mesh.triangles;
+            bool[] referenced = new bool[vertices.Length];
+            int referencedCount = 0;
+            for (int triangle = 0; triangle < triangles.Length; triangle++)
+            {
+                int index = triangles[triangle];
+                if (index < 0 || index >= vertices.Length || referenced[index])
+                {
+                    continue;
+                }
+
+                referenced[index] = true;
+                referencedCount++;
+            }
+
+            int[] referencedVertices = new int[referencedCount];
+            int destination = 0;
+            for (int index = 0; index < referenced.Length; index++)
+            {
+                if (referenced[index])
+                {
+                    referencedVertices[destination++] = index;
+                }
+            }
+
+            scannerArmAlignmentFilter = filter;
+            scannerArmAlignmentVertices = vertices;
+            scannerArmAlignmentTriangles = triangles;
+            scannerArmAlignmentReferencedVertices = referencedVertices;
+            scannerArmAlignmentViewportVertices = new Vector3[vertices.Length];
+            scannerArmAlignmentVertexVisible = new bool[vertices.Length];
+            scannerArmAlignmentResultValid = false;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private bool HasScannerAlignmentGeometry()
+        {
+            return scannerArmAlignmentFilter != null &&
+                   scannerArmAlignmentVertices != null &&
+                   scannerArmAlignmentTriangles != null &&
+                   scannerArmAlignmentReferencedVertices != null &&
+                   scannerArmAlignmentViewportVertices != null &&
+                   scannerArmAlignmentVertexVisible != null;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private bool CanReuseScannerAlignment(Camera camera)
+        {
+            return scannerArmAlignmentResultValid &&
+                   HasScannerAlignmentGeometry() &&
+                   scannerArmSnapshotRoot.transform.position == scannerArmAlignmentRootPosition &&
+                   scannerArmSnapshotRoot.transform.rotation == scannerArmAlignmentRootRotation &&
+                   camera.transform.position == scannerArmAlignmentCameraPosition &&
+                   camera.transform.rotation == scannerArmAlignmentCameraRotation &&
+                   scanTarget.position == scannerArmAlignmentTargetPosition &&
+                   Mathf.Approximately(camera.fieldOfView, scannerArmAlignmentCameraFieldOfView) &&
+                   Mathf.Approximately(camera.aspect, scannerArmAlignmentCameraAspect);
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void CacheScannerAlignmentResult(
+            Camera camera,
+            float distance,
+            Vector2 guideViewport,
+            Vector2 palmViewport)
+        {
+            scannerArmAlignmentCachedDistance = distance;
+            scannerArmAlignmentCachedGuideViewport = guideViewport;
+            scannerArmAlignmentCachedPalmViewport = palmViewport;
+            scannerArmAlignmentRootPosition = scannerArmSnapshotRoot.transform.position;
+            scannerArmAlignmentRootRotation = scannerArmSnapshotRoot.transform.rotation;
+            scannerArmAlignmentCameraPosition = camera.transform.position;
+            scannerArmAlignmentCameraRotation = camera.transform.rotation;
+            scannerArmAlignmentTargetPosition = scanTarget.position;
+            scannerArmAlignmentCameraFieldOfView = camera.fieldOfView;
+            scannerArmAlignmentCameraAspect = camera.aspect;
+            scannerArmAlignmentResultValid = true;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void ClearScannerAlignmentGeometry()
+        {
+            scannerArmAlignmentFilter = null;
+            scannerArmAlignmentVertices = null;
+            scannerArmAlignmentTriangles = null;
+            scannerArmAlignmentReferencedVertices = null;
+            scannerArmAlignmentViewportVertices = null;
+            scannerArmAlignmentVertexVisible = null;
+            scannerArmAlignmentResultValid = false;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private static float DistanceToTriangle(Vector3 point, Vector3 a, Vector3 b, Vector3 c)
         {
             Vector3 ab = b - a;
@@ -2009,6 +2147,13 @@ namespace Behind_Bars.Systems.Jail
                 return float.PositiveInfinity;
             }
 
+            if (CanReuseScannerAlignment(camera))
+            {
+                guideViewport = scannerArmAlignmentCachedGuideViewport;
+                palmViewport = scannerArmAlignmentCachedPalmViewport;
+                return scannerArmAlignmentCachedDistance;
+            }
+
             Vector3 guide = camera.WorldToViewportPoint(scanTarget.position);
             if (guide.z <= 0f)
             {
@@ -2033,45 +2178,51 @@ namespace Behind_Bars.Systems.Jail
             // scanner path. The task now prioritizes reliable completion with
             // the correct visible right hand over a tiny precision hitbox.
             float nearestDistance = float.PositiveInfinity;
-            foreach (MeshFilter filter in scannerArmSnapshotRoot.GetComponentsInChildren<MeshFilter>())
+            if (!HasScannerAlignmentGeometry())
             {
-                Mesh mesh = filter != null ? filter.sharedMesh : null;
-                if (mesh == null)
+                return float.PositiveInfinity;
+            }
+
+            Transform meshTransform = scannerArmAlignmentFilter.transform;
+            for (int referenced = 0; referenced < scannerArmAlignmentReferencedVertices.Length; referenced++)
+            {
+                int vertexIndex = scannerArmAlignmentReferencedVertices[referenced];
+                Vector3 vertexWorld = meshTransform.TransformPoint(scannerArmAlignmentVertices[vertexIndex]);
+                Vector3 vertexViewport = camera.WorldToViewportPoint(vertexWorld);
+                scannerArmAlignmentViewportVertices[vertexIndex] = vertexViewport;
+                scannerArmAlignmentVertexVisible[vertexIndex] = vertexViewport.z > 0f;
+            }
+
+            for (int triangle = 0; triangle + 2 < scannerArmAlignmentTriangles.Length; triangle += 3)
+            {
+                int first = scannerArmAlignmentTriangles[triangle];
+                int second = scannerArmAlignmentTriangles[triangle + 1];
+                int third = scannerArmAlignmentTriangles[triangle + 2];
+                if (first < 0 || second < 0 || third < 0 ||
+                    first >= scannerArmAlignmentVertices.Length ||
+                    second >= scannerArmAlignmentVertices.Length ||
+                    third >= scannerArmAlignmentVertices.Length ||
+                    !scannerArmAlignmentVertexVisible[first] ||
+                    !scannerArmAlignmentVertexVisible[second] ||
+                    !scannerArmAlignmentVertexVisible[third])
                 {
                     continue;
                 }
 
-                Vector3[] vertices = mesh.vertices;
-                int[] triangles = mesh.triangles;
-                for (int triangle = 0; triangle + 2 < triangles.Length; triangle += 3)
+                Vector3 firstViewport = scannerArmAlignmentViewportVertices[first];
+                Vector3 secondViewport = scannerArmAlignmentViewportVertices[second];
+                Vector3 thirdViewport = scannerArmAlignmentViewportVertices[third];
+                nearestDistance = Mathf.Min(nearestDistance, DistanceToTriangle(
+                    guideViewport,
+                    new Vector2(firstViewport.x, firstViewport.y),
+                    new Vector2(secondViewport.x, secondViewport.y),
+                    new Vector2(thirdViewport.x, thirdViewport.y)));
+                if (nearestDistance <= 0f)
                 {
-                    int first = triangles[triangle];
-                    int second = triangles[triangle + 1];
-                    int third = triangles[triangle + 2];
-                    if (first < 0 || second < 0 || third < 0 ||
-                        first >= vertices.Length || second >= vertices.Length || third >= vertices.Length)
-                    {
-                        continue;
-                    }
-
-                    Vector3 firstWorld = filter.transform.TransformPoint(vertices[first]);
-                    Vector3 secondWorld = filter.transform.TransformPoint(vertices[second]);
-                    Vector3 thirdWorld = filter.transform.TransformPoint(vertices[third]);
-                    Vector3 firstViewport = camera.WorldToViewportPoint(firstWorld);
-                    Vector3 secondViewport = camera.WorldToViewportPoint(secondWorld);
-                    Vector3 thirdViewport = camera.WorldToViewportPoint(thirdWorld);
-                    if (firstViewport.z <= 0f || secondViewport.z <= 0f || thirdViewport.z <= 0f)
-                    {
-                        continue;
-                    }
-
-                    nearestDistance = Mathf.Min(nearestDistance, DistanceToTriangle(
-                        guideViewport,
-                        new Vector2(firstViewport.x, firstViewport.y),
-                        new Vector2(secondViewport.x, secondViewport.y),
-                        new Vector2(thirdViewport.x, thirdViewport.y)));
+                    break;
                 }
             }
+            CacheScannerAlignmentResult(camera, nearestDistance, guideViewport, palmViewport);
 
             return nearestDistance;
         }
@@ -2325,6 +2476,7 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         private void RestoreScannerArmSnapshot()
         {
+            ClearScannerAlignmentGeometry();
             if (scannerArmSnapshotRoot != null)
             {
                 UnityEngine.Object.Destroy(scannerArmSnapshotRoot);
