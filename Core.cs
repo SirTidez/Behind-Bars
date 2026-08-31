@@ -618,6 +618,7 @@ namespace Behind_Bars
             TryRegister<BehindBarsUIWrapper>("BehindBarsUIWrapper");
             TryRegister<WantedLevelUI>("WantedLevelUI");
             TryRegister<OfficerCommandUI>("OfficerCommandUI");
+            TryRegister<TierStatusUI>("TierStatusUI");
             TryRegister<UpdateNotificationUI>("UpdateNotificationUI");
             TryRegister<UI.ParoleStatusUI>("ParoleStatusUI");
             TryRegister<UI.ParoleConditionsUI>("ParoleConditionsUI");

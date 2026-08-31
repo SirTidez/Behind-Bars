@@ -58,6 +58,7 @@ namespace Behind_Bars.UI
                 // The service persists between scenes, but the WantedLevelUI panel is
                 // parented to the old HUD canvas. Recreate that scene presentation here.
                 InitializeWantedLevelUI();
+                InitializeTierStatusUI();
                 ModLogger.Debug("BehindBarsUIManager already initialized");
                 return;
             }
@@ -74,6 +75,9 @@ namespace Behind_Bars.UI
                 
                 // Initialize parole status UI
                 InitializeParoleStatusUI();
+
+                // Initialize jail recreation tier status UI
+                InitializeTierStatusUI();
                 
                 // Initialize wanted level UI
                 InitializeWantedLevelUI();
@@ -509,6 +513,12 @@ namespace Behind_Bars.UI
         private OfficerCommandUI? _officerCommandUI;
         private OfficerCommandData? _currentCommand;
 
+        // === JAIL TIER STATUS SYSTEM ===
+
+        private GameObject _tierStatusManager;
+        private TierStatusUI _tierStatusUI;
+        private Coroutine _tierStatusUpdateCoroutine;
+
         // === PAROLE STATUS SYSTEM ===
 
         private GameObject? _paroleStatusManager;
@@ -846,6 +856,10 @@ namespace Behind_Bars.UI
         {
             try
             {
+                // Officer instructions own this HUD slot and must never overlap the
+                // lower-priority recreation status surface.
+                _tierStatusUI?.HideImmediate();
+
                 // Create officer command UI if it doesn't exist
                 if (_officerCommandUI == null)
                 {
@@ -879,6 +893,8 @@ namespace Behind_Bars.UI
         {
             try
             {
+                _tierStatusUI?.HideImmediate();
+
                 if (_officerCommandUI == null)
                 {
                     ShowOfficerCommand(data);
@@ -967,6 +983,116 @@ namespace Behind_Bars.UI
             {
                 ModLogger.Error($"Error creating officer command UI: {ex.Message}");
             }
+        }
+
+        // === JAIL TIER STATUS SYSTEM ===
+
+        private void InitializeTierStatusUI()
+        {
+            if (_tierStatusUpdateCoroutine == null)
+            {
+                _tierStatusUpdateCoroutine = MelonLoader.MelonCoroutines.Start(UpdateTierStatusCoroutine()) as Coroutine;
+                ModLogger.Debug("Tier status UI update coroutine started");
+            }
+        }
+
+        private void CreateTierStatusUI()
+        {
+            if (_tierStatusUI != null)
+            {
+                return;
+            }
+
+            _tierStatusManager = new GameObject("TierStatusManager");
+            GameObject.DontDestroyOnLoad(_tierStatusManager);
+#if !MONO
+            _tierStatusUI = BBHelpers.AddComponentSafe<TierStatusUI>(_tierStatusManager);
+#else
+            _tierStatusUI = _tierStatusManager.AddComponent<TierStatusUI>();
+#endif
+            _tierStatusUI?.CreateUI();
+        }
+
+        private IEnumerator UpdateTierStatusCoroutine()
+        {
+            while (true)
+            {
+                yield return new WaitForSecondsRealtime(0.1f);
+
+                try
+                {
+                    if (!Core.IsGameplaySceneActive || _currentCommand != null || HasActiveOfficerCommand())
+                    {
+                        _tierStatusUI?.HideImmediate();
+                        continue;
+                    }
+
+                    JailLifecycleManager lifecycle = Core.JailController != null
+                        ? BBHelpers.GetComponentSafe<JailLifecycleManager>(Core.JailController.gameObject)
+                        : null;
+                    if (lifecycle == null || !lifecycle.TryGetLocalPlayerRecreationStatus(out JailRecreationStatus status))
+                    {
+                        _tierStatusUI?.HideImmediate();
+                        continue;
+                    }
+
+                    if (_tierStatusUI == null)
+                    {
+                        CreateTierStatusUI();
+                    }
+
+                    TierStatusData data = BuildTierStatusData(status);
+                    if (_tierStatusUI != null)
+                    {
+                        if (_tierStatusUI.IsVisible())
+                        {
+                            _tierStatusUI.UpdateStatus(data);
+                        }
+                        else
+                        {
+                            _tierStatusUI.Show(data);
+                        }
+                    }
+                }
+                catch (System.Exception ex)
+                {
+                    ModLogger.Error($"Error updating tier status UI: {ex.Message}");
+                }
+            }
+        }
+
+        private static TierStatusData BuildTierStatusData(JailRecreationStatus status)
+        {
+            float remainingRealSeconds = Mathf.Max(0f, status.RemainingRealSeconds);
+            bool recallActive = status.IsAssignedTierActive && remainingRealSeconds <= 30f;
+            string assignedTier = FormatTierName(status.AssignedTier);
+
+            return new TierStatusData
+            {
+                HeaderText = recallActive ? "RETURN TO CELL" : "TIER STATUS",
+                TimerLabel = status.IsAssignedTierActive ? "LOCKDOWN IN" : "YOUR REC IN",
+                TimerText = TierStatusFormatting.FormatRealCountdown(remainingRealSeconds),
+                ActiveTierText = status.ActiveTier == JailRecreationTier.None
+                    ? "ALL TIERS LOCKED"
+                    : $"{FormatTierName(status.ActiveTier)} TIER OUT",
+                AssignedTierText = recallActive
+                    ? "RECREATION ENDING"
+                    : $"ASSIGNED · {assignedTier} TIER",
+                CellText = status.AssignedCellNumber.ToString("D2"),
+                RemainingRealSeconds = remainingRealSeconds,
+                PhaseProgress = status.PhaseProgress,
+                IsAssignedTierActive = status.IsAssignedTierActive
+            };
+        }
+
+        private static string FormatTierName(JailRecreationTier tier)
+        {
+            return tier switch
+            {
+                JailRecreationTier.Lower => "LOWER",
+                JailRecreationTier.Upper => "UPPER",
+                _ => "UNKNOWN"
+            };
         }
 
         // === PAROLE STATUS SYSTEM ===
@@ -1406,6 +1532,12 @@ namespace Behind_Bars.UI
         /// </summary>
         public void ShutdownSceneUI()
         {
+            if (_tierStatusUpdateCoroutine != null)
+            {
+                MelonLoader.MelonCoroutines.Stop(_tierStatusUpdateCoroutine);
+                _tierStatusUpdateCoroutine = null;
+            }
+
             if (_paroleStatusUpdateCoroutine != null)
             {
                 MelonLoader.MelonCoroutines.Stop(_paroleStatusUpdateCoroutine);
@@ -1449,6 +1581,17 @@ namespace Behind_Bars.UI
             _officerCommandUI = null;
             _officerCommandManager = null;
             _currentCommand = null;
+
+            if (_tierStatusUI != null)
+            {
+                _tierStatusUI.CancelForSceneExit();
+            }
+            if (_tierStatusManager != null)
+            {
+                UnityEngine.Object.Destroy(_tierStatusManager);
+            }
+            _tierStatusUI = null;
+            _tierStatusManager = null;
 
             // These managers are deliberately persistent during gameplay, but their
             // children are parented to the scene HUD.  Cancel presentation first and

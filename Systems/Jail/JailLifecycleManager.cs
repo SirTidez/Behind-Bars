@@ -33,16 +33,6 @@ namespace Behind_Bars.Systems.Jail
     /// </summary>
     public sealed class JailLifecycleManager : MonoBehaviour
     {
-        private enum RecreationTier
-        {
-            Unknown = -1,
-            None = 0,
-            Lower = 1,
-            Upper = 2
-        }
-
-        private const int RecreationStartHour = 7;
-        private const int BedtimeHour = 22;
         // Inmates can be placed on the far side of either dayroom tier. Give
         // them enough of the two-hour block to complete a real NavMesh return
         // before their doors are secured.
@@ -50,10 +40,14 @@ namespace Behind_Bars.Systems.Jail
         private const float LocalAudioMaxDistance = 55f;
         private const float InmateReturnGraceSeconds = 10f;
 
-        private RecreationTier activeTier = RecreationTier.Unknown;
+        private JailRecreationTier activeTier = JailRecreationTier.Unknown;
         private int lastWarningScheduleMinute = -1;
         private int lastObservedNativeMinute = -1;
         private bool loggedNativeTimeFallback;
+        private int statusClockMinute = -1;
+        private float statusClockMinuteProgress;
+        private float statusClockLastRealtime;
+        private float statusSecondsPerGameMinute = 1f;
         private bool playerReturnInProgress;
         private Coroutine returnGraceCoroutine;
         private Coroutine playerReturnCoroutine;
@@ -126,18 +120,17 @@ namespace Behind_Bars.Systems.Jail
             lastObservedNativeMinute = currentMinute;
             if (force)
             {
-                RecreationTier initialTier = GetScheduledTier(currentMinute / 60);
+                JailRecreationTier initialTier = JailRecreationSchedule.GetScheduledTier(currentMinute);
                 ModLogger.Info($"[JAIL LIFECYCLE] Native Schedule I clock resolved to {currentMinute / 60:00}:{currentMinute % 60:00}; initial recreation state is {initialTier}");
             }
             ApplySchedule(currentMinute, force);
 
-            if (activeTier == RecreationTier.None || activeTier == RecreationTier.Unknown)
+            if (activeTier == JailRecreationTier.None || activeTier == JailRecreationTier.Unknown)
             {
                 return;
             }
 
-            int hour = currentMinute / 60;
-            int endScheduleMinute = GetActiveBlockEndMinute(hour);
+            int endScheduleMinute = JailRecreationSchedule.GetActiveBlockEndMinute(currentMinute);
             if (endScheduleMinute - currentMinute != WarningMinutesBeforeClose ||
                 lastWarningScheduleMinute == currentMinute)
             {
@@ -166,14 +159,13 @@ namespace Behind_Bars.Systems.Jail
                 return;
             }
 
-            int hour = currentMinute / 60;
-            RecreationTier desiredTier = GetScheduledTier(hour);
+            JailRecreationTier desiredTier = JailRecreationSchedule.GetScheduledTier(currentMinute);
             if (!force && desiredTier == activeTier)
             {
                 return;
             }
 
-            RecreationTier previousTier = activeTier;
+            JailRecreationTier previousTier = activeTier;
             activeTier = desiredTier;
             lastWarningScheduleMinute = -1;
 
@@ -184,7 +176,7 @@ namespace Behind_Bars.Systems.Jail
             }
 
             List<InmateBehavior> inmates = GetActiveInmateBehaviors();
-            if (previousTier == RecreationTier.Lower || previousTier == RecreationTier.Upper)
+            if (previousTier == JailRecreationTier.Lower || previousTier == JailRecreationTier.Upper)
             {
                 // Reissue at the transition as a recovery guard for an inmate
                 // that spawned after the warning or briefly lost its route.
@@ -192,7 +184,7 @@ namespace Behind_Bars.Systems.Jail
                 returnGraceCoroutine = MelonCoroutines.Start(SecureTierAfterReturn(previousTier)) as Coroutine;
             }
 
-            if (desiredTier == RecreationTier.None)
+            if (desiredTier == JailRecreationTier.None)
             {
                 CommandAllInmatesHome(inmates);
                 if (returnGraceCoroutine == null)
@@ -248,32 +240,6 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
-        private static RecreationTier GetScheduledTier(int hour)
-        {
-            if (hour < RecreationStartHour || hour >= BedtimeHour)
-            {
-                return RecreationTier.None;
-            }
-
-            // Lower and upper blocks alternate in two-hour windows.  The final
-            // 21:00-22:00 upper-tier window is intentionally shortened by bedtime.
-            return ((hour - RecreationStartHour) / 2) % 2 == 0
-                ? RecreationTier.Lower
-                : RecreationTier.Upper;
-        }
-
-#if !MONO
-        [HideFromIl2Cpp]
-#endif
-        private static int GetActiveBlockEndMinute(int currentHour)
-        {
-            int blockStartHour = RecreationStartHour + (((currentHour - RecreationStartHour) / 2) * 2);
-            return Math.Min(BedtimeHour, blockStartHour + 2) * 60;
-        }
-
-#if !MONO
-        [HideFromIl2Cpp]
-#endif
         private IEnumerator RefreshDuringInitialInmateSpawn()
         {
             // PrisonNPCManager begins spawning on its own Start cycle and creates
@@ -308,13 +274,13 @@ namespace Behind_Bars.Systems.Jail
 #endif
         private void ApplyCurrentTierToInmates()
         {
-            if (activeTier == RecreationTier.Unknown)
+            if (activeTier == JailRecreationTier.Unknown)
             {
                 return;
             }
 
             List<InmateBehavior> inmates = GetActiveInmateBehaviors();
-            if (activeTier == RecreationTier.None)
+            if (activeTier == JailRecreationTier.None)
             {
                 CommandAllInmatesHome(inmates);
                 return;
@@ -326,7 +292,7 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
-        private void OpenTierForRecreation(RecreationTier tier)
+        private void OpenTierForRecreation(JailRecreationTier tier)
         {
             foreach (int cellIndex in GetCellIndicesForTier(tier))
             {
@@ -338,7 +304,7 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
-        private void CommandScheduledRecreation(RecreationTier tier, List<InmateBehavior> inmates)
+        private void CommandScheduledRecreation(JailRecreationTier tier, List<InmateBehavior> inmates)
         {
             List<Transform> anchors = GetRecreationAnchors(tier);
             foreach (InmateBehavior inmate in inmates)
@@ -362,7 +328,7 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
-        private void CommandTierReturn(RecreationTier tier, List<InmateBehavior> inmates)
+        private void CommandTierReturn(JailRecreationTier tier, List<InmateBehavior> inmates)
         {
             foreach (InmateBehavior inmate in inmates)
             {
@@ -387,7 +353,7 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
-        private IEnumerator SecureTierAfterReturn(RecreationTier tier)
+        private IEnumerator SecureTierAfterReturn(JailRecreationTier tier)
         {
             float deadline = Time.realtimeSinceStartup + InmateReturnGraceSeconds;
             while (Time.realtimeSinceStartup < deadline)
@@ -429,15 +395,15 @@ namespace Behind_Bars.Systems.Jail
 #endif
         private IEnumerator SecureAllAfterReturn()
         {
-            yield return SecureTierAfterReturn(RecreationTier.Lower);
-            yield return SecureTierAfterReturn(RecreationTier.Upper);
+            yield return SecureTierAfterReturn(JailRecreationTier.Lower);
+            yield return SecureTierAfterReturn(JailRecreationTier.Upper);
             returnGraceCoroutine = null;
         }
 
 #if !MONO
         [HideFromIl2Cpp]
 #endif
-        private void SecureTierDoors(RecreationTier tier)
+        private void SecureTierDoors(JailRecreationTier tier)
         {
             foreach (int cellIndex in GetCellIndicesForTier(tier))
             {
@@ -448,7 +414,7 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
-        private List<int> GetCellIndicesForTier(RecreationTier tier)
+        private List<int> GetCellIndicesForTier(JailRecreationTier tier)
         {
             var results = new List<int>();
             var cells = Core.JailController?.cells;
@@ -474,14 +440,14 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
-        private RecreationTier GetTierForCell(int cellIndex)
+        private JailRecreationTier GetTierForCell(int cellIndex)
         {
             var cellManager = Core.JailController?.cellManager;
             var cells = cellManager?.cells;
             CellDetail targetCell = cellManager?.GetCellByIndex(cellIndex);
             if (cells == null || targetCell == null)
             {
-                return RecreationTier.None;
+                return JailRecreationTier.None;
             }
 
             float minY = float.MaxValue;
@@ -498,18 +464,18 @@ namespace Behind_Bars.Systems.Jail
 
             if (minY == float.MaxValue)
             {
-                return RecreationTier.None;
+                return JailRecreationTier.None;
             }
 
             float divider = (minY + maxY) * 0.5f;
             if (!TryGetCellTierHeight(targetCell, out float targetHeight))
             {
-                return RecreationTier.None;
+                return JailRecreationTier.None;
             }
 
             return targetHeight > divider
-                ? RecreationTier.Upper
-                : RecreationTier.Lower;
+                ? JailRecreationTier.Upper
+                : JailRecreationTier.Lower;
         }
 
 #if !MONO
@@ -536,7 +502,7 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
-        private List<Transform> GetRecreationAnchors(RecreationTier tier)
+        private List<Transform> GetRecreationAnchors(JailRecreationTier tier)
         {
             var anchors = new List<Transform>();
             List<Transform> allAnchors = Core.JailController?.GetPatrolPoints();
@@ -553,8 +519,8 @@ namespace Behind_Bars.Systems.Jail
                 }
 
                 bool upperName = anchor.name.IndexOf("Upper", StringComparison.OrdinalIgnoreCase) >= 0;
-                if ((tier == RecreationTier.Upper && upperName) ||
-                    (tier == RecreationTier.Lower && !upperName))
+                if ((tier == JailRecreationTier.Upper && upperName) ||
+                    (tier == JailRecreationTier.Lower && !upperName))
                 {
                     anchors.Add(anchor);
                 }
@@ -595,7 +561,7 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
-        private void EnforcePlayerAtTransition(RecreationTier tier)
+        private void EnforcePlayerAtTransition(JailRecreationTier tier)
         {
             if (playerReturnInProgress)
             {
@@ -626,7 +592,7 @@ namespace Behind_Bars.Systems.Jail
                 return;
             }
 
-            RecreationTier playerTier = GetTierForCell(cellIndex);
+            JailRecreationTier playerTier = GetTierForCell(cellIndex);
             if (tier == playerTier)
             {
                 return;
@@ -645,9 +611,153 @@ namespace Behind_Bars.Systems.Jail
 #endif
         public bool IsCellInActiveRecreation(int cellIndex)
         {
-            return activeTier == RecreationTier.Lower || activeTier == RecreationTier.Upper
+            return activeTier == JailRecreationTier.Lower || activeTier == JailRecreationTier.Upper
                 ? GetTierForCell(cellIndex) == activeTier
                 : false;
+        }
+
+        /// <summary>
+        /// Produces the player-facing recreation snapshot without duplicating schedule
+        /// ownership in the UI. The countdown is expressed in real seconds so the
+        /// default two-game-hour block displays as two real minutes.
+        /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        internal bool TryGetLocalPlayerRecreationStatus(out JailRecreationStatus status)
+        {
+            status = null;
+
+            Player player = GetLocalPlayer();
+            CellAssignmentManager assignments = Core.ResolveCellAssignmentManager();
+            JailTimeTracker tracker = Core.ResolveJailTimeTracker();
+            if (player == null || assignments == null || tracker == null || !tracker.IsInJail(player))
+            {
+                return false;
+            }
+
+            int assignedCell = assignments.GetPlayerCellNumber(player);
+            if (assignedCell < 0 || !TryGetCurrentScheduleMinute(out int currentMinute))
+            {
+                return false;
+            }
+
+            TimeManager nativeTimeManager = null;
+            try
+            {
+                nativeTimeManager = TimeManager.Instance;
+            }
+            catch (Exception)
+            {
+                // The legacy one-real-second fallback below keeps early scene setup safe.
+            }
+
+            UpdateStatusClock(nativeTimeManager, currentMinute);
+
+            JailRecreationTier assignedTier = GetTierForCell(assignedCell);
+            if (assignedTier != JailRecreationTier.Lower && assignedTier != JailRecreationTier.Upper)
+            {
+                return false;
+            }
+
+            JailRecreationTier scheduledTier = JailRecreationSchedule.GetScheduledTier(currentMinute);
+            bool assignedTierActive = scheduledTier == assignedTier;
+            int targetMinute = assignedTierActive
+                ? JailRecreationSchedule.GetActiveBlockEndMinute(currentMinute)
+                : JailRecreationSchedule.GetNextTierStartMinute(currentMinute, assignedTier);
+            int phaseStartMinute = JailRecreationSchedule.GetActiveBlockStartMinute(currentMinute);
+            float currentScheduleMinute = currentMinute + statusClockMinuteProgress;
+
+            status = new JailRecreationStatus
+            {
+                AssignedCellNumber = assignedCell,
+                AssignedTier = assignedTier,
+                ActiveTier = scheduledTier,
+                IsAssignedTierActive = assignedTierActive,
+                RemainingRealSeconds = JailRecreationSchedule.GetRemainingRealSeconds(
+                    currentMinute,
+                    statusClockMinuteProgress,
+                    targetMinute,
+                    statusSecondsPerGameMinute),
+                PhaseProgress = JailRecreationSchedule.GetPhaseProgress(
+                    currentScheduleMinute,
+                    phaseStartMinute,
+                    targetMinute)
+            };
+            return true;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void UpdateStatusClock(TimeManager nativeTimeManager, int currentMinute)
+        {
+            float realtimeNow = Time.realtimeSinceStartup;
+            float secondsPerGameMinute = ResolveSecondsPerGameMinute(nativeTimeManager, currentMinute);
+
+            if (statusClockMinute != currentMinute)
+            {
+                statusClockMinute = currentMinute;
+                statusClockMinuteProgress = ResolveNativeMinuteProgress(nativeTimeManager);
+                statusClockLastRealtime = realtimeNow;
+                return;
+            }
+
+            float elapsedRealSeconds = Mathf.Max(0f, realtimeNow - statusClockLastRealtime);
+            statusClockLastRealtime = realtimeNow;
+
+            if (IsNativeClockAdvancing(nativeTimeManager, currentMinute) && secondsPerGameMinute > 0f)
+            {
+                statusClockMinuteProgress = Mathf.Min(
+                    0.999f,
+                    statusClockMinuteProgress + (elapsedRealSeconds / secondsPerGameMinute));
+            }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private float ResolveSecondsPerGameMinute(TimeManager nativeTimeManager, int currentMinute)
+        {
+            if (!IsNativeClockAdvancing(nativeTimeManager, currentMinute))
+            {
+                return statusSecondsPerGameMinute;
+            }
+
+            float minuteDuration = nativeTimeManager != null ? TimeManager.MinuteDuration : 1f;
+            float speedMultiplier = nativeTimeManager != null
+                ? Mathf.Max(nativeTimeManager.TimeSpeedMultiplier, 0.0001f)
+                : 1f;
+            statusSecondsPerGameMinute = minuteDuration /
+                                         (speedMultiplier * Mathf.Max(Time.timeScale, 0.0001f));
+            return statusSecondsPerGameMinute;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private static bool IsNativeClockAdvancing(TimeManager nativeTimeManager, int currentMinute)
+        {
+            if (Time.timeScale <= 0f || (currentMinute >= 4 * 60 && currentMinute < 6 * 60))
+            {
+                return false;
+            }
+
+            return nativeTimeManager == null || nativeTimeManager.TimeSpeedMultiplier > 0f;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private static float ResolveNativeMinuteProgress(TimeManager nativeTimeManager)
+        {
+            if (nativeTimeManager == null)
+            {
+                return 0f;
+            }
+
+            float preciseMinute = nativeTimeManager.NormalizedTimeOfDay * 1440f;
+            return Mathf.Clamp(preciseMinute - nativeTimeManager.DailyMinSum, 0f, 0.999f);
         }
 
 #if !MONO
