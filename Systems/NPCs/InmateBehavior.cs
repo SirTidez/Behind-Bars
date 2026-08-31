@@ -9,6 +9,7 @@ using MelonLoader;
 using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
+using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using Il2CppScheduleOne.NPCs;
 #else
 using ScheduleOne.NPCs;
@@ -43,6 +44,14 @@ namespace Behind_Bars.Systems.NPCs
 
         // Movement state
         private NavMeshAgent navAgent;
+        private NavMeshPath reusablePath;
+#if !MONO
+        private readonly Il2CppStructArray<Vector3> reusablePathCorners = new Il2CppStructArray<Vector3>(2);
+#else
+        private readonly Vector3[] reusablePathCorners = new Vector3[2];
+#endif
+        private Vector3 validatedPathDestination;
+        private bool hasValidatedPath;
         private bool isMoving = false;
         private float nextMoveTime = 0f;
         private Vector3 currentDestination;
@@ -83,6 +92,8 @@ namespace Behind_Bars.Systems.NPCs
             npcComponent = GetComponent<NPC>();
             inmateComponent = BBHelpers.GetComponentSafe<PrisonInmate>(gameObject);
             navAgent = GetComponent<NavMeshAgent>();
+            reusablePath = new NavMeshPath();
+            hasValidatedPath = false;
 
             // Ensure NavMeshAgent is present and configured
             if (navAgent == null)
@@ -210,7 +221,7 @@ namespace Behind_Bars.Systems.NPCs
                 if (scheduledActivity == ScheduledActivity.ReturningToCell)
                 {
                     if (!isMoving && TryGetCellReturnDestination(out Vector3 returnDestination) &&
-                        TrySetWanderDestination(returnDestination))
+                        TrySetValidatedWanderDestination(returnDestination))
                     {
                         isMoving = true;
                         currentDestination = returnDestination;
@@ -243,7 +254,7 @@ namespace Behind_Bars.Systems.NPCs
                         foundDestination = TryGetTemporaryJailWanderDestination(out destination);
                     }
 
-                    if (foundDestination && TrySetWanderDestination(destination))
+                    if (foundDestination && TrySetValidatedWanderDestination(destination))
                     {
                         isMoving = true;
                         currentDestination = destination;
@@ -378,37 +389,41 @@ namespace Behind_Bars.Systems.NPCs
                 return false;
             }
 
-            var candidates = new List<Vector3>();
             if (cell.spawnPoints != null)
             {
                 for (int index = 0; index < cell.spawnPoints.Count; index++)
                 {
-                    if (cell.spawnPoints[index] != null)
+                    Transform spawnPoint = cell.spawnPoints[index];
+                    if (spawnPoint == null ||
+                        !NavMesh.SamplePosition(spawnPoint.position, out NavMeshHit hit, 4f, NavMesh.AllAreas) ||
+                        !HasCompletePathTo(hit.position))
                     {
-                        candidates.Add(cell.spawnPoints[index].position);
+                        continue;
                     }
+
+                    destination = hit.position;
+                    return true;
                 }
             }
 
             if (cell.cellBounds != null)
             {
-                candidates.Add(cell.cellBounds.position);
+                if (NavMesh.SamplePosition(cell.cellBounds.position, out NavMeshHit boundsHit, 4f, NavMesh.AllAreas) &&
+                    HasCompletePathTo(boundsHit.position))
+                {
+                    destination = boundsHit.position;
+                    return true;
+                }
             }
+
             if (cell.cellTransform != null)
             {
-                candidates.Add(cell.cellTransform.position);
-            }
-
-            for (int index = 0; index < candidates.Count; index++)
-            {
-                if (!NavMesh.SamplePosition(candidates[index], out NavMeshHit hit, 4f, NavMesh.AllAreas) ||
-                    !HasCompletePathTo(hit.position))
+                if (NavMesh.SamplePosition(cell.cellTransform.position, out NavMeshHit transformHit, 4f, NavMesh.AllAreas) &&
+                    HasCompletePathTo(transformHit.position))
                 {
-                    continue;
+                    destination = transformHit.position;
+                    return true;
                 }
-
-                destination = hit.position;
-                return true;
             }
 
             return false;
@@ -443,25 +458,51 @@ namespace Behind_Bars.Systems.NPCs
 
         private bool HasCompletePathTo(Vector3 destination)
         {
+            hasValidatedPath = false;
             if (!EnsureAgentOnNavMesh())
             {
                 return false;
             }
 
-            var path = new NavMeshPath();
-            return navAgent.CalculatePath(destination, path) &&
-                   path.status == NavMeshPathStatus.PathComplete &&
-                   path.corners != null && path.corners.Length >= 2;
-        }
+            if (reusablePath == null)
+            {
+                reusablePath = new NavMeshPath();
+            }
 
-        private bool TrySetWanderDestination(Vector3 destination)
-        {
-            if (!EnsureAgentOnNavMesh() || !HasCompletePathTo(destination))
+            if (!navAgent.CalculatePath(destination, reusablePath) ||
+                reusablePath.status != NavMeshPathStatus.PathComplete ||
+                reusablePath.GetCornersNonAlloc(reusablePathCorners) < 2)
             {
                 return false;
             }
 
-            return navAgent.SetDestination(destination);
+            validatedPathDestination = destination;
+            hasValidatedPath = true;
+            return true;
+        }
+
+        private bool TrySetWanderDestination(Vector3 destination)
+        {
+            if (!HasCompletePathTo(destination))
+            {
+                return false;
+            }
+
+            return TrySetValidatedWanderDestination(destination);
+        }
+
+        private bool TrySetValidatedWanderDestination(Vector3 destination)
+        {
+            if (!hasValidatedPath || navAgent == null || !navAgent.enabled || !navAgent.isOnNavMesh ||
+                (validatedPathDestination - destination).sqrMagnitude > 0.0001f)
+            {
+                hasValidatedPath = false;
+                return false;
+            }
+
+            bool pathAssigned = navAgent.SetPath(reusablePath);
+            hasValidatedPath = false;
+            return pathAssigned;
         }
 
         private void LogNavMeshDiagnostic(string reason)
