@@ -44,6 +44,9 @@ namespace Behind_Bars.Systems.NPCs
         private BaseJailNPC npcComponent;
         private bool isAtPosition = false;
         private bool isReturning = false;
+        private float nextPositionCheckTime;
+
+        private const float PositionCheckIntervalSeconds = 0.25f;
 
         #endregion
 
@@ -108,8 +111,7 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         public bool IsAtPosition()
         {
-            float distance = Vector3.Distance(transform.position, stationaryPosition);
-            isAtPosition = distance <= positionTolerance;
+            isAtPosition = GetDistanceSquaredFromStationaryPosition() <= positionTolerance * positionTolerance;
             return isAtPosition;
         }
 
@@ -149,23 +151,41 @@ namespace Behind_Bars.Systems.NPCs
         {
             if (!maintainPosition || npcComponent == null) return;
 
+            float currentTime = Time.time;
+            if (currentTime < nextPositionCheckTime)
+            {
+                return;
+            }
+
+            nextPositionCheckTime = currentTime + PositionCheckIntervalSeconds;
+            float distanceSquared = GetDistanceSquaredFromStationaryPosition();
+            float toleranceSquared = positionTolerance * positionTolerance;
+            isAtPosition = distanceSquared <= toleranceSquared;
+
             // Check if we've reached the position while returning
-            if (isReturning && IsAtPosition())
+            if (isReturning && isAtPosition)
             {
                 isReturning = false;
                 ModLogger.Debug($"StationaryBehavior: Reached stationary position");
             }
 
             // If not at position and not currently moving/returning, return to position
-            if (!IsAtPosition() && !isReturning)
+            if (!isAtPosition && !isReturning)
             {
                 // Only auto-return if we're significantly away (not just minor drift)
-                float distance = Vector3.Distance(transform.position, stationaryPosition);
-                if (distance > positionTolerance * 2f)
+                float returnDistance = positionTolerance * 2f;
+                if (distanceSquared > returnDistance * returnDistance)
                 {
-                    ReturnToPosition();
+                    isReturning = true;
+                    npcComponent.MoveTo(stationaryPosition);
+                    ModLogger.Debug($"StationaryBehavior: Returning to stationary position {stationaryPosition}");
                 }
             }
+        }
+
+        private float GetDistanceSquaredFromStationaryPosition()
+        {
+            return (transform.position - stationaryPosition).sqrMagnitude;
         }
 
         #endregion

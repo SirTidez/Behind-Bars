@@ -53,7 +53,10 @@ namespace Behind_Bars.Systems.Jail
         public float emissiveEmergencyIntensity = 0.8f;
         public float emissiveBlackoutIntensity = 0.0f;
 
+        private const float LightingLodPollInterval = 0.25f;
         private Transform playerTransform;
+        private float nextLightingLodPollTime;
+        private bool hasAppliedLightingState;
 
         [System.Serializable]
         public class AreaLighting
@@ -133,14 +136,16 @@ namespace Behind_Bars.Systems.Jail
 
         void Update()
         {
-            if (enableLightingLOD)
+            if (enableLightingLOD && Time.time >= nextLightingLodPollTime)
             {
+                nextLightingLodPollTime = Time.time + LightingLodPollInterval;
                 UpdateLightingLOD();
             }
         }
 
         public void Initialize(Transform jailRoot)
         {
+            hasAppliedLightingState = false;
             DiscoverAreaLighting(jailRoot);
             FindEmissiveMaterial();
 
@@ -149,6 +154,12 @@ namespace Behind_Bars.Systems.Jail
             if (player != null)
             {
                 playerTransform = player.transform;
+            }
+
+            nextLightingLodPollTime = Time.time + LightingLodPollInterval;
+            if (enableLightingLOD)
+            {
+                UpdateLightingLOD(true);
             }
         }
 
@@ -215,23 +226,31 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Debug($"✓ Lighting discovery complete: {areaLights.Count} areas, {totalLights} total lights");
         }
 
-        void UpdateLightingLOD()
+        void UpdateLightingLOD(bool forceApply = false)
         {
             if (playerTransform == null) return;
+
+            Vector3 playerPosition = playerTransform.position;
+            float cullingDistanceSquared = lightCullingDistance * lightCullingDistance;
 
             foreach (var areaLighting in areaLights)
             {
                 if (areaLighting.lightsParent == null) continue;
 
-                float distance = Vector3.Distance(playerTransform.position, areaLighting.lightsParent.position);
-                bool playerNearby = distance <= lightCullingDistance;
+                Vector3 offset = playerPosition - areaLighting.lightsParent.position;
+                bool playerNearby = offset.sqrMagnitude <= cullingDistanceSquared;
 
-                UpdateAreaLightingLOD(areaLighting, playerNearby);
+                UpdateAreaLightingLOD(areaLighting, playerNearby, forceApply);
             }
         }
 
-        void UpdateAreaLightingLOD(AreaLighting areaLighting, bool playerNearby)
+        void UpdateAreaLightingLOD(AreaLighting areaLighting, bool playerNearby, bool forceApply = false)
         {
+            if (!forceApply && areaLighting.isPlayerNearby == playerNearby)
+            {
+                return;
+            }
+
             areaLighting.isPlayerNearby = playerNearby;
 
             if (!playerNearby && preferBakedLighting)
@@ -264,11 +283,24 @@ namespace Behind_Bars.Systems.Jail
 
         public void SetJailLighting(LightingState state)
         {
+            bool stateChanged = !hasAppliedLightingState || currentLightingState != state;
             currentLightingState = state;
 
-            foreach (var areaLighting in areaLights)
+            if (stateChanged)
             {
-                areaLighting.SetLightingState(state);
+                foreach (var areaLighting in areaLights)
+                {
+                    areaLighting.SetLightingState(state);
+                }
+
+                // State transitions are immediate, while retaining the current LOD culling decision.
+                if (enableLightingLOD)
+                {
+                    UpdateLightingLOD(true);
+                    nextLightingLodPollTime = Time.time + LightingLodPollInterval;
+                }
+
+                hasAppliedLightingState = true;
             }
 
             SetEmissiveMaterial(state);
@@ -290,6 +322,11 @@ namespace Behind_Bars.Systems.Jail
             if (area != null)
             {
                 area.ToggleLights();
+                if (enableLightingLOD)
+                {
+                    UpdateAreaLightingLOD(area, area.isPlayerNearby, true);
+                }
+
                 ModLogger.Info($"💡 Toggled {areaName} lights: {(area.isOn ? "ON" : "OFF")}");
             }
             else
@@ -304,6 +341,11 @@ namespace Behind_Bars.Systems.Jail
             if (area != null)
             {
                 area.SetLights(enabled, area.normalIntensity, area.normalColor);
+                if (enableLightingLOD)
+                {
+                    UpdateAreaLightingLOD(area, area.isPlayerNearby, true);
+                }
+
                 ModLogger.Info($"💡 Set {areaName} lights: {(enabled ? "ON" : "OFF")}");
             }
             else

@@ -78,6 +78,7 @@ namespace Behind_Bars.Systems.NPCs
         /// state prevents the roster pump from resetting an in-progress doorway transition.
         /// </summary>
         private HashSet<ParoleOfficerAssignment> officersAtCourthouse;
+        private bool supervisingOfficerRosterValidated;
 
         private NPCEnterableBuilding courthouseHomeBuilding;
         private bool loggedCourthouseHomeLookupFailure;
@@ -216,6 +217,7 @@ namespace Behind_Bars.Systems.NPCs
                 activeOfficers = new Dictionary<ParoleOfficerAssignment, ParoleOfficerBehavior>();
                 spawnedAssignments = new HashSet<ParoleOfficerAssignment>();
                 officersAtCourthouse = new HashSet<ParoleOfficerAssignment>();
+                supervisingOfficerRosterValidated = false;
                 lastUpdateTime = Time.time;
 
                 // Get references
@@ -794,7 +796,11 @@ namespace Behind_Bars.Systems.NPCs
             if (activeOfficers.TryGetValue(assignment, out var trackedOfficer) && trackedOfficer != null)
             {
                 spawnedAssignments.Add(assignment);
-                DeduplicateSupervisingOfficers(trackedOfficer);
+                if (!supervisingOfficerRosterValidated)
+                {
+                    DeduplicateSupervisingOfficers(trackedOfficer);
+                    supervisingOfficerRosterValidated = true;
+                }
                 return;
             }
 
@@ -803,6 +809,7 @@ namespace Behind_Bars.Systems.NPCs
             {
                 activeOfficers[assignment] = existingSupervisor;
                 spawnedAssignments.Add(assignment);
+                supervisingOfficerRosterValidated = true;
                 return;
             }
 
@@ -862,7 +869,14 @@ namespace Behind_Bars.Systems.NPCs
                 return supervisingOfficer;
             }
 
-            return FindExistingSupervisingOfficer();
+            var existingSupervisor = FindExistingSupervisingOfficer();
+            if (existingSupervisor != null && activeOfficers != null)
+            {
+                activeOfficers[ParoleOfficerAssignment.PoliceStationSupervisor] = existingSupervisor;
+                spawnedAssignments?.Add(ParoleOfficerAssignment.PoliceStationSupervisor);
+            }
+
+            return existingSupervisor;
         }
 
         internal void CancelPreparedSupervisingOfficerForRelease(Player player)
@@ -984,6 +998,7 @@ namespace Behind_Bars.Systems.NPCs
             if (firstSupervisor != null)
             {
                 DeduplicateSupervisingOfficers(firstSupervisor);
+                supervisingOfficerRosterValidated = true;
             }
 
             return firstSupervisor;
@@ -1344,6 +1359,11 @@ namespace Behind_Bars.Systems.NPCs
                     var behavior = BBHelpers.GetComponentSafe<ParoleOfficerBehavior>(paroleOfficer.gameObject);
                     activeOfficers[assignment] = behavior;
                     spawnedAssignments.Add(assignment);
+                    if (assignment == ParoleOfficerAssignment.PoliceStationSupervisor)
+                    {
+                        DeduplicateSupervisingOfficers(behavior);
+                        supervisingOfficerRosterValidated = true;
+                    }
                     ModLogger.Info($"DynamicParoleOfficerManager: Spawned {assignment} officer {badge} at {spawnPosition}");
                 }
                 else
@@ -1387,6 +1407,10 @@ namespace Behind_Bars.Systems.NPCs
                 activeOfficers.Remove(assignment);
                 spawnedAssignments.Remove(assignment);
                 officersAtCourthouse?.Remove(assignment);
+                if (assignment == ParoleOfficerAssignment.PoliceStationSupervisor)
+                {
+                    supervisingOfficerRosterValidated = false;
+                }
             }
             catch (Exception ex)
             {

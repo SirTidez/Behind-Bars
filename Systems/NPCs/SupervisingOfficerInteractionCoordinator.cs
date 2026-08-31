@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using UnityEngine;
 using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
@@ -32,11 +33,15 @@ namespace Behind_Bars.Systems.NPCs
             public Player Parolee;
             public ParoleOfficerBehavior Officer;
             public SupervisingOfficerInteractionKind Kind;
+            public ParoleCheckInSystem CheckInSystem;
         }
 
+        private const float PollIntervalSeconds = 0.2f;
         private readonly HashSet<Player> pendingIntakeRequests = new HashSet<Player>();
         private readonly Dictionary<Player, InteractionSession> activeSessionsByParolee = new Dictionary<Player, InteractionSession>();
         private readonly Dictionary<ParoleOfficerBehavior, InteractionSession> activeSessionsByOfficer = new Dictionary<ParoleOfficerBehavior, InteractionSession>();
+        private readonly List<InteractionSession> sessionsToRemove = new List<InteractionSession>();
+        private float nextPollTime;
 
         public bool TryQueueInitialIntake(Player parolee)
         {
@@ -130,7 +135,8 @@ namespace Behind_Bars.Systems.NPCs
             {
                 Parolee = parolee,
                 Officer = officer,
-                Kind = SupervisingOfficerInteractionKind.CheckIn
+                Kind = SupervisingOfficerInteractionKind.CheckIn,
+                CheckInSystem = BBHelpers.GetComponentSafe<ParoleCheckInSystem>(officer.gameObject)
             };
 
             activeSessionsByParolee[parolee] = session;
@@ -266,12 +272,24 @@ namespace Behind_Bars.Systems.NPCs
 
         public void Poll()
         {
+            if (activeSessionsByParolee.Count == 0)
+            {
+                return;
+            }
+
+            float currentTime = Time.unscaledTime;
+            if (currentTime < nextPollTime)
+            {
+                return;
+            }
+
+            nextPollTime = currentTime + PollIntervalSeconds;
             CleanupActiveSessions();
         }
 
         private void CleanupActiveSessions()
         {
-            var sessionsToRemove = new List<InteractionSession>();
+            sessionsToRemove.Clear();
 
             foreach (var session in activeSessionsByParolee.Values)
             {
@@ -284,7 +302,7 @@ namespace Behind_Bars.Systems.NPCs
                 bool stillActive = session.Kind switch
                 {
                     SupervisingOfficerInteractionKind.Intake => session.Officer.IsHandlingIntakeFor(session.Parolee),
-                    SupervisingOfficerInteractionKind.CheckIn => IsCheckInStillActive(session.Officer, session.Parolee),
+                    SupervisingOfficerInteractionKind.CheckIn => IsCheckInStillActive(session),
                     _ => false
                 };
 
@@ -323,17 +341,21 @@ namespace Behind_Bars.Systems.NPCs
             return activeSessionsByOfficer.ContainsKey(officer);
         }
 
-        private bool IsCheckInStillActive(ParoleOfficerBehavior officer, Player parolee)
+        private bool IsCheckInStillActive(InteractionSession session)
         {
-            if (officer == null || parolee == null)
+            if (session == null || session.Officer == null || session.Parolee == null)
             {
                 return false;
             }
 
-            var checkInSystem = BBHelpers.GetComponentSafe<ParoleCheckInSystem>(officer.gameObject);
-            return checkInSystem != null &&
-                   checkInSystem.IsProcessingCheckIn() &&
-                   checkInSystem.GetCurrentCheckInParolee() == parolee;
+            if (session.CheckInSystem == null)
+            {
+                session.CheckInSystem = BBHelpers.GetComponentSafe<ParoleCheckInSystem>(session.Officer.gameObject);
+            }
+
+            return session.CheckInSystem != null &&
+                   session.CheckInSystem.IsProcessingCheckIn() &&
+                   session.CheckInSystem.GetCurrentCheckInParolee() == session.Parolee;
         }
     }
 }

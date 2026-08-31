@@ -75,7 +75,10 @@ namespace Behind_Bars.Systems.NPCs
 
         private List<ActiveEscort> activeEscorts = new List<ActiveEscort>();
         private Dictionary<string, float> doorReservations = new Dictionary<string, float>();
+        private readonly List<string> expiredDoors = new List<string>();
         private const float DOOR_RESERVATION_TIME = 10f; // Reserve doors for 10 seconds
+        private const float DOOR_CLEANUP_INTERVAL = 0.5f;
+        private float nextDoorCleanupTime;
 
         #endregion
 
@@ -235,11 +238,24 @@ namespace Behind_Bars.Systems.NPCs
         {
             // NO TIMEOUT - escorts can take as long as needed for player to complete booking/release
 
+            if (doorReservations.Count == 0)
+            {
+                return;
+            }
+
+            float currentTime = Time.time;
+            if (currentTime < nextDoorCleanupTime)
+            {
+                return;
+            }
+
+            nextDoorCleanupTime = currentTime + DOOR_CLEANUP_INTERVAL;
+
             // Clean up old door reservations
-            var expiredDoors = new List<string>();
+            expiredDoors.Clear();
             foreach (var kvp in doorReservations)
             {
-                if (Time.time - kvp.Value > DOOR_RESERVATION_TIME)
+                if (currentTime - kvp.Value > DOOR_RESERVATION_TIME)
                 {
                     expiredDoors.Add(kvp.Key);
                 }
