@@ -41,6 +41,41 @@ namespace Behind_Bars.Systems.Jail
         private BookingProcess bookingProcess;
         private List<string> confiscatedItems = new List<string>();
         private bool processingInventory = false;
+        private bool hasCachedInteractionMessage;
+        private string cachedInteractionMessage;
+        private bool hasCachedInteractionState;
+        private int cachedInteractionState;
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void SetInteractionMessage(string message)
+        {
+            if (hasCachedInteractionMessage && cachedInteractionMessage == message)
+            {
+                return;
+            }
+
+            SetMessage(message);
+            cachedInteractionMessage = message;
+            hasCachedInteractionMessage = true;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void SetInteractionState(InteractableObject.EInteractableState state)
+        {
+            int stateValue = (int)state;
+            if (hasCachedInteractionState && cachedInteractionState == stateValue)
+            {
+                return;
+            }
+
+            SetInteractableState(state);
+            cachedInteractionState = stateValue;
+            hasCachedInteractionState = true;
+        }
 
         void Start()
         {
@@ -48,9 +83,9 @@ namespace Behind_Bars.Systems.Jail
             bookingProcess = BBHelpers.FindObjectOfTypeSafe<BookingProcess>();
 
             // Set up interaction directly
-            SetMessage("Process inventory");
+            SetInteractionMessage("Process inventory");
             SetInteractionType(InteractableObject.EInteractionType.Key_Press);
-            SetInteractableState(InteractableObject.EInteractableState.Default);
+            SetInteractionState(InteractableObject.EInteractableState.Default);
             ModLogger.Info("InventoryDropOff interaction setup completed");
 
             // Find storage container
@@ -73,16 +108,16 @@ namespace Behind_Bars.Systems.Jail
         {
             if (processingInventory)
             {
-                SetMessage("Processing inventory...");
-                SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                SetInteractionMessage("Processing inventory...");
+                SetInteractionState(InteractableObject.EInteractableState.Invalid);
                 return;
             }
 
             // Check if booking stations are complete
             if (bookingProcess == null || !bookingProcess.IsBookingComplete())
             {
-                SetMessage("Complete mugshot and fingerprint scan first");
-                SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                SetInteractionMessage("Complete mugshot and fingerprint scan first");
+                SetInteractionState(InteractableObject.EInteractableState.Invalid);
 
                 if (Core.ResolveUIManager() != null)
                 {
@@ -114,8 +149,8 @@ namespace Behind_Bars.Systems.Jail
         private IEnumerator ProcessPlayerInventory(Player player)
         {
             processingInventory = true;
-            SetMessage("Processing inventory...");
-            SetInteractableState(InteractableObject.EInteractableState.Invalid);
+            SetInteractionMessage("Processing inventory...");
+            SetInteractionState(InteractableObject.EInteractableState.Invalid);
 
             ModLogger.Info($"Processing inventory for {player.name}");
 
@@ -163,8 +198,8 @@ namespace Behind_Bars.Systems.Jail
                 }
 
                 // Update interaction state
-                SetMessage("Inventory processed");
-                SetInteractableState(InteractableObject.EInteractableState.Label);
+                SetInteractionMessage("Inventory processed");
+                SetInteractionState(InteractableObject.EInteractableState.Label);
 
                 ModLogger.Info("Inventory processing completed successfully");
             }
@@ -323,18 +358,18 @@ namespace Behind_Bars.Systems.Jail
             {
                 if (IsComplete())
                 {
-                    SetMessage("Inventory processed");
-                    SetInteractableState(InteractableObject.EInteractableState.Label);
+                    SetInteractionMessage("Inventory processed");
+                    SetInteractionState(InteractableObject.EInteractableState.Label);
                 }
                 else if (bookingProcess != null && bookingProcess.IsBookingComplete())
                 {
-                    SetMessage("Process inventory");
-                    SetInteractableState(InteractableObject.EInteractableState.Default);
+                    SetInteractionMessage("Process inventory");
+                    SetInteractionState(InteractableObject.EInteractableState.Default);
                 }
                 else
                 {
-                    SetMessage("Complete booking stations first");
-                    SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                    SetInteractionMessage("Complete booking stations first");
+                    SetInteractionState(InteractableObject.EInteractableState.Invalid);
                 }
             }
         }

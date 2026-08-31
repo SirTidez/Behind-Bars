@@ -37,6 +37,41 @@ namespace Behind_Bars.Systems.Jail
 
         // InteractableObject component for IL2CPP compatibility
         private InteractableObject interactableObject;
+        private bool hasCachedInteractionMessage;
+        private string cachedInteractionMessage;
+        private bool hasCachedInteractionState;
+        private int cachedInteractionState;
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void SetInteractionMessage(string message)
+        {
+            if (interactableObject == null || (hasCachedInteractionMessage && cachedInteractionMessage == message))
+            {
+                return;
+            }
+
+            interactableObject.SetMessage(message);
+            cachedInteractionMessage = message;
+            hasCachedInteractionMessage = true;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void SetInteractionState(InteractableObject.EInteractableState state)
+        {
+            int stateValue = (int)state;
+            if (interactableObject == null || (hasCachedInteractionState && cachedInteractionState == stateValue))
+            {
+                return;
+            }
+
+            interactableObject.SetInteractableState(state);
+            cachedInteractionState = stateValue;
+            hasCachedInteractionState = true;
+        }
         
         public float itemGiveDuration = 1.0f; // Time between giving each item
         public Transform storageLocation; // Where items are "retrieved" from visually
@@ -99,9 +134,9 @@ namespace Behind_Bars.Systems.Jail
             }
             
             // Configure the interaction
-            interactableObject.SetMessage("Collect prison items");
+            SetInteractionMessage("Collect prison items");
             interactableObject.SetInteractionType(InteractableObject.EInteractionType.Key_Press);
-            interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+            SetInteractionState(InteractableObject.EInteractableState.Default);
             
             // Set up event listeners with IL2CPP-safe casting
 #if !MONO
@@ -119,8 +154,8 @@ namespace Behind_Bars.Systems.Jail
         {
             if (isProcessing)
             {
-                interactableObject.SetMessage("Processing...");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                SetInteractionMessage("Processing...");
+                SetInteractionState(InteractableObject.EInteractableState.Invalid);
                 return;
             }
 
@@ -201,8 +236,8 @@ namespace Behind_Bars.Systems.Jail
             isProcessing = true;
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Exchanging items...");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                SetInteractionMessage("Exchanging items...");
+                SetInteractionState(InteractableObject.EInteractableState.Invalid);
             }
 
             ModLogger.Info($"Starting release item exchange for {player.name}");
@@ -393,8 +428,8 @@ namespace Behind_Bars.Systems.Jail
             isProcessing = true;
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Collecting prison items...");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                SetInteractionMessage("Collecting prison items...");
+                SetInteractionState(InteractableObject.EInteractableState.Invalid);
             }
 
             ModLogger.Info($"Starting prison item pickup for {player.name}");
@@ -468,8 +503,8 @@ namespace Behind_Bars.Systems.Jail
                 isProcessing = false;
                 if (interactableObject != null)
                 {
-                    interactableObject.SetMessage("Prison items unavailable");
-                    interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                    SetInteractionMessage("Prison items unavailable");
+                    SetInteractionState(InteractableObject.EInteractableState.Default);
                 }
 
                 if (Core.ResolveUIManager() != null)
@@ -1093,8 +1128,8 @@ namespace Behind_Bars.Systems.Jail
             // Update interaction state to show items are taken
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Items taken");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                SetInteractionMessage("Items taken");
+                SetInteractionState(InteractableObject.EInteractableState.Invalid);
             }
 
             ModLogger.Info("Prison item pickup station disabled - items have been taken and prefabs hidden");
@@ -1215,8 +1250,8 @@ namespace Behind_Bars.Systems.Jail
             // Reset interaction state
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Collect prison items");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                SetInteractionMessage("Collect prison items");
+                SetInteractionState(InteractableObject.EInteractableState.Default);
                 ModLogger.Info("JailInventoryPickupStation: Interaction FORCED to enabled for new inmate");
             }
 
@@ -1229,8 +1264,8 @@ namespace Behind_Bars.Systems.Jail
             if (forceEnabledForNewInmate && interactableObject != null)
             {
                 // Keep enabled state for new inmate, don't let Update() disable it
-                interactableObject.SetMessage("Collect prison items");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                SetInteractionMessage("Collect prison items");
+                SetInteractionState(InteractableObject.EInteractableState.Default);
 
                 // Log once per second to debug
                 if (Time.frameCount % 60 == 0)
@@ -1260,8 +1295,8 @@ namespace Behind_Bars.Systems.Jail
                 if (isDuringRelease)
                 {
                     // During release: Allow interaction to exchange prison items for personal belongings
-                    interactableObject.SetMessage("Exchange prison items for personal belongings");
-                    interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                    SetInteractionMessage("Exchange prison items for personal belongings");
+                    SetInteractionState(InteractableObject.EInteractableState.Default);
                     // Removed spam debug log: ModLogger.Debug("JailInventoryPickupStation: Release mode - allowing interaction");
                 }
                 else if (localPlayer != null && NeedsPrisonItems(localPlayer))
@@ -1275,8 +1310,8 @@ namespace Behind_Bars.Systems.Jail
                         ModLogger.Info("New inmate detected - re-enabled prison item station");
                     }
 
-                    interactableObject.SetMessage("Collect prison items");
-                    interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                    SetInteractionMessage("Collect prison items");
+                    SetInteractionState(InteractableObject.EInteractableState.Default);
 
                     // Debug logging for interaction state
                     if (Time.frameCount % 300 == 0) // Log every ~5 seconds
@@ -1287,8 +1322,8 @@ namespace Behind_Bars.Systems.Jail
                 else
                 {
                     // Items have been taken or player doesn't need them
-                    interactableObject.SetMessage("Items taken");
-                    interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                    SetInteractionMessage("Items taken");
+                    SetInteractionState(InteractableObject.EInteractableState.Invalid);
 
                     // Debug why not enabled
                     if (localPlayer != null && Time.frameCount % 300 == 0)

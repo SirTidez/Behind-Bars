@@ -50,6 +50,41 @@ namespace Behind_Bars.Systems.Jail
 
         // InteractableObject component for IL2CPP compatibility
         private InteractableObject interactableObject;
+        private bool hasCachedInteractionMessage;
+        private string cachedInteractionMessage;
+        private bool hasCachedInteractionState;
+        private int cachedInteractionState;
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void SetInteractionMessage(string message)
+        {
+            if (interactableObject == null || (hasCachedInteractionMessage && cachedInteractionMessage == message))
+            {
+                return;
+            }
+
+            interactableObject.SetMessage(message);
+            cachedInteractionMessage = message;
+            hasCachedInteractionMessage = true;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void SetInteractionState(InteractableObject.EInteractableState state)
+        {
+            int stateValue = (int)state;
+            if (interactableObject == null || (hasCachedInteractionState && cachedInteractionState == stateValue))
+            {
+                return;
+            }
+
+            interactableObject.SetInteractableState(state);
+            cachedInteractionState = stateValue;
+            hasCachedInteractionState = true;
+        }
 
         public Transform scanTarget;        // The ScanTarget in Unity hierarchy
         public Transform ikTarget;          // The IkTarget that will be draggable
@@ -274,9 +309,9 @@ namespace Behind_Bars.Systems.Jail
             }
 
             // Configure the interaction
-            interactableObject.SetMessage("Scan fingerprints");
+            SetInteractionMessage("Scan fingerprints");
             interactableObject.SetInteractionType(InteractableObject.EInteractionType.Key_Press);
-            interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+            SetInteractionState(InteractableObject.EInteractableState.Default);
 
             // Set up event listeners with IL2CPP-safe casting
 #if !MONO
@@ -596,8 +631,8 @@ namespace Behind_Bars.Systems.Jail
 
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Scan fingerprints");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                SetInteractionMessage("Scan fingerprints");
+                SetInteractionState(InteractableObject.EInteractableState.Default);
             }
         }
 
@@ -2694,7 +2729,7 @@ namespace Behind_Bars.Systems.Jail
             if (isScanning || isPalmScanning)
             {
                 if (interactableObject != null)
-                    interactableObject.SetMessage("Scanning in progress...");
+                SetInteractionMessage("Scanning in progress...");
                 return;
             }
 
@@ -2702,7 +2737,7 @@ namespace Behind_Bars.Systems.Jail
             if (bookingProcess != null && bookingProcess.fingerprintComplete)
             {
                 if (interactableObject != null)
-                    interactableObject.SetMessage("Scan already complete");
+                SetInteractionMessage("Scan already complete");
                 return;
             }
 
@@ -2983,13 +3018,13 @@ namespace Behind_Bars.Systems.Jail
             {
                 if (bookingProcess != null && bookingProcess.fingerprintComplete)
                 {
-                    interactableObject.SetMessage("Palm scan complete");
-                    interactableObject.SetInteractableState(InteractableObject.EInteractableState.Label);
+                    SetInteractionMessage("Palm scan complete");
+                    SetInteractionState(InteractableObject.EInteractableState.Label);
                 }
                 else
                 {
-                    interactableObject.SetMessage("Scan fingerprints");
-                    interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                    SetInteractionMessage("Scan fingerprints");
+                    SetInteractionState(InteractableObject.EInteractableState.Default);
                 }
             }
 
@@ -3128,8 +3163,8 @@ namespace Behind_Bars.Systems.Jail
             fingerprintSuccessPresentationActive = false;
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Drag your hand to the scanner...");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                SetInteractionMessage("Drag your hand to the scanner...");
+                SetInteractionState(InteractableObject.EInteractableState.Invalid);
             }
 
             ModLogger.Info("Starting fingerprint scan process");
@@ -3151,8 +3186,8 @@ namespace Behind_Bars.Systems.Jail
                 ExitHandScanInteraction();
                 if (interactableObject != null)
                 {
-                    interactableObject.SetMessage("Scan fingerprints");
-                    interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                    SetInteractionMessage("Scan fingerprints");
+                    SetInteractionState(InteractableObject.EInteractableState.Default);
                 }
                 yield break;
             }
@@ -3173,8 +3208,8 @@ namespace Behind_Bars.Systems.Jail
                 ExitHandScanInteraction();
                 if (interactableObject != null)
                 {
-                    interactableObject.SetMessage("Scan fingerprints");
-                    interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                    SetInteractionMessage("Scan fingerprints");
+                    SetInteractionState(InteractableObject.EInteractableState.Default);
                 }
                 yield break;
             }
@@ -3229,16 +3264,16 @@ namespace Behind_Bars.Systems.Jail
             {
                 if (interactableObject != null)
                 {
-                    interactableObject.SetMessage("Fingerprint scan complete");
-                    interactableObject.SetInteractableState(InteractableObject.EInteractableState.Label);
+                    SetInteractionMessage("Fingerprint scan complete");
+                    SetInteractionState(InteractableObject.EInteractableState.Label);
                 }
             }
             else
             {
                 if (interactableObject != null)
                 {
-                    interactableObject.SetMessage("Scan fingerprints");
-                    interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                    SetInteractionMessage("Scan fingerprints");
+                    SetInteractionState(InteractableObject.EInteractableState.Default);
                 }
             }
 
@@ -3773,13 +3808,13 @@ namespace Behind_Bars.Systems.Jail
             {
                 if (IsComplete())
                 {
-                    interactableObject.SetMessage("Scan Fingerprints");
-                    interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                    SetInteractionMessage("Scan Fingerprints");
+                    SetInteractionState(InteractableObject.EInteractableState.Default);
                 }
                 else
                 {
-                    interactableObject.SetMessage("Scan Fingerprints");
-                    interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                    SetInteractionMessage("Scan Fingerprints");
+                    SetInteractionState(InteractableObject.EInteractableState.Default);
                 }
             }
 

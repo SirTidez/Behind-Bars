@@ -39,6 +39,41 @@ namespace Behind_Bars.Systems.Jail
         
         // InteractableObject component for IL2CPP compatibility
         private InteractableObject interactableObject;
+        private bool hasCachedInteractionMessage;
+        private string cachedInteractionMessage;
+        private bool hasCachedInteractionState;
+        private int cachedInteractionState;
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void SetInteractionMessage(string message)
+        {
+            if (interactableObject == null || (hasCachedInteractionMessage && cachedInteractionMessage == message))
+            {
+                return;
+            }
+
+            interactableObject.SetMessage(message);
+            cachedInteractionMessage = message;
+            hasCachedInteractionMessage = true;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void SetInteractionState(InteractableObject.EInteractableState state)
+        {
+            int stateValue = (int)state;
+            if (interactableObject == null || (hasCachedInteractionState && cachedInteractionState == stateValue))
+            {
+                return;
+            }
+
+            interactableObject.SetInteractableState(state);
+            cachedInteractionState = stateValue;
+            hasCachedInteractionState = true;
+        }
         
         // Camera switching support
         private bool inMugshotView = false;
@@ -221,9 +256,9 @@ namespace Behind_Bars.Systems.Jail
             }
             
             // Configure the interaction
-            interactableObject.SetMessage("Take mugshot");
+            SetInteractionMessage("Take mugshot");
             interactableObject.SetInteractionType(InteractableObject.EInteractionType.Key_Press);
-            interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+            SetInteractionState(InteractableObject.EInteractableState.Default);
             
             // Set up event listeners with IL2CPP-safe casting
 #if !MONO
@@ -241,8 +276,8 @@ namespace Behind_Bars.Systems.Jail
         {
             if (isCapturing)
             {
-                interactableObject.SetMessage("Mugshot in progress...");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                SetInteractionMessage("Mugshot in progress...");
+                SetInteractionState(InteractableObject.EInteractableState.Invalid);
                 return;
             }
             
@@ -353,8 +388,8 @@ namespace Behind_Bars.Systems.Jail
             isCapturing = false;
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Take mugshot");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                SetInteractionMessage("Take mugshot");
+                SetInteractionState(InteractableObject.EInteractableState.Default);
             }
         }
 
@@ -396,8 +431,8 @@ namespace Behind_Bars.Systems.Jail
             isCapturing = true;
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Taking mugshot...");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                SetInteractionMessage("Taking mugshot...");
+                SetInteractionState(InteractableObject.EInteractableState.Invalid);
             }
             
             ModLogger.Info($"Starting mugshot capture for {player.name}");
@@ -585,8 +620,8 @@ namespace Behind_Bars.Systems.Jail
             // Update interaction state - allow re-doing mugshots
             if (!isCapturing && interactableObject != null)
             {
-                interactableObject.SetMessage("Take mugshot");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                SetInteractionMessage("Take mugshot");
+                SetInteractionState(InteractableObject.EInteractableState.Default);
             }
         }
     }

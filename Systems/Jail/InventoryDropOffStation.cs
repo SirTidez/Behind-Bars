@@ -33,6 +33,41 @@ namespace Behind_Bars.Systems.Jail
         
         // InteractableObject component for IL2CPP compatibility
         private InteractableObject interactableObject;
+        private bool hasCachedInteractionMessage;
+        private string cachedInteractionMessage;
+        private bool hasCachedInteractionState;
+        private int cachedInteractionState;
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void SetInteractionMessage(string message)
+        {
+            if (interactableObject == null || (hasCachedInteractionMessage && cachedInteractionMessage == message))
+            {
+                return;
+            }
+
+            interactableObject.SetMessage(message);
+            cachedInteractionMessage = message;
+            hasCachedInteractionMessage = true;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void SetInteractionState(InteractableObject.EInteractableState state)
+        {
+            int stateValue = (int)state;
+            if (interactableObject == null || (hasCachedInteractionState && cachedInteractionState == stateValue))
+            {
+                return;
+            }
+
+            interactableObject.SetInteractableState(state);
+            cachedInteractionState = stateValue;
+            hasCachedInteractionState = true;
+        }
         
         public float itemDropDuration = 1.0f; // Time between dropping each item (1 second to match notification)
         public Transform storageLocation; // Where items are "stored" visually
@@ -81,9 +116,9 @@ namespace Behind_Bars.Systems.Jail
             }
             
             // Configure the interaction
-            interactableObject.SetMessage("Drop off inventory");
+            SetInteractionMessage("Drop off inventory");
             interactableObject.SetInteractionType(InteractableObject.EInteractionType.Key_Press);
-            interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+            SetInteractionState(InteractableObject.EInteractableState.Default);
             
             // Set up event listeners with IL2CPP-safe casting
 #if !MONO
@@ -101,8 +136,8 @@ namespace Behind_Bars.Systems.Jail
         {
             if (isProcessing)
             {
-                interactableObject.SetMessage("Processing...");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                SetInteractionMessage("Processing...");
+                SetInteractionState(InteractableObject.EInteractableState.Invalid);
                 return;
             }
             
@@ -152,8 +187,8 @@ namespace Behind_Bars.Systems.Jail
             isProcessing = true;
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Dropping off items...");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                SetInteractionMessage("Dropping off items...");
+                SetInteractionState(InteractableObject.EInteractableState.Invalid);
             }
             
             ModLogger.Info($"Starting inventory drop-off for {player.name}");
@@ -539,8 +574,8 @@ namespace Behind_Bars.Systems.Jail
             // Update interaction state
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Items dropped off");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Label);
+                SetInteractionMessage("Items dropped off");
+                SetInteractionState(InteractableObject.EInteractableState.Label);
             }
         }
         
@@ -556,18 +591,18 @@ namespace Behind_Bars.Systems.Jail
             {
                 if (bookingProcess != null && bookingProcess.inventoryDropOffComplete)
                 {
-                    interactableObject.SetMessage("Items dropped off");
-                    interactableObject.SetInteractableState(InteractableObject.EInteractableState.Label);
+                    SetInteractionMessage("Items dropped off");
+                    SetInteractionState(InteractableObject.EInteractableState.Label);
                 }
                 else if (bookingProcess != null && (bookingProcess.bookingInProgress || bookingProcess.storageInteractionAllowed))
                 {
-                    interactableObject.SetMessage("Drop off inventory");
-                    interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                    SetInteractionMessage("Drop off inventory");
+                    SetInteractionState(InteractableObject.EInteractableState.Default);
                 }
                 else
                 {
-                    interactableObject.SetMessage("Booking required");
-                    interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                    SetInteractionMessage("Booking required");
+                    SetInteractionState(InteractableObject.EInteractableState.Invalid);
                 }
             }
         }

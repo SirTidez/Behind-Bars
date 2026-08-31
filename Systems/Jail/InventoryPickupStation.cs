@@ -34,6 +34,41 @@ namespace Behind_Bars.Systems.Jail
         
         // InteractableObject component for IL2CPP compatibility
         private InteractableObject interactableObject;
+        private bool hasCachedInteractionMessage;
+        private string cachedInteractionMessage;
+        private bool hasCachedInteractionState;
+        private int cachedInteractionState;
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void SetInteractionMessage(string message)
+        {
+            if (interactableObject == null || (hasCachedInteractionMessage && cachedInteractionMessage == message))
+            {
+                return;
+            }
+
+            interactableObject.SetMessage(message);
+            cachedInteractionMessage = message;
+            hasCachedInteractionMessage = true;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void SetInteractionState(InteractableObject.EInteractableState state)
+        {
+            int stateValue = (int)state;
+            if (interactableObject == null || (hasCachedInteractionState && cachedInteractionState == stateValue))
+            {
+                return;
+            }
+
+            interactableObject.SetInteractableState(state);
+            cachedInteractionState = stateValue;
+            hasCachedInteractionState = true;
+        }
 
         public float itemPickupDuration = 0.3f; // Time between picking up each item
         public Transform storageLocation; // Where items are "retrieved" from visually
@@ -103,9 +138,9 @@ namespace Behind_Bars.Systems.Jail
             }
             
             // Configure the interaction
-            interactableObject.SetMessage("Retrieve personal belongings");
+            SetInteractionMessage("Retrieve personal belongings");
             interactableObject.SetInteractionType(InteractableObject.EInteractionType.Key_Press);
-            interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+            SetInteractionState(InteractableObject.EInteractableState.Invalid);
             
             // Set up event listeners with IL2CPP-safe casting
 #if !MONO
@@ -473,8 +508,8 @@ namespace Behind_Bars.Systems.Jail
             isProcessing = true;
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Processing...");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                SetInteractionMessage("Processing...");
+                SetInteractionState(InteractableObject.EInteractableState.Invalid);
             }
 
             ModLogger.Info($"Starting complete inventory exchange for {player.name}");
@@ -647,8 +682,8 @@ namespace Behind_Bars.Systems.Jail
                     // Update interaction message
                     if (interactableObject != null)
                     {
-                        interactableObject.SetMessage("Storage open - drag items to retrieve them");
-                        interactableObject.SetInteractableState(InteractableObject.EInteractableState.Label);
+                        SetInteractionMessage("Storage open - drag items to retrieve them");
+                        SetInteractionState(InteractableObject.EInteractableState.Label);
                     }
 
                     if (Core.ResolveUIManager() != null)
@@ -1504,8 +1539,8 @@ namespace Behind_Bars.Systems.Jail
             // Update interaction state
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Items retrieved");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Label);
+                SetInteractionMessage("Items retrieved");
+                SetInteractionState(InteractableObject.EInteractableState.Label);
             }
             
             // Reset to default after a delay
@@ -1521,8 +1556,8 @@ namespace Behind_Bars.Systems.Jail
             
             if (interactableObject != null && !isProcessing && !storageSessionActive)
             {
-                interactableObject.SetMessage("Retrieve personal belongings");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                SetInteractionMessage("Retrieve personal belongings");
+                SetInteractionState(InteractableObject.EInteractableState.Default);
             }
         }
         
@@ -1584,8 +1619,8 @@ namespace Behind_Bars.Systems.Jail
 
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Access personal belongings storage");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                SetInteractionMessage("Access personal belongings storage");
+                SetInteractionState(InteractableObject.EInteractableState.Default);
             }
 
             if (Core.ResolveUIManager() != null)
@@ -1608,8 +1643,8 @@ namespace Behind_Bars.Systems.Jail
             {
                 if (interactableObject != null)
                 {
-                    interactableObject.SetMessage("Storage unavailable");
-                    interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                    SetInteractionMessage("Storage unavailable");
+                    SetInteractionState(InteractableObject.EInteractableState.Invalid);
                 }
                 return;
             }
@@ -1618,13 +1653,13 @@ namespace Behind_Bars.Systems.Jail
             if (!isProcessing && !storageSessionActive && interactableObject != null)
             {
                 // Always allow access to storage, even if empty - player needs to restore clothing
-                interactableObject.SetMessage("Access personal belongings storage");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                SetInteractionMessage("Access personal belongings storage");
+                SetInteractionState(InteractableObject.EInteractableState.Default);
             }
             else if (storageSessionActive && interactableObject != null)
             {
-                interactableObject.SetMessage("Collect Personal Belongings");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Label);
+                SetInteractionMessage("Collect Personal Belongings");
+                SetInteractionState(InteractableObject.EInteractableState.Label);
             }
         }
 
@@ -1639,13 +1674,13 @@ namespace Behind_Bars.Systems.Jail
 
             if (enabled)
             {
-                interactableObject.SetMessage("Access personal belongings storage");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                SetInteractionMessage("Access personal belongings storage");
+                SetInteractionState(InteractableObject.EInteractableState.Default);
             }
             else
             {
-                interactableObject.SetMessage("Storage unavailable");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                SetInteractionMessage("Storage unavailable");
+                SetInteractionState(InteractableObject.EInteractableState.Invalid);
             }
         }
     }

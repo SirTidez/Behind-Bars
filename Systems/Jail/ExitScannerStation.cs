@@ -40,6 +40,41 @@ namespace Behind_Bars.Systems.Jail
 
         // InteractableObject component for IL2CPP compatibility
         private InteractableObject interactableObject;
+        private bool hasCachedInteractionMessage;
+        private string cachedInteractionMessage;
+        private bool hasCachedInteractionState;
+        private int cachedInteractionState;
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void SetInteractionMessage(string message)
+        {
+            if (interactableObject == null || (hasCachedInteractionMessage && cachedInteractionMessage == message))
+            {
+                return;
+            }
+
+            interactableObject.SetMessage(message);
+            cachedInteractionMessage = message;
+            hasCachedInteractionMessage = true;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void SetInteractionState(InteractableObject.EInteractableState state)
+        {
+            int stateValue = (int)state;
+            if (interactableObject == null || (hasCachedInteractionState && cachedInteractionState == stateValue))
+            {
+                return;
+            }
+
+            interactableObject.SetInteractableState(state);
+            cachedInteractionState = stateValue;
+            hasCachedInteractionState = true;
+        }
 
         public Transform scanTarget;        // The ScanTarget in Unity hierarchy
         public Transform ikTarget;          // The IkTarget that will be draggable
@@ -159,9 +194,9 @@ namespace Behind_Bars.Systems.Jail
             }
 
             // Configure the interaction - DISABLED by default, only enabled during release
-            interactableObject.SetMessage("Exit scanner (not available)");
+            SetInteractionMessage("Exit scanner (not available)");
             interactableObject.SetInteractionType(InteractableObject.EInteractionType.Key_Press);
-            interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid); // Disabled until release process
+            SetInteractionState(InteractableObject.EInteractableState.Invalid); // Disabled until release process
 
             // Set up event listeners with IL2CPP-safe casting
 #if !MONO
@@ -295,7 +330,7 @@ namespace Behind_Bars.Systems.Jail
             {
                 ModLogger.Info("Already scanning - ignoring interaction");
                 if (interactableObject != null)
-                    interactableObject.SetMessage("Scanning in progress...");
+                    SetInteractionMessage("Scanning in progress...");
                 return;
             }
 
@@ -303,7 +338,7 @@ namespace Behind_Bars.Systems.Jail
             {
                 ModLogger.Info("Already completed - ignoring interaction");
                 if (interactableObject != null)
-                    interactableObject.SetMessage("Already completed");
+                    SetInteractionMessage("Already completed");
                 return;
             }
 
@@ -380,8 +415,8 @@ namespace Behind_Bars.Systems.Jail
             // Update interaction message
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Scanning...");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                SetInteractionMessage("Scanning...");
+                SetInteractionState(InteractableObject.EInteractableState.Invalid);
             }
 
             ModLogger.Info("Exit scanner camera locked and player frozen");
@@ -640,8 +675,8 @@ namespace Behind_Bars.Systems.Jail
             // Update interaction state
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Scan complete - proceed to exit");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Label);
+                SetInteractionMessage("Scan complete - proceed to exit");
+                SetInteractionState(InteractableObject.EInteractableState.Label);
             }
 
             if (currentPlayer != null)
@@ -680,8 +715,8 @@ namespace Behind_Bars.Systems.Jail
             // Reset interaction
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Scan fingerprint to complete release");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                SetInteractionMessage("Scan fingerprint to complete release");
+                SetInteractionState(InteractableObject.EInteractableState.Default);
             }
         }
 
@@ -1047,8 +1082,8 @@ namespace Behind_Bars.Systems.Jail
         {
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Scan fingerprint to complete release");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                SetInteractionMessage("Scan fingerprint to complete release");
+                SetInteractionState(InteractableObject.EInteractableState.Default);
                 ModLogger.Info("Exit scanner enabled for release process");
             }
         }
@@ -1060,8 +1095,8 @@ namespace Behind_Bars.Systems.Jail
         {
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Exit scanner (not available)");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                SetInteractionMessage("Exit scanner (not available)");
+                SetInteractionState(InteractableObject.EInteractableState.Invalid);
                 ModLogger.Info("Exit scanner disabled");
             }
         }
@@ -1118,8 +1153,8 @@ namespace Behind_Bars.Systems.Jail
             // Update interaction state ONLY if completed (don't re-enable automatically)
             if (interactableObject != null && !isScanning && isCompleted)
             {
-                interactableObject.SetMessage("Release completed");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Label);
+                SetInteractionMessage("Release completed");
+                SetInteractionState(InteractableObject.EInteractableState.Label);
             }
 
             // Handle escape key to exit scanner view
