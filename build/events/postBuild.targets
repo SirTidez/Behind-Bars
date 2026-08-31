@@ -4,16 +4,16 @@
         <PostWaitSeconds Condition="'$(IsMultiplayerTest)' != 'true'">1</PostWaitSeconds>
     </PropertyGroup>
 
-    <Target Name="Kill running S1 instances" AfterTargets="PostBuildEvent" Condition="'$(RunPostBuildEvent)' == 'OnBuildSuccess'">
+    <!--<Target Name="Kill running S1 instances" AfterTargets="PostBuildEvent" Condition="'$(RunPostBuildEvent)' == 'OnBuildSuccess'">
         <Message Text="Checking for running S1 instances..." Importance="high" />
         <Exec Command='(tasklist | findstr /I "Schedule.*I.exe" &gt;nul || exit 0) &amp;&amp; taskkill /F /IM "$(S1ExeName)"' />
         <Message Text="Waiting for S1 processes to terminate..." Importance="normal" />
         <Exec Command='powershell -Command "while (Get-Process -Name \"$(S1ExeName)\" -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 200 }; Start-Sleep -Seconds $(PostWaitSeconds)"' />
-    </Target>
+    </Target>-->
 
     <Target Name="Clean mod folder and copy requested mods" AfterTargets="PostBuildEvent" Condition="'$(RunPostBuildEvent)' == 'OnBuildSuccess'">
         <Message Text="Cleaning mods directory: $(S1ModsDir)" Importance="high" />
-        <Exec Command='powershell -Command "Remove-Item \"$(S1ModsDir)\*\" -Recurse -Force"' />
+        <!--<Exec Command='powershell -Command "Remove-Item \"$(S1ModsDir)\*\" -Recurse -Force"' />-->
 
         <Message Text="Checking if mods in ModList exist..." Importance="high" />
         <Exec WorkingDirectory="$(ProjectDir)"
@@ -44,5 +44,10 @@
         <!--<Message Condition="'$(IsMultiplayerTest)' == 'true'" Text="Multiplayer mode: launching mod starter..." Importance="high" />-->
         <!--<Exec Condition="'$(IsMultiplayerTest)' == 'true'"
               Command='powershell -Command "Start-Process -FilePath \"$(MultiplayerModStarter)\" -WorkingDirectory \"$(S1Dir)\""' />-->
+    </Target>
+
+    <Target Name="Copy built mod to FOMOD directory" AfterTargets="Copy built mod and run the game" Condition="'$(RunPostBuildEvent)' == 'OnBuildSuccess'">
+        <Message Text="Syncing FOMOD info and copying built mod..." Importance="high" />
+        <Exec Command='powershell -NoProfile -ExecutionPolicy Bypass -File "$(MSBuildProjectDirectory)\build\events\sync-fomod.ps1" -ProjectRoot "$(MSBuildProjectDirectory)" -TargetPath "$(TargetPath)" -IsMono "$(IsMono)" -Configuration "$(Configuration)"' />
     </Target>
 </Project>

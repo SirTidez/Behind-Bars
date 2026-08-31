@@ -5,25 +5,51 @@ using Behind_Bars.Systems.Jail;
 
 namespace BehindBars.Areas
 {
+    /// <summary>
+    /// Serializable scene-discovery model shared by the jail's named areas.
+    /// Bounds, lights, doors, and anchor transforms are collected from the authored
+    /// hierarchy; this layer does not itself run inmate activities or pathfinding.
+    /// </summary>
     [System.Serializable]
     public abstract class JailAreaBase
     {
+        // Runtime-owned identity and discovery root. Initialize implementations replace
+        // these values when the scene hierarchy is scanned.
         public string areaName;
         public Transform areaRoot;
         public bool isInitialized = false;
 
+        // Discovery results. Lists are mutable and owned by each area instance; callers
+        // should not assume a missing/renamed scene object will be represented by a null
+        // placeholder in every list.
         public List<Transform> bounds = new List<Transform>();
         public List<JailDoor> doors = new List<JailDoor>();
         public List<Light> lights = new List<Light>();
 
+        // Access metadata consumed by JailAreaManager. These flags do not create
+        // authorization checks or enforce occupancy on their own.
         public bool isAccessible = true;
         public bool requiresAuthorization = false;
         public int maxOccupancy = -1; // -1 = unlimited
 
+        /// <summary>
+        /// Populate this area from its authored scene root.
+        /// </summary>
+        /// <param name="root">Transform containing the area's named children and bounds.</param>
         public abstract void Initialize(Transform root);
+
+        /// <summary>
+        /// Toggle the area's access flag and any door state owned by the implementation.
+        /// </summary>
+        /// <param name="accessible">Whether the area should be marked accessible.</param>
         public abstract void SetAccessible(bool accessible);
 
-        // Unified bounds calculation - works for all areas
+        /// <summary>
+        /// Test whether a world position is inside any discovered bound collider.
+        /// </summary>
+        /// <param name="position">World-space position to test.</param>
+        /// <returns><c>true</c> when at least one non-null bound collider contains the position.</returns>
+        /// <remarks>Only collider bounds are tested; this does not account for doors, navmesh, or authorization.</remarks>
         public virtual bool IsPositionInArea(Vector3 position)
         {
             return bounds.Any(bound =>
@@ -33,7 +59,11 @@ namespace BehindBars.Areas
             });
         }
 
-        // Calculate combined bounds of all area bounds
+        /// <summary>
+        /// Calculate one axis-aligned bounds value that contains all discovered colliders.
+        /// </summary>
+        /// <returns>The combined collider bounds, or a unit fallback around <see cref="areaRoot"/> when no bounds are assigned and a root exists.</returns>
+        /// <remarks>If transforms exist but none have colliders, Unity's default empty bounds is returned.</remarks>
         public virtual Bounds GetTotalBounds()
         {
             if (bounds.Count == 0)
@@ -65,19 +95,28 @@ namespace BehindBars.Areas
             return totalBounds;
         }
 
-        // Get center point of the area
+        /// <summary>
+        /// Return the center of <see cref="GetTotalBounds"/>.
+        /// </summary>
         public virtual Vector3 GetAreaCenter()
         {
             return GetTotalBounds().center;
         }
 
-        // Get area size
+        /// <summary>
+        /// Return the size of <see cref="GetTotalBounds"/>.
+        /// </summary>
         public virtual Vector3 GetAreaSize()
         {
             return GetTotalBounds().size;
         }
 
-        // Check if area overlaps with another area
+        /// <summary>
+        /// Test the aggregate axis-aligned bounds against another area's aggregate bounds.
+        /// </summary>
+        /// <param name="otherArea">Area to compare with.</param>
+        /// <returns><c>true</c> when the two aggregate bounds intersect.</returns>
+        /// <remarks>No null guard is applied to <paramref name="otherArea"/>.</remarks>
         public virtual bool OverlapsWith(JailAreaBase otherArea)
         {
             return GetTotalBounds().Intersects(otherArea.GetTotalBounds());
@@ -93,7 +132,9 @@ namespace BehindBars.Areas
                 transform => bounds.Add(transform));
         }
 
-        // Generic helper method for IL2CPP-safe Transform searching
+        // Recursive name search is used instead of broad scene queries. The Func/Action
+        // callbacks remain protected implementation detail on this serializable data model;
+        // they are not part of an injected MonoBehaviour API surface.
         protected void FindTransformsRecursive(Transform parent, System.Func<string, bool> nameCheck, System.Action<Transform> onFound)
         {
             // Check current transform
@@ -116,6 +157,10 @@ namespace BehindBars.Areas
             lights.AddRange(areaLights);
         }
 
+        /// <summary>
+        /// Enable or disable every discovered light in the area.
+        /// </summary>
+        /// <param name="enabled">Whether discovered lights should be enabled.</param>
         public virtual void ToggleLights(bool enabled)
         {
             foreach (var light in lights)
@@ -127,6 +172,9 @@ namespace BehindBars.Areas
             }
         }
 
+        /// <summary>
+        /// Lock every valid door currently registered by the area.
+        /// </summary>
         public virtual void LockAllDoors()
         {
             foreach (var door in doors)
@@ -138,6 +186,9 @@ namespace BehindBars.Areas
             }
         }
 
+        /// <summary>
+        /// Unlock every valid door currently registered by the area.
+        /// </summary>
         public virtual void UnlockAllDoors()
         {
             foreach (var door in doors)
@@ -150,13 +201,22 @@ namespace BehindBars.Areas
         }
     }
 
+    /// <summary>
+    /// Scene anchors and access flags for the kitchen area.
+    /// Meal-prep state is scaffolding: <see cref="StartMealPrep"/> only flips a flag and
+    /// does not run a cooking mini-game or award inventory.
+    /// </summary>
     [System.Serializable]
     public class KitchenArea : JailAreaBase
     {
+        // Discovered kitchen interaction anchors. They are scene references only; no
+        // station behavior is attached by this data class.
         public List<Transform> cookingStations = new List<Transform>();
         public List<Transform> storageAreas = new List<Transform>();
         public bool kitchenOperational = true;
 
+        // Prototype activity settings retained for authoring/configuration. The current
+        // implementation does not consume the timing or concurrency values.
         public bool miniGameEnabled = false;
         public float mealPrepTimeLimit = 300f; // 5 minutes
         public int maxSimultaneousCooks = 4;
@@ -209,6 +269,10 @@ namespace BehindBars.Areas
             }
         }
 
+        /// <summary>
+        /// Mark meal preparation as started when the kitchen is accessible.
+        /// </summary>
+        /// <remarks>This is a prototype state toggle; it does not start a mini-game or consume ingredients.</remarks>
         public void StartMealPrep()
         {
             if (!kitchenOperational || !isAccessible)
@@ -222,14 +286,22 @@ namespace BehindBars.Areas
         }
     }
 
+    /// <summary>
+    /// Scene anchors and access flags for the laundry area.
+    /// The laundry mini-game API is currently a flag/reward calculation stub; it does not
+    /// validate a load or apply sentence credit by itself.
+    /// </summary>
     [System.Serializable]
     public class LaundryArea : JailAreaBase
     {
+        // Discovered laundry interaction anchors. Lists are rebuilt on Initialize.
         public List<Transform> washingMachines = new List<Transform>();
         public List<Transform> dryingAreas = new List<Transform>();
         public List<Transform> clothingCollectionPoints = new List<Transform>();
         public bool laundryOperational = true;
 
+        // Prototype activity settings. Only miniGameEnabled and the reduction scalar are
+        // read by the current public methods; timing/concurrency values are informational.
         public bool miniGameEnabled = false;
         public float washCycleTime = 120f; // 2 minutes per load
         public int maxSimultaneousLoads = 6;
@@ -288,6 +360,10 @@ namespace BehindBars.Areas
             }
         }
 
+        /// <summary>
+        /// Mark the prototype laundry activity as started when the area is accessible.
+        /// </summary>
+        /// <remarks>No activity UI, timing loop, or sentence update is performed here.</remarks>
         public void StartLaundryMiniGame()
         {
             if (!laundryOperational || !isAccessible)
@@ -300,6 +376,12 @@ namespace BehindBars.Areas
             Debug.Log("🧺 Laundry mini-game started");
         }
 
+        /// <summary>
+        /// Convert a caller-supplied laundry quality score into a sentence-reduction value.
+        /// </summary>
+        /// <param name="qualityScore">Unvalidated quality multiplier supplied by the caller.</param>
+        /// <returns>Configured reduction multiplied by <paramref name="qualityScore"/>, or zero if the prototype is not active.</returns>
+        /// <remarks>This method does not clamp the score, reset the activity, or apply the returned reduction to a sentence.</remarks>
         public float CompleteLaundryLoad(float qualityScore)
         {
             if (!miniGameEnabled) return 0f;
@@ -310,9 +392,14 @@ namespace BehindBars.Areas
         }
     }
 
+    /// <summary>
+    /// Scene anchors and access flags for the phone area.
+    /// This model does not create calls, enforce monitoring, or implement the call timer.
+    /// </summary>
     [System.Serializable]
     public class PhoneArea : JailAreaBase
     {
+        // Phone transforms discovered by name; the call system, if any, owns interaction.
         public List<Transform> phoneBooths = new List<Transform>();
         public float callTimeLimit = 900f; // 15 minutes
         public bool callsMonitored = true;
@@ -360,12 +447,20 @@ namespace BehindBars.Areas
         }
     }
 
+    /// <summary>
+    /// Scene references for booking stations, guard points, and booking doors.
+    /// Booking flow/state ownership remains with the station and BookingProcess classes.
+    /// </summary>
     [System.Serializable]
     public class BookingArea : JailAreaBase
     {
+        // Door metadata is created from exact authored child names during initialization.
         public JailDoor prisonEntryDoor;
         public JailDoor bookingInnerDoor;
         public JailDoor guardDoor;
+
+        // Station/spawn anchors used by booking orchestration; missing authored children
+        // may be represented by null entries in guardSpawns.
         public List<Transform> processingStations = new List<Transform>();
         public List<Transform> guardSpawns = new List<Transform>();
 
@@ -476,6 +571,11 @@ namespace BehindBars.Areas
             }
         }
 
+        /// <summary>
+        /// Instantiate missing booking doors from the supplied steel-door prefab.
+        /// </summary>
+        /// <param name="steelDoorPrefab">Prefab used for each valid, not-yet-instantiated door.</param>
+        /// <remarks>Existing door instances are left in place; invalid door metadata is skipped.</remarks>
         public void InstantiateDoors(GameObject steelDoorPrefab)
         {
             if (steelDoorPrefab == null)
@@ -583,8 +683,9 @@ namespace BehindBars.Areas
         }
 
         /// <summary>
-        /// Get all door points for SecurityDoor mapping
+        /// Collect authored child transforms whose names start with <c>DoorPoint_</c>.
         /// </summary>
+        /// <returns>A new name-to-transform map; duplicate names overwrite earlier entries.</returns>
         public Dictionary<string, Transform> GetAllDoorPoints()
         {
             var doorPoints = new Dictionary<string, Transform>();
@@ -624,7 +725,7 @@ namespace BehindBars.Areas
         }
 
         /// <summary>
-        /// Get the MugshotStation transform
+        /// Return the processing station named <c>MugshotStation</c>, if discovered.
         /// </summary>
         public Transform GetMugshotStation()
         {
@@ -637,7 +738,7 @@ namespace BehindBars.Areas
         }
 
         /// <summary>
-        /// Get the ScannerStation transform
+        /// Return the processing station named <c>ScannerStation</c>, if discovered.
         /// </summary>
         public Transform GetScannerStation()
         {
@@ -650,8 +751,10 @@ namespace BehindBars.Areas
         }
 
         /// <summary>
-        /// Get the GuardPoint for a specific station
+        /// Resolve a booking station and return its direct <c>GuardPoint</c> child.
         /// </summary>
+        /// <param name="stationName">Known station name or substring used for fallback matching.</param>
+        /// <returns>The station's direct guard point, or <c>null</c> when no station/point is found.</returns>
         public Transform GetStationGuardPoint(string stationName)
         {
             Transform station = null;
@@ -681,9 +784,16 @@ namespace BehindBars.Areas
         }
     }
 
+    /// <summary>
+    /// Scene anchors for the inventory storage area.
+    /// Inventory transfer and persistence are implemented by the station components, not
+    /// by this area model.
+    /// </summary>
     [System.Serializable]
     public class StorageArea : JailAreaBase
     {
+        // Authored station/guard anchors. These can remain null when hierarchy discovery
+        // cannot find the expected child names.
         public Transform inventoryDropOff;
         public Transform inventoryPickup;
         public Transform guardPoint;
@@ -727,7 +837,7 @@ namespace BehindBars.Areas
         }
 
         /// <summary>
-        /// Get the GuardPoint for Storage supervision
+        /// Return the discovered Storage guard-point anchor.
         /// </summary>
         public Transform GetGuardPoint()
         {
@@ -751,9 +861,15 @@ namespace BehindBars.Areas
         }
     }
 
+    /// <summary>
+    /// Scene anchors for the guard room.
+    /// Monitor, locker, and guard-spawn lists are discovery data only; this class does not
+    /// spawn guards or implement monitor behavior.
+    /// </summary>
     [System.Serializable]
     public class GuardRoomArea : JailAreaBase
     {
+        // Discovery results for guard-room scene objects.
         public List<Transform> monitorStations = new List<Transform>();
         public List<Transform> equipmentLockers = new List<Transform>();
         public List<Transform> guardSpawns = new List<Transform>();
@@ -809,9 +925,15 @@ namespace BehindBars.Areas
         }
     }
 
+    /// <summary>
+    /// Scene anchors and access flag for the main recreation area.
+    /// Recreation scheduling and inmate movement are owned by JailLifecycleManager and NPC
+    /// systems; this class only exposes the area flag and door/light helpers.
+    /// </summary>
     [System.Serializable]
     public class MainRecArea : JailAreaBase
     {
+        // Recreation scene anchors discovered by keyword search.
         public List<Transform> recreationEquipment = new List<Transform>();
         public List<Transform> seatingAreas = new List<Transform>();
         public bool recreationTime = true;
@@ -865,9 +987,15 @@ namespace BehindBars.Areas
         }
     }
 
+    /// <summary>
+    /// Scene anchors and access flags for the shower area.
+    /// The shower timer is configuration data only; no shower interaction is implemented
+    /// in this model.
+    /// </summary>
     [System.Serializable]
     public class ShowerArea : JailAreaBase
     {
+        // Shower stall transforms discovered by keyword search.
         public List<Transform> showerStalls = new List<Transform>();
         public float showerTimeLimit = 600f; // 10 minutes
         public bool showersOperational = true;
@@ -916,9 +1044,16 @@ namespace BehindBars.Areas
         }
     }
 
+    /// <summary>
+    /// Scene references for the exit scanner, trigger, guard point, and release door.
+    /// Scanner interaction and release completion are owned by ExitScannerStation; this
+    /// model only discovers the anchors and toggles area/door accessibility.
+    /// </summary>
     [System.Serializable]
     public class ExitScannerArea : JailAreaBase
     {
+        // The scanner station root, supervision point, and release trigger are discovered
+        // from the authored ExitScanner hierarchy (with sibling fallbacks for the trigger/door).
         public Transform scannerStation;
         public Transform guardPoint;
         public Transform exitTrigger;
@@ -1021,6 +1156,10 @@ namespace BehindBars.Areas
             }
         }
 
+        /// <summary>
+        /// Open the discovered exit door when the scanner area is operational.
+        /// </summary>
+        /// <remarks>This delegates to the local <see cref="JailDoor"/> model; release completion remains station-owned.</remarks>
         public void OpenExitDoor()
         {
             if (exitDoor != null && exitDoor.IsValid() && scannerOperational)
@@ -1030,6 +1169,9 @@ namespace BehindBars.Areas
             }
         }
 
+        /// <summary>
+        /// Close the discovered exit door, when valid.
+        /// </summary>
         public void CloseExitDoor()
         {
             if (exitDoor != null && exitDoor.IsValid())
@@ -1039,14 +1181,19 @@ namespace BehindBars.Areas
             }
         }
 
+        /// <summary>
+        /// Check whether the discovered exit door reports an open state.
+        /// </summary>
         public bool IsExitDoorOpen()
         {
             return exitDoor != null && exitDoor.IsValid() && exitDoor.IsOpen();
         }
 
         /// <summary>
-        /// Instantiate the exit door using the provided prefab (same as BookingArea)
+        /// Instantiate the missing exit door from the provided prefab.
         /// </summary>
+        /// <param name="steelDoorPrefab">Prefab used for the exit door.</param>
+        /// <remarks>The exit door is only created when its authored holder is valid and no instance exists.</remarks>
         public void InstantiateDoors(GameObject steelDoorPrefab)
         {
             if (steelDoorPrefab == null)

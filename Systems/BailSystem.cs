@@ -20,23 +20,48 @@ using Il2CppScheduleOne.Levelling;
 
 namespace Behind_Bars.Systems
 {
+    /// <summary>
+    /// Calculates bail offers and coordinates the local cash mutation with custody release authorization.
+    /// </summary>
+    /// <remarks>
+    /// Bail amounts and payment state are process-local. A player payment is deducted from
+    /// <c>cashBalance</c>, then a pending bail release is recorded; if that authorization
+    /// cannot be retained, the local deduction is reversed. Friend-funded bail currently has
+    /// no authoritative payer or transaction path and is rejected.
+    /// </remarks>
     public class BailSystem
     {
         private const float BAIL_MULTIPLIER = 2.5f; // Bail is typically 2.5x the fine
-        private const float LEVEL_SCALING_FACTOR = 0.1f; // How much player level affects bail
+        // Retained for the planned level formula; the current implementation uses the rank
+        // switch below and does not read this constant.
+        private const float LEVEL_SCALING_FACTOR = 0.1f;
 
-        // Track bail amounts for each player
+        // Process-local latest amounts keyed by the shared player identity. Entries remain
+        // until overwritten or consumed by the private legacy getter; this is not persisted.
         private static System.Collections.Generic.Dictionary<string, float> playerBailAmounts =
             new System.Collections.Generic.Dictionary<string, float>();
         
+        /// <summary>
+        /// Describes the amount and current negotiation affordances presented to a player.
+        /// </summary>
         public class BailOffer
         {
+            /// <summary>Calculated bail amount in the game's currency units.</summary>
             public float Amount { get; set; }
+            /// <summary>Whether the current simplified rules allow negotiation.</summary>
             public bool IsNegotiable { get; set; }
+            /// <summary>Player-facing explanation of the calculated offer.</summary>
             public string Description { get; set; } = "";
+            /// <summary>Negotiation range as a fraction of the original amount (0.2 means 20%).</summary>
             public float NegotiationRange { get; set; } = 0.2f; // 20% negotiation range
         }
 
+        /// <summary>
+        /// Calculate a bail offer from the base fine and the current global rank adjustment.
+        /// </summary>
+        /// <param name="player">Player receiving the offer; the current formula uses the global rank and the name for logging.</param>
+        /// <param name="baseFineAmount">Fine amount used as the 2.5x bail baseline.</param>
+        /// <returns>A newly-created bail offer.</returns>
         public BailOffer CalculateBailAmount(Player player, float baseFineAmount)
         {
             var bailOffer = new BailOffer();
@@ -61,6 +86,11 @@ namespace Behind_Bars.Systems
             return bailOffer;
         }
 
+        /// <summary>
+        /// Resolve the current global rank multiplier used by the simplified bail formula.
+        /// </summary>
+        /// <param name="player">Currently unused; rank is read from the global <c>LevelManager</c>.</param>
+        /// <returns>The rank multiplier, defaulting to 1.0 for an unknown rank.</returns>
         private float GetPlayerLevelAdjustment(Player player)
         {
             // TODO: Implement actual level-based calculation
@@ -88,6 +118,12 @@ namespace Behind_Bars.Systems
             return playerLevel;
         }
 
+        /// <summary>
+        /// Apply the current fine-size threshold for negotiation.
+        /// </summary>
+        /// <param name="player">Currently unused by the threshold-only implementation.</param>
+        /// <param name="fineAmount">Fine amount to compare with the 500-unit threshold.</param>
+        /// <returns><see langword="true"/> when the fine is at least 500; otherwise <see langword="false"/>.</returns>
         private bool DetermineNegotiability(Player player, float fineAmount)
         {
             // TODO: Implement actual negotiability logic
@@ -101,6 +137,11 @@ namespace Behind_Bars.Systems
             return fineAmount >= 500f;
         }
 
+        /// <summary>
+        /// Return the fixed negotiation range used until player-skill rules are implemented.
+        /// </summary>
+        /// <param name="player">Currently unused; retained for the future skill-aware calculation.</param>
+        /// <returns>A 0.2 fraction, representing a 20 percent range.</returns>
         private float GetNegotiationRange(Player player)
         {
             // TODO: Implement actual negotiation range logic
@@ -113,6 +154,12 @@ namespace Behind_Bars.Systems
             return 0.2f;
         }
 
+        /// <summary>
+        /// Check whether the player's current cash balance can cover bail.
+        /// </summary>
+        /// <param name="player">Currently unused; affordability reads the global cash balance.</param>
+        /// <param name="bailAmount">Amount to compare against <c>MoneyManager.cashBalance</c>.</param>
+        /// <returns><see langword="true"/> when the money service exists and cash is sufficient.</returns>
         public bool CanPlayerAffordBail(Player player, float bailAmount)
         {
             // Check cash balance only (not onlineBalance)
@@ -126,19 +173,18 @@ namespace Behind_Bars.Systems
             return MoneyManager.Instance.cashBalance >= bailAmount;
         }
 
+        /// <summary>
+        /// Report whether a friend can fund bail through an authoritative transaction.
+        /// </summary>
+        /// <param name="player">Player for whom bail would be funded; currently unused.</param>
+        /// <param name="bailAmount">Requested amount; currently unused.</param>
+        /// <returns>Always <see langword="false"/> because no friend-payer deduction or confirmation path exists.</returns>
         public bool CanFriendsPayBail(Player player, float bailAmount)
         {
-            // Check if we're in multiplayer
-            if (!IsMultiplayer())
-                return false;
-            
-            // TODO: Implement friend bail payment logic
-            // This should:
-            // 1. Check if other players are online
-            // 2. Check if they have enough money
-            // 3. Check if they're willing to help
-            
-            return true; // Placeholder
+            // Friend-funded bail has no authoritative payer, deduction, or
+            // network confirmation path yet. Do not expose a successful
+            // result until that transaction can be completed safely.
+            return false;
         }
 
         private bool IsMultiplayer()
@@ -154,6 +200,20 @@ namespace Behind_Bars.Systems
             }
         }
 
+        /// <summary>
+        /// Attempt a bail payment and stage the corresponding custody release authorization.
+        /// </summary>
+        /// <param name="player">Player whose custody release is being authorized.</param>
+        /// <param name="bailAmount">Cash amount to deduct and record.</param>
+        /// <param name="isFriendPayment">Requests the currently unsupported friend-payment path when <see langword="true"/>.</param>
+        /// <remarks>
+        /// Player payment checks and deducts cash before calling the jail manager. A failed
+        /// authorization restores that local cash mutation and leaves no successful bail
+        /// record. The waits are Unity-scaled <see cref="WaitForSeconds"/> intervals; they
+        /// are pacing only and do not provide transaction confirmation. Friend payment exits
+        /// before any deduction or authorization. The caller must still observe the custody
+        /// release flow after the pending authorization is staged.
+        /// </remarks>
         public IEnumerator ProcessBailPayment(Player player, float bailAmount, bool isFriendPayment = false)
         {
             ModLogger.Info($"Processing bail payment of ${bailAmount} for player {player.name}" +
@@ -161,14 +221,8 @@ namespace Behind_Bars.Systems
             
             if (isFriendPayment)
             {
-                // TODO: Implement friend payment logic
-                // This should:
-                // 1. Deduct money from friend's account
-                // 2. Show confirmation to both players
-                // 3. Release the arrested player
-
-                yield return new WaitForSeconds(1f);
-                ModLogger.Info($"Bail paid by friend for {player.name}");
+                ModLogger.Warn($"Friend-paid bail is unavailable; no bail was processed for {player.name}");
+                yield break;
             }
             else
             {
@@ -194,40 +248,61 @@ namespace Behind_Bars.Systems
                 ModLogger.Info($"Bail paid by {player.name}");
             }
 
-            // Store the bail amount for release processing
-            StoreBailAmount(player, bailAmount);
+            // Only commit the payment once the custody system has accepted a
+            // corresponding release authorization. If it cannot, reverse the
+            // local cash mutation so a failed handoff cannot consume bail and
+            // leave sentence tracking active.
+            if (!TryRecordBailAuthorization(player))
+            {
+                if (!isFriendPayment && MoneyManager.Instance != null)
+                {
+                    MoneyManager.Instance.ChangeCashBalance(bailAmount);
+                    ModLogger.Warn($"Returned ${bailAmount:F0} after bail authorization failed for {player.name}");
+                }
+                yield break;
+            }
 
-            // Release player from custody
-            yield return ReleasePlayerOnBail(player);
+            StoreBailAmount(player, bailAmount);
+            yield return new WaitForSeconds(1f);
         }
 
-        private IEnumerator ReleasePlayerOnBail(Player player)
+        /// <summary>
+        /// Stage a pending bail release in the jail manager and verify that it was retained.
+        /// </summary>
+        /// <param name="player">Player whose release type should be marked.</param>
+        /// <returns><see langword="true"/> only when the jail manager exists and reports the marker as present.</returns>
+        /// <remarks>
+        /// This method records authorization only; it does not release the player or clear
+        /// custody state. The later jail/custody path owns those operations.
+        /// </remarks>
+        private bool TryRecordBailAuthorization(Player player)
         {
-            ModLogger.Info($"Releasing {player.name} on bail");
+            ModLogger.Info($"Recording bail authorization for {player.name}");
 
             try
             {
-                // Get the core jail system
-                var jailSystem = Core.Instance?.JailSystem;
-                if (jailSystem != null)
+                var jailManager = Core.Instance?.JailManager;
+                if (jailManager == null)
                 {
-                    // Use the enhanced release system for bail
-                    float bailAmount = GetLastBailAmount(player); // We'll need to track this
-                    jailSystem.InitiateEnhancedRelease(player, ReleaseManager.ReleaseType.BailPayment, bailAmount);
+                    ModLogger.Error("JailManager not found - cannot record bail authorization");
+                    return false;
+                }
 
-                    ModLogger.Info($"{player.name} has been released on bail through enhanced system");
-                }
-                else
+                jailManager.MarkPendingReleaseType(player, ReleaseManager.ReleaseType.BailPayment);
+                if (!jailManager.HasPendingReleaseType(player))
                 {
-                    ModLogger.Error("JailSystem not found - cannot process bail release");
+                    ModLogger.Error($"Bail authorization was not retained for {player.name}");
+                    return false;
                 }
+
+                ModLogger.Info($"{player.name} bail payment recorded; awaiting custody cleanup before release");
+                return true;
             }
             catch (System.Exception ex)
             {
-                ModLogger.Error($"Error processing bail release: {ex.Message}");
+                ModLogger.Error($"Error recording bail authorization: {ex.Message}");
+                return false;
             }
-
-            yield return new WaitForSeconds(1f);
         }
 
         /// <summary>
@@ -265,7 +340,7 @@ namespace Behind_Bars.Systems
         }
 
         /// <summary>
-        /// Store bail amount for a player when bail is calculated
+        /// Store the latest bail amount for a player after a successful local payment handoff
         /// </summary>
         public void StoreBailAmount(Player player, float amount)
         {
@@ -281,10 +356,16 @@ namespace Behind_Bars.Systems
         /// </summary>
         private string GetPlayerKey(Player player)
         {
-            // Use player name for now, could be enhanced with unique ID
-            return player.name;
+            return Core.ResolvePlayerKey(player);
         }
 
+        /// <summary>
+        /// Calculate a skill-adjusted amount inside the supplied negotiation range.
+        /// </summary>
+        /// <param name="originalAmount">Original offered amount.</param>
+        /// <param name="negotiationRange">Fractional range around the original amount.</param>
+        /// <param name="playerSkill">Skill value used as a 10 percent-per-point interpolation bonus.</param>
+        /// <returns>The interpolated amount clamped to the calculated minimum and maximum.</returns>
         public float NegotiateBailAmount(float originalAmount, float negotiationRange, float playerSkill)
         {
             // Calculate the minimum and maximum negotiation range

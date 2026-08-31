@@ -1,8 +1,9 @@
 namespace Behind_Bars.Systems.NPCs
 {
     /// <summary>
-    /// Centralized resource paths for avatar customization
-    /// Based on S1API documentation and game resources
+    /// Centralized asset paths consumed by the game's avatar customization settings.
+    /// Values mirror the currently observed Schedule I resource layout; they are
+    /// provenance constants, not runtime-discovered or bundle-validation results.
     /// </summary>
     public static class AvatarResourcePaths
     {
@@ -21,11 +22,12 @@ namespace Behind_Bars.Systems.NPCs
             public const string HazmatSuit = "Avatar/Layers/Top/HazmatSuit";
             public const string LabCoat = "Avatar/Layers/Top/LabCoat";
 
-            // Special work shirts
+            // Special work shirts observed in the game resource layout.
             public const string FastFoodTShirt = "Avatar/Layers/Top/FastFood T-Shirt";
             public const string GasStationTShirt = "Avatar/Layers/Top/GasStation T-Shirt";
 
-            // Use ButtonUp for police
+            // The current police uniform reuses the generic button-up asset; this is
+            // an alias, not a separately verified police-shirt resource.
             public const string PoliceShirt = ButtonUp;
         }
 
@@ -39,7 +41,8 @@ namespace Behind_Bars.Systems.NPCs
             public const string Shorts = "Avatar/Layers/Bottom/Shorts";
             public const string Sweatpants = "Avatar/Layers/Bottom/Sweatpants";
 
-            // For uniforms
+            // The current uniform path reuses jeans; this is an intentional alias
+            // because no distinct pants path is registered by this project.
             public const string Pants = "Avatar/Layers/Bottom/Jeans"; // Use jeans as pants
         }
 
@@ -70,7 +73,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Footwear accessory paths (from S1API - VERIFIED)
+        /// Known footwear accessory paths mirrored from the game's resource layout.
+        /// These constants are not runtime-validated when this type is loaded.
         /// </summary>
         public static class Footwear
         {
@@ -82,7 +86,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Head accessory paths (from S1API - VERIFIED)
+        /// Known head accessory paths mirrored from the game's resource layout.
+        /// These constants are not runtime-validated when this type is loaded.
         /// </summary>
         public static class Headwear
         {

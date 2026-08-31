@@ -375,3 +375,27 @@ assets/game_rip
 .vscode/launch.json
 Behind Bars.csproj.DotSettings
 /assets/plan
+assets/S1API
+assets/S1API_NPC_Initialization_Analysis.md
+assets/S1API_NPC_Relationships_Diagram.md
+assets/S1API_NPC_Classes_Analysis.md
+assets/S1API_Integration_Summary.md
+qodana.yaml
+/assets/Behind Bars
+assets/Behind Bars.zip
+/.auto-claude
+/.serena
+/.dotnet
+
+# Canonical local Unity authoring source. It is deliberately never included in
+# source-control changes or release packaging; only exported runtime bundles are tracked.
+/BB Unity Project/
+
+# Local authoring/cache outputs. These are reproducible support artifacts, not
+# runtime mod source; the exported root AssetBundles remain intentionally tracked.
+/Unity/
+/BuildArtifacts/
+/FingerprintPoseBundleBuild/
+/.dotnet-home/
+/AUDIT_TASKS.local.md
+/-

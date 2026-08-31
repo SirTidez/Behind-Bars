@@ -5,6 +5,7 @@ using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.UI;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppInterop.Runtime.Attributes;
@@ -32,25 +33,34 @@ namespace Behind_Bars.Systems.Jail
         public PrisonBedInteractable(System.IntPtr ptr) : base(ptr) { }
 #endif
 
-        // Bed Components
+        // Authored dressing references.  JailCellManager binds these transforms from the bunk
+        // prefab; this component only toggles their visibility as setupStage advances.
         public Transform bedMat;
         public Transform whiteSheet;
         public Transform bedSheet;  
         public Transform pillow;
         
-        // Bed Settings
+        // Bunk metadata used when creating the functional JailBed handoff.
         public bool isTopBunk = false;
         public string cellName = "";
         
-        // Setup Progress
+        // Setup stage is the single source for dressing visibility: 0 is empty and 4 is complete.
         private int setupStage = 0; // 0 = empty, 4 = complete
         
         // Component references
         private InteractableObject interactableObject;
                 
-        // State tracking
+        // State invariant: isProcessing gates the delayed stage coroutine, isComplete gates the
+        // final sleep handoff, and isClaimedByNpc blocks player setup while the bunk is reserved.
+        // npcOwnerName is display-only ownership context for the claimed state.
         private bool isProcessing = false;
         private bool isComplete = false;
+        private bool isClaimedByNpc = false;
+        // The complete staged dressing hierarchy is serialized under the
+        // anchor's authored PrisonBedInteractable prefab. JailCellManager
+        // binds that hierarchy and this component only controls ownership and
+        // player interaction state.
+        private string npcOwnerName = string.Empty;
         
         // Stage descriptions
         private readonly string[] stageActions = {
@@ -72,6 +82,11 @@ namespace Behind_Bars.Systems.Jail
             InitializeBedSetup();
         }
 
+        /// <summary>
+        /// Initialize the interactable and its staged visuals.  An NPC claim made before Unity
+        /// invokes <c>Start</c> is preserved as a completed, player-inaccessible bunk; otherwise
+        /// the bed starts at stage zero.
+        /// </summary>
         private void InitializeBedSetup()
         {
             ModLogger.Debug($"Initializing prison bed setup for {(isTopBunk ? "top bunk" : "bottom bunk")} in {cellName}");
@@ -79,8 +94,15 @@ namespace Behind_Bars.Systems.Jail
             // Set up interaction component
             SetupInteractableComponent();
             
-            // Initialize bed state (all components hidden initially)
-            SetupStage = 0;
+            // Preserve a claim made during staged NPC spawning. The owning
+            // cell can reserve this bunk before Unity invokes Start on the
+            // newly attached interactable.
+            SetupStage = isClaimedByNpc ? 4 : 0;
+            if (isClaimedByNpc)
+            {
+                isProcessing = false;
+                isComplete = true;
+            }
             
             // Force initial visual update to ensure everything starts hidden
             UpdateBedVisuals();
@@ -88,6 +110,9 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Debug($"Prison bed setup initialized at stage {setupStage}");
         }
                 
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private GameObject[] GetChildGameObjects(Transform parent)
         {
             if (parent == null) return null;
@@ -130,14 +155,20 @@ namespace Behind_Bars.Systems.Jail
             
             // Set up event listeners with IL2CPP-safe casting
 #if !MONO
+            interactableObject.onHovered.AddListener((System.Action)OnHovered);
             interactableObject.onInteractStart.AddListener((System.Action)OnInteractStart);
 #else
+            interactableObject.onHovered.AddListener(OnHovered);
             interactableObject.onInteractStart.AddListener(OnInteractStart);
 #endif
             
             ModLogger.Debug("Prison bed InteractableObject component configured");
         }
         
+        /// <summary>
+        /// Current staged dressing progress, clamped to the inclusive range 0 through 4.  Setting
+        /// the stage immediately refreshes both dressing visibility and interaction messaging.
+        /// </summary>
         public int SetupStage
         {
             get => setupStage;
@@ -149,6 +180,10 @@ namespace Behind_Bars.Systems.Jail
             }
         }
         
+        /// <summary>
+        /// Toggle the authored dressing objects to match the current setup stage.  This method does
+        /// not create or destroy dressing objects and tolerates missing transform references.
+        /// </summary>
         private void UpdateBedVisuals()
         {
             // Simply enable/disable the GameObjects - much cleaner approach
@@ -158,17 +193,37 @@ namespace Behind_Bars.Systems.Jail
             bool showPillow = setupStage >= 4;
             
             // Enable/disable the bed component GameObjects
-            if (bedMat != null) bedMat.gameObject.SetActive(showMat);
-            if (whiteSheet != null) whiteSheet.gameObject.SetActive(showWhiteSheet);
-            if (bedSheet != null) bedSheet.gameObject.SetActive(showBedSheet);
-            if (pillow != null) pillow.gameObject.SetActive(showPillow);
+            SetDressingVisible(bedMat, showMat);
+            SetDressingVisible(whiteSheet, showWhiteSheet);
+            SetDressingVisible(bedSheet, showBedSheet);
+            SetDressingVisible(pillow, showPillow);
             
             ModLogger.Debug($"Updated bed visuals for stage {setupStage} - Mat: {showMat}, WhiteSheet: {showWhiteSheet}, BedSheet: {showBedSheet}, Pillow: {showPillow}");
         }
         
+        /// <summary>
+        /// Called when player hovers over the bed - updates interaction state in real-time
+        /// </summary>
+        private void OnHovered()
+        {
+            UpdateInteractionState();
+        }
+        
+        /// <summary>
+        /// Recompute the interaction prompt and validity from claim, completion, processing, and
+        /// item-availability state.  Claimed beds are blocked, completed beds advertise sleep, and
+        /// incomplete beds advertise the next required component when it is available.
+        /// </summary>
         private void UpdateInteractionState()
         {
             if (interactableObject == null) return;
+
+            if (isClaimedByNpc)
+            {
+                interactableObject.SetMessage($"{npcOwnerName}'s assigned bunk");
+                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                return;
+            }
             
             if (isComplete)
             {
@@ -199,13 +254,19 @@ namespace Behind_Bars.Systems.Jail
             }
         }
         
+        /// <summary>
+        /// Gate a player interaction and start at most one delayed setup-stage coroutine.  A claimed
+        /// or already-processing bed is ignored; a complete bed only logs because <c>JailBed</c>
+        /// owns the sleep interaction after setup completes.
+        /// </summary>
         private void OnInteractStart()
         {
-            if (isProcessing) return;
+            if (isProcessing || isClaimedByNpc) return;
             
             if (isComplete)
             {
-                // Bed is complete - this should be handled by JailBed component
+                // Bed is complete; the JailBed component attached during CompleteBedSetup owns
+                // the resulting sleep interaction, so this staged setup component only logs/returns.
                 ModLogger.Debug("Bed is complete - interaction should be handled by JailBed");
                 return;
             }
@@ -222,9 +283,9 @@ namespace Behind_Bars.Systems.Jail
             if (!string.IsNullOrEmpty(requiredItem) && !CheckPlayerHasRequiredItem(requiredItem))
             {
                 string itemName = GetItemDisplayName(requiredItem);
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         $"You need a {itemName} to continue setting up the bed.", 
                         NotificationType.Warning
                     );
@@ -237,9 +298,39 @@ namespace Behind_Bars.Systems.Jail
             MelonCoroutines.Start(ProcessBedSetupStage());
         }
 
+        /// <summary>
+        /// Marks this bed as an occupied inmate's completed bunk.  NPC beds
+        /// are visual-only and deliberately cannot be claimed by the player.
+        /// </summary>
+        public void ClaimForNpc(string ownerName)
+        {
+            isClaimedByNpc = true;
+            npcOwnerName = string.IsNullOrWhiteSpace(ownerName) ? "Inmate" : ownerName;
+            isProcessing = false;
+            isComplete = true;
+            SetupStage = 4;
+            ModLogger.Debug($"Claimed prison bunk in {cellName} for NPC {npcOwnerName}");
+        }
+
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        private static void SetDressingVisible(Transform dressing, bool visible)
+        {
+            if (dressing != null)
+            {
+                dressing.gameObject.SetActive(visible);
+            }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        /// <summary>
+        /// Process one staged bed action with its fixed 1.5-second delay.  The stage advances first,
+        /// consumes the bedroll after stage 0 and sheets/pillow after stage 3, and converts the bed
+        /// to a functional <c>JailBed</c> after the final half-second completion delay.
+        /// </summary>
         private IEnumerator ProcessBedSetupStage()
         {
             isProcessing = true;
@@ -247,13 +338,10 @@ namespace Behind_Bars.Systems.Jail
             
             ModLogger.Info($"Processing bed setup stage {setupStage + 1}");
             
-            // Get the required item before processing
-            string requiredItem = GetRequiredItemForStage(setupStage);
-            
             // Show progress notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     stageMessages[setupStage], 
                     NotificationType.Progress
                 );
@@ -262,14 +350,24 @@ namespace Behind_Bars.Systems.Jail
             // Setup time delay
             yield return new WaitForSeconds(1.5f);
             
-            // Consume the required item
-            if (!string.IsNullOrEmpty(requiredItem))
-            {
-                ConsumeRequiredItem(requiredItem);
-            }
-            
             // Advance to next stage
             SetupStage++;
+            
+            // Consume items only at the right times:
+            // - Bedroll is consumed after stage 0 (placing bed mat)
+            // - Sheets & pillow is consumed only after stage 3 (when bed is complete)
+            // - Stages 1 and 2 use sheetsnpillows but don't consume it yet
+            if (setupStage == 1)
+            {
+                // Just finished stage 0 - consume bedroll
+                ConsumeRequiredItem("behindbars.bedroll");
+            }
+            else if (setupStage >= 4)
+            {
+                // Just finished stage 3 - bed is complete, consume sheets & pillow
+                ConsumeRequiredItem("behindbars.sheetsnpillows");
+            }
+            // Stages 1 and 2 don't consume the item - it's needed for later stages
             
             // Check if bed is complete
             if (setupStage >= 4)
@@ -283,9 +381,9 @@ namespace Behind_Bars.Systems.Jail
                 UpdateInteractionState();
                 
                 // Show completion notification for this stage
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         $"Bed setup: {setupStage}/4 complete", 
                         NotificationType.Progress
                     );
@@ -295,6 +393,10 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info($"Bed setup stage completed. Current stage: {setupStage}");
         }
         
+        /// <summary>
+        /// Mark staged setup complete, attach and initialize the functional <c>JailBed</c> when it
+        /// is absent, then refresh the sleep prompt and completion notification.
+        /// </summary>
         private void CompleteBedSetup()
         {
             ModLogger.Info($"Completing bed setup for {(isTopBunk ? "top bunk" : "bottom bunk")} in {cellName}");
@@ -303,10 +405,10 @@ namespace Behind_Bars.Systems.Jail
             isProcessing = false;
             
             // Add JailBed component for sleeping functionality
-            var jailBed = GetComponent<JailBed>();
+            var jailBed = BBHelpers.GetComponentSafe<JailBed>(gameObject);
             if (jailBed == null)
             {
-                jailBed = gameObject.AddComponent<JailBed>();
+                jailBed = BBHelpers.AddComponentSafe<JailBed>(gameObject);
                 jailBed.bedName = $"{cellName} {(isTopBunk ? "Top Bunk" : "Bottom Bunk")}";
                 jailBed.isTopBunk = isTopBunk;
                 jailBed.sleepPosition = transform;
@@ -318,9 +420,9 @@ namespace Behind_Bars.Systems.Jail
             UpdateInteractionState();
             
             // Show completion notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Bed setup complete! You can now sleep here.", 
                     NotificationType.Progress
                 );
@@ -330,14 +432,16 @@ namespace Behind_Bars.Systems.Jail
         }
         
         /// <summary>
-        /// Reset bed to unmade state (for new inmates)
+        /// Resets dressing state to stage zero and removes the functional JailBed component when present.
+        /// This reduced reset does not clear the NPC-claim flag or owner name, so it is not a complete ownership reset and
+        /// the bed may remain player-inaccessible through the claimed-state invariant.
         /// </summary>
         public void ResetBed()
         {
             ModLogger.Info($"Resetting bed setup for {(isTopBunk ? "top bunk" : "bottom bunk")} in {cellName}");
             
             // Remove JailBed component if it exists
-            var jailBed = GetComponent<JailBed>();
+            var jailBed = BBHelpers.GetComponentSafe<JailBed>(gameObject);
             if (jailBed != null)
             {
                 DestroyImmediate(jailBed);
@@ -353,12 +457,14 @@ namespace Behind_Bars.Systems.Jail
         }
         
         /// <summary>
-        /// Check if this bed is fully set up
+        /// Returns true only when the completion flag is set and the clamped setup stage has reached 4. An NPC claim also
+        /// sets this state, while ResetBed can clear completion without clearing the separate NPC-claim flag.
         /// </summary>
         public bool IsComplete => isComplete && setupStage >= 4;
         
         /// <summary>
-        /// Get setup progress (0.0 to 1.0)
+        /// Returns setupStage divided by 4 as normalized progress. SetupStage is clamped to 0-4, so normal values are 0.0
+        /// through 1.0; the method does not independently inspect isComplete or NPC ownership.
         /// </summary>
         public float GetProgress() => setupStage / 4f;
 
@@ -401,11 +507,6 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         private bool CheckPlayerHasRequiredItem(string itemId)
         {
-            // TEMPORARY: Inventory check disabled for testing - always return true
-            ModLogger.Debug($"Inventory check disabled - allowing bed setup without item {itemId}");
-            return true;
-            
-            /* ORIGINAL CODE - Re-enable when inventory detection is working:
             try
             {
 #if !MONO
@@ -431,7 +532,6 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Error($"Error checking for required item {itemId}: {ex.Message}");
                 return false;
             }
-            */
         }
         
         /// <summary>
@@ -462,9 +562,9 @@ namespace Behind_Bars.Systems.Jail
                     string itemName = GetItemDisplayName(itemId);
                     ModLogger.Info($"Consumed 1 {itemName} from player inventory (had {itemCount})");
                     
-                    if (BehindBarsUIManager.Instance != null)
+                    if (Core.ResolveUIManager() != null)
                     {
-                        BehindBarsUIManager.Instance.ShowNotification(
+                        Core.ResolveUIManager().ShowNotification(
                             $"Used {itemName}", 
                             NotificationType.Progress
                         );

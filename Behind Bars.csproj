@@ -4,7 +4,8 @@
     <PropertyGroup>
         <!-- Testing props -->
         <!--<DefineConstants>$(DefineConstants);TestMultiplayer</DefineConstants>-->
-        <DefineConstants>$(DefineConstants);UnityExplorer</DefineConstants>
+        <!-- UnityExplorer is an optional runtime diagnostic mod. Keep it out
+             of ordinary builds so debug deployment only contains Behind Bars. -->
 
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>disable</Nullable>
@@ -53,12 +54,37 @@
     <Import Project="build\events\preBuild.targets" />
     <Import Project="build\events\postBuild.targets" />
     <ItemGroup>
+      <!-- Unity authoring projects are deliberately local-only. Keep their
+           editor scripts, imported packages, and original source assets out of
+           the MelonLoader compile and release surface. -->
+      <Compile Remove="Unity\**\*.cs" />
+      <Compile Remove="BB Unity Project\**\*.cs" />
+      <None Remove="Unity\**" />
+      <None Remove="BB Unity Project\**" />
+      <Content Remove="Unity\**" />
+      <Content Remove="BB Unity Project\**" />
+      <EmbeddedResource Remove="Unity\**" />
+      <EmbeddedResource Remove="BB Unity Project\**" />
       <None Remove="behind_bars" />
       <None Remove="behind_bars.bundle" />
+      <None Remove="behind_bars_scanner_pose" />
+      <None Remove="behind_bars_property_locker.bundle" />
+      <None Remove="behind_bars_jail_lifecycle_audio" />
     </ItemGroup>
     <ItemGroup>
       <EmbeddedResource Include="behind_bars" />
       <EmbeddedResource Include="behind_bars.bundle" />
+      <EmbeddedResource Include="behind_bars_scanner_pose" />
+      <EmbeddedResource Include="behind_bars_property_locker.bundle" />
+      <EmbeddedResource Include="behind_bars_jail_lifecycle_audio" />
+      <None Remove="Icons\behindbars.bedroll.png" />
+      <EmbeddedResource Include="Icons\behindbars.bedroll.png" />
+      <None Remove="Icons\behindbars.cup.png" />
+      <EmbeddedResource Include="Icons\behindbars.cup.png" />
+      <None Remove="Icons\behindbars.sheetsnpillows.png" />
+      <EmbeddedResource Include="Icons\behindbars.sheetsnpillows.png" />
+      <None Remove="Icons\behindbars.toothbrush.png" />
+      <EmbeddedResource Include="Icons\behindbars.toothbrush.png" />
     </ItemGroup>
 
 </Project>

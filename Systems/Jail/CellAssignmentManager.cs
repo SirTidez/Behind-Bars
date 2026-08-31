@@ -22,16 +22,24 @@ namespace Behind_Bars.Systems.Jail
         public CellAssignmentManager(System.IntPtr ptr) : base(ptr) { }
 #endif
 
+        /// <summary>
+        /// Gets the scene-owned cell assignment manager. Cell dictionaries are rebuilt
+        /// from the current JailController during Start.
+        /// </summary>
         public static CellAssignmentManager Instance { get; private set; }
 
-        // Cell tracking
-        private Dictionary<int, CellOccupancy> cellOccupancy = new Dictionary<int, CellOccupancy>();
-        private Dictionary<string, int> playerCellAssignments = new Dictionary<string, int>(); // playerId -> cellNumber
-        private Dictionary<string, int> npcCellAssignments = new Dictionary<string, int>(); // npcId -> cellNumber
+        // Cell tracking is keyed by authored cell number. The two assignment maps are
+        // the reverse lookups used by player/NPC callers; the returned occupancy values
+        // are mutable runtime records, not persistence objects.
+        public Dictionary<int, CellOccupancy> cellOccupancy = new Dictionary<int, CellOccupancy>();
+        public Dictionary<string, int> playerCellAssignments = new Dictionary<string, int>(); // playerId -> cellNumber
+        public Dictionary<string, int> npcCellAssignments = new Dictionary<string, int>(); // npcId -> cellNumber
 
         // Configuration
         public int totalCells = 36; // Total cells available (0-35)
-        public int maxOccupantsPerCell = 1; // NPCs should have individual cells since there are plenty
+        // Legacy inspector value retained for compatibility. Initialization currently
+        // derives capacity per index (two for player cells 0-11, one for later cells).
+        public int maxOccupantsPerCell = 1;
         private const int MAX_PLAYER_CELLS = 12; // Players restricted to cells 0-11
         private const int MAX_USABLE_CELLS = 36; // NPCs can use all cells 0-35
 
@@ -54,7 +62,8 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Initialize cell occupancy tracking
+        /// Clears scene-local assignments and initializes occupancy for the detected jail
+        /// cells. Player cells are limited to 0-11; NPC cells prefer 12+ when available.
         /// </summary>
         private void InitializeCellTracking()
         {
@@ -165,6 +174,7 @@ namespace Behind_Bars.Systems.Jail
             if (AssignOccupantToCell(cellNumber, npcId, $"NPC: {npcName}"))
             {
                 npcCellAssignments[npcId] = cellNumber;
+                Core.JailController?.cellManager?.ClaimBedForNpc(cellNumber, npcName);
                 ModLogger.Debug($"✓ Assigned NPC {npcName} to cell {cellNumber}");
                 return cellNumber;
             }
@@ -283,15 +293,17 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Find an available cell for NPCs (can use cells 0-35, preferring empty cells)
+        /// Find an available cell for NPCs. Reserve the player-facing lower
+        /// block (0-11) unless the dedicated inmate block is completely full.
         /// </summary>
         private int FindAvailableNPCCell()
         {
             var availableCells = new List<int>();
             var emptyCells = new List<int>();
 
-            // Check all available cells (0-35)
-            for (int i = 0; i < totalCells; i++)
+            // Prefer dedicated NPC cells (12+) so every routine inmate owns
+            // a private, claimed bunk without consuming player accommodation.
+            for (int i = MAX_PLAYER_CELLS; i < totalCells; i++)
             {
                 if (cellOccupancy.ContainsKey(i) && cellOccupancy[i].HasSpace())
                 {
@@ -301,6 +313,24 @@ namespace Behind_Bars.Systems.Jail
                     if (cellOccupancy[i].IsEmpty())
                     {
                         emptyCells.Add(i);
+                    }
+                }
+            }
+
+            // A tiny or legacy jail can expose fewer dedicated NPC cells.
+            // Retain the old all-cell fallback only after the preferred range
+            // has genuinely been exhausted.
+            if (availableCells.Count == 0)
+            {
+                for (int i = 0; i < Math.Min(MAX_PLAYER_CELLS, totalCells); i++)
+                {
+                    if (cellOccupancy.ContainsKey(i) && cellOccupancy[i].HasSpace())
+                    {
+                        availableCells.Add(i);
+                        if (cellOccupancy[i].IsEmpty())
+                        {
+                            emptyCells.Add(i);
+                        }
                     }
                 }
             }
@@ -337,6 +367,8 @@ namespace Behind_Bars.Systems.Jail
             }
 
             var cell = cellOccupancy[cellNumber];
+            // Keep the ID/name lists index-aligned: removal uses the same occupant index
+            // so diagnostics and reverse assignments cannot drift apart.
             if (!cell.HasSpace())
             {
                 ModLogger.Error($"Cell {cellNumber} is full");
@@ -366,6 +398,8 @@ namespace Behind_Bars.Systems.Jail
             }
 
             var cell = cellOccupancy[cellNumber];
+            // Remove the display name at the same index as the stable occupant ID. The
+            // cell remains available whenever its post-removal count is below capacity.
             int index = cell.occupants.IndexOf(occupantId);
             if (index >= 0)
             {
@@ -384,8 +418,8 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         private string GetPlayerId(Player player)
         {
-            // Use a combination of name and instance ID for uniqueness
-            return $"{player.name}_{player.GetInstanceID()}";
+            string playerKey = Core.ResolvePlayerKey(player);
+            return !string.IsNullOrEmpty(playerKey) ? playerKey : $"{player.name}_{player.GetInstanceID()}";
         }
 
         /// <summary>
@@ -393,6 +427,8 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         public Dictionary<int, CellOccupancy> GetAllCellOccupancy()
         {
+            // This is a shallow dictionary copy; CellOccupancy instances remain the live
+            // records used by the manager.
             return new Dictionary<int, CellOccupancy>(cellOccupancy);
         }
 
@@ -468,22 +504,34 @@ namespace Behind_Bars.Systems.Jail
     [System.Serializable]
     public class CellOccupancy
     {
+        /// <summary>Authored/runtime cell number represented by this record.</summary>
         public int cellNumber;
+
+        /// <summary>Stable occupant IDs currently assigned to the cell.</summary>
         public List<string> occupants = new List<string>(); // List of occupant IDs
+
+        /// <summary>Display labels kept index-aligned with <see cref="occupants"/>.</summary>
         public List<string> occupantNames = new List<string>(); // Display names for debugging
+
+        /// <summary>Maximum occupants for this cell record.</summary>
         public int maxOccupants = 2;
+
+        /// <summary>Cached availability flag maintained when assignments change.</summary>
         public bool isAvailable = true;
 
+        /// <summary>Returns whether another occupant can be added.</summary>
         public bool HasSpace()
         {
             return occupants.Count < maxOccupants;
         }
 
+        /// <summary>Returns whether no occupants are currently assigned.</summary>
         public bool IsEmpty()
         {
             return occupants.Count == 0;
         }
 
+        /// <summary>Returns the remaining capacity, which may be negative for corrupt data.</summary>
         public int GetAvailableSpace()
         {
             return maxOccupants - occupants.Count;

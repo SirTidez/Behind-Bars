@@ -1,13 +1,17 @@
+using System;
 using UnityEngine;
 using Behind_Bars.Helpers;
 using Behind_Bars.Utils;
 using Behind_Bars.Systems;
 using Behind_Bars.Systems.Jail;
 using Behind_Bars.Systems.CrimeTracking;
+using Behind_Bars.Systems.Parole;
+using Behind_Bars.Systems.Parole.Conditions;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine.UI;
 using Object = UnityEngine.Object;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppTMPro;
@@ -32,12 +36,22 @@ namespace Behind_Bars.UI
     public class BehindBarsUIManager
     {
         private static BehindBarsUIManager? _instance;
+
+        /// <summary>
+        /// Gets the process-wide UI service. The service survives scene changes, while each
+        /// scene-bound presentation is explicitly rebuilt or released by the scene lifecycle.
+        /// </summary>
         public static BehindBarsUIManager Instance => _instance ??= new BehindBarsUIManager();
 
         private GameObject? _uiPrefab;
         private GameObject? _activeUI;
         private BehindBarsUIWrapper? _uiWrapper;
         private bool _isInitialized = false;
+        private Coroutine? _jailInfoUpdateCoroutine;
+
+        // Performance: Pool canvas to avoid repeated allocation
+        private static Canvas? _pooledOverlayCanvas;
+        private const string OverlayCanvasName = "Behind Bars Overlay Canvas";
 
         /// <summary>
         /// Initialize the UI manager and load assets
@@ -46,6 +60,10 @@ namespace Behind_Bars.UI
         {
             if (_isInitialized)
             {
+                // The service persists between scenes, but the WantedLevelUI panel is
+                // parented to the old HUD canvas. Recreate that scene presentation here.
+                InitializeWantedLevelUI();
+                InitializeTierStatusUI();
                 ModLogger.Debug("BehindBarsUIManager already initialized");
                 return;
             }
@@ -62,6 +80,9 @@ namespace Behind_Bars.UI
                 
                 // Initialize parole status UI
                 InitializeParoleStatusUI();
+
+                // Initialize jail recreation tier status UI
+                InitializeTierStatusUI();
                 
                 // Initialize wanted level UI
                 InitializeWantedLevelUI();
@@ -241,10 +262,8 @@ namespace Behind_Bars.UI
                 try
                 {
                     ModLogger.Debug("Using IL2CPP component addition method");
-                    var wrapperComponent = _activeUI.AddComponent(Il2CppInterop.Runtime.Il2CppType.Of<BehindBarsUIWrapper>());
-                    ModLogger.Debug("IL2CPP AddComponent succeeded, casting to BehindBarsUIWrapper");
-                    _uiWrapper = wrapperComponent.Cast<BehindBarsUIWrapper>();
-                    ModLogger.Debug("Cast to BehindBarsUIWrapper succeeded");
+                    _uiWrapper = BBHelpers.AddComponentSafe<BehindBarsUIWrapper>(_activeUI);
+                    ModLogger.Debug("IL2CPP AddComponent succeeded for BehindBarsUIWrapper");
                 }
                 catch (System.Exception ex)
                 {
@@ -292,7 +311,13 @@ namespace Behind_Bars.UI
 
                 // Wait a frame for components to initialize, then update info and start dynamic updates
                 ModLogger.Debug("Starting UI update coroutine");
-                MelonLoader.MelonCoroutines.Start(UpdateUIAfterFrame(crime, timeInfo, bailInfo, jailTimeSeconds, bailAmount));
+                if (_jailInfoUpdateCoroutine != null)
+                {
+                    MelonLoader.MelonCoroutines.Stop(_jailInfoUpdateCoroutine);
+                }
+
+                _jailInfoUpdateCoroutine = MelonLoader.MelonCoroutines.Start(
+                    UpdateUIAfterFrame(crime, timeInfo, bailInfo, jailTimeSeconds, bailAmount)) as Coroutine;
 
                 ModLogger.Debug($"✓ Jail info UI created in overlay canvas '{canvas.name}' with sorting order {canvas.sortingOrder}");
             }
@@ -318,6 +343,12 @@ namespace Behind_Bars.UI
         {
             yield return null; // Wait one frame
 
+            if (!Core.IsGameplaySceneActive)
+            {
+                _jailInfoUpdateCoroutine = null;
+                yield break;
+            }
+
             if (_uiWrapper != null && _uiWrapper.IsInitialized)
             {
                 _uiWrapper.UpdateJailInfo(crime, timeInfo, bailInfo);
@@ -337,6 +368,8 @@ namespace Behind_Bars.UI
             {
                 ModLogger.Warn("UI wrapper not initialized after frame wait");
             }
+
+            _jailInfoUpdateCoroutine = null;
         }
 
         /// <summary>
@@ -355,24 +388,59 @@ namespace Behind_Bars.UI
         /// </summary>
         public void DestroyJailInfoUI()
         {
+            if (_jailInfoUpdateCoroutine != null)
+            {
+                MelonLoader.MelonCoroutines.Stop(_jailInfoUpdateCoroutine);
+                _jailInfoUpdateCoroutine = null;
+            }
+
+            try
+            {
+                _uiWrapper?.StopDynamicUpdates();
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Warn($"Jail info UI dynamic-update cleanup ignored an issue: {ex.Message}");
+            }
+
             if (_activeUI != null)
             {
-                // Get the canvas before destroying the UI
-                var canvas = _activeUI.transform.parent?.GetComponent<Canvas>();
-                
                 // Destroy the UI
                 UnityEngine.Object.DestroyImmediate(_activeUI);
-                _activeUI = null;
-                _uiWrapper = null;
-                
-                // Clean up the overlay canvas if it was created by us
-                if (canvas != null && canvas.name == "Behind Bars Overlay Canvas")
-                {
-                    UnityEngine.Object.DestroyImmediate(canvas.gameObject);
-                    ModLogger.Debug("Destroyed Behind Bars overlay canvas");
-                }
                 
                 ModLogger.Debug("Jail info UI destroyed");
+            }
+
+            _activeUI = null;
+            _uiWrapper = null;
+
+            // This overlay deliberately survives scene loads during active jail play. A menu
+            // transition must remove it even when Unity has already invalidated _activeUI.
+            DestroyPooledOverlayCanvas();
+        }
+
+        /// <summary>
+        /// Releases the pooled Behind Bars overlay and removes a same-name orphan left behind
+        /// by an unload race. The exact-name lookup is restricted to the canvas owned here.
+        /// </summary>
+        private static void DestroyPooledOverlayCanvas()
+        {
+            var pooledCanvas = _pooledOverlayCanvas;
+            _pooledOverlayCanvas = null;
+
+            if (pooledCanvas != null)
+            {
+                UnityEngine.Object.DestroyImmediate(pooledCanvas.gameObject);
+                ModLogger.Debug("Destroyed pooled Behind Bars overlay canvas");
+            }
+
+            // Recover from stale managed bookkeeping after an unload race. This exact name is
+            // owned by Behind Bars, so it cannot affect a game-created menu canvas.
+            var orphanedCanvas = GameObject.Find(OverlayCanvasName);
+            if (orphanedCanvas != null)
+            {
+                UnityEngine.Object.DestroyImmediate(orphanedCanvas);
+                ModLogger.Debug("Destroyed orphaned Behind Bars overlay canvas");
             }
         }
 
@@ -388,32 +456,47 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Find existing overlay canvas or create a new one for UI
+        /// Performance: Find existing overlay canvas or create a new one (pooled)
+        /// Reuses pooled canvas to avoid repeated allocation
         /// </summary>
         private Canvas FindOrCreateCanvas()
         {
-            // Always create a dedicated overlay canvas for the jail UI
-            // This ensures it appears on top and is properly isolated
-            ModLogger.Debug("Creating dedicated overlay canvas for Behind Bars UI");
-            
-            var canvasGO = new GameObject("Behind Bars Overlay Canvas");
+            // Reuse existing pooled canvas if it exists and is still valid
+            if (_pooledOverlayCanvas != null && _pooledOverlayCanvas.gameObject != null)
+            {
+                ModLogger.Debug("Reusing pooled overlay canvas");
+                return _pooledOverlayCanvas;
+            }
+
+            // Create new canvas only if pool is empty
+            ModLogger.Debug("Creating new dedicated overlay canvas for Behind Bars UI");
+
+            var canvasGO = new GameObject(OverlayCanvasName);
             var overlayCanvas = canvasGO.AddComponent<Canvas>();
             overlayCanvas.renderMode = RenderMode.ScreenSpaceOverlay;
-            overlayCanvas.sortingOrder = 1000; // Very high sorting order to appear on top of everything
-            
+            // Jail HUD should render over ordinary gameplay but below the game's pause/menu
+            // layer. A high overlay order left custody information interactive above pause.
+            overlayCanvas.sortingOrder = 100;
+
             // Add CanvasScaler for proper scaling
             var scaler = canvasGO.AddComponent<UnityEngine.UI.CanvasScaler>();
             scaler.uiScaleMode = UnityEngine.UI.CanvasScaler.ScaleMode.ScaleWithScreenSize;
             scaler.referenceResolution = new Vector2(1920, 1080);
             scaler.matchWidthOrHeight = 0.5f; // Balance between width and height matching
-            
-            // Add GraphicRaycaster for UI interaction
-            canvasGO.AddComponent<UnityEngine.UI.GraphicRaycaster>();
-            
+
+            // This canvas is display-only. Leaving a GraphicRaycaster active lets the
+            // custody HUD compete with native pause/menu controls even when the game
+            // renders its menu above us.
+            var raycaster = canvasGO.AddComponent<UnityEngine.UI.GraphicRaycaster>();
+            raycaster.enabled = false;
+
             // Don't destroy on load so it persists across scenes
             UnityEngine.Object.DontDestroyOnLoad(canvasGO);
-            
-            ModLogger.Debug("Created overlay canvas with sorting order 1000");
+
+            // Cache in pool for reuse
+            _pooledOverlayCanvas = overlayCanvas;
+
+            ModLogger.Debug("Created and pooled overlay canvas with sorting order 100 (below game pause UI)");
             return overlayCanvas;
         }
 
@@ -437,13 +520,32 @@ namespace Behind_Bars.UI
 
         private GameObject? _officerCommandManager;
         private OfficerCommandUI? _officerCommandUI;
+
+        // A non-null command is the arbitration flag for the shared top-left HUD slot. Tier
+        // status is lower priority and must remain synchronously hidden until this is cleared.
         private OfficerCommandData? _currentCommand;
+
+        // === JAIL TIER STATUS SYSTEM ===
+
+        // The manager host persists only long enough to coordinate the scene presentation. The
+        // card itself owns references to the current HUD canvas and is reset at scene exit.
+        private GameObject _tierStatusManager;
+        private TierStatusUI _tierStatusUI;
+        // Polls schedule state at a bounded realtime cadence; ShutdownSceneUI is its owner.
+        private Coroutine _tierStatusUpdateCoroutine;
 
         // === PAROLE STATUS SYSTEM ===
 
         private GameObject? _paroleStatusManager;
         private ParoleStatusUI? _paroleStatusUI;
         private Coroutine? _paroleStatusUpdateCoroutine;
+        // Event subscription state is deliberately explicit so static release and Player.Local
+        // arrest listeners can be removed during scene shutdown. The player wrapper is retained;
+        // the IL2CPP branch currently recreates the Action trampoline during removal, so delegate
+        // identity/equality remains a cleanup assumption to harden in a future behavior pass.
+        private Coroutine? _arrestSubscriptionCoroutine;
+        private Player? _arrestSubscriptionPlayer;
+        private bool _isSubscribedToArrestEvents = false;
         
         // === BAIL UI SYSTEM ===
 
@@ -767,12 +869,17 @@ namespace Behind_Bars.UI
         // === OFFICER COMMAND SYSTEM ===
 
         /// <summary>
-        /// Show a persistent officer command notification
+        /// Shows an officer command and claims the shared top-left HUD slot. Any tier-status
+        /// presentation is hidden immediately before the command is created or updated.
         /// </summary>
         public void ShowOfficerCommand(OfficerCommandData data)
         {
             try
             {
+                // Officer instructions own this HUD slot and must never overlap the
+                // lower-priority recreation status surface.
+                _tierStatusUI?.HideImmediate();
+
                 // Create officer command UI if it doesn't exist
                 if (_officerCommandUI == null)
                 {
@@ -800,12 +907,15 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Update the current officer command
+        /// Updates the command that owns the shared top-left HUD slot. Tier status remains
+        /// suppressed while the command data is current, including during a UI rebuild.
         /// </summary>
         public void UpdateOfficerCommand(OfficerCommandData data)
         {
             try
             {
+                _tierStatusUI?.HideImmediate();
+
                 if (_officerCommandUI == null)
                 {
                     ShowOfficerCommand(data);
@@ -876,9 +986,7 @@ namespace Behind_Bars.UI
                 // Add the OfficerCommandUI component
 #if !MONO
                 // IL2CPP-safe component addition
-                var componentType = Il2CppInterop.Runtime.Il2CppType.Of<OfficerCommandUI>();
-                var component = _officerCommandManager.AddComponent(componentType);
-                _officerCommandUI = component.Cast<OfficerCommandUI>();
+                _officerCommandUI = BBHelpers.AddComponentSafe<OfficerCommandUI>(_officerCommandManager);
 #else
                 _officerCommandUI = _officerCommandManager.AddComponent<OfficerCommandUI>();
 #endif
@@ -896,6 +1004,139 @@ namespace Behind_Bars.UI
             {
                 ModLogger.Error($"Error creating officer command UI: {ex.Message}");
             }
+        }
+
+        // === JAIL TIER STATUS SYSTEM ===
+
+        /// <summary>
+        /// Starts the single realtime tier-status polling loop. Creation is deferred until a
+        /// gameplay scene has a valid HUD, and repeated initialization does not add a second loop.
+        /// </summary>
+        private void InitializeTierStatusUI()
+        {
+            if (_tierStatusUpdateCoroutine == null)
+            {
+                _tierStatusUpdateCoroutine = MelonLoader.MelonCoroutines.Start(UpdateTierStatusCoroutine()) as Coroutine;
+                ModLogger.Debug("Tier status UI update coroutine started");
+            }
+        }
+
+        /// <summary>
+        /// Creates the persistent host and runtime-appropriate tier-status component once.
+        /// The component then binds its presentation to the current player HUD canvas.
+        /// </summary>
+        private void CreateTierStatusUI()
+        {
+            if (_tierStatusUI != null)
+            {
+                return;
+            }
+
+            _tierStatusManager = new GameObject("TierStatusManager");
+            GameObject.DontDestroyOnLoad(_tierStatusManager);
+#if !MONO
+            _tierStatusUI = BBHelpers.AddComponentSafe<TierStatusUI>(_tierStatusManager);
+#else
+            _tierStatusUI = _tierStatusManager.AddComponent<TierStatusUI>();
+#endif
+            _tierStatusUI?.CreateUI();
+        }
+
+        /// <summary>
+        /// Arbitrates the lower-priority tier surface against officer commands and scene state,
+        /// then projects the latest recreation snapshot into the card at a 0.1-second realtime
+        /// cadence. The loop is stopped by <see cref="ShutdownSceneUI"/>.
+        /// </summary>
+        private IEnumerator UpdateTierStatusCoroutine()
+        {
+            while (true)
+            {
+                yield return new WaitForSecondsRealtime(0.1f);
+
+                try
+                {
+                    if (!Core.IsGameplaySceneActive || _currentCommand != null || HasActiveOfficerCommand())
+                    {
+                        _tierStatusUI?.HideImmediate();
+                        continue;
+                    }
+
+                    JailLifecycleManager lifecycle = Core.JailController != null
+                        ? BBHelpers.GetComponentSafe<JailLifecycleManager>(Core.JailController.gameObject)
+                        : null;
+                    if (lifecycle == null || !lifecycle.TryGetLocalPlayerRecreationStatus(out JailRecreationStatus status))
+                    {
+                        _tierStatusUI?.HideImmediate();
+                        continue;
+                    }
+
+                    if (_tierStatusUI == null)
+                    {
+                        CreateTierStatusUI();
+                    }
+
+                    TierStatusData data = BuildTierStatusData(status);
+                    if (_tierStatusUI != null)
+                    {
+                        if (_tierStatusUI.IsVisible())
+                        {
+                            _tierStatusUI.UpdateStatus(data);
+                        }
+                        else
+                        {
+                            _tierStatusUI.Show(data);
+                        }
+                    }
+                }
+                catch (System.Exception ex)
+                {
+                    ModLogger.Error($"Error updating tier status UI: {ex.Message}");
+                }
+            }
+        }
+
+        /// <summary>
+        /// Converts lifecycle status into display strings and normalized progress. The countdown
+        /// is kept in real-world seconds all the way to the UI so it is not affected by game-time
+        /// scaling; urgency starts at thirty seconds and becomes critical at ten seconds.
+        /// </summary>
+        /// <param name="status">Current local player's recreation schedule snapshot.</param>
+        /// <returns>A presentation snapshot for the tier-status card.</returns>
+        private static TierStatusData BuildTierStatusData(JailRecreationStatus status)
+        {
+            float remainingRealSeconds = Mathf.Max(0f, status.RemainingRealSeconds);
+            bool recallActive = status.IsAssignedTierActive && remainingRealSeconds <= 30f;
+            string assignedTier = FormatTierName(status.AssignedTier);
+
+            return new TierStatusData
+            {
+                HeaderText = recallActive ? "RETURN TO CELL" : "TIER STATUS",
+                TimerLabel = status.IsAssignedTierActive ? "LOCKDOWN IN" : "YOUR REC IN",
+                TimerText = TierStatusFormatting.FormatRealCountdown(remainingRealSeconds),
+                ActiveTierText = status.ActiveTier == JailRecreationTier.None
+                    ? "ALL TIERS LOCKED"
+                    : $"{FormatTierName(status.ActiveTier)} TIER OUT",
+                AssignedTierText = recallActive
+                    ? "RECREATION ENDING"
+                    : $"ASSIGNED · {assignedTier} TIER",
+                CellText = status.AssignedCellNumber.ToString("D2"),
+                RemainingRealSeconds = remainingRealSeconds,
+                PhaseProgress = status.PhaseProgress,
+                IsAssignedTierActive = status.IsAssignedTierActive
+            };
+        }
+
+        /// <summary>Maps the internal tier enum to the short label used by the card.</summary>
+        /// <param name="tier">Tier value reported by the jail lifecycle.</param>
+        /// <returns>A display label, or <c>UNKNOWN</c> for an unsupported value.</returns>
+        private static string FormatTierName(JailRecreationTier tier)
+        {
+            return tier switch
+            {
+                JailRecreationTier.Lower => "LOWER",
+                JailRecreationTier.Upper => "UPPER",
+                _ => "UNKNOWN"
+            };
         }
 
         // === PAROLE STATUS SYSTEM ===
@@ -918,10 +1159,125 @@ namespace Behind_Bars.UI
                     _paroleStatusUpdateCoroutine = MelonLoader.MelonCoroutines.Start(UpdateParoleStatusCoroutine()) as Coroutine;
                     ModLogger.Debug("Parole status UI update coroutine started");
                 }
+                
+                // Subscribe to arrest/release events for immediate UI updates
+                SubscribeToArrestReleaseEvents();
             }
             catch (System.Exception ex)
             {
                 ModLogger.Error($"Error initializing parole status UI: {ex.Message}");
+            }
+        }
+        
+        /// <summary>
+        /// Subscribes once to Player.Local arrest and ReleaseManager release events for immediate
+        /// parole visibility control. The player wrapper is retained for removal in
+        /// <see cref="ShutdownSceneUI"/>; IL2CPP currently recreates the arrest delegate there,
+        /// so successful deregistration depends on the runtime's delegate equality behavior.
+        /// </summary>
+        private void SubscribeToArrestReleaseEvents()
+        {
+            if (_isSubscribedToArrestEvents)
+            {
+                return;
+            }
+            
+            // Subscribe to ReleaseManager events (static, always available)
+            ReleaseManager.OnReleaseCompleted += HandlePlayerReleased;
+            ModLogger.Debug("ParoleStatusUI subscribed to ReleaseManager.OnReleaseCompleted");
+            
+            // Start coroutine to subscribe to Player.local.onArrested when available
+            _arrestSubscriptionCoroutine = MelonLoader.MelonCoroutines.Start(WaitForPlayerAndSubscribeToArrest()) as Coroutine;
+            
+            _isSubscribedToArrestEvents = true;
+        }
+        
+        /// <summary>
+        /// Waits for Player.Local to become available, then records that exact player wrapper for
+        /// the matching arrest-listener removal during scene shutdown.
+        /// </summary>
+        private IEnumerator WaitForPlayerAndSubscribeToArrest()
+        {
+            ModLogger.Debug("ParoleStatusUI waiting for Player.Local to subscribe to onArrested...");
+            
+            int attempts = 0;
+            const int maxAttempts = 300; // 30 seconds max wait
+            
+            while (attempts < maxAttempts)
+            {
+                Player localPlayer = null;
+                
+                try
+                {
+#if !MONO
+                    localPlayer = Player.Local;
+                    if (localPlayer != null && localPlayer.Pointer != IntPtr.Zero)
+                    {
+                        // Subscribe to onArrested
+                        localPlayer.add_onArrested(new Action(HandlePlayerArrested));
+                        _arrestSubscriptionPlayer = localPlayer;
+                        ModLogger.Info($"ParoleStatusUI subscribed to Player.local.onArrested for {localPlayer.name}");
+                        yield break;
+                    }
+#else
+                    localPlayer = Player.Local;
+                    if (localPlayer != null)
+                    {
+                        // Subscribe to onArrested
+                        localPlayer.onArrested += HandlePlayerArrested;
+                        _arrestSubscriptionPlayer = localPlayer;
+                        ModLogger.Info($"ParoleStatusUI subscribed to Player.local.onArrested for {localPlayer.name}");
+                        yield break;
+                    }
+#endif
+                }
+                catch (Exception)
+                {
+                    // Player.Local not available yet
+                    if (attempts % 50 == 0) // Log every 5 seconds
+                    {
+                        ModLogger.Debug($"ParoleStatusUI still waiting for Player.Local... ({attempts / 10}s elapsed)");
+                    }
+                }
+                
+                attempts++;
+                yield return new WaitForSeconds(0.1f);
+            }
+            
+            ModLogger.Warn("ParoleStatusUI: Gave up waiting for Player.Local after 30 seconds");
+        }
+        
+        /// <summary>
+        /// Event handler called when Player.local.onArrested fires - hide parole status UI immediately
+        /// </summary>
+        private void HandlePlayerArrested()
+        {
+            try
+            {
+                ModLogger.Info("ParoleStatusUI: HandlePlayerArrested event received - hiding UI immediately");
+                HideParoleStatus();
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"ParoleStatusUI: Error in HandlePlayerArrested: {ex.Message}");
+            }
+        }
+        
+        /// <summary>
+        /// Event handler called when ReleaseManager.OnReleaseCompleted fires
+        /// Note: ShowParoleStatus() is called after release summary UI is dismissed
+        /// </summary>
+        private void HandlePlayerReleased(Player player, ReleaseManager.ReleaseType releaseType)
+        {
+            try
+            {
+                ModLogger.Info($"ParoleStatusUI: HandlePlayerReleased event received for {player?.name} (type: {releaseType})");
+                // ShowParoleStatus() will be called after release summary UI is dismissed in ReleaseManager
+                // The coroutine will automatically show the UI if player is on parole
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"ParoleStatusUI: Error in HandlePlayerReleased: {ex.Message}");
             }
         }
 
@@ -939,9 +1295,7 @@ namespace Behind_Bars.UI
                 // Add the ParoleStatusUI component
 #if !MONO
                 // IL2CPP-safe component addition
-                var componentType = Il2CppInterop.Runtime.Il2CppType.Of<ParoleStatusUI>();
-                var component = _paroleStatusManager.AddComponent(componentType);
-                _paroleStatusUI = component.Cast<ParoleStatusUI>();
+                _paroleStatusUI = BBHelpers.AddComponentSafe<ParoleStatusUI>(_paroleStatusManager);
 #else
                 _paroleStatusUI = _paroleStatusManager.AddComponent<ParoleStatusUI>();
 #endif
@@ -1059,13 +1413,14 @@ namespace Behind_Bars.UI
 
                 // CRITICAL: Don't show parole status UI if player is in jail
                 // Use IsInJail to check jail status (set immediately on arrest, before sentence tracking starts)
-                if (JailTimeTracker.Instance != null && JailTimeTracker.Instance.IsInJail(player))
+                var jailTimeTracker = Core.ResolveJailTimeTracker();
+                if (jailTimeTracker != null && jailTimeTracker.IsInJail(player))
                 {
                     return new ParoleStatusData { IsOnParole = false };
                 }
 
                 // Get cached rap sheet (loads from file only once)
-                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                var rapSheet = Core.GetRapSheet(player);
                 if (rapSheet == null)
                 {
                     // No rap sheet available - player is not on parole
@@ -1082,6 +1437,32 @@ namespace Behind_Bars.UI
                 var searchProbability = rapSheet.GetSearchProbability();
                 var searchPercent = Mathf.RoundToInt(searchProbability * 100f);
 
+                // Get curfew time if applicable
+                string curfewTime = "";
+                var conditionManager = Core.ResolveParoleConditionManager();
+                if (conditionManager != null)
+                {
+                    var activeConditions = conditionManager.GetActiveConditions();
+                    if (activeConditions != null)
+                    {
+                        foreach (var condition in activeConditions)
+                        {
+                            if (condition is CurfewCondition)
+                            {
+                                curfewTime = CurfewCondition.GetCurfewDisplayTime(rapSheet.LSILevel);
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                // Get compliance streak
+                int streakDays = paroleRecord.GetConsecutiveHighComplianceDays();
+
+                // Get outstanding fees
+                float feesOwed = paroleRecord.GetTotalFeesOwed() - paroleRecord.GetTotalFeesPaid();
+                if (feesOwed < 0f) feesOwed = 0f;
+
                 return new ParoleStatusData
                 {
                     IsOnParole = true,
@@ -1089,7 +1470,11 @@ namespace Behind_Bars.UI
                     TimeRemainingFormatted = FormatTimeRemaining(remainingTime),
                     SupervisionLevel = rapSheet.LSILevel,
                     SearchProbabilityPercent = searchPercent,
-                    ViolationCount = paroleRecord.GetViolationCount()
+                    ViolationCount = paroleRecord.GetViolationCount(),
+                    CurfewTime = curfewTime,
+                    ComplianceStreakDays = streakDays,
+                    ComplianceStreakRequired = 3,
+                    OutstandingFees = feesOwed
                 };
             }
             catch (System.Exception ex)
@@ -1114,7 +1499,13 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Coroutine to periodically update parole status
+        /// Coroutine to periodically update parole status display.
+        /// NOTE: Primary visibility control is event-driven via HandlePlayerArrested (from Player.local.onArrested)
+        /// and HandlePlayerReleased (from ReleaseManager.OnReleaseCompleted).
+        /// This coroutine handles:
+        ///   - Periodic data updates (time remaining, violations)
+        ///   - Safety fallback for jail status (in case events miss)
+        ///   - Auto-showing UI when player is on parole after release
         /// </summary>
         private IEnumerator UpdateParoleStatusCoroutine()
         {
@@ -1125,51 +1516,54 @@ namespace Behind_Bars.UI
                 try
                 {
                     var statusData = GetParoleStatusData();
-                    if (statusData != null)
-                    {
-                        // CRITICAL: Hide UI if player is in jail (GetParoleStatusData already checks this, but double-check)
+                    if (statusData == null)
+                        continue;
+
+                    // SAFETY FALLBACK: Hide UI if player is in jail
+                    // Primary hiding is done by HandlePlayerArrested event, but this catches edge cases
+                    // where the event might not fire or JailTimeTracker.SetInJail was called independently
 #if !MONO
-                        var player = Il2CppScheduleOne.PlayerScripts.Player.Local;
+                    var player = Il2CppScheduleOne.PlayerScripts.Player.Local;
 #else
-                        var player = ScheduleOne.PlayerScripts.Player.Local;
+                    var player = ScheduleOne.PlayerScripts.Player.Local;
 #endif
-                        // Use IsInJail to check jail status (set immediately on arrest, before sentence tracking starts)
-                        if (player != null && JailTimeTracker.Instance != null && JailTimeTracker.Instance.IsInJail(player))
+                    var jailTimeTracker = Core.ResolveJailTimeTracker();
+                    if (player != null && jailTimeTracker != null && jailTimeTracker.IsInJail(player))
+                    {
+                        if (_paroleStatusUI != null && _paroleStatusUI.IsVisible())
                         {
-                            // Player is in jail - hide parole status UI
-                            if (_paroleStatusUI != null && _paroleStatusUI.IsVisible())
-                            {
-                                _paroleStatusUI.Hide();
-                            }
-                            continue;
+                            _paroleStatusUI.Hide();
+                            ModLogger.Debug("ParoleStatusUI: Safety fallback hid UI (JailTimeTracker.IsInJail = true)");
+                        }
+                        continue;
+                    }
+
+                    // Update parole status display based on current state
+                    if (statusData.IsOnParole)
+                    {
+                        if (_paroleStatusUI == null)
+                        {
+                            CreateParoleStatusUI();
                         }
 
-                        if (statusData.IsOnParole)
+                        if (_paroleStatusUI != null)
                         {
-                            if (_paroleStatusUI == null)
+                            if (!_paroleStatusUI.IsVisible())
                             {
-                                CreateParoleStatusUI();
+                                _paroleStatusUI.Show(statusData);
                             }
-
-                            if (_paroleStatusUI != null)
+                            else
                             {
-                                if (!_paroleStatusUI.IsVisible())
-                                {
-                                    _paroleStatusUI.Show(statusData);
-                                }
-                                else
-                                {
-                                    _paroleStatusUI.UpdateStatus(statusData);
-                                }
+                                _paroleStatusUI.UpdateStatus(statusData);
                             }
                         }
-                        else
+                    }
+                    else
+                    {
+                        // Not on parole - hide UI
+                        if (_paroleStatusUI != null && _paroleStatusUI.IsVisible())
                         {
-                            // Not on parole - hide UI
-                            if (_paroleStatusUI != null && _paroleStatusUI.IsVisible())
-                            {
-                                _paroleStatusUI.Hide();
-                            }
+                            _paroleStatusUI.Hide();
                         }
                     }
                 }
@@ -1178,6 +1572,151 @@ namespace Behind_Bars.UI
                     ModLogger.Error($"Error in parole status update coroutine: {ex.Message}");
                 }
             }
+        }
+
+        /// <summary>
+        /// Releases transient scene UI and its listeners without destroying the persistent UI
+        /// service. Coroutines stop first, then fades/listeners are cancelled before their hosts
+        /// are destroyed; this prevents scene teardown from resuming work against old HUD objects.
+        /// Officer-command and tier surfaces are cleared before the remaining presentation hosts,
+        /// and no method in this path lazily recreates UI.
+        /// </summary>
+        public void ShutdownSceneUI()
+        {
+            if (_tierStatusUpdateCoroutine != null)
+            {
+                MelonLoader.MelonCoroutines.Stop(_tierStatusUpdateCoroutine);
+                _tierStatusUpdateCoroutine = null;
+            }
+
+            if (_paroleStatusUpdateCoroutine != null)
+            {
+                MelonLoader.MelonCoroutines.Stop(_paroleStatusUpdateCoroutine);
+                _paroleStatusUpdateCoroutine = null;
+            }
+
+            if (_arrestSubscriptionCoroutine != null)
+            {
+                MelonLoader.MelonCoroutines.Stop(_arrestSubscriptionCoroutine);
+                _arrestSubscriptionCoroutine = null;
+            }
+
+            try
+            {
+                HideNotification();
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Warn($"Notification shutdown ignored an issue: {ex.Message}");
+            }
+
+            try
+            {
+                _uiWrapper?.StopDynamicUpdates();
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Warn($"Jail UI update shutdown ignored an issue: {ex.Message}");
+            }
+
+            if (_officerCommandUI != null)
+            {
+                _officerCommandUI.CancelForSceneExit();
+            }
+
+            if (_officerCommandManager != null)
+            {
+                UnityEngine.Object.Destroy(_officerCommandManager);
+            }
+
+            _officerCommandUI = null;
+            _officerCommandManager = null;
+            _currentCommand = null;
+
+            if (_tierStatusUI != null)
+            {
+                _tierStatusUI.CancelForSceneExit();
+            }
+            if (_tierStatusManager != null)
+            {
+                UnityEngine.Object.Destroy(_tierStatusManager);
+            }
+            _tierStatusUI = null;
+            _tierStatusManager = null;
+
+            // These managers are deliberately persistent during gameplay, but their
+            // children are parented to the scene HUD.  Cancel presentation first and
+            // discard the persistent hosts so a menu transition cannot resume a fade
+            // against destroyed UI objects.
+            try { _bailUI?.CancelForSceneExit(); }
+            catch (System.Exception ex) { ModLogger.Warn($"Bail UI scene cleanup ignored an issue: {ex.Message}"); }
+            try { _paroleStatusUI?.CancelForSceneExit(); }
+            catch (System.Exception ex) { ModLogger.Warn($"Parole status scene cleanup ignored an issue: {ex.Message}"); }
+            try { _paroleConditionsUI?.CancelForSceneExit(); }
+            catch (System.Exception ex) { ModLogger.Warn($"Parole conditions scene cleanup ignored an issue: {ex.Message}"); }
+
+            if (_bailManager != null)
+            {
+                UnityEngine.Object.Destroy(_bailManager);
+            }
+            if (_paroleStatusManager != null)
+            {
+                UnityEngine.Object.Destroy(_paroleStatusManager);
+            }
+            if (_paroleConditionsManager != null)
+            {
+                UnityEngine.Object.Destroy(_paroleConditionsManager);
+            }
+
+            _bailUI = null;
+            _bailManager = null;
+            _paroleStatusUI = null;
+            _paroleStatusManager = null;
+            _paroleConditionsUI = null;
+            _paroleConditionsManager = null;
+
+            if (_isSubscribedToArrestEvents)
+            {
+                ReleaseManager.OnReleaseCompleted -= HandlePlayerReleased;
+                if (_arrestSubscriptionPlayer != null)
+                {
+#if !MONO
+                    _arrestSubscriptionPlayer.remove_onArrested(new Action(HandlePlayerArrested));
+#else
+                    _arrestSubscriptionPlayer.onArrested -= HandlePlayerArrested;
+#endif
+                }
+
+                _arrestSubscriptionPlayer = null;
+                _isSubscribedToArrestEvents = false;
+            }
+
+            try
+            {
+                PropertyLockerUI.Instance.CloseForSceneTransition();
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Warn($"Property locker scene cleanup ignored an issue: {ex.Message}");
+            }
+            try
+            {
+                DestroyJailInfoUI();
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Warn($"Jail UI artifact cleanup ignored an issue: {ex.Message}");
+            }
+            try
+            {
+                _wantedLevelUI?.ReleaseScenePresentation();
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Warn($"Wanted UI scene cleanup ignored an issue: {ex.Message}");
+            }
+
+            ModLogger.Debug("BehindBarsUIManager released scene UI and event listeners");
         }
 
         // === BAIL UI SYSTEM ===
@@ -1340,9 +1879,7 @@ namespace Behind_Bars.UI
                 // Add the ParoleConditionsUI component
 #if !MONO
                 // IL2CPP-safe component addition
-                var componentType = Il2CppInterop.Runtime.Il2CppType.Of<ParoleConditionsUI>();
-                var component = _paroleConditionsManager.AddComponent(componentType);
-                _paroleConditionsUI = component.Cast<ParoleConditionsUI>();
+                _paroleConditionsUI = BBHelpers.AddComponentSafe<ParoleConditionsUI>(_paroleConditionsManager);
 #else
                 _paroleConditionsUI = _paroleConditionsManager.AddComponent<ParoleConditionsUI>();
 #endif
@@ -1376,9 +1913,7 @@ namespace Behind_Bars.UI
                 // Add the BailUI component
 #if !MONO
                 // IL2CPP-safe component addition
-                var componentType = Il2CppInterop.Runtime.Il2CppType.Of<BailUI>();
-                var component = _bailManager.AddComponent(componentType);
-                _bailUI = component.Cast<BailUI>();
+                _bailUI = BBHelpers.AddComponentSafe<BailUI>(_bailManager);
 #else
                 _bailUI = _bailManager.AddComponent<BailUI>();
 #endif
@@ -1411,6 +1946,10 @@ namespace Behind_Bars.UI
                 {
                     CreateWantedLevelUI();
                 }
+                else
+                {
+                    _wantedLevelUI.CreateWantedLevelUI();
+                }
 
                 ModLogger.Debug("WantedLevelUI initialized successfully");
             }
@@ -1434,9 +1973,7 @@ namespace Behind_Bars.UI
                 // Add the WantedLevelUI component
 #if !MONO
                 // IL2CPP-safe component addition
-                var componentType = Il2CppInterop.Runtime.Il2CppType.Of<WantedLevelUI>();
-                var component = _wantedLevelManager.AddComponent(componentType);
-                _wantedLevelUI = component.Cast<WantedLevelUI>();
+                _wantedLevelUI = BBHelpers.AddComponentSafe<WantedLevelUI>(_wantedLevelManager);
 #else
                 _wantedLevelUI = _wantedLevelManager.AddComponent<WantedLevelUI>();
 #endif
@@ -1784,12 +2321,12 @@ namespace Behind_Bars.UI
                    "• Alt+4: Toggle Holding Cell Door 0\n" +
                    "• Alt+5: Toggle Holding Cell Door 1\n\n" +
                    "Jail Management:\n" +
-                   "• L: Emergency Lockdown (locks all doors, emergency lighting)\n" +
-                   "• U: Unlock All (unlocks all doors, normal lighting)\n" +
-                   "• O: Open All Cells\n" +
-                   "• C: Close All Cells\n" +
-                   "• H: Blackout Lighting\n" +
-                   "• N: Normal Lighting\n\n" +
+                   "• Alt+L: Emergency Lockdown (locks all doors, emergency lighting)\n" +
+                   "• Alt+U: Unlock All (unlocks all doors, normal lighting)\n" +
+                   "• Alt+O: Open All Cells\n" +
+                   "• Alt+C: Close All Cells\n" +
+                   "• Alt+H: Blackout Lighting\n" +
+                   "• Alt+N: Normal Lighting\n\n" +
                    "• Alt+0: Show this instructions screen";
         }
     }

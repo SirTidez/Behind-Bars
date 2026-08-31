@@ -13,8 +13,13 @@ using FishNet.Connection;
 
 namespace Behind_Bars.Harmony
 {
+#if MONO
     /// <summary>
     /// Patches StorageEntity to make PrisonStorageEntity work locally without network sync
+    /// </summary>
+    /// <remarks>
+    /// This compatibility patch is compiled only for the Mono target. IL2CPP does not
+    /// receive these reflection-based local hooks from this class.
     /// </summary>
     [HarmonyPatch(typeof(StorageEntity))]
     public class StorageEntityPatch
@@ -27,17 +32,17 @@ namespace Behind_Bars.Harmony
         /// </summary>
         [HarmonyPrefix]
         [HarmonyPatch(nameof(StorageEntity.SetStoredInstance))]
-        public static bool SetStoredInstance_Prefix(StorageEntity __instance, NetworkConnection conn, int itemSlotIndex, ItemInstance instance)
+        public static bool SetStoredInstance_Prefix(StorageEntity __instance, NetworkConnection conn, int itemSlotIndex, object instance)
         {
             // Only intercept for our custom PrisonStorageEntity
             if (__instance is Behind_Bars.Systems.Jail.PrisonStorageEntity)
             {
-                ModLogger.Debug($"PrisonStorageEntity: Patched SetStoredInstance - slot {itemSlotIndex}, item: {(instance != null ? instance.Name : "null")}");
+                ModLogger.Debug($"PrisonStorageEntity: Patched SetStoredInstance - slot {itemSlotIndex}, item: {(instance != null ? GetItemName(instance) : "null")}");
 
                 // Manually set the slot locally (skip network RPCs)
                 if (itemSlotIndex >= 0 && itemSlotIndex < __instance.ItemSlots.Count)
                 {
-                    __instance.ItemSlots[itemSlotIndex].SetStoredItem(instance, true); // true = internal/local
+                    SetStoredItemLocally(__instance.ItemSlots[itemSlotIndex], instance);
                     ModLogger.Info($"Locally updated storage slot {itemSlotIndex}");
                 }
 
@@ -71,5 +76,87 @@ namespace Behind_Bars.Harmony
 
             return true; // Allow normal behavior for other StorageEntity types
         }
+
+        /// <summary>
+        /// Invokes the slot's local SetStoredItem operation without going through the
+        /// network RPC. Reflection keeps this helper compatible with the runtime slot
+        /// wrapper; a missing method or invocation failure is logged and ignored.
+        /// </summary>
+        /// <param name="slot">The item-slot object receiving the stored instance.</param>
+        /// <param name="instance">The item instance to store, which may be null.</param>
+        private static void SetStoredItemLocally(object slot, object instance)
+        {
+            if (slot == null)
+            {
+                return;
+            }
+
+            try
+            {
+                var method = slot.GetType().GetMethod("SetStoredItem");
+                if (method != null)
+                {
+                    method.Invoke(slot, new object[] { instance, true });
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Warn($"Failed to set stored item locally: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Best-effort diagnostic name lookup for a stored item. It probes a direct
+        /// <c>Name</c>, then <c>Definition.name</c>/<c>Definition.Name</c>, and finally
+        /// falls back to the runtime type name if the shape differs or reflection fails.
+        /// </summary>
+        /// <param name="itemInstance">The item instance being logged, or null.</param>
+        /// <returns>A human-readable item name or a safe type/null fallback.</returns>
+        private static string GetItemName(object itemInstance)
+        {
+            if (itemInstance == null)
+            {
+                return "null";
+            }
+
+            try
+            {
+                var nameProperty = itemInstance.GetType().GetProperty("Name");
+                if (nameProperty != null)
+                {
+                    var value = nameProperty.GetValue(itemInstance) as string;
+                    if (!string.IsNullOrWhiteSpace(value))
+                    {
+                        return value;
+                    }
+                }
+
+                var definitionProperty = itemInstance.GetType().GetProperty("Definition");
+                if (definitionProperty != null)
+                {
+                    var definition = definitionProperty.GetValue(itemInstance);
+                    if (definition != null)
+                    {
+                        var defType = definition.GetType();
+                        var defNameProperty = defType.GetProperty("name") ?? defType.GetProperty("Name");
+                        if (defNameProperty != null)
+                        {
+                            var value = defNameProperty.GetValue(definition) as string;
+                            if (!string.IsNullOrWhiteSpace(value))
+                            {
+                                return value;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Debug($"Failed to read item name from {itemInstance.GetType().Name}: {ex.Message}");
+            }
+
+            return itemInstance.GetType().Name;
+        }
     }
+#endif
 }

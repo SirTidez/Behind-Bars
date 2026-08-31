@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using Behind_Bars.Systems.Jail;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -10,9 +11,15 @@ using Il2CppScheduleOne.PlayerScripts;
 using ScheduleOne.PlayerScripts;
 #endif
 
+/// <summary>
+/// Runtime state for one authored jail door, including prefab instance, lock state,
+/// animation target, and completion callbacks.
+/// </summary>
 [System.Serializable]
 public class JailDoor
 {
+    // Authored holder/operation points and the instantiated door are scene references;
+    // they are rebuilt on scene load rather than persisted in custody data.
     public Transform doorHolder;
     public GameObject doorInstance;
     public Transform doorHinge;
@@ -29,11 +36,24 @@ public class JailDoor
     public float animationSpeed = 2f;
     public bool reverseDirection = false;  // If true, flips the open angle direction
 
-    // Private animation state
+    // Private animation state. currentAngle is the last applied hinge angle; targetAngle
+    // is selected by OpenDoor/CloseDoor while isAnimating gates UpdateDoorAnimation.
     private float targetAngle;
     private float currentAngle;
     private bool isAnimating = false;
 
+    /// <summary>
+    /// Raised after this door reaches its fully open position.
+    /// </summary>
+    public event Action<JailDoor> Opened;
+
+    /// <summary>
+    /// Raised after this door reaches its fully closed position, including the
+    /// closed-and-locked state.
+    /// </summary>
+    public event Action<JailDoor> Closed;
+
+    /// <summary>Classifies the physical role of a jail door.</summary>
     public enum DoorType
     {
         CellDoor,
@@ -43,12 +63,14 @@ public class JailDoor
         AreaDoor
     }
 
+    /// <summary>Describes whether a guard passes through a door or only operates it.</summary>
     public enum DoorInteractionType
     {
         PassThrough,    // Guard moves through door (Inner, Entry, Guard doors)
         OperationOnly   // Guard only opens/closes door (Cell, Holding doors)
     }
 
+    /// <summary>Transient animation/lock state reported by a jail door.</summary>
     public enum DoorState
     {
         Closed,
@@ -58,43 +80,56 @@ public class JailDoor
         Locked
     }
 
+    /// <summary>Returns whether the authored door holder exists.</summary>
     public bool IsValid()
     {
         return doorHolder != null;
     }
 
+    /// <summary>Returns whether a runtime door prefab has been assigned.</summary>
     public bool IsInstantiated()
     {
         return doorInstance != null;
     }
 
+    /// <summary>Returns true only for the fully open state.</summary>
     public bool IsOpen()
     {
         return currentState == DoorState.Open;
     }
 
+    /// <summary>Returns true for both closed and closed-and-locked states.</summary>
     public bool IsClosed()
     {
         return currentState == DoorState.Closed || currentState == DoorState.Locked;
     }
 
+    /// <summary>Returns whether the hinge is moving toward its current target.</summary>
     public bool IsAnimating()
     {
         return isAnimating;
     }
 
+    /// <summary>
+    /// Begins opening the door unless it is locked or already opening/open. Completion
+    /// and the <see cref="Opened"/> event occur on a later animation update.
+    /// </summary>
     public void OpenDoor()
     {
         if (isLocked || currentState == DoorState.Open || currentState == DoorState.Opening)
             return;
 
         currentState = DoorState.Opening;
-        targetAngle = reverseDirection ? -openAngle : openAngle;
+        targetAngle = GetEffectiveOpenAngle();
         isAnimating = true;
 
         Debug.Log($"{doorName}: Opening door (direction: {(reverseDirection ? "reversed" : "normal")})");
     }
 
+    /// <summary>
+    /// Begins closing the door unless it is already closed/closing/locked. Locking is a
+    /// separate operation performed by LockDoor or the owning controller.
+    /// </summary>
     public void CloseDoor()
     {
         if (currentState == DoorState.Closed || currentState == DoorState.Closing || currentState == DoorState.Locked)
@@ -107,6 +142,10 @@ public class JailDoor
         Debug.Log($"{doorName}: Closing door");
     }
 
+    /// <summary>
+    /// Marks the door locked and closes it first when necessary. A closing-and-locking
+    /// transition raises <see cref="Closed"/> only after the hinge reaches its target.
+    /// </summary>
     public void LockDoor()
     {
         isLocked = true;
@@ -127,6 +166,7 @@ public class JailDoor
         }
     }
 
+    /// <summary>Clears the lock and returns a locked door to the closed state.</summary>
     public void UnlockDoor()
     {
         if (isLocked)
@@ -137,6 +177,11 @@ public class JailDoor
         }
     }
 
+    /// <summary>
+    /// Advances the hinge toward its target and raises the corresponding completion event
+    /// when the door reaches its open or closed position.
+    /// </summary>
+    /// <param name="deltaTime">Frame interval used for animation interpolation.</param>
     public void UpdateDoorAnimation(float deltaTime)
     {
         if (!isAnimating || doorHinge == null)
@@ -148,18 +193,23 @@ public class JailDoor
         // Apply rotation to hinge (on Z axis for your doors)
         doorHinge.localEulerAngles = new Vector3(0, 0, currentAngle);
 
-        // Check if animation is complete
-        if (Mathf.Abs(Mathf.DeltaAngle(currentAngle, targetAngle)) < 0.1f)
+        // Lerp approaches its target asymptotically. Waiting for the last fraction of a
+        // degree leaves a visually complete door in Opening/Closing for an extra beat and
+        // stalls an escort waiting on the completion event. Snap the imperceptible final
+        // two degrees for both directions so the event matches the visible animation.
+        const float completionTolerance = 2f;
+        if (Mathf.Abs(Mathf.DeltaAngle(currentAngle, targetAngle)) < completionTolerance)
         {
             currentAngle = targetAngle;
             doorHinge.localEulerAngles = new Vector3(0, 0, currentAngle);
             isAnimating = false;
 
             // Update state based on final position
-            if (Mathf.Approximately(currentAngle, openAngle))
+            if (Mathf.Approximately(currentAngle, GetEffectiveOpenAngle()))
             {
                 currentState = DoorState.Open;
                 Debug.Log($"{doorName}: Door opened");
+                RaiseDoorEvent(Opened, "opened");
             }
             else if (Mathf.Approximately(currentAngle, closedAngle))
             {
@@ -173,10 +223,43 @@ public class JailDoor
                     currentState = DoorState.Closed;
                     Debug.Log($"{doorName}: Door closed");
                 }
+
+                RaiseDoorEvent(Closed, "closed");
             }
         }
     }
 
+    private float GetEffectiveOpenAngle()
+    {
+        return reverseDirection ? -openAngle : openAngle;
+    }
+
+    // Invoke each listener independently so one subscriber cannot prevent the door state
+    // transition or the remaining listeners from observing completion.
+    private void RaiseDoorEvent(Action<JailDoor> listeners, string completedState)
+    {
+        if (listeners == null)
+        {
+            return;
+        }
+
+        foreach (Delegate listener in listeners.GetInvocationList())
+        {
+            try
+            {
+                ((Action<JailDoor>)listener)?.Invoke(this);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogError($"{doorName}: {completedState} listener failed: {exception}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Resets the authored hinge to its closed angle and derives the interaction mode from
+    /// the configured door type. It does not instantiate a prefab.
+    /// </summary>
     public void InitializeDoor()
     {
         if (doorHinge != null)
@@ -211,7 +294,8 @@ public class JailDoor
         }
     }
 
-    // Legacy method for compatibility
+    // Legacy compatibility wrapper; prefer the explicit OpenDoor/CloseDoor/LockDoor APIs
+    // when the caller needs to reason about asynchronous animation state.
     public void SetDoorState(bool open, bool locked = false)
     {
         if (locked)
@@ -228,24 +312,41 @@ public class JailDoor
         }
     }
 
+    /// <summary>Returns whether the door is currently locked.</summary>
     public bool IsLocked()
     {
         return isLocked;
     }
 }
 
+/// <summary>
+/// Runtime reservation for one holding-cell spawn point. Occupant key and display name
+/// are cleared together when the reservation is released.
+/// </summary>
 [System.Serializable]
 public class SpawnPointOccupancy
 {
+    /// <summary>Authored transform used as the spawn destination.</summary>
     public Transform spawnPoint;
+    /// <summary>Zero-based spawn index within the holding cell.</summary>
     public int spawnIndex;
+    /// <summary>Whether this point is reserved by an occupant.</summary>
     public bool isOccupied;
+    /// <summary>Stable runtime key for the reserved occupant.</summary>
+    public string occupantKey;
+    /// <summary>Display name retained for diagnostics.</summary>
     public string occupantName;
 }
 
+/// <summary>
+/// Authored cell geometry plus scene-local door, bed, spawn, and occupancy state used by
+/// booking, recreation, and custody flows.
+/// </summary>
 [System.Serializable]
 public class CellDetail
 {
+    // cellIndex is the authored child index under Cells. It is intentionally distinct
+    // from a compact runtime list position used by some holding-cell APIs.
     public Transform cellTransform;
     public Transform cellBounds;
     public JailDoor cellDoor;
@@ -255,7 +356,17 @@ public class CellDetail
     public Transform cellBedTop;
     public JailBed bedBottomComponent;
     public JailBed bedTopComponent;
-    
+
+    // Runtime ownership surfaces for the current progressive-bed component.
+    // Both player and NPC bunks use this same authored surface; an NPC claim
+    // completes it and disables interaction rather than using a display clone.
+    // Never persist Unity object references in the cell save model.
+    [System.NonSerialized]
+    public PrisonBedInteractable preparedBottomBunk;
+
+    [System.NonSerialized]
+    public PrisonBedInteractable preparedTopBunk;
+
     // Spawn points for arrested players
     public List<Transform> spawnPoints = new List<Transform>();
     
@@ -265,18 +376,22 @@ public class CellDetail
     public int cellIndex;
     public string cellName;
     public bool isOccupied = false;
+    public string occupantKey = "";
     public string occupantName = "";
     
     // Maximum occupants for this cell (3 for holding cells, 1 for regular cells)
     public int maxOccupants = 1;
 
+    /// <summary>Returns whether the cell transform and its door record are usable.</summary>
     public bool IsValid()
     {
         return cellTransform != null && cellDoor.IsValid();
     }
     
     /// <summary>
-    /// Initialize spawn point occupancy tracking
+    /// Initialize spawn point occupancy tracking. Holding cells use this list as the
+    /// authoritative per-occupant reservation; regular cells may use the cell-level
+    /// fallback when no spawn points were authored.
     /// </summary>
     public void InitializeSpawnPointOccupancy()
     {
@@ -289,6 +404,7 @@ public class CellDetail
                 spawnPoint = spawnPoints[i],
                 spawnIndex = i,
                 isOccupied = false,
+                occupantKey = null,
                 occupantName = null
             });
         }
@@ -297,7 +413,9 @@ public class CellDetail
     }
 
     /// <summary>
-    /// Gets the next available spawn point in this cell
+    /// Gets the next available spawn point in this cell. Holding cells search their
+    /// occupancy records first; regular cells fall back to bounds/transform or the first
+    /// authored point when no per-spawn records exist.
     /// </summary>
     /// <returns>Transform of available spawn point, or null if all are occupied</returns>
     public Transform GetAvailableSpawnPoint()
@@ -319,11 +437,22 @@ public class CellDetail
     }
     
     /// <summary>
-    /// Assigns a player to the first available spawn point
+    /// Assigns a player to the first available spawn point and records the stable key/name
+    /// pair. Holding cells update cell-level occupancy from their per-spawn records.
     /// </summary>
-    /// <param name="playerName">Player to assign</param>
+    /// <param name="player">Player to assign</param>
     /// <returns>The spawn point assigned, or null if cell is full</returns>
-    public Transform AssignPlayerToSpawnPoint(string playerName)
+    public Transform AssignPlayerToSpawnPoint(Player player)
+    {
+        if (player == null)
+        {
+            return null;
+        }
+
+        return AssignPlayerToSpawnPoint(GetPlayerRuntimeKey(player), player.name);
+    }
+
+    private Transform AssignPlayerToSpawnPoint(string playerKey, string playerDisplayName)
     {
         if (spawnPointOccupancy.Count > 0)
         {
@@ -332,12 +461,13 @@ public class CellDetail
             if (availableSpawn != null)
             {
                 availableSpawn.isOccupied = true;
-                availableSpawn.occupantName = playerName;
+                availableSpawn.occupantKey = playerKey;
+                availableSpawn.occupantName = playerDisplayName;
                 
                 // Update cell-level occupancy
                 UpdateCellOccupancy();
                 
-                Debug.Log($"Assigned {playerName} to {cellName} spawn point {availableSpawn.spawnIndex}");
+                Debug.Log($"Assigned {playerDisplayName} to {cellName} spawn point {availableSpawn.spawnIndex}");
                 return availableSpawn.spawnPoint;
             }
         }
@@ -347,7 +477,8 @@ public class CellDetail
             if (!isOccupied)
             {
                 isOccupied = true;
-                occupantName = playerName;
+                occupantKey = playerKey;
+                occupantName = playerDisplayName;
                 return GetAvailableSpawnPoint();
             }
         }
@@ -358,29 +489,41 @@ public class CellDetail
     /// <summary>
     /// Releases a player from their spawn point
     /// </summary>
-    /// <param name="playerName">Player to release</param>
-    public void ReleasePlayerFromSpawnPoint(string playerName)
+    /// <param name="player">Player to release</param>
+    public void ReleasePlayerFromSpawnPoint(Player player)
+    {
+        if (player == null)
+        {
+            return;
+        }
+
+        ReleasePlayerFromSpawnPoint(GetPlayerRuntimeKey(player), player.name);
+    }
+
+    private void ReleasePlayerFromSpawnPoint(string playerKey, string playerDisplayName)
     {
         if (spawnPointOccupancy.Count > 0)
         {
-            var occupiedSpawn = spawnPointOccupancy.Find(sp => sp.occupantName == playerName);
+            var occupiedSpawn = spawnPointOccupancy.Find(sp => sp.occupantKey == playerKey || sp.occupantName == playerDisplayName);
             if (occupiedSpawn != null)
             {
                 occupiedSpawn.isOccupied = false;
+                occupiedSpawn.occupantKey = null;
                 occupiedSpawn.occupantName = null;
                 
                 // Update cell-level occupancy
                 UpdateCellOccupancy();
                 
-                Debug.Log($"Released {playerName} from {cellName} spawn point {occupiedSpawn.spawnIndex}");
+                Debug.Log($"Released {playerDisplayName} from {cellName} spawn point {occupiedSpawn.spawnIndex}");
             }
         }
         else
         {
             // Regular cell behavior
-            if (occupantName == playerName)
+            if (occupantKey == playerKey || occupantName == playerDisplayName)
             {
                 isOccupied = false;
+                occupantKey = "";
                 occupantName = "";
             }
         }
@@ -399,13 +542,25 @@ public class CellDetail
             // Set occupant name to first occupant (for compatibility)
             if (occupiedSpawns.Count > 0)
             {
+                occupantKey = occupiedSpawns[0].occupantKey;
                 occupantName = occupiedSpawns[0].occupantName;
             }
             else
             {
+                occupantKey = "";
                 occupantName = "";
             }
         }
+    }
+
+    private static string GetPlayerRuntimeKey(Player player)
+    {
+        if (player == null)
+        {
+            return string.Empty;
+        }
+
+        return Behind_Bars.Core.ResolvePlayerKey(player);
     }
     
     /// <summary>
@@ -443,6 +598,7 @@ public class CellDetail
         return spawnPoints[randomIndex];
     }
 
+    /// <summary>Begins opening this cell's door when its door record is valid.</summary>
     public void OpenCell()
     {
         if (cellDoor.IsValid())
@@ -451,6 +607,7 @@ public class CellDetail
         }
     }
 
+    /// <summary>Begins closing this cell's door when its door record is valid.</summary>
     public void CloseCell()
     {
         if (cellDoor.IsValid())
@@ -459,6 +616,8 @@ public class CellDetail
         }
     }
 
+    /// <summary>Locks or unlocks this cell's door without changing occupancy.</summary>
+    /// <param name="locked">Whether the cell door should be locked.</param>
     public void LockCell(bool locked)
     {
         if (cellDoor.IsValid())
@@ -498,10 +657,10 @@ public class CellDetail
         {
             if (cellBedBottom != null)
             {
-                var prisonBed = cellBedBottom.GetComponent<PrisonBedInteractable>();
+                var prisonBed = BBHelpers.GetComponentSafe<PrisonBedInteractable>(cellBedBottom.gameObject);
                 if (prisonBed != null && prisonBed.IsComplete)
                 {
-                    var jailBed = cellBedBottom.GetComponent<JailBed>();
+                    var jailBed = BBHelpers.GetComponentSafe<JailBed>(cellBedBottom.gameObject);
                     if (jailBed != null)
                         beds.Add(jailBed);
                 }
@@ -509,10 +668,10 @@ public class CellDetail
 
             if (cellBedTop != null)
             {
-                var prisonBed = cellBedTop.GetComponent<PrisonBedInteractable>();
+                var prisonBed = BBHelpers.GetComponentSafe<PrisonBedInteractable>(cellBedTop.gameObject);
                 if (prisonBed != null && prisonBed.IsComplete)
                 {
-                    var jailBed = cellBedTop.GetComponent<JailBed>();
+                    var jailBed = BBHelpers.GetComponentSafe<JailBed>(cellBedTop.gameObject);
                     if (jailBed != null)
                         beds.Add(jailBed);
                 }
@@ -537,10 +696,10 @@ public class CellDetail
         // Check for completed PrisonBedInteractable with JailBed (bottom preferred)
         if (cellBedBottom != null)
         {
-            var prisonBed = cellBedBottom.GetComponent<PrisonBedInteractable>();
+            var prisonBed = BBHelpers.GetComponentSafe<PrisonBedInteractable>(cellBedBottom.gameObject);
             if (prisonBed != null && prisonBed.IsComplete)
             {
-                var jailBed = cellBedBottom.GetComponent<JailBed>();
+                var jailBed = BBHelpers.GetComponentSafe<JailBed>(cellBedBottom.gameObject);
                 if (jailBed != null)
                     return jailBed;
             }
@@ -548,10 +707,10 @@ public class CellDetail
 
         if (cellBedTop != null)
         {
-            var prisonBed = cellBedTop.GetComponent<PrisonBedInteractable>();
+            var prisonBed = BBHelpers.GetComponentSafe<PrisonBedInteractable>(cellBedTop.gameObject);
             if (prisonBed != null && prisonBed.IsComplete)
             {
-                var jailBed = cellBedTop.GetComponent<JailBed>();
+                var jailBed = BBHelpers.GetComponentSafe<JailBed>(cellBedTop.gameObject);
                 if (jailBed != null)
                     return jailBed;
             }
@@ -570,14 +729,14 @@ public class CellDetail
 
         if (cellBedBottom != null)
         {
-            var prisonBed = cellBedBottom.GetComponent<PrisonBedInteractable>();
+            var prisonBed = BBHelpers.GetComponentSafe<PrisonBedInteractable>(cellBedBottom.gameObject);
             if (prisonBed != null)
                 beds.Add(prisonBed);
         }
 
         if (cellBedTop != null)
         {
-            var prisonBed = cellBedTop.GetComponent<PrisonBedInteractable>();
+            var prisonBed = BBHelpers.GetComponentSafe<PrisonBedInteractable>(cellBedTop.gameObject);
             if (prisonBed != null)
                 beds.Add(prisonBed);
         }
@@ -624,6 +783,10 @@ public class CellDetail
     }
 }
 
+/// <summary>
+/// Authored storage-area references and the two inventory stations used by booking and
+/// release. Component references are resolved lazily through the IL2CPP-safe helpers.
+/// </summary>
 [System.Serializable]
 public class JailStorageArea
 {
@@ -659,6 +822,7 @@ public class JailStorageArea
     private JailInventoryPickupStation jailInventoryComponent;
     private InventoryPickupStation inventoryPickupComponent;
 
+    /// <summary>Returns whether the storage root and guard point are both assigned.</summary>
     public bool IsValid()
     {
         return storageArea != null && guardPoint != null;
@@ -678,10 +842,10 @@ public class JailStorageArea
         // Initialize jail inventory pickup station (prison items)
         if (jailInventoryPickup != null)
         {
-            jailInventoryComponent = jailInventoryPickup.GetComponent<JailInventoryPickupStation>();
+            jailInventoryComponent = BBHelpers.GetComponentSafe<JailInventoryPickupStation>(jailInventoryPickup.gameObject);
             if (jailInventoryComponent == null)
             {
-                jailInventoryComponent = jailInventoryPickup.gameObject.AddComponent<JailInventoryPickupStation>();
+                jailInventoryComponent = BBHelpers.AddComponentSafe<JailInventoryPickupStation>(jailInventoryPickup.gameObject);
                 Debug.Log("Added JailInventoryPickupStation component to JailInventoryPickup");
             }
         }
@@ -689,10 +853,10 @@ public class JailStorageArea
         // Initialize inventory pickup station (personal items return)
         if (inventoryPickup != null)
         {
-            inventoryPickupComponent = inventoryPickup.GetComponent<InventoryPickupStation>();
+            inventoryPickupComponent = BBHelpers.GetComponentSafe<InventoryPickupStation>(inventoryPickup.gameObject);
             if (inventoryPickupComponent == null)
             {
-                inventoryPickupComponent = inventoryPickup.gameObject.AddComponent<InventoryPickupStation>();
+                inventoryPickupComponent = BBHelpers.AddComponentSafe<InventoryPickupStation>(inventoryPickup.gameObject);
                 Debug.Log("Added InventoryPickupStation component to InventoryPickup");
             }
         }
@@ -707,7 +871,7 @@ public class JailStorageArea
     {
         if (jailInventoryComponent == null && jailInventoryPickup != null)
         {
-            jailInventoryComponent = jailInventoryPickup.GetComponent<JailInventoryPickupStation>();
+            jailInventoryComponent = BBHelpers.GetComponentSafe<JailInventoryPickupStation>(jailInventoryPickup.gameObject);
         }
         return jailInventoryComponent;
     }
@@ -719,7 +883,7 @@ public class JailStorageArea
     {
         if (inventoryPickupComponent == null && inventoryPickup != null)
         {
-            inventoryPickupComponent = inventoryPickup.GetComponent<InventoryPickupStation>();
+            inventoryPickupComponent = BBHelpers.GetComponentSafe<InventoryPickupStation>(inventoryPickup.gameObject);
         }
         return inventoryPickupComponent;
     }

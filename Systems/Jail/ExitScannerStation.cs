@@ -4,6 +4,7 @@ using UnityEngine.UI;
 using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.UI;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -27,7 +28,9 @@ using ScheduleOne;
 namespace Behind_Bars.Systems.Jail
 {
     /// <summary>
-    /// Exit scanner station for final release - same as fingerprint scanner but teleports player out on completion
+    /// Runs the final release scanner interaction and hands release completion to ReleaseManager.
+    /// The current default path is a fixed palm-scan animation followed by an authored exit
+    /// trigger/timeout handoff; the legacy IK and drag-validation paths remain incomplete.
     /// </summary>
     public class ExitScannerStation : MonoBehaviour
     {
@@ -35,32 +38,73 @@ namespace Behind_Bars.Systems.Jail
         public ExitScannerStation(System.IntPtr ptr) : base(ptr) { }
 #endif
 
-        public bool useNewPalmScanner = true;  // Toggle between old IK system and new palm scanner
+        // Scanner mode switch. The palm path is the only completed path; false selects the
+        // legacy StartIKScanMode stub, which logs but does not complete a scan.
+        public bool useNewPalmScanner = true;
 
         // InteractableObject component for IL2CPP compatibility
         private InteractableObject interactableObject;
+        private bool hasCachedInteractionMessage;
+        private string cachedInteractionMessage;
+        private bool hasCachedInteractionState;
+        private int cachedInteractionState;
 
-        public Transform scanTarget;        // The ScanTarget in Unity hierarchy
-        public Transform ikTarget;          // The IkTarget that will be draggable
-        public Image scanEffect;            // The scanning effect image
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void SetInteractionMessage(string message)
+        {
+            if (interactableObject == null || (hasCachedInteractionMessage && cachedInteractionMessage == message))
+            {
+                return;
+            }
+
+            interactableObject.SetMessage(message);
+            cachedInteractionMessage = message;
+            hasCachedInteractionMessage = true;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void SetInteractionState(InteractableObject.EInteractableState state)
+        {
+            int stateValue = (int)state;
+            if (interactableObject == null || (hasCachedInteractionState && cachedInteractionState == stateValue))
+            {
+                return;
+            }
+
+            interactableObject.SetInteractableState(state);
+            cachedInteractionState = stateValue;
+            hasCachedInteractionState = true;
+        }
+
+        // Authored scanner presentation references. The current simplified sequence uses
+        // scanEffect/Canvas animation but does not validate the palm against scanTarget.
+        public Transform scanTarget;
+        public Transform ikTarget;
+        public Image scanEffect;
         public AudioSource scannerAudio;
 
-        public Camera interactionCamera;     // Camera for palm scanner view
-        public GameObject palmModel;         // The MockHand or palm prefab
-        public Transform palmStartPosition;  // Where palm starts
+        public Camera interactionCamera;
+        public GameObject palmModel;
+        public Transform palmStartPosition;
         public float dragSensitivity = 0.02f;
         public float maxDragDistance = 0.3f;
 
-        public float scanDuration = 5f;     // Max 5 seconds scanning
-        public float validRange = 0.3f;     // Range around scanTarget that's valid
+        // Timing/range values belong to the legacy drag-validation timer. The current fixed
+        // animation uses its own 1.5-second segments and does not consume these values.
+        public float scanDuration = 5f;
+        public float validRange = 0.3f;
 
         public AudioClip scanningSound;
         public AudioClip successSound;
         public AudioClip errorSound;
 
-        // Release teleport position (police station exit)
-        public Vector3 releasePosition = new Vector3(13.7402f, 1.4857f, 38.1558f); // Police station exit coordinates
-        public Vector3 releaseRotation = new Vector3(0f, 80.1529f, 0f); // Release rotation (facing away from wall)
+        // Fallback release transform used only when ReleaseManager cannot be resolved.
+        public Vector3 releasePosition = new Vector3(13.7402f, 1.4857f, 38.1558f);
+        public Vector3 releaseRotation = new Vector3(0f, 80.1529f, 0f);
 
         private bool isScanning = false;
         private bool isDragging = false;
@@ -69,13 +113,17 @@ namespace Behind_Bars.Systems.Jail
         private Camera playerCamera;
         private Coroutine scanCoroutine;
 
-        // Palm scanner state
+        // Palm scanner state. CompletePalmScan sets isCompleted before the player reaches
+        // the exit trigger; IsComplete therefore means scan accepted, not fully released.
         private bool inScannerView = false;
         private bool isPalmScanning = false;
         private Vector3 originalPalmPosition;
         private Vector3 dragStartWorldPos;
         private Vector3 mouseStartPos;
         private GameObject punchContainer;
+        private ExitReleaseTriggerRelay exitTriggerRelay;
+        private bool exitTriggerReached;
+        private object exitTriggerMonitorCoroutine;
 
         // IK System
         private AvatarIKController ikController;
@@ -102,7 +150,6 @@ namespace Behind_Bars.Systems.Jail
             }
             else
             {
-                SetupOldIKComponents();
             }
 
             // Find components using exact hierarchy paths
@@ -156,9 +203,9 @@ namespace Behind_Bars.Systems.Jail
             }
 
             // Configure the interaction - DISABLED by default, only enabled during release
-            interactableObject.SetMessage("Exit scanner (not available)");
+            SetInteractionMessage("Exit scanner (not available)");
             interactableObject.SetInteractionType(InteractableObject.EInteractionType.Key_Press);
-            interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid); // Disabled until release process
+            SetInteractionState(InteractableObject.EInteractableState.Invalid); // Disabled until release process
 
             // Set up event listeners with IL2CPP-safe casting
 #if !MONO
@@ -266,12 +313,6 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Debug($"Palm scanner setup complete - Camera: {interactionCamera != null}, Palm: {palmModel != null}, Audio: {scannerAudio != null}");
         }
 
-        private void SetupOldIKComponents()
-        {
-            // Old IK system setup (same as original scanner)
-            ModLogger.Debug("Setting up old IK system for exit scanner");
-        }
-
         private void SetupIkTargetVisualizer()
         {
             // Add visual indicator for IK target
@@ -298,7 +339,7 @@ namespace Behind_Bars.Systems.Jail
             {
                 ModLogger.Info("Already scanning - ignoring interaction");
                 if (interactableObject != null)
-                    interactableObject.SetMessage("Scanning in progress...");
+                    SetInteractionMessage("Scanning in progress...");
                 return;
             }
 
@@ -306,7 +347,7 @@ namespace Behind_Bars.Systems.Jail
             {
                 ModLogger.Info("Already completed - ignoring interaction");
                 if (interactableObject != null)
-                    interactableObject.SetMessage("Already completed");
+                    SetInteractionMessage("Already completed");
                 return;
             }
 
@@ -363,7 +404,7 @@ namespace Behind_Bars.Systems.Jail
 #if MONO
             PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
 #else
-            PlayerSingleton<PlayerMovement>.Instance.canMove = false;
+            PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
 #endif
             PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(false);
             PlayerSingleton<PlayerInventory>.Instance.SetEquippingEnabled(false);
@@ -383,16 +424,17 @@ namespace Behind_Bars.Systems.Jail
             // Update interaction message
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Scanning...");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                SetInteractionMessage("Scanning...");
+                SetInteractionState(InteractableObject.EInteractableState.Invalid);
             }
 
             ModLogger.Info("Exit scanner camera locked and player frozen");
         }
 
         /// <summary>
-        /// Main scan process - copied from working ScannerStation
+        /// Run the current palm-scan presentation and accept the scan when the fixed animation ends.
         /// </summary>
+        /// <remarks>This path does not invoke <see cref="PalmScanTimer"/> or validate <see cref="validRange"/>.</remarks>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -473,7 +515,8 @@ namespace Behind_Bars.Systems.Jail
             // Make sure scan image is visible
             imgScanEffect.gameObject.SetActive(true);
 
-            // Animation: Start -> End -> Start (same as working scanner)
+            // Animation: Start -> End -> Start (same as working scanner). This fixed animation
+            // takes three seconds total and is independent of the public scanDuration field.
             float animTime = 1.5f; // Time for each segment
 
             // Phase 1: Start -> End
@@ -509,6 +552,8 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info("Exit scan animation completed: Start -> End -> Start");
         }
 
+        // Legacy mode retained for the old configuration switch. It is currently a log-only
+        // stub and does not set isScanning, start a coroutine, or complete the release.
         private void StartIKScanMode()
         {
             ModLogger.Info("Starting IK scan mode for exit scanner");
@@ -518,15 +563,17 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Legacy drag-validation loop. The active SimplifiedScanProcess path never starts it;
+        // its scanDuration/validRange behavior is retained only for unfinished IK/palm work.
         private IEnumerator PalmScanTimer()
         {
             float elapsed = 0f;
             bool scanCompleted = false;
 
             // Show notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Drag your palm to the scanner",
                     NotificationType.Instruction
                 );
@@ -617,20 +664,25 @@ namespace Behind_Bars.Systems.Jail
             }
 
             // Show success notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Exit scan complete - you are now free!",
                     NotificationType.Progress
                 );
             }
 
-            // Open exit door after successful scan
-            OpenExitDoor();
-
             // Mark as completed
             isCompleted = true;
             isScanning = false;
+
+            // Bind the release trigger before opening the door.  Previously this was
+            // delayed by two seconds, allowing the player to pass the exit volume before
+            // its callback existed.
+            StartExitTriggerMonitoring();
+
+            // Open exit door after successful scan
+            OpenExitDoor();
 
             // Reset camera
             ResetCamera();
@@ -638,12 +690,17 @@ namespace Behind_Bars.Systems.Jail
             // Update interaction state
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Scan complete - proceed to exit");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Label);
+                SetInteractionMessage("Scan complete - proceed to exit");
+                SetInteractionState(InteractableObject.EInteractableState.Label);
             }
 
-            // Release the player after a short delay
-            MelonCoroutines.Start(ReleasePlayerAfterDelay());
+            if (currentPlayer != null)
+            {
+                ModLogger.Info($"ExitScannerStation: Player {currentPlayer.name} ready for exit trigger");
+                Core.ResolveUIManager()?.ShowNotification(
+                    "Scan complete - walk through the exit to be released!",
+                    NotificationType.Instruction);
+            }
         }
 
         private void FailPalmScan()
@@ -659,9 +716,9 @@ namespace Behind_Bars.Systems.Jail
             }
 
             // Show failure notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Scan failed - try again",
                     NotificationType.Warning
                 );
@@ -673,39 +730,29 @@ namespace Behind_Bars.Systems.Jail
             // Reset interaction
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Scan fingerprint to complete release");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                SetInteractionMessage("Scan fingerprint to complete release");
+                SetInteractionState(InteractableObject.EInteractableState.Default);
             }
         }
 
 #if !MONO
         [HideFromIl2Cpp]
 #endif
-        private IEnumerator ReleasePlayerAfterDelay()
+        private void StartExitTriggerMonitoring()
         {
-            yield return new WaitForSeconds(2f);
-
-            if (currentPlayer != null)
+            if (exitTriggerMonitorCoroutine != null)
             {
-                ModLogger.Info($"ExitScannerStation: Player {currentPlayer.name} ready for exit trigger");
-
-                // Show notification to walk through exit
-                if (BehindBarsUIManager.Instance != null)
-                {
-                    BehindBarsUIManager.Instance.ShowNotification(
-                        "Scan complete - walk through the exit to be released!",
-                        NotificationType.Instruction
-                    );
-                }
-
-                // Set up exit trigger monitoring
-                MelonCoroutines.Start(MonitorExitTrigger());
+                MelonCoroutines.Stop(exitTriggerMonitorCoroutine);
+                exitTriggerMonitorCoroutine = null;
             }
+
+            exitTriggerMonitorCoroutine = MelonCoroutines.Start(MonitorExitTrigger());
         }
 
         /// <summary>
-        /// Monitors for player entering the exit trigger area
+        /// Monitor the authored exit trigger after a successful scan and hand off release.
         /// </summary>
+        /// <remarks>Missing/invalid trigger infrastructure falls back to a three-second teleport; a valid trigger also times out after 30 seconds.</remarks>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -721,7 +768,7 @@ namespace Behind_Bars.Systems.Jail
                 yield break;
             }
 
-            Collider exitCollider = exitTrigger.GetComponent<Collider>();
+            Collider exitCollider = BBHelpers.GetComponentSafe<Collider>(exitTrigger.gameObject);
             if (exitCollider == null || !exitCollider.isTrigger)
             {
                 ModLogger.Warn("Exit trigger has no trigger collider - using fallback");
@@ -730,7 +777,23 @@ namespace Behind_Bars.Systems.Jail
                 yield break;
             }
 
-            ModLogger.Info($"Monitoring exit trigger: {exitTrigger.name}");
+            exitTriggerRelay = BBHelpers.GetComponentSafe<ExitReleaseTriggerRelay>(exitTrigger.gameObject);
+            if (exitTriggerRelay == null)
+            {
+                exitTriggerRelay = BBHelpers.AddComponentSafe<ExitReleaseTriggerRelay>(exitTrigger.gameObject);
+            }
+
+            if (exitTriggerRelay == null)
+            {
+                ModLogger.Warn("Could not attach exit trigger relay - using fallback teleport");
+                yield return new WaitForSeconds(3f);
+                TeleportPlayerToRelease();
+                yield break;
+            }
+
+            exitTriggerReached = false;
+            exitTriggerRelay.Configure(this);
+            ModLogger.Info($"Listening for exit trigger entry: {exitTrigger.name}");
 
             // Monitor for up to 30 seconds
             float timeout = 30f;
@@ -738,10 +801,10 @@ namespace Behind_Bars.Systems.Jail
 
             while (elapsed < timeout && currentPlayer != null && isCompleted)
             {
-                // Check if player is within exit trigger bounds
-                if (exitCollider.bounds.Contains(currentPlayer.transform.position))
+                if (exitTriggerReached || IsPlayerInsideExitTrigger(exitCollider))
                 {
                     ModLogger.Info($"Player {currentPlayer.name} entered exit trigger - teleporting to release");
+                    exitTriggerMonitorCoroutine = null;
                     TeleportPlayerToRelease();
                     yield break;
                 }
@@ -754,7 +817,43 @@ namespace Behind_Bars.Systems.Jail
             if (currentPlayer != null)
             {
                 ModLogger.Info("Exit trigger timeout - teleporting player to release");
+                exitTriggerMonitorCoroutine = null;
                 TeleportPlayerToRelease();
+            }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private bool IsPlayerInsideExitTrigger(Collider exitCollider)
+        {
+            if (exitCollider == null || currentPlayer == null)
+            {
+                return false;
+            }
+
+            Vector3 playerPosition = currentPlayer.transform.position;
+            Vector3 closestPoint = exitCollider.ClosestPoint(playerPosition);
+            return (closestPoint - playerPosition).sqrMagnitude <= 0.0004f;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        internal void HandleExitTriggerEntered(Collider other)
+        {
+            if (!isCompleted || currentPlayer == null || other == null)
+            {
+                return;
+            }
+
+            Transform playerTransform = currentPlayer.transform;
+            Transform enteredTransform = other.transform;
+            if (enteredTransform == playerTransform ||
+                enteredTransform.IsChildOf(playerTransform) ||
+                playerTransform.IsChildOf(enteredTransform))
+            {
+                exitTriggerReached = true;
             }
         }
 
@@ -817,8 +916,9 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Final teleportation to release location
+        /// Complete the exit-trigger handoff through ReleaseManager or the local fallback transform.
         /// </summary>
+        /// <remarks>When ReleaseManager exists, it owns the actual teleport/release state; direct coordinates are used only when it is unavailable.</remarks>
         private void TeleportPlayerToRelease()
         {
             if (currentPlayer == null) return;
@@ -829,9 +929,10 @@ namespace Behind_Bars.Systems.Jail
             CloseExitDoor();
 
             // Notify ReleaseManager of exit scan completion (ReleaseManager will handle teleportation)
-            if (ReleaseManager.Instance != null)
+            var releaseManager = Core.ResolveReleaseManager();
+            if (releaseManager != null)
             {
-                ReleaseManager.Instance.OnExitScanCompleted(currentPlayer);
+                releaseManager.OnExitScanCompleted(currentPlayer);
                 ModLogger.Info("ExitScannerStation: Notified ReleaseManager of scan completion");
             }
             else
@@ -842,16 +943,16 @@ namespace Behind_Bars.Systems.Jail
                 currentPlayer.transform.rotation = Quaternion.Euler(releaseRotation);
 
                 // CRITICAL: Hide officer command notification in fallback path
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.HideOfficerCommand();
+                    Core.ResolveUIManager().HideOfficerCommand();
                     ModLogger.Info("ExitScannerStation: Hidden officer command notification (fallback path)");
                 }
 
                 // Final notification
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         "Release complete - you are free to go!",
                         NotificationType.Progress
                     );
@@ -877,7 +978,7 @@ namespace Behind_Bars.Systems.Jail
 #if MONO
             PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
 #else
-            PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+            PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
 #endif
             PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
             PlayerSingleton<PlayerInventory>.Instance.SetEquippingEnabled(true);
@@ -992,27 +1093,29 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Enable the scanner for use during release process (called by ReleaseOfficer)
+        /// Enable the interaction surface for the release process.
         /// </summary>
+        /// <remarks>This changes only the InteractableObject message/state; it does not reset a prior completion flag or cancel an active scan.</remarks>
         public void EnableForRelease()
         {
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Scan fingerprint to complete release");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                SetInteractionMessage("Scan fingerprint to complete release");
+                SetInteractionState(InteractableObject.EInteractableState.Default);
                 ModLogger.Info("Exit scanner enabled for release process");
             }
         }
 
         /// <summary>
-        /// Disable the scanner after release or when not in release process
+        /// Mark the interaction surface unavailable outside the release process.
         /// </summary>
+        /// <remarks>This changes only the interaction message/state; any running scan coroutine must be stopped by its own completion/reset path.</remarks>
         public void DisableScanner()
         {
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Exit scanner (not available)");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                SetInteractionMessage("Exit scanner (not available)");
+                SetInteractionState(InteractableObject.EInteractableState.Invalid);
                 ModLogger.Info("Exit scanner disabled");
             }
         }
@@ -1069,8 +1172,8 @@ namespace Behind_Bars.Systems.Jail
             // Update interaction state ONLY if completed (don't re-enable automatically)
             if (interactableObject != null && !isScanning && isCompleted)
             {
-                interactableObject.SetMessage("Release completed");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Label);
+                SetInteractionMessage("Release completed");
+                SetInteractionState(InteractableObject.EInteractableState.Label);
             }
 
             // Handle escape key to exit scanner view
@@ -1140,6 +1243,10 @@ namespace Behind_Bars.Systems.Jail
             return names;
         }
 
+        /// <summary>
+        /// Return whether the scanner has accepted a scan.
+        /// </summary>
+        /// <remarks>The flag is set before trigger entry and ReleaseManager completion, so it is not proof that the player has been released.</remarks>
         public bool IsComplete()
         {
             return isCompleted;

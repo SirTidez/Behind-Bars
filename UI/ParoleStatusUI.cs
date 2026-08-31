@@ -1,8 +1,10 @@
 using UnityEngine;
 using UnityEngine.UI;
 using Behind_Bars.Helpers;
+using Behind_Bars.Utils;
 using Behind_Bars.Systems.CrimeTracking;
 using System.Collections;
+using System.Linq;
 
 #if !MONO
 using Il2CppTMPro;
@@ -23,20 +25,36 @@ namespace Behind_Bars.UI
     public class ParoleStatusUI : MonoBehaviour
     {
 #if !MONO
+        /// <summary>
+        /// Creates the IL2CPP wrapper instance for the persistent parole status panel.
+        /// </summary>
         public ParoleStatusUI(System.IntPtr ptr) : base(ptr) { }
 #endif
 
+        // Runtime-created panel and text references. The panel is attached to the
+        // current HUD canvas and is rebuilt when that scene-owned canvas is replaced.
         private GameObject _statusPanel;
         private Image _backgroundImage;
         private TextMeshProUGUI _headerText;
         private TextMeshProUGUI _timeRemainingText;
         private TextMeshProUGUI _supervisionLevelText;
         private TextMeshProUGUI _violationsText;
+        private TextMeshProUGUI _curfewText;
+        private TextMeshProUGUI _complianceStreakText;
+        private TextMeshProUGUI _feesText;
         private CanvasGroup _canvasGroup;
+        private TMP_FontAsset _defaultFontAsset;
+        private UnityEngine.Material _defaultFontMaterial;
 
+        // A single fade handle is shared by Show and Hide so a new transition can
+        // stop the previous one before it writes to the CanvasGroup.
         private bool _isInitialized = false;
         private Coroutine _fadeCoroutine;
 
+        /// <summary>
+        /// Starts one-time panel construction; HUD lookup may defer it until the
+        /// gameplay canvas and a usable TMP font are available.
+        /// </summary>
         public void Start()
         {
             if (!_isInitialized)
@@ -46,8 +64,9 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Create the persistent parole status UI elements
-        /// Can be called manually or via Unity's Start()
+        /// Creates the persistent parole status panel, or schedules a bounded retry
+        /// when the player HUD is not ready. It may be called manually or by Unity's
+        /// Start method and is idempotent after successful construction.
         /// </summary>
         public void CreateUI()
         {
@@ -73,7 +92,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Get the player's HUD canvas
+        /// Resolves the active player HUD canvas through the Mono or IL2CPP singleton
+        /// path. A not-yet-created HUD returns null so creation can retry safely.
         /// </summary>
         private Canvas GetPlayerHUDCanvas()
         {
@@ -109,8 +129,11 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Create UI with a known canvas
+        /// Builds the status panel under a known HUD canvas and caches a valid TMP
+        /// font/material pair before creating text. The initialized guard prevents a
+        /// deferred retry from creating a second panel.
         /// </summary>
+        /// <param name="mainCanvas">The gameplay HUD canvas that owns this panel.</param>
         private void CreateUIWithCanvas(Canvas mainCanvas)
         {
             try
@@ -121,9 +144,17 @@ namespace Behind_Bars.UI
                     return;
                 }
 
+                CacheTextDefaults(mainCanvas);
+                if (_defaultFontAsset == null || _defaultFontMaterial == null)
+                {
+                    ModLogger.Error("ParoleStatusUI: Could not resolve a valid TMP font/material pair from HUD canvas; skipping UI creation to avoid TMP null errors");
+                    return;
+                }
+
                 // Create the status panel
                 _statusPanel = new GameObject("ParoleStatusPanel");
                 _statusPanel.transform.SetParent(mainCanvas.transform, false);
+                _statusPanel.SetActive(false);
 
                 // Add RectTransform component - RIGHT SIDE, VERTICALLY CENTERED
                 RectTransform panelRect = _statusPanel.AddComponent<RectTransform>();
@@ -131,7 +162,7 @@ namespace Behind_Bars.UI
                 panelRect.anchorMax = new Vector2(1f, 0.5f);
                 panelRect.pivot = new Vector2(1f, 0.5f); // Right edge, vertical center
                 panelRect.anchoredPosition = new Vector2(-10f, 0f); // 10 pixels from right edge, centered vertically
-                panelRect.sizeDelta = new Vector2(250f, 140f); // Width 250px, Height 140px
+                panelRect.sizeDelta = new Vector2(250f, 200f); // Width 250px, Height 200px (expanded for new fields)
 
                 // Add CanvasGroup for fade animations
                 _canvasGroup = _statusPanel.AddComponent<CanvasGroup>();
@@ -151,68 +182,54 @@ namespace Behind_Bars.UI
                 headerObj.transform.SetParent(_statusPanel.transform, false);
 
                 RectTransform headerRect = headerObj.AddComponent<RectTransform>();
-                headerRect.anchorMin = new Vector2(0f, 0.75f);
+                headerRect.anchorMin = new Vector2(0f, 0.86f);
                 headerRect.anchorMax = new Vector2(1f, 1f);
                 headerRect.offsetMin = new Vector2(10f, 0f);
-                headerRect.offsetMax = new Vector2(-10f, -5f);
+                headerRect.offsetMax = new Vector2(-10f, -3f);
 
                 _headerText = headerObj.AddComponent<TextMeshProUGUI>();
+                InitializeTextComponent(_headerText);
                 _headerText.text = "PAROLE STATUS";
                 _headerText.fontSize = 14f;
-                _headerText.color = new Color(1f, 0.9f, 0.3f); // Yellow-gold color
+                _headerText.color = new Color(1f, 0.9f, 0.3f);
                 _headerText.fontStyle = FontStyles.Bold;
                 _headerText.alignment = TextAlignmentOptions.Center;
 
+                // Row height = ~14% each for 6 data rows below the 14% header
+                // Rows from top to bottom: Time (0.72-0.86), Supervision (0.58-0.72), Violations (0.44-0.58),
+                //   Curfew (0.30-0.44), Compliance (0.16-0.30), Fees (0.02-0.16)
+
                 // Create time remaining text
-                GameObject timeObj = new GameObject("TimeRemainingText");
-                timeObj.transform.SetParent(_statusPanel.transform, false);
-
-                RectTransform timeRect = timeObj.AddComponent<RectTransform>();
-                timeRect.anchorMin = new Vector2(0f, 0.5f);
-                timeRect.anchorMax = new Vector2(1f, 0.75f);
-                timeRect.offsetMin = new Vector2(10f, 0f);
-                timeRect.offsetMax = new Vector2(-10f, 0f);
-
-                _timeRemainingText = timeObj.AddComponent<TextMeshProUGUI>();
-                _timeRemainingText.text = "";
-                _timeRemainingText.fontSize = 13f;
+                _timeRemainingText = CreateStatusRow(_statusPanel.transform, "TimeRemainingText", 0.72f, 0.86f);
+                _timeRemainingText.fontSize = 12f;
                 _timeRemainingText.color = Color.white;
-                _timeRemainingText.alignment = TextAlignmentOptions.Left;
 
                 // Create supervision level text
-                GameObject supervisionObj = new GameObject("SupervisionLevelText");
-                supervisionObj.transform.SetParent(_statusPanel.transform, false);
-
-                RectTransform supervisionRect = supervisionObj.AddComponent<RectTransform>();
-                supervisionRect.anchorMin = new Vector2(0f, 0.25f);
-                supervisionRect.anchorMax = new Vector2(1f, 0.5f);
-                supervisionRect.offsetMin = new Vector2(10f, 0f);
-                supervisionRect.offsetMax = new Vector2(-10f, 0f);
-
-                _supervisionLevelText = supervisionObj.AddComponent<TextMeshProUGUI>();
-                _supervisionLevelText.text = "";
-                _supervisionLevelText.fontSize = 12f;
-                _supervisionLevelText.color = new Color(0.5f, 1f, 1f); // Cyan color
-                _supervisionLevelText.alignment = TextAlignmentOptions.Left;
+                _supervisionLevelText = CreateStatusRow(_statusPanel.transform, "SupervisionLevelText", 0.58f, 0.72f);
+                _supervisionLevelText.fontSize = 11f;
+                _supervisionLevelText.color = new Color(0.5f, 1f, 1f);
 
                 // Create violations text
-                GameObject violationsObj = new GameObject("ViolationsText");
-                violationsObj.transform.SetParent(_statusPanel.transform, false);
-
-                RectTransform violationsRect = violationsObj.AddComponent<RectTransform>();
-                violationsRect.anchorMin = new Vector2(0f, 0f);
-                violationsRect.anchorMax = new Vector2(1f, 0.25f);
-                violationsRect.offsetMin = new Vector2(10f, 5f);
-                violationsRect.offsetMax = new Vector2(-10f, 0f);
-
-                _violationsText = violationsObj.AddComponent<TextMeshProUGUI>();
-                _violationsText.text = "";
-                _violationsText.fontSize = 12f;
+                _violationsText = CreateStatusRow(_statusPanel.transform, "ViolationsText", 0.44f, 0.58f);
+                _violationsText.fontSize = 11f;
                 _violationsText.color = Color.white;
-                _violationsText.alignment = TextAlignmentOptions.Left;
 
-                // Start hidden
-                _statusPanel.SetActive(false);
+                // Create curfew text
+                _curfewText = CreateStatusRow(_statusPanel.transform, "CurfewText", 0.30f, 0.44f);
+                _curfewText.fontSize = 11f;
+                _curfewText.color = new Color(1f, 0.85f, 0.5f);
+
+                // Create compliance streak text
+                _complianceStreakText = CreateStatusRow(_statusPanel.transform, "ComplianceStreakText", 0.16f, 0.30f);
+                _complianceStreakText.fontSize = 11f;
+                _complianceStreakText.color = new Color(0.5f, 1f, 0.5f);
+
+                // Create fees text
+                _feesText = CreateStatusRow(_statusPanel.transform, "FeesText", 0.02f, 0.16f);
+                _feesText.fontSize = 11f;
+                _feesText.color = new Color(1f, 0.6f, 0.6f);
+
+                ApplyFontFixes();
 
                 _isInitialized = true;
                 ModLogger.Debug("ParoleStatusUI created successfully at right side, vertically centered");
@@ -225,8 +242,13 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Wait for HUD canvas to be available and then create UI
+        /// Waits up to ten half-second polls for the HUD canvas, then creates the
+        /// panel once it is available. The bounded retry avoids a coroutine that
+        /// would otherwise survive indefinitely outside a gameplay scene.
         /// </summary>
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
         private IEnumerator WaitForCanvasAndCreate()
         {
             int attempts = 0;
@@ -251,8 +273,14 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Show parole status UI with data
+        /// Presents the current parole snapshot and fades the panel in only when it
+        /// was previously hidden. Repeated updates while visible refresh text without
+        /// restarting the transition.
         /// </summary>
+        /// <param name="data">The current parole data snapshot to display.</param>
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
         public void Show(ParoleStatusData data)
         {
             if (!_isInitialized)
@@ -280,6 +308,7 @@ namespace Behind_Bars.UI
                 // Check if panel is already visible - if so, just update without fading
                 bool wasVisible = _statusPanel.activeSelf && _canvasGroup.alpha > 0.9f;
 
+                ApplyFontFixes();
                 UpdateStatus(data);
 
                 // Activate panel
@@ -311,8 +340,14 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Update status without re-fading
+        /// Updates displayed parole values without starting a new fade. A snapshot
+        /// that is no longer on parole hides the panel, while optional curfew,
+        /// compliance, and fee rows are enabled only when their values apply.
         /// </summary>
+        /// <param name="data">The current parole data snapshot, or null to skip.</param>
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
         public void UpdateStatus(ParoleStatusData data)
         {
             if (!_isInitialized || data == null)
@@ -330,13 +365,9 @@ namespace Behind_Bars.UI
                     return;
                 }
 
-                // Null check all text components
                 if (_timeRemainingText == null || _supervisionLevelText == null || _violationsText == null)
                 {
                     ModLogger.Error("ParoleStatusUI: One or more text components are null!");
-                    ModLogger.Error($"  _timeRemainingText: {_timeRemainingText != null}");
-                    ModLogger.Error($"  _supervisionLevelText: {_supervisionLevelText != null}");
-                    ModLogger.Error($"  _violationsText: {_violationsText != null}");
                     return;
                 }
 
@@ -347,8 +378,53 @@ namespace Behind_Bars.UI
 
                 // Color violations text red if violations > 0
                 _violationsText.color = data.ViolationCount > 0
-                    ? new Color(1f, 0.5f, 0.5f) // Red
+                    ? new Color(1f, 0.5f, 0.5f)
                     : Color.white;
+
+                // Curfew display
+                if (_curfewText != null)
+                {
+                    if (!string.IsNullOrEmpty(data.CurfewTime))
+                    {
+                        _curfewText.text = $"Curfew: {data.CurfewTime}";
+                        _curfewText.gameObject.SetActive(true);
+                    }
+                    else
+                    {
+                        _curfewText.text = "";
+                        _curfewText.gameObject.SetActive(false);
+                    }
+                }
+
+                // Compliance streak display
+                if (_complianceStreakText != null)
+                {
+                    if (data.ComplianceStreakDays > 0 || data.ComplianceStreakRequired > 0)
+                    {
+                        _complianceStreakText.text = $"Good behavior: {data.ComplianceStreakDays}/{data.ComplianceStreakRequired} days";
+                        _complianceStreakText.gameObject.SetActive(true);
+                    }
+                    else
+                    {
+                        _complianceStreakText.text = "";
+                        _complianceStreakText.gameObject.SetActive(false);
+                    }
+                }
+
+                // Outstanding fees display
+                if (_feesText != null)
+                {
+                    if (data.OutstandingFees > 0f)
+                    {
+                        _feesText.text = $"Fees owed: ${data.OutstandingFees:F0}";
+                        _feesText.gameObject.SetActive(true);
+                    }
+                    else
+                    {
+                        _feesText.text = "";
+                        _feesText.gameObject.SetActive(false);
+                    }
+                }
 
                 ModLogger.Debug($"ParoleStatusUI: Updated status - {data.TimeRemainingFormatted}, {data.SupervisionLevel} - {data.SearchProbabilityPercent}%, Violations: {data.ViolationCount}");
             }
@@ -360,7 +436,9 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Hide the status UI with fade out
+        /// Starts the normal fade-out for the status panel. Scene teardown should use
+        /// <see cref="CancelForSceneExit"/> so no coroutine can resume against an
+        /// unloading HUD canvas.
         /// </summary>
         public void Hide()
         {
@@ -387,7 +465,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Check if status UI is currently visible
+        /// Reports whether the initialized panel is active and its CanvasGroup is
+        /// currently presenting an opaque status surface.
         /// </summary>
         public bool IsVisible()
         {
@@ -395,8 +474,215 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Format LSI level with search probability
+        /// Ends status presentation synchronously before a scene transition. This
+        /// avoids the fade coroutine writing to a HUD CanvasGroup after it unloads;
+        /// the component itself remains available for the next HUD presentation.
         /// </summary>
+        public void CancelForSceneExit()
+        {
+            if (_fadeCoroutine != null)
+            {
+                MelonLoader.MelonCoroutines.Stop(_fadeCoroutine);
+                _fadeCoroutine = null;
+            }
+
+            if (_canvasGroup != null)
+            {
+                _canvasGroup.alpha = 0f;
+            }
+
+            if (_statusPanel != null)
+            {
+                _statusPanel.SetActive(false);
+            }
+        }
+
+        /// <summary>
+        /// Creates one left-aligned text row within the status panel's normalized
+        /// vertical range and applies the cached font/material configuration.
+        /// </summary>
+        /// <param name="parent">The status panel transform that owns the row.</param>
+        /// <param name="name">The object name used for the row hierarchy.</param>
+        /// <param name="anchorMinY">The lower normalized panel anchor.</param>
+        /// <param name="anchorMaxY">The upper normalized panel anchor.</param>
+        private TextMeshProUGUI CreateStatusRow(Transform parent, string name, float anchorMinY, float anchorMaxY)
+        {
+            GameObject obj = new GameObject(name);
+            obj.transform.SetParent(parent, false);
+
+            RectTransform rect = obj.AddComponent<RectTransform>();
+            rect.anchorMin = new Vector2(0f, anchorMinY);
+            rect.anchorMax = new Vector2(1f, anchorMaxY);
+            rect.offsetMin = new Vector2(10f, 0f);
+            rect.offsetMax = new Vector2(-10f, 0f);
+
+            TextMeshProUGUI text = obj.AddComponent<TextMeshProUGUI>();
+            InitializeTextComponent(text);
+            text.text = "";
+            text.alignment = TextAlignmentOptions.Left;
+            return text;
+        }
+
+        /// <summary>
+        /// Finds a usable TMP font/material pair from the HUD, global TMP settings,
+        /// or loaded text objects and caches it for all rows created by this panel.
+        /// </summary>
+        /// <param name="canvas">The current HUD canvas to probe first.</param>
+        private void CacheTextDefaults(Canvas canvas)
+        {
+            if (canvas == null)
+            {
+                return;
+            }
+
+            TextMeshProUGUI sampleText = canvas.GetComponentInChildren<TextMeshProUGUI>(true);
+            if (sampleText != null && sampleText.font != null)
+            {
+                _defaultFontAsset = sampleText.font;
+                _defaultFontMaterial = sampleText.fontSharedMaterial ??
+                                       sampleText.fontMaterial ??
+                                       _defaultFontAsset.material;
+
+                if (_defaultFontAsset != null && _defaultFontMaterial != null)
+                {
+                    TMPFontFix.CacheFont("base", _defaultFontAsset, _defaultFontMaterial);
+                }
+
+                return;
+            }
+
+            if (TMP_Settings.defaultFontAsset != null)
+            {
+                _defaultFontAsset = TMP_Settings.defaultFontAsset;
+                _defaultFontMaterial = TMP_Settings.defaultFontAsset.material;
+                if (_defaultFontAsset != null && _defaultFontMaterial != null)
+                {
+                    TMPFontFix.CacheFont("base", _defaultFontAsset, _defaultFontMaterial);
+                    return;
+                }
+            }
+
+            var fallbackText = Resources.FindObjectsOfTypeAll<TextMeshProUGUI>()
+                .FirstOrDefault(t => t != null &&
+                                     t.font != null &&
+                                     (t.fontSharedMaterial != null || t.fontMaterial != null || t.font.material != null));
+            if (fallbackText != null)
+            {
+                _defaultFontAsset = fallbackText.font;
+                _defaultFontMaterial = fallbackText.fontSharedMaterial ??
+                                       fallbackText.fontMaterial ??
+                                       fallbackText.font.material;
+
+                if (_defaultFontAsset != null && _defaultFontMaterial != null)
+                {
+                    TMPFontFix.CacheFont("base", _defaultFontAsset, _defaultFontMaterial);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Applies the cached TMP assets and non-interactive defaults to one text
+        /// component before it is populated or shown.
+        /// </summary>
+        /// <param name="text">The runtime-created text component to initialize.</param>
+        private void InitializeTextComponent(TextMeshProUGUI text)
+        {
+            if (text == null)
+            {
+                return;
+            }
+
+            if (_defaultFontAsset != null)
+            {
+                text.font = _defaultFontAsset;
+            }
+
+            if (_defaultFontMaterial != null)
+            {
+                text.fontSharedMaterial = _defaultFontMaterial;
+                text.fontMaterial = _defaultFontMaterial;
+            }
+            else if (text.font != null && text.font.material != null)
+            {
+                text.fontSharedMaterial = text.font.material;
+                text.fontMaterial = text.font.material;
+            }
+
+            if (_defaultFontAsset != null && _defaultFontMaterial != null)
+            {
+                TMPFontFix.ApplySafeFont(text, "base");
+            }
+
+            text.raycastTarget = false;
+            text.havePropertiesChanged = true;
+            text.SetAllDirty();
+        }
+
+        /// <summary>
+        /// Reapplies the cached TMP assets to every row. This is intentionally safe to
+        /// call during Show because HUD/font initialization can finish after creation.
+        /// </summary>
+        private void ApplyFontFixes()
+        {
+            if (_statusPanel == null)
+            {
+                return;
+            }
+
+            if (_defaultFontAsset == null || _defaultFontMaterial == null)
+            {
+                CacheTextDefaults(GetPlayerHUDCanvas());
+            }
+
+            if (_defaultFontAsset == null || _defaultFontMaterial == null)
+            {
+                return;
+            }
+
+            TMPFontFix.FixAllTMPFonts(_statusPanel, "base");
+
+            var texts = _statusPanel.GetComponentsInChildren<TextMeshProUGUI>(true);
+            foreach (var text in texts)
+            {
+                if (text == null)
+                {
+                    continue;
+                }
+
+                if (text.font == null && _defaultFontAsset != null)
+                {
+                    text.font = _defaultFontAsset;
+                }
+
+                if (text.fontMaterial == null)
+                {
+                    if (_defaultFontMaterial != null)
+                    {
+                        text.fontSharedMaterial = _defaultFontMaterial;
+                        text.fontMaterial = _defaultFontMaterial;
+                    }
+                    else if (text.font != null && text.font.material != null)
+                    {
+                        text.fontSharedMaterial = text.font.material;
+                        text.fontMaterial = text.font.material;
+                    }
+                }
+
+                TMPFontFix.ApplySafeFont(text, "base");
+                text.havePropertiesChanged = true;
+                text.SetAllDirty();
+            }
+        }
+
+        /// <summary>
+        /// Formats the LSI level and search probability used by the supervision row.
+        /// The probability is already supplied as a whole-number percentage.
+        /// </summary>
+        /// <param name="level">The assessed supervision level.</param>
+        /// <param name="searchPercent">The associated search probability percentage.</param>
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
         private string FormatLSILevel(LSILevel level, int searchPercent)
         {
             string levelName = level switch
@@ -413,8 +699,12 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Fade in animation
+        /// Fades the status panel in over scaled game time and finishes at full alpha
+        /// so a partially completed frame cannot leave the HUD dimmed.
         /// </summary>
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
         private IEnumerator FadeIn()
         {
             float fadeTime = 0.3f;
@@ -431,8 +721,12 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Fade out animation
+        /// Fades the status panel out over scaled game time and deactivates its root
+        /// after the transition completes.
         /// </summary>
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
         private IEnumerator FadeOut()
         {
             float fadeTime = 0.5f;

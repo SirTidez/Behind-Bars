@@ -22,8 +22,15 @@ namespace Behind_Bars.Systems.Jail
     public class CrimeSentenceCalculator
     {
         private static CrimeSentenceCalculator? _instance;
+
+        /// <summary>
+        /// Lazily created process-local sentence calculator.
+        /// </summary>
+        /// <remarks>The instance is not persisted or synchronized across multiplayer peers.</remarks>
         public static CrimeSentenceCalculator Instance => _instance ??= new CrimeSentenceCalculator();
 
+        // Sentence bounds are game-minute units, not wall-clock minutes. JailTimeTracker
+        // converts/consumes the resulting value according to the game's time system.
         private const float MIN_SENTENCE_MINUTES = 120f; // Minimum sentence: 2 game hours (120 game minutes)
         private const float MAX_SENTENCE_MINUTES = 7200f; // Maximum sentence: 5 game days (7200 minutes)
 
@@ -35,6 +42,8 @@ namespace Behind_Bars.Systems.Jail
         /// <param name="player">The player to calculate sentence for</param>
         /// <param name="rapSheet">The player's rap sheet (optional)</param>
         /// <param name="wasOnParole">Whether the player was on parole when arrested (affects sentence multiplier)</param>
+        /// <returns>A new sentence breakdown clamped to the configured game-minute bounds.</returns>
+        /// <remarks>RapSheet entries are preferred; CrimeData fills only missing crime types. No crimes produce the minimum sentence.</remarks>
         public JailSentenceData CalculateSentence(Player player, RapSheet? rapSheet = null, bool wasOnParole = false)
         {
             var sentenceData = new JailSentenceData();
@@ -97,8 +106,8 @@ namespace Behind_Bars.Systems.Jail
 
             // Group crimes by type and count them
             var crimesByType = crimesToProcess
-                .Where(c => c.Crime != null)
-                .GroupBy(c => c.Crime.GetType())
+                .Where(c => c != null)
+                .GroupBy(c => c.GetCrimeTypeName())
                 .ToList();
 
             ModLogger.Info($"[SENTENCE CALC] Processing {crimesByType.Count} unique crime types");
@@ -106,14 +115,13 @@ namespace Behind_Bars.Systems.Jail
             // Process each crime type
             foreach (var crimeGroup in crimesByType)
             {
-                var crimeType = crimeGroup.Key;
                 var crimeInstances = crimeGroup.ToList();
                 int count = crimeInstances.Count;
                 var firstCrime = crimeInstances[0].Crime;
-                string crimeClassName = firstCrime.GetType().Name;
+                string crimeClassName = crimeGroup.Key;
 
                 // Get base sentence for this crime
-                float baseMinutes = GetBaseSentenceForCrime(firstCrime, configManager);
+                float baseMinutes = GetBaseSentenceForCrime(crimeClassName, firstCrime, configManager);
                 ModLogger.Info($"[SENTENCE CALC] Crime: {crimeClassName} x{count}, Base: {baseMinutes} game minutes ({GameTimeManager.FormatGameTime(baseMinutes)})");
 
                 // Create CrimeSentence for each instance
@@ -123,8 +131,8 @@ namespace Behind_Bars.Systems.Jail
                     var crimeSentence = new CrimeSentence
                     {
                         CrimeClassName = crimeClassName,
-                        BaseMinutes = baseMinutes,
-                        Severity = crimeInstance.Severity > 0 ? crimeInstance.Severity : CalculateCrimeSeverity(firstCrime),
+                        BaseMinutes = baseMinutes + CrimeEnhancementPenaltyCalculator.GetSentenceSurcharge(crimeInstance, crimeClassName),
+                        Severity = crimeInstance.Severity > 0 ? crimeInstance.Severity : CalculateCrimeSeverity(crimeClassName),
                         WasWitnessed = crimeInstance.WasWitnessed,
                         WitnessCount = crimeInstance.WitnessIds?.Count ?? 0
                     };
@@ -191,10 +199,8 @@ namespace Behind_Bars.Systems.Jail
         /// <summary>
         /// Get base sentence for a crime using SentenceConfigManager
         /// </summary>
-        private float GetBaseSentenceForCrime(Crime crime, SentenceConfigManager configManager)
+        private float GetBaseSentenceForCrime(string crimeClassName, Crime crime, SentenceConfigManager configManager)
         {
-            string crimeClassName = crime.GetType().Name;
-
             // Handle Murder crimes with victim type
             if (crime is Crimes.Murder murderCrime)
             {
@@ -216,7 +222,12 @@ namespace Behind_Bars.Systems.Jail
         {
             // Default severity based on crime type
             // This can be enhanced to use CrimeInstance.Severity if available
-            string crimeName = crime.GetType().Name;
+            return CalculateCrimeSeverity(crime?.GetType().Name);
+        }
+
+        private float CalculateCrimeSeverity(string crimeName)
+        {
+            crimeName ??= string.Empty;
 
             return crimeName switch
             {

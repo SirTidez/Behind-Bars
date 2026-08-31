@@ -4,6 +4,7 @@ using UnityEngine.UI;
 using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.UI;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppInterop.Runtime.Attributes;
@@ -21,7 +22,9 @@ using ScheduleOne.UI;
 namespace Behind_Bars.Systems.Jail
 {
     /// <summary>
-    /// Handles player mugshot capture during booking process
+    /// Runs the booking mugshot interaction and records completion on BookingProcess.
+    /// The station positions the player and temporarily owns camera/input state, but the
+    /// saved image is a cropped screen capture rather than a dedicated mugshot-camera render.
     /// </summary>
     public class MugshotStation : MonoBehaviour
     {
@@ -29,6 +32,8 @@ namespace Behind_Bars.Systems.Jail
         public MugshotStation(System.IntPtr ptr) : base(ptr) { }
 #endif
         
+        // Authored presentation references. mugshotCamera supplies the temporary view pose;
+        // CapturePhoto currently captures the display screen instead of this camera directly.
         public Camera mugshotCamera;
         public RawImage displayMonitor;
         public Transform attachmentPoint;
@@ -38,22 +43,63 @@ namespace Behind_Bars.Systems.Jail
         
         // InteractableObject component for IL2CPP compatibility
         private InteractableObject interactableObject;
+        private bool hasCachedInteractionMessage;
+        private string cachedInteractionMessage;
+        private bool hasCachedInteractionState;
+        private int cachedInteractionState;
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void SetInteractionMessage(string message)
+        {
+            if (interactableObject == null || (hasCachedInteractionMessage && cachedInteractionMessage == message))
+            {
+                return;
+            }
+
+            interactableObject.SetMessage(message);
+            cachedInteractionMessage = message;
+            hasCachedInteractionMessage = true;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void SetInteractionState(InteractableObject.EInteractableState state)
+        {
+            int stateValue = (int)state;
+            if (interactableObject == null || (hasCachedInteractionState && cachedInteractionState == stateValue))
+            {
+                return;
+            }
+
+            interactableObject.SetInteractableState(state);
+            cachedInteractionState = stateValue;
+            hasCachedInteractionState = true;
+        }
         
-        // Camera switching support
+        // Camera/input ownership during the interaction. These flags must be cleared on
+        // completion, disable, and scene exit so the player is not left frozen or hidden.
         private bool inMugshotView = false;
         
+        // Timing and positioning settings for the booking presentation. They are wall-clock
+        // WaitForSeconds delays, not game-minute values.
         public float positioningDuration = 0.5f; // Quick positioning
         public float holdDuration = 0.5f; // Quick hold
         public Vector3 cameraOffset = new Vector3(0, 1f, -3f); // Position camera in front of and slightly above player
         
         private bool isCapturing = false;
+        // Completion is delegated to the BookingProcess discovered at Start; a missing
+        // process allows the visual capture but makes IsComplete return false.
         private BookingProcess bookingProcess;
         private Player currentPlayer;
+        private Coroutine mugshotCaptureCoroutine;
         
         void Start()
         {
             // Find booking process
-            bookingProcess = FindObjectOfType<BookingProcess>();
+            bookingProcess = BBHelpers.FindObjectOfTypeSafe<BookingProcess>();
             
             // Set up InteractableObject component for IL2CPP compatibility
             SetupInteractableComponent();
@@ -219,9 +265,9 @@ namespace Behind_Bars.Systems.Jail
             }
             
             // Configure the interaction
-            interactableObject.SetMessage("Take mugshot");
+            SetInteractionMessage("Take mugshot");
             interactableObject.SetInteractionType(InteractableObject.EInteractionType.Key_Press);
-            interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+            SetInteractionState(InteractableObject.EInteractableState.Default);
             
             // Set up event listeners with IL2CPP-safe casting
 #if !MONO
@@ -239,8 +285,8 @@ namespace Behind_Bars.Systems.Jail
         {
             if (isCapturing)
             {
-                interactableObject.SetMessage("Mugshot in progress...");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                SetInteractionMessage("Mugshot in progress...");
+                SetInteractionState(InteractableObject.EInteractableState.Invalid);
                 return;
             }
             
@@ -273,7 +319,7 @@ namespace Behind_Bars.Systems.Jail
             StartCameraView();
             
             // Start mugshot process
-            MelonCoroutines.Start(CaptureMugshot(currentPlayer));
+            mugshotCaptureCoroutine = MelonCoroutines.Start(CaptureMugshot(currentPlayer)) as Coroutine;
         }
         
         private void StartCameraView()
@@ -290,7 +336,7 @@ namespace Behind_Bars.Systems.Jail
 #if MONO
                 PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
 #else
-                PlayerSingleton<PlayerMovement>.Instance.canMove = false;
+                PlayerSingleton<PlayerMovement>.Instance.CanMove = false;
 #endif
                 PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(false);
                 PlayerSingleton<PlayerInventory>.Instance.SetEquippingEnabled(false);
@@ -337,7 +383,7 @@ namespace Behind_Bars.Systems.Jail
 #if MONO
                 PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
 #else
-                PlayerSingleton<PlayerMovement>.Instance.canMove = true;
+                PlayerSingleton<PlayerMovement>.Instance.CanMove = true;
 #endif
                 PlayerSingleton<PlayerInventory>.Instance.SetInventoryEnabled(true);
                 PlayerSingleton<PlayerInventory>.Instance.SetEquippingEnabled(true);
@@ -351,21 +397,54 @@ namespace Behind_Bars.Systems.Jail
             isCapturing = false;
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Take mugshot");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                SetInteractionMessage("Take mugshot");
+                SetInteractionState(InteractableObject.EInteractableState.Default);
             }
+        }
+
+        /// <summary>
+        /// Cancel an in-progress mugshot and restore camera/input ownership.
+        /// </summary>
+        /// <remarks>Safe to call during disable/destroy; it stops the managed capture coroutine and hides the flash.</remarks>
+        public void CancelForSceneExit()
+        {
+            if (mugshotCaptureCoroutine != null)
+            {
+                MelonCoroutines.Stop(mugshotCaptureCoroutine);
+                mugshotCaptureCoroutine = null;
+            }
+
+            if (flashLightComponent != null)
+            {
+                flashLightComponent.enabled = false;
+            }
+
+            ExitCameraView();
+            isCapturing = false;
+        }
+
+        private void OnDisable()
+        {
+            CancelForSceneExit();
+        }
+
+        private void OnDestroy()
+        {
+            CancelForSceneExit();
         }
 
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Capture owns the temporary mugshot interaction. It records BookingProcess completion
+        // only when both a screen texture and display monitor are available.
         private IEnumerator CaptureMugshot(Player player)
         {
             isCapturing = true;
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Taking mugshot...");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                SetInteractionMessage("Taking mugshot...");
+                SetInteractionState(InteractableObject.EInteractableState.Invalid);
             }
             
             ModLogger.Info($"Starting mugshot capture for {player.name}");
@@ -376,18 +455,18 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info("Using main player camera for photo capture (player is now visible)");
             
             // Show notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification("Hold still for mugshot...", NotificationType.Instruction);
+                Core.ResolveUIManager().ShowNotification("Hold still for mugshot...", NotificationType.Instruction);
             }
             
             // Wait for positioning
             yield return new WaitForSeconds(positioningDuration);
 
             // Flash effect before capture
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification("3... 2... 1...", NotificationType.Instruction);
+                Core.ResolveUIManager().ShowNotification("3... 2... 1...", NotificationType.Instruction);
             }
             yield return new WaitForSeconds(1.5f);
             
@@ -399,9 +478,9 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Info("Flash light activated");
             }
             
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification("*FLASH*", NotificationType.Progress);
+                Core.ResolveUIManager().ShowNotification("*FLASH*", NotificationType.Progress);
             }
             
             // Wait a tiny moment for the flash to fully activate, then capture
@@ -428,9 +507,9 @@ namespace Behind_Bars.Systems.Jail
                     }
                     
                     // Show success notification
-                    if (BehindBarsUIManager.Instance != null)
+                    if (Core.ResolveUIManager() != null)
                     {
-                        BehindBarsUIManager.Instance.ShowNotification("Mugshot captured!", NotificationType.Progress);
+                        Core.ResolveUIManager().ShowNotification("Mugshot captured!", NotificationType.Progress);
                     }
                 }
                 else
@@ -456,10 +535,14 @@ namespace Behind_Bars.Systems.Jail
             
             // Exit camera view and restore normal view
             ExitCameraView();
+            mugshotCaptureCoroutine = null;
             
             ModLogger.Info("Mugshot capture completed successfully");
         }
         
+        // The current capture path hides the HUD, captures the rendered screen, and crops its
+        // center 512x512 region. It does not render mugshotCamera to a dedicated texture, so
+        // the result can contain whatever is centered on the screen at capture time.
         private Texture2D CapturePhoto()
         {
             try
@@ -542,6 +625,10 @@ namespace Behind_Bars.Systems.Jail
             }
         }
         
+        /// <summary>
+        /// Return whether BookingProcess has accepted a mugshot texture.
+        /// </summary>
+        /// <remarks>A visible monitor image alone is not completion; the booking process flag is authoritative.</remarks>
         public bool IsComplete()
         {
             return bookingProcess != null && bookingProcess.mugshotComplete;
@@ -552,8 +639,8 @@ namespace Behind_Bars.Systems.Jail
             // Update interaction state - allow re-doing mugshots
             if (!isCapturing && interactableObject != null)
             {
-                interactableObject.SetMessage("Take mugshot");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                SetInteractionMessage("Take mugshot");
+                SetInteractionState(InteractableObject.EInteractableState.Default);
             }
         }
     }

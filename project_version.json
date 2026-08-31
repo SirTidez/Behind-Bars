@@ -1,7 +1,7 @@
 {
-  "version": "alpha-1.0.5",
-  "description": "Fixed save system - RapSheet and ParoleRecord now save/load correctly",
-  "release_date": "2025-11-23",
+  "version": "alpha-1.2.0",
+  "description": "Major IL2CPP jail and parole parity improvements, mod-first witness and assault tracking with duplicate suppression, and post-release compliance/dialogue flow fixes.",
+  "release_date": "2026-02-07",
   "download_url": "",
   "changelog_url": "https://github.com/SirTidez/Behind-Bars/blob/parole-development/CHANGELOG.md"
 }

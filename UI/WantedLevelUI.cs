@@ -2,15 +2,18 @@ using UnityEngine;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.CrimeDetection;
 using Behind_Bars.Harmony;
+using Behind_Bars.Utils;
 
 
 #if !MONO
 using Il2CppTMPro;
 using Il2CppScheduleOne.DevUtilities;
+using Il2CppScheduleOne.PlayerScripts;
 using Il2CppScheduleOne.UI;
 #else
 using TMPro;
 using ScheduleOne.DevUtilities;
+using ScheduleOne.PlayerScripts;
 using ScheduleOne.UI;
 #endif
 
@@ -22,16 +25,27 @@ namespace Behind_Bars.UI
     public class WantedLevelUI : MonoBehaviour
     {
 #if !MONO
+        /// <summary>
+        /// Creates the IL2CPP wrapper instance for the wanted-level overlay.
+        /// </summary>
         public WantedLevelUI(System.IntPtr ptr) : base(ptr) { }
 #endif
 
+        // Runtime-created panel and text references. They are invalidated together
+        // when ReleaseScenePresentation detaches the old scene canvas.
         private GameObject _wantedPanel;
         private TextMeshProUGUI _wantedLevelText;
         private TextMeshProUGUI _crimeCountText;
+
+        // The overlay polls at a coarse cadence rather than from Update so wanted
+        // display refreshes do not add a per-frame timer check.
         private bool _isInitialized = false;
-        private float _updateTimer = 0f;
         private const float UPDATE_INTERVAL = 1f; // Update every second
-        
+
+        /// <summary>
+        /// Starts one-time overlay construction; the component can also be initialized
+        /// manually when the HUD is created after Unity's normal lifecycle callback.
+        /// </summary>
         public void Start()
         {
             // Only create if not already initialized (allows manual initialization)
@@ -40,22 +54,56 @@ namespace Behind_Bars.UI
                 CreateWantedLevelUI();
             }
         }
-        
-        public void Update()
+
+        /// <summary>
+        /// Starts the repeating display poll when an already-initialized overlay is
+        /// enabled. Construction itself starts a poll, so this is safe only because
+        /// Unity invokes it after the component's enabled state changes.
+        /// </summary>
+        void OnEnable()
         {
-            if (!_isInitialized)
-                return;
-                
-            _updateTimer += Time.deltaTime;
-            if (_updateTimer >= UPDATE_INTERVAL)
+            if (_isInitialized)
             {
-                _updateTimer = 0f;
-                UpdateWantedDisplay();
+                // Start repeating updates every second (no per-frame overhead)
+                InvokeRepeating(nameof(UpdateWantedDisplay), 0f, UPDATE_INTERVAL);
             }
+        }
+
+        /// <summary>
+        /// Stops the repeating display poll while the overlay is disabled, preventing
+        /// InvokeRepeating from retaining a callback during scene transitions.
+        /// </summary>
+        void OnDisable()
+        {
+            // Stop repeating updates when disabled
+            CancelInvoke(nameof(UpdateWantedDisplay));
+        }
+
+        /// <summary>
+        /// Releases the old scene canvas presentation while retaining the registered
+        /// component for the next gameplay scene. The panel is parented to the game's
+        /// HUD canvas, which is destroyed when returning to Menu; cached child
+        /// references are therefore cleared along with the destroyed root.
+        /// </summary>
+        public void ReleaseScenePresentation()
+        {
+            CancelInvoke(nameof(UpdateWantedDisplay));
+
+            if (_wantedPanel != null)
+            {
+                UnityEngine.Object.Destroy(_wantedPanel);
+            }
+
+            _wantedPanel = null;
+            _wantedLevelText = null;
+            _crimeCountText = null;
+            _isInitialized = false;
         }
         
         /// <summary>
-        /// Create the wanted level UI elements (can be called manually for IL2CPP compatibility)
+        /// Creates the wanted overlay (manually callable for IL2CPP compatibility),
+        /// resolving the gameplay HUD canvas first and falling back to a dedicated
+        /// overlay canvas only when no scene canvas is available.
         /// </summary>
         public void CreateWantedLevelUI()
         {
@@ -118,6 +166,12 @@ namespace Behind_Bars.UI
                     ModLogger.Error("Failed to find or create canvas for WantedLevelUI");
                     return;
                 }
+
+                if (!TMPFontFix.EnsureFontCached(mainCanvas))
+                {
+                    ModLogger.Error("WantedLevelUI: Could not resolve a valid TMP font/material pair; skipping UI creation");
+                    return;
+                }
                 
                 // Create the wanted level panel
                 _wantedPanel = new GameObject("WantedLevelPanel");
@@ -167,12 +221,17 @@ namespace Behind_Bars.UI
                 _crimeCountText.fontSize = 10f;
                 _crimeCountText.color = Color.white;
                 _crimeCountText.alignment = TextAlignmentOptions.Center;
+
+                TMPFontFix.FixAllTMPFonts(_wantedPanel, "base");
                 
                 _isInitialized = true;
                 ModLogger.Debug($"✓ WantedLevelUI created successfully on canvas '{mainCanvas.name}'");
-                
+
                 // Do an initial update to show current wanted level
                 UpdateWantedDisplay();
+
+                // Performance: Start repeating updates (no per-frame overhead)
+                InvokeRepeating(nameof(UpdateWantedDisplay), UPDATE_INTERVAL, UPDATE_INTERVAL);
             }
             catch (System.Exception ex)
             {
@@ -181,6 +240,11 @@ namespace Behind_Bars.UI
             }
         }
         
+        /// <summary>
+        /// Refreshes the wanted level and crime count, hiding the panel when the crime
+        /// system is unavailable, the player is in custody, or the current wanted value
+        /// is below the display threshold.
+        /// </summary>
         private void UpdateWantedDisplay()
         {
             try
@@ -198,6 +262,16 @@ namespace Behind_Bars.UI
                         _wantedPanel.SetActive(false);
                     return;
                 }
+
+                // The wanted overlay communicates active street heat. A player who
+                // is already in custody may still have recorded street crimes, but
+                // that state must not occupy the HUD during intake or imprisonment.
+                var localPlayer = Player.Local;
+                if (localPlayer != null && Core.ResolveJailTimeTracker().IsInJail(localPlayer))
+                {
+                    _wantedPanel.SetActive(false);
+                    return;
+                }
                 
                 float wantedLevel = crimeDetectionSystem.GetWantedLevel();
                 var crimeSummary = crimeDetectionSystem.GetCrimeSummary();
@@ -208,7 +282,8 @@ namespace Behind_Bars.UI
                     totalCrimes += crimeCount;
                 }
                 
-                // Show panel only if player has crimes or wanted level
+                // Current behavior gates visibility only on wanted level; the crime
+                // count is supporting text and does not independently show the panel.
                 bool shouldShow = wantedLevel > 0.1f;
                 
                 if (_wantedPanel != null)
@@ -289,7 +364,10 @@ namespace Behind_Bars.UI
         }
         
         /// <summary>
-        /// Find existing overlay canvas or create a new one for UI
+        /// Finds an existing overlay canvas or creates a persistent fallback canvas
+        /// when the gameplay HUD cannot be resolved. The fallback is intentionally
+        /// retained across scenes by DontDestroyOnLoad; the scene-owned panel still
+        /// needs ReleaseScenePresentation when its parent HUD is unloaded.
         /// </summary>
         private Canvas FindOrCreateCanvas()
         {

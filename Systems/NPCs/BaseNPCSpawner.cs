@@ -1,6 +1,8 @@
 using System;
 using UnityEngine;
 using Behind_Bars.Helpers;
+using Behind_Bars.Utils;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 
 #if !MONO
@@ -28,182 +30,123 @@ using Avatar = ScheduleOne.AvatarFramework.Avatar;
 namespace Behind_Bars.Systems.NPCs
 {
     /// <summary>
-    /// BaseNPC spawner using the community-discovered BaseNPC prefab (ID 182)
-    /// This replaces DirectNPCBuilder with a cleaner approach using native game systems
+    /// Native NPC prefab spawner. Prefab IDs and object names change between Schedule I builds,
+    /// so the current prefab is selected from FishNet's registered native NPC prefabs.
     /// </summary>
     public static class BaseNPCSpawner
     {
-        public const int BASE_NPC_PREFAB_ID = 182; // Community discovered BaseNPC prefab
-
         public enum NPCRole
         {
+            /// <summary>Canonical guard role; receives <see cref="GuardBehavior"/>.</summary>
             PrisonGuard,
+            /// <summary>Canonical inmate role; receives the current inmate behavior path.</summary>
             PrisonInmate,
+            /// <summary>Role label routed through <see cref="GuardBehavior"/>; this helper does not add the intake state machine.</summary>
             IntakeOfficer,
+            /// <summary>Canonical parole role; receives <see cref="ParoleOfficerBehavior"/>.</summary>
+            ParoleOfficer,
+            /// <summary>Minimal pathfinding/test role with no canonical jail workflow.</summary>
             TestNPC
         }
 
         /// <summary>
-        /// Spawn a BaseNPC and configure it for jail use
+        /// Creates an inactive native NPC from the Behind Bars-owned FishNet template. Callers
+        /// must attach and initialize role behavior before finalizing the network spawn.
+        /// </summary>
+        public static bool TryCreatePreparedNativeNPC(
+            NPCRole role,
+            string firstName,
+            string lastName,
+            out GameObject npcObject)
+        {
+            return JailNpcPrefabLifecycle.TryCreatePreparedInstance(role, firstName, lastName, out npcObject);
+        }
+
+        /// <summary>
+        /// Activates a fully configured jail NPC, validates its native graph, positions it, and
+        /// performs the server-side FishNet spawn when applicable.
+        /// </summary>
+        public static bool TryFinalizePreparedNativeNPC(GameObject npcObject, Vector3 position)
+        {
+            return JailNpcPrefabLifecycle.TryActivateAndSpawn(npcObject, position);
+        }
+
+        /// <summary>
+        /// Warms the local FishNet registry with Behind Bars' persistent NPC template. This is
+        /// safe on both host and client and never clones a live NPC.
+        /// </summary>
+        public static System.Collections.IEnumerator PrewarmNativeNpcTemplate()
+        {
+            return JailNpcPrefabLifecycle.Prewarm();
+        }
+
+        /// <summary>
+        /// Creates a prepared native NPC, attaches the role-specific Behind Bars behavior,
+        /// then finalizes it through <see cref="JailNpcPrefabLifecycle"/>. This is the current
+        /// canonical spawner path; the older helper methods below remain compatibility paths
+        /// and are not part of this flow.
         /// </summary>
         /// <param name="role">Type of NPC to create</param>
         /// <param name="position">World position to spawn</param>
         /// <param name="firstName">NPC first name</param>
         /// <param name="lastName">NPC last name</param>
         /// <param name="badgeNumber">Badge number for guards</param>
+        /// <param name="guardAssignment">Guard post assigned to a guard or intake officer.</param>
+        /// <param name="paroleAssignment">Parole assignment used for a parole officer.</param>
         /// <returns>Spawned GameObject or null if failed</returns>
-        public static GameObject SpawnJailNPC(NPCRole role, Vector3 position, string firstName = "NPC", string lastName = "Test", string badgeNumber = "")
+        public static GameObject SpawnJailNPC(
+            NPCRole role,
+            Vector3 position,
+            string firstName = "NPC",
+            string lastName = "Test",
+            string badgeNumber = "",
+            GuardBehavior.GuardAssignment guardAssignment = GuardBehavior.GuardAssignment.GuardRoom0,
+            ParoleOfficerBehavior.ParoleOfficerAssignment paroleAssignment = ParoleOfficerBehavior.ParoleOfficerAssignment.PoliceStationSupervisor)
         {
             try
             {
-                ModLogger.Debug($"🎯 Spawning BaseNPC for {role}: {firstName} {lastName} at {position}");
-
-                // Get the BaseNPC prefab
-                var baseNPCPrefab = GetBaseNPCPrefab();
-                if (baseNPCPrefab == null)
+                if (!TryCreatePreparedNativeNPC(role, firstName, lastName, out var npcInstance))
                 {
-                    ModLogger.Error("❌ Failed to get BaseNPC prefab");
+                    ModLogger.Error($"[NPC Spawn] Failed to prepare {role} NPC");
                     return null;
                 }
 
-                // Instantiate the BaseNPC
-                var npcInstance = UnityEngine.Object.Instantiate(baseNPCPrefab, position, Quaternion.identity);
-                if (npcInstance == null)
-                {
-                    ModLogger.Error("❌ Failed to instantiate BaseNPC");
-                    return null;
-                }
-
-                // Set name immediately
-                npcInstance.name = $"{role}_{firstName}_{lastName}";
-                
-                // Ensure GameObject is active before trying to access components
-                npcInstance.SetActive(true);
-                
-                ModLogger.Debug($"✓ BaseNPC instantiated: {npcInstance.name}");
-
-                // Log all components on the instantiated prefab for debugging
-                var allComponents = npcInstance.GetComponents<Component>();
-                ModLogger.Debug($"📋 Components found on {npcInstance.name}: {allComponents.Length} components");
-                foreach (var comp in allComponents)
-                {
-                    if (comp != null)
-                    {
-                        ModLogger.Debug($"  - {comp.GetType().Name}");
-                    }
-                }
-
-                // Get the NPC component - try both direct and in children
-                var npcComponent = npcInstance.GetComponent<NPC>();
-                if (npcComponent == null)
-                {
-                    ModLogger.Debug("⚠️ NPC component not found on root, checking children...");
-                    npcComponent = npcInstance.GetComponentInChildren<NPC>();
-                }
-                
-                if (npcComponent != null)
-                {
-                    // Configure the NPC's basic properties
-                    npcComponent.FirstName = firstName;
-                    npcComponent.LastName = lastName;
-                    npcComponent.ID = $"{role.ToString().ToLower()}_{Guid.NewGuid().ToString().Substring(0, 8)}";
-
-                    ModLogger.Debug($"✓ NPC component configured: {npcComponent.FirstName} {npcComponent.LastName} (ID: {npcComponent.ID})");
-                }
-                else
-                {
-                    ModLogger.Error("⚠️ No NPC component found on BaseNPC - checking prefab structure...");
-                    // Log all child objects to help debug
-                    LogChildHierarchy(npcInstance, 0);
-                    ModLogger.Error("❌ Cannot proceed without NPC component - NPC will not spawn correctly");
-                    UnityEngine.Object.Destroy(npcInstance);
-                    return null;
-                }
-
-                // Apply appearance fixes (this is crucial - fixes the "marshmallow man" issue)
                 FixNPCAppearance(npcInstance, role, firstName);
+                AddJailBehaviorComponents(npcInstance, role, badgeNumber, guardAssignment, paroleAssignment);
 
-                // Add jail-specific behavior components
-                AddJailBehaviorComponents(npcInstance, role, badgeNumber);
-
-                // Spawn on network if we're the server
-                if (ShouldSpawnOnNetwork())
+                if (TryFinalizePreparedNativeNPC(npcInstance, position))
                 {
-                    SpawnOnNetwork(npcInstance);
+                    ModLogger.Debug($"[NPC Spawn] Spawned canonical {role} NPC: {firstName} {lastName}");
+                    return npcInstance;
                 }
 
-                // Final positioning and activation
-                FinalizeNPCSpawn(npcInstance, position);
-
-                ModLogger.Debug($"🎉 Successfully spawned {role} NPC: {firstName} {lastName}");
-                return npcInstance;
+                return null;
             }
             catch (Exception e)
             {
-                ModLogger.Error($"❌ Failed to spawn BaseNPC for {role}: {e.Message}");
+                ModLogger.Error($"[NPC Spawn] Failed to spawn {role}: {e.Message}");
                 ModLogger.Error($"Stack trace: {e.StackTrace}");
                 return null;
             }
         }
 
         /// <summary>
-        /// Get the BaseNPC prefab by searching through NetworkObject spawnable prefabs by name (S1API method)
-        /// This matches how S1API finds the BaseNPC prefab
+        /// Gets the current native NPC prefab from FishNet's registered spawnables.
+        ///
+        /// Earlier game versions exposed this as an object named BaseNPC. The current beta no
+        /// longer does, so name lookup alone prevents all canonical guard/inmate behavior from spawning.
+        /// The NPC component is a game-owned IL2CPP type, making this component-based lookup safe.
         /// </summary>
-        private static GameObject GetBaseNPCPrefab()
+        public static GameObject GetBaseNPCPrefab()
         {
-            try
-            {
-                var networkManager = InstanceFinder.NetworkManager;
-                if (networkManager == null)
-                {
-                    ModLogger.Error("NetworkManager not found - FishNet not initialized?");
-                    return null;
-                }
-
-                // Get spawnable prefabs collection (S1API method)
-                var spawnablePrefabs = networkManager.GetPrefabObjects<PrefabObjects>(0, false);
-                if (spawnablePrefabs == null)
-                {
-                    ModLogger.Error("No prefab objects collection found");
-                    return null;
-                }
-
-                int count = spawnablePrefabs.GetObjectCount();
-                ModLogger.Debug($"🔍 Searching through {count} NetworkObject prefabs for 'BaseNPC'...");
-
-                // Look for "BaseNPC" prefab (S1API method)
-                NetworkObject chosen = null;
-                for (int i = 0; i < count; i++)
-                {
-                    NetworkObject obj = spawnablePrefabs.GetObject(true, i);
-                    if (obj != null && obj.gameObject != null && obj.gameObject.name == "BaseNPC")
-                    {
-                        chosen = obj;
-                        break;
-                    }
-                }
-
-                if (chosen != null && chosen.gameObject != null)
-                {
-                    ModLogger.Debug($"✓ Found BaseNPC prefab: '{chosen.gameObject.name}'");
-                    return chosen.gameObject;
-                }
-
-                ModLogger.Error("❌ BaseNPC prefab not found in NetworkObject spawnable prefabs");
-                return null;
-            }
-            catch (Exception e)
-            {
-                ModLogger.Error($"Error getting BaseNPC prefab: {e.Message}");
-                ModLogger.Error($"Stack trace: {e.StackTrace}");
-                return null;
-            }
+            return JailNpcPrefabLifecycle.GetPreparedTemplateOrNull();
         }
 
         /// <summary>
-        /// Fix the "marshmallow man" appearance issue
-        /// Try to find and copy a working Avatar component to our NPC
+        /// Applies role appearance settings to the prepared NPC's own native Avatar. The
+        /// canonical template must already contain an Avatar; live-avatar cloning is not
+        /// attempted here. Missing appearance settings are logged and leave the native
+        /// component in its existing state.
         /// </summary>
         private static void FixNPCAppearance(GameObject npcInstance, NPCRole role, string firstName)
         {
@@ -240,35 +183,8 @@ namespace Behind_Bars.Systems.NPCs
 
                 if (npcAvatar == null)
                 {
-                    ModLogger.Info("No Avatar component on NPC, trying to add one from template");
-
-                    // Find a working NPC with an Avatar to copy from
-                    var templateNPC = FindWorkingNPCWithAvatar();
-                    if (templateNPC != null)
-                    {
-                        var templateAvatar = templateNPC.GetComponentInChildren<Avatar>();
-                        if (templateAvatar != null && templateAvatar.gameObject != null)
-                        {
-                            ModLogger.Info($"Found template Avatar from {templateNPC.name}, attempting to copy structure");
-
-                            // Clone the entire Avatar GameObject hierarchy
-                            var avatarClone = UnityEngine.Object.Instantiate(templateAvatar.gameObject, npcInstance.transform);
-                            avatarClone.name = "Avatar";
-
-                            // Get the cloned Avatar component
-                            npcAvatar = avatarClone.GetComponent<Avatar>();
-
-                            // Assign it to the NPC
-                            npcComponent.Avatar = npcAvatar;
-
-                            ModLogger.Info($"✓ Cloned Avatar structure from {templateNPC.name} to {npcInstance.name}");
-                        }
-                    }
-                    else
-                    {
-                        ModLogger.Error("❌ No template NPC with working Avatar found");
-                        return;
-                    }
+                    ModLogger.Error($"[NPC Spawn] {npcInstance.name} has no native Avatar. The prepared template is invalid; live-avatar cloning is disabled.");
+                    return;
                 }
                 else
                 {
@@ -297,12 +213,6 @@ namespace Behind_Bars.Systems.NPCs
                                 // Apply the settings to the NPC's own Avatar
                                 npcAvatar.LoadAvatarSettings(avatarSettings);
                                 ModLogger.Debug($"✓ Avatar settings loaded for {npcInstance.name}");
-
-                                // Force refresh the avatar
-                                if (npcAvatar.InitialAvatarSettings == null)
-                                {
-                                    npcAvatar.InitialAvatarSettings = avatarSettings;
-                                }
 
                                 // Try to trigger avatar refresh
                                 npcAvatar.enabled = false;
@@ -334,7 +244,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Apply predefined customizations for special characters like "Dre"
+        /// Applies optional name-based customization for special inmate identities. A name
+        /// without a registered customization is intentionally a no-op; this helper does not
+        /// create a replacement avatar or alter the role's behavior graph.
         /// </summary>
         private static void ApplyPredefinedCharacterCustomizations(object npcAvatar, string firstName, NPCRole role)
         {
@@ -374,7 +286,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Apply Dre's specific customizations - arm tattoos and distinctive look
+        /// Applies the currently supported Dre tattoo customization to the native Avatar
+        /// settings. Height/build customization remains disabled because the required API is
+        /// unavailable in this branch.
         /// </summary>
         private static void ApplyDreCustomizations(object npcAvatar)
         {
@@ -502,7 +416,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Find an existing NPC with a working Avatar component
+        /// Legacy search helper for finding a live NPC with a usable Avatar. The canonical
+        /// spawner does not use this method to clone a live NPC; it is retained only for old
+        /// appearance experiments and diagnostics.
         /// </summary>
         private static GameObject FindWorkingNPCWithAvatar()
         {
@@ -523,19 +439,15 @@ namespace Behind_Bars.Systems.NPCs
                     }
                 }
 
-                // Then try regular NPCs
-                var npcs = UnityEngine.Object.FindObjectsOfType<NPC>();
+                // Then try regular NPCs - use NPCRegistry for O(1) access
+                var npcs = NPCRegistryHelper.GetNPCsExcluding("Prison", "BaseNPC");
                 foreach (var npc in npcs)
                 {
-                    // Skip our own spawned NPCs
-                    if (!npc.gameObject.name.Contains("Prison") && !npc.gameObject.name.Contains("BaseNPC"))
+                    var avatar = npc.GetComponentInChildren<Avatar>();
+                    if (avatar != null && avatar.CurrentSettings != null)
                     {
-                        var avatar = npc.GetComponentInChildren<Avatar>();
-                        if (avatar != null && avatar.CurrentSettings != null)
-                        {
-                            ModLogger.Info($"Found working avatar on NPC: {npc.gameObject.name}");
-                            return npc.gameObject;
-                        }
+                        ModLogger.Info($"Found working avatar on NPC: {npc.gameObject.name}");
+                        return npc.gameObject;
                     }
                 }
 
@@ -549,9 +461,17 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Add jail-specific behavior components based on NPC role
+        /// Attaches the role-specific behavior to the prepared native object. Guards and
+        /// intake officers receive <see cref="GuardBehavior"/>, parole officers receive
+        /// <see cref="ParoleOfficerBehavior"/>, and test NPCs receive only their minimal
+        /// test controller. This method does not replace the native NPC component.
         /// </summary>
-        private static void AddJailBehaviorComponents(GameObject npcInstance, NPCRole role, string badgeNumber)
+        private static void AddJailBehaviorComponents(
+            GameObject npcInstance,
+            NPCRole role,
+            string badgeNumber,
+            GuardBehavior.GuardAssignment guardAssignment,
+            ParoleOfficerBehavior.ParoleOfficerAssignment paroleAssignment)
         {
             try
             {
@@ -561,7 +481,11 @@ namespace Behind_Bars.Systems.NPCs
                 {
                     case NPCRole.PrisonGuard:
                     case NPCRole.IntakeOfficer:
-                        AddGuardBehavior(npcInstance, role, badgeNumber);
+                        AddGuardBehavior(npcInstance, guardAssignment, badgeNumber);
+                        break;
+
+                    case NPCRole.ParoleOfficer:
+                        AddParoleOfficerBehavior(npcInstance, paroleAssignment, badgeNumber);
                         break;
 
                     case NPCRole.PrisonInmate:
@@ -583,21 +507,21 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Add guard-specific behavior components
+        /// Attaches the canonical <see cref="GuardBehavior"/> and immediately applies its
+        /// assignment/badge configuration. The guard behavior owns subsequent movement and
+        /// state transitions; this helper only performs initial attachment.
         /// </summary>
-        private static void AddGuardBehavior(GameObject npcInstance, NPCRole role, string badgeNumber)
+        private static void AddGuardBehavior(
+            GameObject npcInstance,
+            GuardBehavior.GuardAssignment assignment,
+            string badgeNumber)
         {
             // Add GuardBehavior component
-            var guardBehavior = npcInstance.GetComponent<GuardBehavior>();
+            var guardBehavior = BBHelpers.GetComponentSafe<GuardBehavior>(npcInstance);
             if (guardBehavior == null)
             {
-                guardBehavior = npcInstance.AddComponent<GuardBehavior>();
+                guardBehavior = BBHelpers.AddComponentSafe<GuardBehavior>(npcInstance);
             }
-
-            // Determine assignment based on role
-            GuardBehavior.GuardAssignment assignment = role == NPCRole.IntakeOfficer
-                ? GuardBehavior.GuardAssignment.Booking0
-                : GuardBehavior.GuardAssignment.GuardRoom0;
 
             // Generate badge number if not provided
             if (string.IsNullOrEmpty(badgeNumber))
@@ -605,16 +529,42 @@ namespace Behind_Bars.Systems.NPCs
                 badgeNumber = $"G{UnityEngine.Random.Range(1000, 9999)}";
             }
 
+            guardBehavior.Initialize(assignment, badgeNumber);
+
             ModLogger.Debug($"✓ GuardBehavior added to {npcInstance.name} with assignment {assignment}");
         }
 
         /// <summary>
-        /// Add inmate-specific behavior components
+        /// Attaches and initializes the canonical parole-officer behavior. A failed component
+        /// attachment is logged and does not silently downgrade the object to a static guard.
+        /// </summary>
+        private static void AddParoleOfficerBehavior(
+            GameObject npcInstance,
+            ParoleOfficerBehavior.ParoleOfficerAssignment assignment,
+            string badgeNumber)
+        {
+            var behavior = BBHelpers.GetComponentSafe<ParoleOfficerBehavior>(npcInstance)
+                           ?? BBHelpers.AddComponentSafe<ParoleOfficerBehavior>(npcInstance);
+            if (behavior == null)
+            {
+                ModLogger.Error($"[NPC Spawn] Failed to add canonical ParoleOfficerBehavior to {npcInstance.name}");
+                return;
+            }
+
+            behavior.Initialize(assignment, badgeNumber);
+        }
+
+        /// <summary>
+        /// Handles the inmate role's current attachment seam. In this branch the method only
+        /// verifies/logs a <see cref="BaseJailNPC"/> component; it does not add an
+        /// <see cref="InmateBehavior"/> component. The current runtime adds that component
+        /// later through the prison-NPC manager, so this helper must not be read as a promise
+        /// that a full inmate state machine was attached here.
         /// </summary>
         private static void AddInmateBehavior(GameObject npcInstance)
         {
             // Inmates use BaseJailNPC for basic movement and interaction
-            var baseNPC = npcInstance.GetComponent<BaseJailNPC>();
+            var baseNPC = BBHelpers.GetComponentSafe<BaseJailNPC>(npcInstance);
             if (baseNPC == null)
             {
                 // BaseNPC should inherit from MonoBehaviour, not BaseJailNPC
@@ -626,15 +576,21 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Add minimal components for test NPCs
+        /// Adds only the minimal test controller used by the explicit TestNPC role. This is a
+        /// diagnostic path and is not a substitute for canonical guard, intake, parole, or
+        /// inmate behavior.
         /// </summary>
         private static void AddTestNPCBehavior(GameObject npcInstance)
         {
             // TestNPC should have minimal components for testing pathfinding
-            var testController = npcInstance.GetComponent<TestNPCController>();
+            var testController = BBHelpers.GetComponentSafe<TestNPCController>(npcInstance);
             if (testController == null)
             {
-                testController = npcInstance.AddComponent<TestNPCController>();
+                testController = BBHelpers.AddComponentSafe<TestNPCController>(npcInstance);
+            }
+
+            if (testController != null)
+            {
                 testController.usePatrolMode = true;
             }
 
@@ -642,7 +598,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Check if we should spawn the NPC on the network
+        /// Legacy server check retained for callers from the pre-template spawner. The
+        /// current canonical path delegates network ownership to
+        /// <see cref="JailNpcPrefabLifecycle"/> and does not call this helper.
         /// </summary>
         private static bool ShouldSpawnOnNetwork()
         {
@@ -661,7 +619,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Spawn the NPC on the network for multiplayer compatibility
+        /// Legacy direct FishNet spawn helper. It remains available for old callers but is
+        /// not the canonical activation path; it does not perform the native graph checks or
+        /// asynchronous spawn contract enforced by <see cref="JailNpcPrefabLifecycle"/>.
         /// </summary>
         private static void SpawnOnNetwork(GameObject npcInstance)
         {
@@ -687,10 +647,13 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        // Removed ValidateAvatarComponents and fallback methods - no longer needed with MugshotRig approach
+        // Historical avatar-validation/fallback helpers were removed. The current template
+        // path requires a native Avatar and intentionally does not restore live-object cloning.
 
         /// <summary>
-        /// Finalize NPC spawn - positioning, NavMesh, activation
+        /// Legacy local finalization helper for the pre-template path. Current callers should
+        /// use <see cref="TryFinalizePreparedNativeNPC"/> so native graph validation and the
+        /// FishNet server/client contract are preserved.
         /// </summary>
         private static void FinalizeNPCSpawn(GameObject npcInstance, Vector3 position)
         {
@@ -744,7 +707,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Quick test method to spawn a BaseNPC and see if it works
+        /// Diagnostic convenience wrapper that requests the minimal TestNPC role. It is not
+        /// evidence that a canonical jail NPC behavior graph was spawned.
         /// </summary>
         public static GameObject TestSpawnBaseNPC(Vector3 position)
         {
@@ -753,7 +717,7 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Convenience method for spawning guards
+        /// Convenience wrapper for the canonical guard role.
         /// </summary>
         public static GameObject SpawnGuard(Vector3 position, string firstName = "Officer", string lastName = "Guard", string badgeNumber = "")
         {
@@ -761,7 +725,7 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Convenience method for spawning intake officers
+        /// Convenience wrapper for the guard behavior configured as an intake officer.
         /// </summary>
         public static GameObject SpawnIntakeOfficer(Vector3 position, string firstName = "Officer", string lastName = "Intake", string badgeNumber = "")
         {
@@ -769,7 +733,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Convenience method for spawning inmates
+        /// Convenience wrapper for the current inmate role attachment path. Callers should
+        /// verify the resulting object has the expected canonical inmate behavior.
         /// </summary>
         public static GameObject SpawnInmate(Vector3 position, string firstName = "Inmate", string lastName = "Prisoner")
         {

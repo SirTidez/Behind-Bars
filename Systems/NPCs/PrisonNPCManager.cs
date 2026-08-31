@@ -4,8 +4,10 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using Behind_Bars.Helpers;
+using Behind_Bars.Utils;
 using Behind_Bars.Systems.Jail;
 using MelonLoader;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 
 #if !MONO
@@ -13,8 +15,10 @@ using Il2CppFishNet;
 using Il2CppFishNet.Managing;
 using Il2CppFishNet.Managing.Object;
 using Il2CppFishNet.Object;
+using Il2CppInterop.Runtime.Attributes;
 using Il2CppScheduleOne.NPCs;
 using Il2CppScheduleOne.AvatarFramework;
+using Il2CppScheduleOne.Dialogue;
 using Il2CppScheduleOne;
 #else
 using FishNet;
@@ -23,14 +27,16 @@ using FishNet.Managing.Object;
 using FishNet.Object;
 using ScheduleOne.NPCs;
 using ScheduleOne.AvatarFramework;
+using ScheduleOne.Dialogue;
 using ScheduleOne;
 #endif
 
 namespace Behind_Bars.Systems.NPCs
 {
     /// <summary>
-    /// Manages prison NPCs with customizable appearances and behaviors
-    /// Enhanced for IL2CPP compatibility and intake coordination
+    /// Owns scene-time prison NPC creation and registry bookkeeping. Native
+    /// BaseNPCSpawner factories establish the game NPC first; canonical behavior
+    /// components and lightweight wrapper components are then attached by role.
     /// </summary>
     public class PrisonNPCManager : MonoBehaviour
     {
@@ -38,34 +44,42 @@ namespace Behind_Bars.Systems.NPCs
         public PrisonNPCManager(System.IntPtr ptr) : base(ptr) { }
 #endif
 
+        /// <summary>Gets the scene-owned prison NPC manager, or null before Awake.</summary>
         public static PrisonNPCManager Instance { get; private set; }
+        private Coroutine? npcInitializationCoroutine;
+        private readonly List<Coroutine> guardDialogueInitializationCoroutines = new();
         
-        // NPC spawning status
+        // Set only after the ordered guard/manager/inmate initialization coroutine
+        // reaches its final step; a failed individual spawn does not necessarily
+        // prevent this flag from becoming true.
+        /// <summary>Whether the initial NPC population coroutine has completed.</summary>
         public bool IsSpawningComplete { get; private set; } = false;
-        
-        // NPC tracking
+
+        // Wrapper lists are manager-owned snapshots; canonical behavior registries
+        // below are the sources used for coordination and availability checks.
         private List<PrisonGuard> activeGuards = new List<PrisonGuard>();
-        private List<ParoleOfficer> activeParoleOfficers = new List<ParoleOfficer>();
         private List<PrisonInmate> activeInmates = new List<PrisonInmate>();
         
-        // Guard coordination for IL2CPP-safe management
+        // Canonical behavior registries. The role-specific pointer fields are
+        // convenience selections and are not independent ownership records.
         private List<GuardBehavior> registeredGuards = new List<GuardBehavior>();
         private List<ParoleOfficerBehavior> registeredParoleOfficers = new List<ParoleOfficerBehavior>();
+        private List<ReleaseOfficerBehavior> registeredReleaseOfficers = new List<ReleaseOfficerBehavior>();
         private GuardBehavior intakeOfficer = null;
         private ParoleOfficerBehavior paroleSupervisor = null;
         private bool isPatrolInProgress = false;
         private float nextPatrolTime = 0f;
         private readonly float PATROL_COOLDOWN = 300f; // 5 minutes between coordinated patrols
         
-        // Enhanced spawn configuration
-        public int maxGuards = 4; // Exactly 4 guards: 2 in guard room, 2 in booking
+        // Spawn caps/configuration. maxParoleOfficers is consumed by the dynamic
+        // parole manager; this manager does not directly loop over that cap here.
+        public int maxGuards = 5; // 2 guard-room posts, intake/release, and the day-room patrol
         public int maxParoleOfficers = 6; // 1 supervising (stationary) + 5 patrol officers
         public int maxInmates = 8;
         
         // Spawn areas (will be set by JailController)
-        public Transform[] guardSpawnPoints;
-        public Transform[] paroleOfficerSpawnPoints;
-        public Transform[] inmateSpawnPoints;
+        private Transform[] guardSpawnPoints;
+        private Transform[] inmateSpawnPoints;
         
         // Guard assignment tracking
         private readonly GuardBehavior.GuardAssignment[] guardAssignments = {
@@ -75,15 +89,11 @@ namespace Behind_Bars.Systems.NPCs
             GuardBehavior.GuardAssignment.Booking1
         };
         
-        private readonly ParoleOfficerBehavior.ParoleOfficerAssignment[] paroleOfficerAssignments = {
-            ParoleOfficerBehavior.ParoleOfficerAssignment.PoliceStationSupervisor,  // Supervising officer (stationary)
-            ParoleOfficerBehavior.ParoleOfficerAssignment.PoliceStationPatrol,      // PoliceStation route patrol
-            ParoleOfficerBehavior.ParoleOfficerAssignment.NorthtownPatrol,          // North route
-            ParoleOfficerBehavior.ParoleOfficerAssignment.UptownPatrol,             // East route
-            ParoleOfficerBehavior.ParoleOfficerAssignment.WestsidePatrol,           // West route
-            ParoleOfficerBehavior.ParoleOfficerAssignment.DocksPatrol               // Canal route
-        };
-        
+
+        /// <summary>
+        /// Establishes the scene singleton. A duplicate component is destroyed and
+        /// does not participate in spawning or registration.
+        /// </summary>
         private void Awake()
         {
             if (Instance == null)
@@ -97,17 +107,66 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Resolves authored spawn points and starts the ordered population
+        /// coroutine. It does not synchronously guarantee that NPCs exist.
+        /// </summary>
         private void Start()
         {
             // Initialize spawn points from JailController
             InitializeSpawnPoints();
 
             // Start NPC spawning process
-            MelonCoroutines.Start(InitializeNPCs());
+            npcInitializationCoroutine = MelonCoroutines.Start(InitializeNPCs()) as Coroutine;
         }
 
         /// <summary>
-        /// Initialize spawn points from the jail controller
+        /// Stops scene-owned NPC initialization before the jail hierarchy unloads.
+        /// Individual NPCs remain Unity scene objects and will receive their normal lifecycle callbacks.
+        /// </summary>
+        public void CancelForSceneExit()
+        {
+            if (npcInitializationCoroutine != null)
+            {
+                MelonCoroutines.Stop(npcInitializationCoroutine);
+                npcInitializationCoroutine = null;
+            }
+
+            foreach (var coroutine in guardDialogueInitializationCoroutines)
+            {
+                if (coroutine != null)
+                {
+                    MelonCoroutines.Stop(coroutine);
+                }
+            }
+
+            guardDialogueInitializationCoroutines.Clear();
+
+            IsSpawningComplete = false;
+            isPatrolInProgress = false;
+            if (DynamicParoleOfficerManager.Instance != null)
+            {
+                UnityEngine.Object.Destroy(DynamicParoleOfficerManager.Instance.gameObject);
+            }
+            ModLogger.Debug("PrisonNPCManager cancelled scene initialization");
+        }
+
+        /// <summary>
+        /// Cancels scene-owned initialization, tears down the dynamic parole
+        /// manager, and clears the singleton when this manager is destroyed.
+        /// </summary>
+        private void OnDestroy()
+        {
+            CancelForSceneExit();
+            if (Instance == this)
+            {
+                Instance = null;
+            }
+        }
+
+        /// <summary>
+        /// Resolves guard spawn arrays from JailController and creates manager-owned
+        /// inmate spawn transforms around the jail center.
         /// </summary>
         private void InitializeSpawnPoints()
         {
@@ -141,12 +200,11 @@ namespace Behind_Bars.Systems.NPCs
             // Create inmate spawn points near the jail center
             CreateInmateSpawnPoints(jailController);
 
-            // Create parole officer spawn points
-            CreateParoleOfficerSpawnPoints(jailController);
         }
 
         /// <summary>
-        /// Create spawn points for inmates around the jail area
+        /// Creates six manager-owned radial inmate spawn transforms. These are
+        /// synthetic points; cell assignment remains the authority for placement.
         /// </summary>
         private void CreateInmateSpawnPoints(JailController jailController)
         {
@@ -178,38 +236,11 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Debug($"Created {inmateSpawnPoints.Length} inmate spawn points");
         }
 
-        private void CreateParoleOfficerSpawnPoints(JailController jailController)
-        {
-            var spawnPoints = new List<Transform>();
-
-            // Create spawn points near the downtown police station
-            Vector3 policeStationPos = new Vector3(50f, 0f, 50f); // Example position TODO: Find exact coordinates for spawn point
-
-            // Create spawn points in a circle around the parking lot of the police station
-            // Spawn in a half-circle starting from the door of the police station
-            int numPoints = 5; // Example number of patroling officers
-            float radius = 6f;
-            
-            for (int i = 0; i < numPoints; i++)
-            {
-                float angle = (180f / numPoints) * i * Mathf.Deg2Rad;
-                Vector3 spawnPos = policeStationPos + new Vector3(
-                    Mathf.Cos(angle) * radius,
-                    0f,
-                    Mathf.Sin(angle) * radius
-                );
-
-                GameObject spawnPoint = new GameObject($"ParoleOfficerSpawnPoint_{i}");
-                spawnPoint.transform.position = spawnPos;
-                spawnPoint.transform.SetParent(transform);
-                spawnPoints.Add(spawnPoint.transform);
-            }
-
-            paroleOfficerSpawnPoints = spawnPoints.ToArray();
-        }
-
         /// <summary>
-        /// Initialize NPCs in the prison
+        /// Runs the ordered startup pipeline: wait, spawn staffed guards, create
+        /// DynamicParoleOfficerManager, spawn inmates, then set IsSpawningComplete.
+        /// Individual failures are logged by each stage and do not all abort the
+        /// enclosing coroutine.
         /// </summary>
         private IEnumerator InitializeNPCs()
         {
@@ -221,8 +252,7 @@ namespace Behind_Bars.Systems.NPCs
             // Spawn guards first
             yield return SpawnGuards();
             
-            // NOTE: Parole officers are now spawned dynamically by DynamicParoleOfficerManager
-            // REMOVED: yield return SpawnParoleOfficers();
+            // DynamicParoleOfficerManager is the sole owner of parole-officer creation.
             
             // Initialize dynamic parole officer manager
             InitializeDynamicParoleOfficerManager();
@@ -236,25 +266,33 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Initialize the dynamic parole officer manager
+        /// Creates the scene-owned DynamicParoleOfficerManager child. That manager
+        /// is the normal owner of dynamic parole-officer creation; this method only
+        /// installs and initializes its component.
         /// </summary>
         private void InitializeDynamicParoleOfficerManager()
         {
             try
             {
-                ModLogger.Debug("Initializing DynamicParoleOfficerManager...");
+                ModLogger.Info("Initializing DynamicParoleOfficerManager...");
                 
                 // Create GameObject for the manager
                 GameObject managerObject = new GameObject("DynamicParoleOfficerManager");
                 managerObject.transform.SetParent(transform); // Parent to NPC manager for organization
                 
                 // Add the component
-                var manager = managerObject.AddComponent<DynamicParoleOfficerManager>();
+                var manager = BBHelpers.AddComponentSafe<DynamicParoleOfficerManager>(managerObject);
+                if (manager == null)
+                {
+                    ModLogger.Error("Failed to add DynamicParoleOfficerManager component");
+                    UnityEngine.Object.Destroy(managerObject);
+                    return;
+                }
                 
                 // Initialize it
                 manager.Initialize();
                 
-                ModLogger.Debug("✓ DynamicParoleOfficerManager initialized");
+                ModLogger.Info("✓ DynamicParoleOfficerManager initialized");
             }
             catch (Exception ex)
             {
@@ -263,7 +301,7 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Spawn exactly 4 prison guards with specific assignments
+        /// Spawn the four staffed posts plus a dedicated day-room patrol officer.
         /// </summary>
         private IEnumerator SpawnGuards()
         {
@@ -274,10 +312,11 @@ namespace Behind_Bars.Systems.NPCs
                 yield break;
             }
 
-            ModLogger.Debug("Spawning 4 guards with specific assignments...");
+            ModLogger.Debug("Spawning four staffed guards and one dedicated day-room patrol guard...");
             
-            // Spawn exactly 4 guards with specific assignments
-            for (int i = 0; i < maxGuards; i++)
+            // The staffed positions have fixed responsibilities. Do not use maxGuards
+            // as an array bound: existing saves may still hold the previous value.
+            for (int i = 0; i < guardAssignments.Length; i++)
             {
                 var assignment = guardAssignments[i];
                 Transform spawnPoint = GetSpawnPointForAssignment(assignment, jailController);
@@ -299,14 +338,150 @@ namespace Behind_Bars.Systems.NPCs
                 }
                 else
                 {
-                    ModLogger.Error($"Failed to spawn guard for assignment {assignment}");
+                    ModLogger.Error($"Failed to spawn canonical guard for assignment {assignment}");
                 }
 
                 // Small delay between spawns
                 yield return new WaitForSeconds(0.8f);
             }
+
+            yield return SpawnDayRoomPatrolGuard(jailController);
             
             ModLogger.Debug($"✓ Spawned {activeGuards.Count} guards with assignments");
+        }
+
+        /// <summary>
+        /// Creates a distinct day-room patrol guard using the authored jail patrol circuit.
+        /// These markers sit on the walkable circulation paths; cell door transforms do not.
+        /// </summary>
+        private IEnumerator SpawnDayRoomPatrolGuard(JailController jailController)
+        {
+            Vector3[] patrolRoute = BuildDayRoomPatrolRoute(jailController, out Vector3[] inspectionTargets);
+            if (patrolRoute.Length < 2)
+            {
+                ModLogger.Error("[NPC Spawn] Day-room patrol guard was not spawned: fewer than two authored jail patrol points were found");
+                yield break;
+            }
+
+            string officerName = $"Day Room Officer {GetRandomOfficerName()}";
+            var patrolGuard = SpawnGuard(
+                patrolRoute[0],
+                officerName,
+                "G1004",
+                GuardBehavior.GuardAssignment.DayRoomPatrol);
+
+            if (patrolGuard == null)
+            {
+                ModLogger.Error("[NPC Spawn] Failed to spawn canonical day-room patrol guard");
+                yield break;
+            }
+
+            activeGuards.Add(patrolGuard);
+            var guardBehavior = BBHelpers.GetComponentSafe<GuardBehavior>(patrolGuard.gameObject);
+            if (guardBehavior == null)
+            {
+                ModLogger.Error("[NPC Spawn] Day-room patrol guard is missing GuardBehavior; destroying invalid guard");
+                UnityEngine.Object.Destroy(patrolGuard.gameObject);
+                activeGuards.Remove(patrolGuard);
+                yield break;
+            }
+
+            guardBehavior.AssignDayRoomPatrolRoute(patrolRoute, inspectionTargets);
+            guardBehavior.AssignToRole(GuardBehavior.GuardRole.PatrolGuard);
+            ModLogger.Info($"✓ Spawned day-room patrol guard {officerName} with {patrolRoute.Length} authored jail patrol points");
+            yield return new WaitForSeconds(0.8f);
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private Vector3[] BuildDayRoomPatrolRoute(JailController jailController, out Vector3[] inspectionTargets)
+        {
+            if (jailController == null)
+            {
+                inspectionTargets = Array.Empty<Vector3>();
+                return Array.Empty<Vector3>();
+            }
+
+            // This ordering is the authored clockwise circuit in Jail.prefab: lower-right,
+            // lower-left, upstairs-left, upstairs-right, then back down the right stair.
+            // It deliberately follows the corridor points instead of positioning the agent
+            // on cell-door transforms, which can be inside bars or off the runtime NavMesh.
+            string[] markerOrder =
+            {
+                "Patrol_Laundry",
+                "Patrol_Kitchen",
+                "Patrol_Lower_Left",
+                "Patrol_Upper_Left",
+                "Patrol_Upper_Right"
+            };
+
+            var route = new List<Vector3>(markerOrder.Length);
+            var lookTargets = new List<Vector3>(markerOrder.Length);
+            foreach (string markerName in markerOrder)
+            {
+                Transform patrolMarker = FindJailPatrolMarker(jailController, markerName);
+                if (patrolMarker == null)
+                {
+                    ModLogger.Warn($"[NPC Spawn] Authored day-room patrol marker '{markerName}' was not found");
+                    continue;
+                }
+
+                route.Add(patrolMarker.position);
+                lookTargets.Add(GetDayRoomCellInteriorTarget(jailController, patrolMarker.position));
+            }
+
+            inspectionTargets = lookTargets.ToArray();
+            if (route.Count > 0)
+            {
+                ModLogger.Debug($"Day-room patrol route loaded {route.Count} authored jail markers with matched cell-interior look targets");
+            }
+
+            return route.ToArray();
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private static Transform FindJailPatrolMarker(JailController jailController, string markerName)
+        {
+            foreach (Transform patrolPoint in jailController.patrolPoints)
+            {
+                if (patrolPoint != null && patrolPoint.name == markerName)
+                {
+                    return patrolPoint;
+                }
+            }
+
+            return null;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private static Vector3 GetDayRoomCellInteriorTarget(JailController jailController, Vector3 patrolPoint)
+        {
+            Transform nearestInterior = null;
+            float nearestDistanceSquared = float.MaxValue;
+            foreach (var cell in jailController.cells)
+            {
+                Transform interior = cell?.cellBounds ?? cell?.cellTransform;
+                if (interior == null)
+                {
+                    continue;
+                }
+
+                float distanceSquared = (interior.position - patrolPoint).sqrMagnitude;
+                if (distanceSquared < nearestDistanceSquared)
+                {
+                    nearestDistanceSquared = distanceSquared;
+                    nearestInterior = interior;
+                }
+            }
+
+            // The actual jail prefab always provides a cell root.  Keep the marker position
+            // as a safe fallback for a malformed asset rather than pointing the guard away.
+            return nearestInterior != null ? nearestInterior.position : patrolPoint;
         }
         
         /// <summary>
@@ -346,92 +521,6 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Spawn parole officers with preset routes
-        /// </summary>
-        private IEnumerator SpawnParoleOfficers()
-        {
-            ModLogger.Debug("Spawning parole officers with preset routes...");
-            
-            for (int i = 0; i < paroleOfficerAssignments.Length; i++)
-            {
-                var assignment = paroleOfficerAssignments[i];
-                Vector3 spawnPosition = GetSpawnPositionForParoleOfficer(assignment);
-                
-                string officerName = GetParoleOfficerNameForAssignment(assignment);
-                string badge = $"HCPO{1000 + i}";
-                
-                var paroleOfficer = SpawnParoleOfficer(spawnPosition, officerName, badge, assignment);
-                if (paroleOfficer != null)
-                {
-                    activeParoleOfficers.Add(paroleOfficer);
-                    ModLogger.Debug($"✓ Spawned parole officer {paroleOfficer.badgeNumber} at {assignment}");
-                }
-                else
-                {
-                    ModLogger.Error($"Failed to spawn parole officer for assignment {assignment}");
-                }
-                
-                yield return new WaitForSeconds(0.8f);
-            }
-            
-            ModLogger.Debug($"✓ Parole officers spawned");
-        }
-
-        /// <summary>
-        /// Get spawn position for a parole officer based on their assignment
-        /// </summary>
-        private Vector3 GetSpawnPositionForParoleOfficer(ParoleOfficerBehavior.ParoleOfficerAssignment assignment)
-        {
-            // TODO: Update to spawn all officers at police station entrance. Supervising officer should remain at entrance. Patrol officers should path from entrance to their route start points.
-            
-            // For PoliceStationSupervisor: Return first waypoint of PoliceStation route
-            if (assignment == ParoleOfficerBehavior.ParoleOfficerAssignment.PoliceStationSupervisor)
-            {
-                var policeStationRoute = PresetParoleOfficerRoutes.GetRoute("PoliceStation");
-                if (policeStationRoute != null && policeStationRoute.points != null && policeStationRoute.points.Length > 0)
-                {
-                    return policeStationRoute.points[0];
-                }
-            }
-            
-            // For all other assignments: Get route from AssignmentToRouteMap and return first waypoint
-            if (ParoleOfficerBehavior.AssignmentToRouteMap.TryGetValue(assignment, out string routeName) && !string.IsNullOrEmpty(routeName))
-            {
-                var route = PresetParoleOfficerRoutes.GetRoute(routeName);
-                if (route != null && route.points != null && route.points.Length > 0)
-                {
-                    return route.points[0];
-                }
-                else
-                {
-                    ModLogger.Error($"Route {routeName} not found or has no waypoints for assignment {assignment}");
-                }
-            }
-            
-            // Fallback to police station position
-            ModLogger.Warn($"Using fallback spawn position for assignment {assignment}");
-            return new Vector3(27.0941f, 1.065f, 45.0492f);
-        }
-
-        /// <summary>
-        /// Get name for parole officer based on assignment
-        /// </summary>
-        private string GetParoleOfficerNameForAssignment(ParoleOfficerBehavior.ParoleOfficerAssignment assignment)
-        {
-            string randomName = GetRandomOfficerName();
-            
-            switch (assignment)
-            {
-                case ParoleOfficerBehavior.ParoleOfficerAssignment.PoliceStationSupervisor:
-                    return $"Supervising Officer {randomName}";
-                case ParoleOfficerBehavior.ParoleOfficerAssignment.PoliceStationPatrol:
-                    return $"Station Officer {randomName}";
-                default:
-                    return $"Parole Officer {randomName}";
-            }
-        }
-
-        /// <summary>
         /// Get a random name for an officer
         /// </summary>
         private string GetRandomOfficerName()
@@ -451,7 +540,7 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private IEnumerator SpawnInmates()
         {
-            var cellManager = CellAssignmentManager.Instance;
+            var cellManager = Core.ResolveCellAssignmentManager();
             if (cellManager == null)
             {
                 ModLogger.Error("CellAssignmentManager not available - cannot spawn inmates in cells");
@@ -510,7 +599,7 @@ namespace Behind_Bars.Systems.NPCs
                     inmate.assignedCell = assignedCell; // Store cell assignment
 
                     // Add InmateBehavior for random cell movement
-                    var inmateBehavior = inmate.gameObject.AddComponent<InmateBehavior>();
+                    var inmateBehavior = BBHelpers.AddComponentSafe<InmateBehavior>(inmate.gameObject);
                     if (inmateBehavior != null)
                     {
                         inmateBehavior.SetCellNumber(assignedCell);
@@ -546,6 +635,15 @@ namespace Behind_Bars.Systems.NPCs
                         }
 
                         ModLogger.Debug($"Added InmateBehavior to {inmateId} for cell {assignedCell}");
+
+                        // The lifecycle manager may have started before the
+                        // staged inmate roster completed. Notify it through
+                        // the canonical spawn seam so this inmate immediately
+                        // receives the currently active recreation/count order.
+                        var lifecycleManager = Core.JailController != null
+                            ? BBHelpers.GetComponentSafe<JailLifecycleManager>(Core.JailController.gameObject)
+                            : null;
+                        lifecycleManager?.NotifyInmateRosterChanged();
                     }
 
                     ModLogger.Debug($"✓ Spawned inmate {inmateId} ({crimeType}) in cell {assignedCell}");
@@ -726,171 +824,98 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Spawn a single guard using BaseNPC prefab (ID 182)
+        /// Creates one canonical guard through the prepared native-NPC factory,
+        /// attaches GuardBehavior and the PrisonGuard wrapper, then finalizes its
+        /// network/NavMesh placement. Injection failure destroys the prepared
+        /// object rather than installing a static fallback.
         /// </summary>
+        /// <param name="position">World-space spawn position.</param>
+        /// <param name="firstName">Display name passed to the native NPC factory.</param>
+        /// <param name="badgeNumber">Optional stable badge; generated when empty.</param>
+        /// <param name="assignment">Canonical guard assignment.</param>
+        /// <returns>The initialized wrapper, or null when preparation, injection, or finalization fails.</returns>
         public PrisonGuard SpawnGuard(Vector3 position, string firstName = "Officer", string badgeNumber = "", GuardBehavior.GuardAssignment assignment = GuardBehavior.GuardAssignment.GuardRoom0)
         {
             try
             {
-                ModLogger.Debug($"🎯 Spawning guard using BaseNPC: {firstName} at {assignment}");
-
-                // Get BaseNPC prefab directly
-                var baseNPCPrefab = GetBaseNPCPrefab();
-                if (baseNPCPrefab == null)
+                var role = assignment == GuardBehavior.GuardAssignment.Booking0
+                    ? BaseNPCSpawner.NPCRole.IntakeOfficer
+                    : BaseNPCSpawner.NPCRole.PrisonGuard;
+                if (!BaseNPCSpawner.TryCreatePreparedNativeNPC(role, firstName, "Guard", out var guardObject))
                 {
-                    ModLogger.Error("❌ Failed to get BaseNPC prefab for guard");
+                    ModLogger.Error($"[NPC Spawn] Failed to prepare canonical guard for {assignment}");
                     return null;
                 }
 
-                // Instantiate BaseNPC
-                var guardObject = UnityEngine.Object.Instantiate(baseNPCPrefab, position, Quaternion.identity);
-                if (guardObject == null)
+                // Generate badge if needed
+                if (string.IsNullOrEmpty(badgeNumber))
                 {
-                    ModLogger.Error("❌ Failed to instantiate BaseNPC for guard");
-                    return null;
+                    badgeNumber = GenerateBadgeNumber();
                 }
 
-                // Set name and configure basic properties
-                guardObject.name = $"PrisonGuard_{firstName}_{assignment}";
-                
-                // Ensure GameObject is active before trying to access components
-                guardObject.SetActive(true);
+                var npcComponent = guardObject.GetComponent<NPC>() ?? guardObject.GetComponentInChildren<NPC>(true);
+                FixNPCAppearance(guardObject, "guard");
 
-                // Log all components on the instantiated prefab for debugging
-                var allComponents = guardObject.GetComponents<Component>();
-                ModLogger.Debug($"📋 Components found on {guardObject.name}: {allComponents.Length} components");
-                foreach (var comp in allComponents)
+                var guardBehavior = BBHelpers.AddComponentSafe<GuardBehavior>(guardObject);
+                if (guardBehavior == null)
                 {
-                    if (comp != null)
-                    {
-                        ModLogger.Debug($"  - {comp.GetType().Name}");
-                    }
-                }
-
-                // Get the NPC component - try both direct and in children
-                var npcComponent = guardObject.GetComponent<NPC>();
-                if (npcComponent == null)
-                {
-                    ModLogger.Debug("⚠️ NPC component not found on root, checking children...");
-                    npcComponent = guardObject.GetComponentInChildren<NPC>();
-                }
-                
-                if (npcComponent != null)
-                {
-                    npcComponent.FirstName = firstName;
-                    npcComponent.LastName = "Guard";
-                    npcComponent.ID = $"guard_{System.Guid.NewGuid().ToString().Substring(0, 8)}";
-                    ModLogger.Debug($"✓ NPC component configured: {npcComponent.FirstName} {npcComponent.LastName} (ID: {npcComponent.ID})");
-                }
-                else
-                {
-                    ModLogger.Error("⚠️ No NPC component found on BaseNPC - checking prefab structure...");
-                    // Log all child objects to help debug
-                    LogChildHierarchy(guardObject, 0);
-                    ModLogger.Error("❌ Cannot proceed without NPC component - guard will not spawn correctly");
+                    ModLogger.Error("[NPC Spawn] GuardBehavior injection failed; refusing static fallback guard");
                     UnityEngine.Object.Destroy(guardObject);
                     return null;
                 }
 
-                // Generate badge if needed
-                if (string.IsNullOrEmpty(badgeNumber))
-                {
-                    badgeNumber = GenerateBadgeNumber();
-                }
-
-                // Fix appearance using existing NPCs
-                FixNPCAppearance(guardObject, "guard");
-
-                // Add GuardBehavior component
-                var guardBehavior = guardObject.AddComponent<GuardBehavior>();
-
+                // Native object -> canonical behavior -> audio -> wrapper -> finalize.
+                // The wrapper is bookkeeping; GuardBehavior owns runtime behavior.
                 // Add audio system components for voice commands
-                AddAudioSystemToGuard(guardObject, npcComponent);
+                AddAudioSystemToGuard(guardObject, npcComponent, true);
 
-                // Add PrisonGuard wrapper component
-                var prisonGuard = guardObject.AddComponent<PrisonGuard>();
+                var prisonGuard = BBHelpers.AddComponentSafe<PrisonGuard>(guardObject);
+                if (prisonGuard == null)
+                {
+                    ModLogger.Error("[NPC Spawn] Failed to add PrisonGuard wrapper");
+                    UnityEngine.Object.Destroy(guardObject);
+                    return null;
+                }
                 prisonGuard.Initialize(badgeNumber, firstName, assignment);
 
-                // Spawn on network if we're server
-                SpawnOnNetworkIfServer(guardObject);
+                if (!BaseNPCSpawner.TryFinalizePreparedNativeNPC(guardObject, position))
+                {
+                    return null;
+                }
 
-                // Position on NavMesh
-                PositionOnNavMesh(guardObject, position);
-
-                ModLogger.Debug($"✓ BaseNPC guard spawned: {firstName} (Badge: {badgeNumber}, Assignment: {assignment})");
+                ModLogger.Debug($"[NPC Spawn] Spawned canonical guard {firstName} ({assignment})");
                 return prisonGuard;
             }
             catch (Exception e)
             {
-                ModLogger.Error($"Error spawning BaseNPC guard: {e.Message}");
+                ModLogger.Error($"[NPC Spawn] Error spawning guard: {e.Message}");
                 return null;
             }
         }
 
         /// <summary>
-        /// Spawn a single parole officer using BaseNPC prefab (ID 182)
+        /// Creates one canonical parole officer through the prepared native-NPC
+        /// factory, applies appearance before behavior injection, then attaches
+        /// ParoleOfficerBehavior, its wrapper, and (for the supervisor) the
+        /// check-in system before final placement.
         /// </summary>
+        /// <param name="position">World-space spawn position.</param>
+        /// <param name="firstName">Display name passed to the native NPC factory.</param>
+        /// <param name="badgeNumber">Optional stable badge; generated when empty.</param>
+        /// <param name="assignment">Canonical parole-officer assignment.</param>
+        /// <returns>The initialized wrapper, or null when preparation, injection, or finalization fails.</returns>
         public ParoleOfficer SpawnParoleOfficer(Vector3 position, string firstName = "Officer", string badgeNumber = "", ParoleOfficerBehavior.ParoleOfficerAssignment assignment = ParoleOfficerBehavior.ParoleOfficerAssignment.PoliceStationSupervisor)
         {
             try
             {
-                ModLogger.Debug($"🎯 Spawning parole officer using BaseNPC: {firstName} at {assignment}");
-
-                // Get BaseNPC prefab directly
-                var baseNPCPrefab = GetBaseNPCPrefab();
-                if (baseNPCPrefab == null)
+                bool isSupervisingOfficer = assignment == ParoleOfficerBehavior.ParoleOfficerAssignment.PoliceStationSupervisor;
+                if (!BaseNPCSpawner.TryCreatePreparedNativeNPC(
+                        BaseNPCSpawner.NPCRole.ParoleOfficer,
+                        firstName,
+                        isSupervisingOfficer ? string.Empty : "Parole Officer",
+                        out var paroleOfficerObject))
                 {
-                    ModLogger.Error("❌ Failed to get BaseNPC prefab for parole officer");
-                    return null;
-                }
-
-                // Instantiate BaseNPC
-                var paroleOfficerObject = UnityEngine.Object.Instantiate(baseNPCPrefab, position, Quaternion.identity);
-                if (paroleOfficerObject == null)
-                {
-                    ModLogger.Error("❌ Failed to instantiate BaseNPC for parole officer");
-                    return null;
-                }
-
-                // Set name and configure basic properties
-                paroleOfficerObject.name = $"ParoleOfficer_{firstName}_{assignment}";
-                
-                // Ensure GameObject is active before trying to access components
-                paroleOfficerObject.SetActive(true);
-
-                // Log all components on the instantiated prefab for debugging
-                var allComponents = paroleOfficerObject.GetComponents<Component>();
-                ModLogger.Debug($"📋 Components found on {paroleOfficerObject.name}: {allComponents.Length} components");
-                foreach (var comp in allComponents)
-                {
-                    if (comp != null)
-                    {
-                        ModLogger.Debug($"  - {comp.GetType().Name}");
-                    }
-                }
-
-                // Get the NPC component - try both direct and in children
-                var npcComponent = paroleOfficerObject.GetComponent<NPC>();
-                if (npcComponent == null)
-                {
-                    ModLogger.Debug("⚠️ NPC component not found on root, checking children...");
-                    npcComponent = paroleOfficerObject.GetComponentInChildren<NPC>();
-                }
-                
-                if (npcComponent != null)
-                {
-                    npcComponent.FirstName = firstName;
-                    npcComponent.LastName = "Parole Officer";
-                    npcComponent.ID = $"paroleofficer_{System.Guid.NewGuid().ToString().Substring(0, 8)}";
-                    ModLogger.Debug($"✓ NPC component configured: {npcComponent.FirstName} {npcComponent.LastName} (ID: {npcComponent.ID})");
-                }
-                else
-                {
-                    ModLogger.Error("⚠️ No NPC component found on BaseNPC - checking prefab structure...");
-                    // Log all child objects to help debug
-                    LogChildHierarchy(paroleOfficerObject, 0);
-                    ModLogger.Error("❌ Cannot proceed without NPC component - parole officer will not spawn correctly");
-                    UnityEngine.Object.Destroy(paroleOfficerObject);
+                    ModLogger.Error($"[NPC Spawn] Failed to prepare canonical parole officer for {assignment}");
                     return null;
                 }
 
@@ -900,38 +925,70 @@ namespace Behind_Bars.Systems.NPCs
                     badgeNumber = GenerateBadgeNumber();
                 }
 
-                // Fix appearance using NPCAppearanceManager (more reliable than searching scene)
+                var npcComponent = paroleOfficerObject.GetComponent<NPC>() ?? paroleOfficerObject.GetComponentInChildren<NPC>(true);
                 FixParoleOfficerAppearance(paroleOfficerObject, firstName);
 
-                // Add ParoleOfficerBehavior component
-                var paroleBehavior = paroleOfficerObject.AddComponent<ParoleOfficerBehavior>();
+                ParoleOfficerBehavior paroleBehavior = BBHelpers.AddComponentSafe<ParoleOfficerBehavior>(paroleOfficerObject);
+                if (paroleBehavior == null)
+                {
+                    ModLogger.Error("[NPC Spawn] Failed to add canonical ParoleOfficerBehavior");
+                    UnityEngine.Object.Destroy(paroleOfficerObject);
+                    return null;
+                }
 
-                // Add audio system components for voice commands
-                AddAudioSystemToGuard(paroleOfficerObject, npcComponent);
+                // The wrapper stores metadata only; ParoleOfficerBehavior remains
+                // the canonical owner of patrol/intake behavior and registration.
+                AddAudioSystemToGuard(paroleOfficerObject, npcComponent, true);
 
-                // Add ParoleOfficer wrapper component
-                var paroleOfficer = paroleOfficerObject.AddComponent<ParoleOfficer>();
+                var paroleOfficer = BBHelpers.AddComponentSafe<ParoleOfficer>(paroleOfficerObject);
+                if (paroleOfficer == null)
+                {
+                    ModLogger.Error("[NPC Spawn] Failed to add ParoleOfficer wrapper");
+                    UnityEngine.Object.Destroy(paroleOfficerObject);
+                    return null;
+                }
                 paroleOfficer.Initialize(badgeNumber, firstName, assignment);
 
-                // Spawn on network if we're server
-                SpawnOnNetworkIfServer(paroleOfficerObject);
+                if (assignment == ParoleOfficerBehavior.ParoleOfficerAssignment.PoliceStationSupervisor)
+                {
+                    var checkInSystem = BBHelpers.GetComponentSafe<ParoleCheckInSystem>(paroleOfficerObject);
+                    if (checkInSystem == null)
+                    {
+                        checkInSystem = BBHelpers.AddComponentSafe<ParoleCheckInSystem>(paroleOfficerObject);
+                        if (checkInSystem != null)
+                        {
+                            ModLogger.Debug($"✓ ParoleCheckInSystem added to supervising officer {paroleOfficerObject.name}");
+                        }
+                    }
+                }
 
-                // Position on NavMesh
-                PositionOnNavMesh(paroleOfficerObject, position);
+                if (!BaseNPCSpawner.TryFinalizePreparedNativeNPC(paroleOfficerObject, position))
+                {
+                    return null;
+                }
 
-                ModLogger.Debug($"✓ BaseNPC parole officer spawned: {firstName} (Badge: {badgeNumber}, Assignment: {assignment})");
+                ModLogger.Debug($"[NPC Spawn] Spawned canonical parole officer {firstName} ({assignment})");
                 return paroleOfficer;
             }
             catch (Exception e)
             {
-                ModLogger.Error($"Error spawning BaseNPC parole officer: {e.Message}");
+                ModLogger.Error($"[NPC Spawn] Error spawning parole officer: {e.Message}");
                 return null;
             }
         }
 
         /// <summary>
-        /// Spawn a single inmate using BaseNPCSpawner with working avatar system
+        /// Creates one inmate through BaseNPCSpawner, which owns native avatar,
+        /// network, and NavMesh setup, then attaches the PrisonInmate metadata
+        /// wrapper. Direct calls stop there; the normal SpawnInmates flow adds
+        /// InmateBehavior afterward for jail movement, so the wrapper is not that
+        /// behavior.
         /// </summary>
+        /// <param name="position">World-space spawn position.</param>
+        /// <param name="firstName">Display name passed to the native factory.</param>
+        /// <param name="prisonerID">Optional identifier; generated when empty.</param>
+        /// <param name="crimeType">Crime label stored by the wrapper.</param>
+        /// <returns>The initialized wrapper, or null when native creation fails.</returns>
         public PrisonInmate SpawnInmate(Vector3 position, string firstName = "Inmate", string prisonerID = "", string crimeType = "Unknown")
         {
             try
@@ -954,7 +1011,7 @@ namespace Behind_Bars.Systems.NPCs
 
                 // The NPC component is already configured by BaseNPCSpawner
                 // Just add our PrisonInmate component for jail-specific behavior
-                var prisonInmate = inmateObject.AddComponent<PrisonInmate>();
+                var prisonInmate = BBHelpers.AddComponentSafe<PrisonInmate>(inmateObject);
                 prisonInmate.Initialize(prisonerID, firstName, crimeType);
 
                 // BaseNPCSpawner already handles network spawning and NavMesh positioning
@@ -969,9 +1026,8 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        /// <summary>
-        /// Get all active guards
-        /// </summary>
+        /// <summary>Returns a cleaned snapshot of manager-tracked guard wrappers.</summary>
+        /// <returns>A new list; removing from it does not unregister or destroy a guard.</returns>
         public List<PrisonGuard> GetActiveGuards()
         {
             // Clean up null references
@@ -979,9 +1035,8 @@ namespace Behind_Bars.Systems.NPCs
             return new List<PrisonGuard>(activeGuards);
         }
 
-        /// <summary>
-        /// Get all active inmates
-        /// </summary>
+        /// <summary>Returns a cleaned snapshot of manager-tracked inmate wrappers.</summary>
+        /// <returns>A new list; removing from it does not unregister or destroy an inmate.</returns>
         public List<PrisonInmate> GetActiveInmates()
         {
             // Clean up null references
@@ -989,9 +1044,8 @@ namespace Behind_Bars.Systems.NPCs
             return new List<PrisonInmate>(activeInmates);
         }
 
-        /// <summary>
-        /// Remove a guard from tracking
-        /// </summary>
+        /// <summary>Removes a guard wrapper from the manager's active snapshot.</summary>
+        /// <param name="guard">Wrapper to stop tracking; the scene object is not destroyed.</param>
         public void RemoveGuard(PrisonGuard guard)
         {
             if (activeGuards.Contains(guard))
@@ -1001,9 +1055,8 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        /// <summary>
-        /// Remove an inmate from tracking
-        /// </summary>
+        /// <summary>Removes an inmate wrapper from the manager's active snapshot.</summary>
+        /// <param name="inmate">Wrapper to stop tracking; the scene object is not destroyed.</param>
         public void RemoveInmate(PrisonInmate inmate)
         {
             if (activeInmates.Contains(inmate))
@@ -1016,58 +1069,11 @@ namespace Behind_Bars.Systems.NPCs
         #region BaseNPC Helper Methods
 
         /// <summary>
-        /// Get the BaseNPC prefab by searching through NetworkObject spawnable prefabs by name (S1API method)
-        /// This matches how S1API finds the BaseNPC prefab
+        /// Gets the native NPC prefab through the shared game-version-compatible lookup.
         /// </summary>
         private GameObject GetBaseNPCPrefab()
         {
-            try
-            {
-                var networkManager = InstanceFinder.NetworkManager;
-                if (networkManager == null)
-                {
-                    ModLogger.Error("NetworkManager not found - FishNet not initialized?");
-                    return null;
-                }
-
-                // Get spawnable prefabs collection (S1API method)
-                var spawnablePrefabs = networkManager.GetPrefabObjects<PrefabObjects>(0, false);
-                if (spawnablePrefabs == null)
-                {
-                    ModLogger.Error("No prefab objects collection found");
-                    return null;
-                }
-
-                int count = spawnablePrefabs.GetObjectCount();
-                ModLogger.Debug($"🔍 Searching through {count} NetworkObject prefabs for 'BaseNPC'...");
-
-                // Look for "BaseNPC" prefab (S1API method)
-                NetworkObject chosen = null;
-                for (int i = 0; i < count; i++)
-                {
-                    NetworkObject obj = spawnablePrefabs.GetObject(true, i);
-                    if (obj != null && obj.gameObject != null && obj.gameObject.name == "BaseNPC")
-                    {
-                        chosen = obj;
-                        break;
-                    }
-                }
-
-                if (chosen != null && chosen.gameObject != null)
-                {
-                    ModLogger.Debug($"✓ Found BaseNPC prefab: '{chosen.gameObject.name}'");
-                    return chosen.gameObject;
-                }
-
-                ModLogger.Error("❌ BaseNPC prefab not found in NetworkObject spawnable prefabs");
-                return null;
-            }
-            catch (Exception e)
-            {
-                ModLogger.Error($"Error getting BaseNPC prefab: {e.Message}");
-                ModLogger.Error($"Stack trace: {e.StackTrace}");
-                return null;
-            }
+            return BaseNPCSpawner.GetBaseNPCPrefab();
         }
 
         /// <summary>
@@ -1096,8 +1102,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Fix parole officer appearance using NPCAppearanceManager (more reliable than searching scene)
-        /// This ensures consistent guard appearance even when spawned before other guards
+        /// Applies the parole officer's appearance through NPCAppearanceManager,
+        /// sanitizing accessory settings before loading them into the native Avatar.
+        /// If no Avatar/settings can be resolved, the current scene-search fallback
+        /// is attempted and may leave the native appearance unchanged.
         /// </summary>
         private void FixParoleOfficerAppearance(GameObject npcInstance, string firstName)
         {
@@ -1173,15 +1181,13 @@ namespace Behind_Bars.Systems.NPCs
                             // Ensure Avatar GameObject is active
                             avatar.gameObject.SetActive(true);
 
+                            // IL2CPP startup can throw in ApplyAccessorySettings when accessory prefabs are unresolved.
+                            // For parole officers, use accessory-free settings to keep spawn stable.
+                            SanitizeParoleOfficerAvatarSettings(avatarSettings);
+
                             // Apply the settings to the NPC's own Avatar
                             avatar.LoadAvatarSettings(avatarSettings);
                             ModLogger.Debug($"✓ Avatar settings loaded from NPCAppearanceManager for {npcInstance.name}");
-
-                            // Force refresh the avatar
-                            if (avatar.InitialAvatarSettings == null)
-                            {
-                                avatar.InitialAvatarSettings = avatarSettings;
-                            }
 
                             // Try to trigger avatar refresh
                             avatar.enabled = false;
@@ -1226,7 +1232,51 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Fix BaseNPC appearance by copying from existing NPCs
+        /// Removes accessory entries from the settings selected for a parole officer
+        /// Avatar load. EmployeeManager normally supplies a clone, but a cache
+        /// fallback can return a live cached reference, so this sanitize may mutate
+        /// that cached object. It is a spawn-stability step, not full customization.
+        /// </summary>
+#if !MONO
+        private void SanitizeParoleOfficerAvatarSettings(Il2CppScheduleOne.AvatarFramework.AvatarSettings avatarSettings)
+        {
+            if (avatarSettings == null)
+            {
+                return;
+            }
+
+            try
+            {
+                avatarSettings.AccessorySettings.Clear();
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"Failed to sanitize IL2CPP parole accessory settings: {ex.Message}");
+            }
+        }
+#else
+        private void SanitizeParoleOfficerAvatarSettings(ScheduleOne.AvatarFramework.AvatarSettings avatarSettings)
+        {
+            if (avatarSettings == null)
+            {
+                return;
+            }
+
+            try
+            {
+                avatarSettings.AccessorySettings.Clear();
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Debug($"Failed to sanitize Mono parole accessory settings: {ex.Message}");
+            }
+        }
+#endif
+
+        /// <summary>
+        /// Passes an existing source Avatar's current settings to the target.
+        /// This legacy fallback does not synthesize appearance data when no source
+        /// Avatar is found; it only logs and leaves the target's current settings.
         /// </summary>
         private void FixNPCAppearance(GameObject npcInstance, string npcType)
         {
@@ -1334,7 +1384,8 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private object FindSourceAvatar(string npcType)
         {
-            var existingNPCs = UnityEngine.Object.FindObjectsOfType<NPC>();
+            // Use NPCRegistry for O(1) access instead of O(n) FindObjectsOfType
+            var existingNPCs = NPCRegistryHelper.GetNPCsExcluding("Prison");
 
             if (npcType == "guard")
             {
@@ -1342,7 +1393,6 @@ namespace Behind_Bars.Systems.NPCs
                 var guardAvatars = new List<object>();
                 foreach (var npc in existingNPCs)
                 {
-                    if (npc.gameObject.name.Contains("Prison")) continue;
                     var avatar = npc.Avatar;
                     if (avatar == null || avatar.CurrentSettings == null) continue;
 
@@ -1581,8 +1631,9 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private object FindAnyWorkingAvatar()
         {
-            var existingNPCs = UnityEngine.Object.FindObjectsOfType<NPC>();
-            ModLogger.Info($"🔍 Searching {existingNPCs.Length} NPCs for working avatars...");
+            // Use NPCRegistry for O(1) access instead of O(n) FindObjectsOfType
+            var existingNPCs = NPCRegistryHelper.GetNPCsExcluding("Prison");
+            ModLogger.Info($"🔍 Searching {existingNPCs.Count} NPCs for working avatars...");
 
             int checkedNPCs = 0;
             int npcsWithAvatars = 0;
@@ -1592,7 +1643,6 @@ namespace Behind_Bars.Systems.NPCs
             foreach (var npc in existingNPCs)
             {
                 checkedNPCs++;
-                if (npc.gameObject.name.Contains("Prison")) continue;
 
                 if (npc.Avatar != null)
                 {
@@ -1743,10 +1793,10 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private object GetAnyWorkingAvatarSettings()
         {
-            var existingNPCs = UnityEngine.Object.FindObjectsOfType<NPC>();
+            // Use NPCRegistry for O(1) access instead of O(n) FindObjectsOfType
+            var existingNPCs = NPCRegistryHelper.GetNPCsExcluding("Prison");
             foreach (var npc in existingNPCs)
             {
-                if (npc.gameObject.name.Contains("Prison")) continue;
                 if (npc.Avatar?.CurrentSettings != null)
                 {
                     return npc.Avatar.CurrentSettings;
@@ -2227,15 +2277,18 @@ namespace Behind_Bars.Systems.NPCs
         #region Guard Coordination Methods
         
         /// <summary>
-        /// Register a guard with the manager for coordination
+        /// Registers a canonical GuardBehavior once and updates the convenience
+        /// intake-officer pointer when its role is IntakeOfficer. This registry is
+        /// separate from the active wrapper list used by spawn bookkeeping.
         /// </summary>
+        /// <param name="guard">Canonical guard behavior to register.</param>
         public void RegisterGuard(GuardBehavior guard)
         {
             if (!registeredGuards.Contains(guard))
             {
                 registeredGuards.Add(guard);
 
-                // Track intake officer specifically
+                // Track supervising officer specifically.
                 if (guard.GetRole() == GuardBehavior.GuardRole.IntakeOfficer)
                 {
                     intakeOfficer = guard;
@@ -2247,8 +2300,10 @@ namespace Behind_Bars.Systems.NPCs
         }
         
         /// <summary>
-        /// Unregister a guard from the manager
+        /// Removes a canonical guard and clears the intake pointer when it refers
+        /// to that exact behavior. It does not destroy the underlying GameObject.
         /// </summary>
+        /// <param name="guard">Canonical guard behavior to unregister.</param>
         public void UnregisterGuard(GuardBehavior guard)
         {
             if (registeredGuards.Contains(guard))
@@ -2266,8 +2321,12 @@ namespace Behind_Bars.Systems.NPCs
         }
         
         /// <summary>
-        /// Try to assign a coordinated patrol to guards
+        /// Starts a paired patrol only when the scaled Unity-time cooldown has
+        /// elapsed and the requesting guard is idle. The current partner search
+        /// matches role area, not route geometry, and this coroutine does not
+        /// reserve doors.
         /// </summary>
+        /// <param name="requestingGuard">Idle guard requesting a patrol partner.</param>
         public IEnumerator TryAssignPatrol(GuardBehavior requestingGuard)
         {
             // Check if it's time for a patrol and no patrol is in progress
@@ -2297,7 +2356,8 @@ namespace Behind_Bars.Systems.NPCs
         }
         
         /// <summary>
-        /// Find a suitable patrol partner for a guard
+        /// Finds the first idle guard sharing the requester's stationary-role area.
+        /// It returns no partner for patrol-role guards or across role areas.
         /// </summary>
         private GuardBehavior FindPatrolPartner(GuardBehavior requestingGuard)
         {
@@ -2321,7 +2381,8 @@ namespace Behind_Bars.Systems.NPCs
         }
         
         /// <summary>
-        /// End patrol coordination state
+        /// Clears the manager's patrol-in-progress flag; it does not stop either
+        /// guard's patrol state or release any door reservation.
         /// </summary>
         public void EndPatrolCoordination()
         {
@@ -2330,46 +2391,61 @@ namespace Behind_Bars.Systems.NPCs
         }
         
         /// <summary>
-        /// Get the intake officer for prisoner processing
+        /// Gets the convenience pointer to the registered intake guard.
         /// </summary>
+        /// <returns>The last registered IntakeOfficer, or null.</returns>
         public GuardBehavior GetIntakeOfficer()
         {
             return intakeOfficer;
         }
         
         /// <summary>
-        /// Check if intake officer is available
+        /// Checks whether the registered intake guard exists and is not processing
+        /// an intake. Null/stale pointers are not repaired by this query.
         /// </summary>
+        /// <returns>True when the intake pointer is present and idle.</returns>
         public bool IsIntakeOfficerAvailable()
         {
-            return intakeOfficer != null && !intakeOfficer.IsProcessingIntake();
+            if (intakeOfficer != null)
+            {
+                return !intakeOfficer.IsProcessingIntake();
+            }
+            return false;
         }
         
         /// <summary>
-        /// Request prisoner escort from intake officer
+        /// Converts a prisoner GameObject to its Player and forwards the request to
+        /// the legacy intake officer entry point. This method does not reserve a
+        /// route or guarantee that the officer accepted the downstream request.
         /// </summary>
+        /// <param name="prisoner">GameObject expected to carry a Player component.</param>
+        /// <returns>True when an available intake officer accepted the forwarding call.</returns>
         public bool RequestPrisonerEscort(GameObject prisoner)
         {
-            if (IsIntakeOfficerAvailable() && prisoner != null)
+            if (prisoner == null)
             {
-                // Convert GameObject to Player component
+                ModLogger.Warn("Cannot request prisoner escort - prisoner GameObject is null");
+                return false;
+            }
+
+            // Convert GameObject to Player component
 #if !MONO
-                var playerComponent = prisoner.GetComponent<Il2CppScheduleOne.PlayerScripts.Player>();
+            var playerComponent = prisoner.GetComponent<Il2CppScheduleOne.PlayerScripts.Player>();
 #else
-                var playerComponent = prisoner.GetComponent<ScheduleOne.PlayerScripts.Player>();
+            var playerComponent = prisoner.GetComponent<ScheduleOne.PlayerScripts.Player>();
 #endif
 
-                if (playerComponent != null)
-                {
-                    intakeOfficer.StartIntakeProcess(playerComponent);
-                    ModLogger.Info($"Requested prisoner escort for {prisoner.name} from intake officer");
-                    return true;
-                }
-                else
-                {
-                    ModLogger.Error($"GameObject {prisoner.name} does not have a Player component");
-                    return false;
-                }
+            if (playerComponent == null)
+            {
+                ModLogger.Error($"GameObject {prisoner.name} does not have a Player component");
+                return false;
+            }
+
+            if (intakeOfficer != null && !intakeOfficer.IsProcessingIntake())
+            {
+                intakeOfficer.StartIntakeProcess(playerComponent);
+                ModLogger.Info($"Requested prisoner escort for {prisoner.name} from intake officer");
+                return true;
             }
 
             ModLogger.Warn($"Cannot request prisoner escort - intake officer not available");
@@ -2377,8 +2453,9 @@ namespace Behind_Bars.Systems.NPCs
         }
         
         /// <summary>
-        /// Get all registered guards
+        /// Returns a cleaned copy of the canonical guard registry.
         /// </summary>
+        /// <returns>A new list; mutating it does not unregister guards.</returns>
         public List<GuardBehavior> GetRegisteredGuards()
         {
             // Clean up null references
@@ -2391,8 +2468,11 @@ namespace Behind_Bars.Systems.NPCs
         #region Parole Officer Coordination Methods
 
         /// <summary>
-        /// Register a guard with the manager for coordination
+        /// Registers a canonical ParoleOfficerBehavior once and updates the
+        /// supervising-officer convenience pointer when applicable. This list is
+        /// the manager's registry; it does not own the dynamic manager's lifecycle.
         /// </summary>
+        /// <param name="officer">Canonical parole officer behavior to register.</param>
         public void RegisterParoleOfficer(ParoleOfficerBehavior officer)
         {
             if (!registeredParoleOfficers.Contains(officer))
@@ -2411,8 +2491,12 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Unregister a guard from the manager
+        /// Removes a canonical parole officer and clears the supervising pointer
+        /// when it refers to that exact behavior. It does not clear coordinator
+        /// escort ownership by itself. The legacy diagnostic below still labels
+        /// this pointer an "intake officer".
         /// </summary>
+        /// <param name="officer">Canonical parole officer behavior to unregister.</param>
         public void UnregisterParoleOfficer(ParoleOfficerBehavior officer)
         {
             if (registeredParoleOfficers.Contains(officer))
@@ -2430,8 +2514,59 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Try to assign a coordinated patrol to officers
+        /// Registers a canonical release officer for lookup by ReleaseManager.
+        /// Registration is idempotent for the same component and does not itself
+        /// reserve or begin an escort.
         /// </summary>
+        /// <param name="officer">Release officer behavior to register.</param>
+        public void RegisterReleaseOfficer(ReleaseOfficerBehavior officer)
+        {
+            if (officer == null)
+            {
+                return;
+            }
+
+            if (!registeredReleaseOfficers.Contains(officer))
+            {
+                registeredReleaseOfficers.Add(officer);
+                ModLogger.Debug($"Registered release officer {officer.GetBadgeNumber()} with PrisonNPCManager");
+            }
+        }
+
+        /// <summary>
+        /// Removes a release officer from the manager lookup registry. Active
+        /// escort/coordinator cleanup remains the release behavior's responsibility.
+        /// </summary>
+        /// <param name="officer">Release officer behavior to unregister.</param>
+        public void UnregisterReleaseOfficer(ReleaseOfficerBehavior officer)
+        {
+            if (officer == null)
+            {
+                return;
+            }
+
+            if (registeredReleaseOfficers.Remove(officer))
+            {
+                ModLogger.Debug($"Unregistered release officer {officer.GetBadgeNumber()} from PrisonNPCManager");
+            }
+        }
+
+        /// <summary>
+        /// Returns a cleaned copy of the canonical release-officer registry.
+        /// </summary>
+        /// <returns>A new list; mutating it does not unregister officers.</returns>
+        public List<ReleaseOfficerBehavior> GetRegisteredReleaseOfficers()
+        {
+            registeredReleaseOfficers.RemoveAll(officer => officer == null);
+            return new List<ReleaseOfficerBehavior>(registeredReleaseOfficers);
+        }
+
+        /// <summary>
+        /// Starts a paired patrol after the scaled Unity-time cooldown when the
+        /// requesting officer is idle. The current partner test only compares the
+        /// broad PatrolOfficer role, not actual route/region assignment.
+        /// </summary>
+        /// <param name="requestingOfficer">Idle patrol officer requesting a partner.</param>
         public IEnumerator TryAssignPatrol(ParoleOfficerBehavior requestingOfficer)
         {
             // Check if it's time for a patrol and no patrol is in progress
@@ -2461,7 +2596,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Find a suitable patrol partner for a parole officer
+        /// Finds the first other idle patrol-role officer. It does not verify that
+        /// the two officers share a route or physical region.
         /// </summary>
         private ParoleOfficerBehavior FindPatrolPartner(ParoleOfficerBehavior requestingOfficer)
         {
@@ -2484,7 +2620,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// End patrol coordination state
+        /// Clears the parole patrol-in-progress flag without stopping active patrol
+        /// state on either officer.
         /// </summary>
         public void EndParolePatrolCoordination()
         {
@@ -2493,25 +2630,32 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Get the supervising officer for prisoner processing
+        /// Gets the current supervising-officer pointer selected during registration.
         /// </summary>
+        /// <returns>The registered supervisor, or null.</returns>
         public ParoleOfficerBehavior GetSupervisingOfficer()
         {
             return paroleSupervisor;
         }
 
         /// <summary>
-        /// Check if supervising officer is available
+        /// Checks whether the registered supervisor exists and is not processing
+        /// canonical intake. It does not validate check-in or coordinator ownership.
         /// </summary>
+        /// <returns>True when the supervisor pointer is present and intake-idle.</returns>
         public bool IsSupervisingOfficerAvailable()
         {
             return paroleSupervisor != null && !paroleSupervisor.IsProcessingIntake();
         }
 
         /// <summary>
-        /// Request prisoner escort from parole officer
-        /// TODO: Implement parole intake proccess here
+        /// Compatibility request that converts the parolee GameObject to Player and
+        /// forwards it to the supervising officer's legacy intake entry point. The
+        /// misleading "release escort" name is retained for callers; this method
+        /// does not invoke ReleaseOfficerBehavior or perform a physical release.
         /// </summary>
+        /// <param name="parolee">GameObject expected to carry a Player component.</param>
+        /// <returns>True when the supervisor and Player component are available and the request is forwarded.</returns>
         public bool RequestReleaseEscort(GameObject parolee)
         {
             if (IsSupervisingOfficerAvailable() && parolee != null)
@@ -2541,8 +2685,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Get all registered guards
+        /// Returns a cleaned copy of the canonical parole-officer registry.
         /// </summary>
+        /// <returns>A new list; mutating it does not unregister officers.</returns>
         public List<ParoleOfficerBehavior> GetRegisteredParoleOfficers()
         {
             // Clean up null references
@@ -2584,52 +2729,45 @@ namespace Behind_Bars.Systems.NPCs
         /// <summary>
         /// Add audio system components to a guard for voice commands
         /// </summary>
-        private void AddAudioSystemToGuard(GameObject guardObject, object npcComponent)
+        private void AddAudioSystemToGuard(GameObject guardObject, object npcComponent, bool hasDynamicGuardBehavior)
         {
             try
             {
                 ModLogger.Debug($"Adding audio system to guard: {guardObject.name}");
 
-                // Add AudioSourceController for managing audio playback
 #if !MONO
-                var audioSourceController = guardObject.AddComponent<Il2CppScheduleOne.Audio.AudioSourceController>();
-#else
-                var audioSourceController = guardObject.AddComponent<ScheduleOne.Audio.AudioSourceController>();
-#endif
-
-                if (audioSourceController != null)
+                if (!hasDynamicGuardBehavior)
                 {
-                    // Configure audio settings
-                    audioSourceController.DefaultVolume = 0.8f;
-                    audioSourceController.RandomizePitch = true;
-                    audioSourceController.MinPitch = 0.9f;
-                    audioSourceController.MaxPitch = 1.1f;
-
-                    // Set audio type for guards
-#if !MONO
-                    audioSourceController.AudioType = Il2CppScheduleOne.Audio.EAudioType.FX;
-#else
-                    audioSourceController.AudioType = ScheduleOne.Audio.EAudioType.FX;
+                    ModLogger.Warn($"Skipping jail dialogue/audio components for fallback guard {guardObject.name} (no GuardBehavior)");
+                    return;
+                }
 #endif
 
-                    ModLogger.Debug($"✓ AudioSourceController added to guard {guardObject.name}");
+                var audioSource = guardObject.GetComponent<AudioSource>();
+                if (audioSource == null)
+                {
+                    audioSource = guardObject.AddComponent<AudioSource>();
+                }
+
+                if (audioSource != null)
+                {
+                    audioSource.volume = 0.8f;
+                    audioSource.pitch = 1.0f;
+                    audioSource.playOnAwake = false;
+                    audioSource.spatialBlend = 0.5f;
+                    ModLogger.Debug($"✓ AudioSource configured for guard {guardObject.name}");
                 }
 
                 // Add JailNPCAudioController for guard voice management
-                var jailAudioController = guardObject.AddComponent<JailNPCAudioController>();
+                var jailAudioController = BBHelpers.AddComponentSafe<JailNPCAudioController>(guardObject);
                 ModLogger.Debug($"✓ JailNPCAudioController added to guard {guardObject.name}");
 
-                // Add base DialogueController (required by JailNPCDialogueController)
-#if !MONO
-                var baseDialogueController = guardObject.AddComponent<Il2CppScheduleOne.Dialogue.DialogueController>();
-#else
-                var baseDialogueController = guardObject.AddComponent<ScheduleOne.Dialogue.DialogueController>();
-#endif
-                ModLogger.Debug($"✓ Base DialogueController added to guard {guardObject.name}");
-
-                // Add JailNPCDialogueController for dialogue integration
-                var dialogueController = guardObject.AddComponent<JailNPCDialogueController>();
-                ModLogger.Debug($"✓ JailNPCDialogueController added to guard {guardObject.name}");
+                var dialogueInitializationCoroutine = MelonCoroutines.Start(
+                    InitializeGuardDialogueWhenReady(guardObject, npcComponent)) as Coroutine;
+                if (dialogueInitializationCoroutine != null)
+                {
+                    guardDialogueInitializationCoroutines.Add(dialogueInitializationCoroutine);
+                }
 
                 ModLogger.Debug($"✓ Audio system configured for guard: {guardObject.name}");
             }
@@ -2639,12 +2777,94 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
+        /// <summary>
+        /// Defer guard dialogue hookup until the spawned BaseNPC has completed its native initialization.
+        /// </summary>
+        private IEnumerator InitializeGuardDialogueWhenReady(GameObject guardObject, object npcComponent)
+        {
+            if (guardObject == null)
+            {
+                yield break;
+            }
+
+            const int maxAttempts = 20;
+            DialogueHandler dialogueHandler = null;
+            DialogueController baseDialogueController = null;
+
+            for (int attempt = 0; attempt < maxAttempts; attempt++)
+            {
+                if (guardObject == null)
+                {
+                    yield break;
+                }
+
+#if !MONO
+                var nativeNpc = npcComponent as Il2CppScheduleOne.NPCs.NPC;
+#else
+                var nativeNpc = npcComponent as ScheduleOne.NPCs.NPC;
+#endif
+
+                if (nativeNpc != null)
+                {
+                    dialogueHandler = nativeNpc.DialogueHandler;
+                }
+
+                dialogueHandler ??= guardObject.GetComponentInChildren<DialogueHandler>(true);
+                baseDialogueController = guardObject.GetComponentInChildren<DialogueController>(true);
+
+                if (dialogueHandler != null || baseDialogueController != null)
+                {
+                    break;
+                }
+
+                yield return null;
+            }
+
+            if (guardObject == null)
+            {
+                yield break;
+            }
+
+            if (baseDialogueController == null)
+            {
+                try
+                {
+#if !MONO
+                    baseDialogueController = guardObject.AddComponent<Il2CppScheduleOne.Dialogue.DialogueController>();
+#else
+                    baseDialogueController = guardObject.AddComponent<ScheduleOne.Dialogue.DialogueController>();
+#endif
+                    ModLogger.Debug($"✓ Base DialogueController added to guard {guardObject.name}");
+                }
+                catch (Exception ex)
+                {
+                    ModLogger.Error($"Failed to add DialogueController to guard {guardObject.name}: {ex.Message}");
+                    yield break;
+                }
+            }
+
+            baseDialogueController.DialogueEnabled = true;
+            baseDialogueController.UseDialogueBehaviour = true;
+
+            var dialogueController = BBHelpers.GetComponentSafe<JailNPCDialogueController>(guardObject)
+                ?? BBHelpers.AddComponentSafe<JailNPCDialogueController>(guardObject);
+
+            if (dialogueController != null)
+            {
+                ModLogger.Debug($"✓ JailNPCDialogueController ready on guard {guardObject.name}");
+            }
+            else
+            {
+                ModLogger.Warn($"Failed to add JailNPCDialogueController to {guardObject.name}");
+            }
+        }
+
         #endregion
     }
 
     /// <summary>
-    /// Custom prison guard class with enhanced behaviors and assignment system
-    /// </summary>
+     /// Custom prison guard class with enhanced behaviors and assignment system
+     /// </summary>
     public class PrisonGuard : MonoBehaviour
     {
 #if !MONO
@@ -2664,11 +2884,7 @@ namespace Behind_Bars.Systems.NPCs
             assignment = guardAssignment;
 
             // Get or add the guard behavior component
-            guardBehavior = GetComponent<GuardBehavior>();
-            if (guardBehavior == null)
-            {
-                guardBehavior = gameObject.AddComponent<GuardBehavior>();
-            }
+            guardBehavior = BBHelpers.GetComponentSafe<GuardBehavior>(gameObject);
 
             if (guardBehavior != null)
             {
@@ -2682,9 +2898,10 @@ namespace Behind_Bars.Systems.NPCs
                     if (assignment == GuardBehavior.GuardAssignment.Booking0)
                     {
                         ModLogger.Debug($"Manually registering intake officer {name}");
-                        if (PrisonNPCManager.Instance != null)
+                        var npcManager = Core.Instance?.NpcManager;
+                        if (npcManager != null)
                         {
-                            PrisonNPCManager.Instance.RegisterGuard(guardBehavior);
+                            npcManager.RegisterGuard(guardBehavior);
                         }
                     }
                 }
@@ -2695,7 +2912,7 @@ namespace Behind_Bars.Systems.NPCs
             }
             else
             {
-                ModLogger.Error($"GuardBehavior component not found on guard {name}");
+                ModLogger.Warn($"GuardBehavior component not found on guard {name} - guard will remain as static fallback");
             }
 
             ModLogger.Debug($"Prison guard {name} initialized with badge {badge} and assignment {assignment}");
@@ -2734,11 +2951,7 @@ namespace Behind_Bars.Systems.NPCs
             assignment = guardAssignment;
 
             // Get or add the guard behavior component
-            officerBehavior = GetComponent<ParoleOfficerBehavior>();
-            if (officerBehavior == null)
-            {
-                officerBehavior = gameObject.AddComponent<ParoleOfficerBehavior>();
-            }
+            officerBehavior = BBHelpers.GetComponentSafe<ParoleOfficerBehavior>(gameObject);
 
             if (officerBehavior != null)
             {
@@ -2752,9 +2965,10 @@ namespace Behind_Bars.Systems.NPCs
                     if (assignment == ParoleOfficerBehavior.ParoleOfficerAssignment.PoliceStationSupervisor)
                     {
                         ModLogger.Debug($"Manually registering supervising officer {name}");
-                        if (PrisonNPCManager.Instance != null)
+                        var npcManager = Core.Instance?.NpcManager;
+                        if (npcManager != null)
                         {
-                            PrisonNPCManager.Instance.RegisterParoleOfficer(officerBehavior);
+                            npcManager.RegisterParoleOfficer(officerBehavior);
                         }
                     }
                 }

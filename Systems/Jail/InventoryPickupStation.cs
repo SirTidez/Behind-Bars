@@ -3,8 +3,8 @@ using System.Collections.Generic;
 using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
-using Behind_Bars.UI;
 using Behind_Bars.Systems.Data;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppInterop.Runtime.Attributes;
@@ -24,7 +24,13 @@ using ScheduleOne.Storage;
 namespace Behind_Bars.Systems.Jail
 {
     /// <summary>
-    /// Handles player inventory pickup when being released from jail
+    /// Owns the active release-side personal-property interaction.
+    /// The station reads the persisted snapshot, returns legal items through the registry,
+    /// restores civilian clothing, and notifies ReleaseManager. The former interactive
+    /// StorageEntity surface is unavailable on IL2CPP; fallback transfer is intentionally
+    /// direct and the snapshot is normally cleared after the transfer loop completes, even
+    /// when an individual item definition or inventory call could not be returned; an early
+    /// missing-inventory abort instead leaves the persisted snapshot for later recovery.
     /// </summary>
     public class InventoryPickupStation : MonoBehaviour
     {
@@ -32,21 +38,63 @@ namespace Behind_Bars.Systems.Jail
         public InventoryPickupStation(System.IntPtr ptr) : base(ptr) { }
 #endif
         
-        // InteractableObject component for IL2CPP compatibility
+        // Interaction cache/state. Setter helpers are hidden from IL2CPP because they retain
+        // runtime-specific delegate surfaces; the public station API remains injection-safe.
         private InteractableObject interactableObject;
+        private bool hasCachedInteractionMessage;
+        private string cachedInteractionMessage;
+        private bool hasCachedInteractionState;
+        private int cachedInteractionState;
 
-        public float itemPickupDuration = 0.3f; // Time between picking up each item
-        public Transform storageLocation; // Where items are "retrieved" from visually
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void SetInteractionMessage(string message)
+        {
+            if (interactableObject == null || (hasCachedInteractionMessage && cachedInteractionMessage == message))
+            {
+                return;
+            }
 
+            interactableObject.SetMessage(message);
+            cachedInteractionMessage = message;
+            hasCachedInteractionMessage = true;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void SetInteractionState(InteractableObject.EInteractableState state)
+        {
+            int stateValue = (int)state;
+            if (interactableObject == null || (hasCachedInteractionState && cachedInteractionState == stateValue))
+            {
+                return;
+            }
+
+            interactableObject.SetInteractableState(state);
+            cachedInteractionState = stateValue;
+            hasCachedInteractionState = true;
+        }
+
+        // Retained presentation settings. The current direct transfer returns items through
+        // one registry loop and does not consume itemPickupDuration; storageLocation is visual only.
+        public float itemPickupDuration = 0.3f;
+        public Transform storageLocation;
+
+        // Active release state. legalItems/contrabandItems are rebuilt from persistent data;
+        // they are not themselves the durable snapshot and are cleared after completion.
         private bool isProcessing = false;
         private Player currentPlayer;
         private List<PersistentPlayerData.StoredItem> legalItems = new List<PersistentPlayerData.StoredItem>();
         private List<PersistentPlayerData.StoredItem> contrabandItems = new List<PersistentPlayerData.StoredItem>();
 
-        // Interactive storage components
+        // Interactive storage components are retained for the Mono prototype. On IL2CPP the
+        // StorageEntity injection path is deliberately disabled and direct transfer is used.
         private PrisonStorageEntity storageEntity;
         private bool storageSessionActive = false;
         private bool isDisabledByOfficer = false; // Officer has disabled this station - don't allow reopening
+        private bool releaseAccessEnabled = false;
         
         void Start()
         {
@@ -82,15 +130,18 @@ namespace Behind_Bars.Systems.Jail
             {
                 ModLogger.Debug("Found PossesionCubby component in InventoryPickup station");
             }
+
+            // Preserve any release state configured before Start ran on a lazily added component.
+            SetReleaseAccessEnabled(releaseAccessEnabled);
         }
         
         private void SetupInteractableComponent()
         {
             // Get or create InteractableObject component
-            interactableObject = GetComponent<InteractableObject>();
+            interactableObject = BBHelpers.GetComponentSafe<InteractableObject>(gameObject);
             if (interactableObject == null)
             {
-                interactableObject = gameObject.AddComponent<InteractableObject>();
+                interactableObject = BBHelpers.AddComponentSafe<InteractableObject>(gameObject);
                 ModLogger.Debug("Added InteractableObject component to InventoryPickupStation");
             }
             else
@@ -99,12 +150,9 @@ namespace Behind_Bars.Systems.Jail
             }
             
             // Configure the interaction
-            interactableObject.SetMessage("Retrieve personal belongings");
+            SetInteractionMessage("Retrieve personal belongings");
             interactableObject.SetInteractionType(InteractableObject.EInteractionType.Key_Press);
-            interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
-
-            // Set up storage entity
-            SetupStorageEntity();
+            SetInteractionState(InteractableObject.EInteractableState.Invalid);
             
             // Set up event listeners with IL2CPP-safe casting
 #if !MONO
@@ -123,12 +171,27 @@ namespace Behind_Bars.Systems.Jail
         /// </summary>
         private void SetupStorageEntity()
         {
+#if !MONO
+            // StorageEntity derives from FishNet.NetworkBehaviour and cannot be safely injected on
+            // the current IL2CPP bridge. The station itself owns the release interaction and
+            // directly returns persisted property instead of opening a secondary UI surface.
+            storageEntity = null;
+            ModLogger.Debug("InventoryPickupStation: native StorageEntity injection is unavailable; using direct property return");
+            return;
+#else
             // Get or create PrisonStorageEntity component
-            storageEntity = GetComponent<PrisonStorageEntity>();
+            storageEntity = BBHelpers.GetComponentSafe<PrisonStorageEntity>(gameObject);
             if (storageEntity == null)
             {
-                storageEntity = gameObject.AddComponent<PrisonStorageEntity>();
-                ModLogger.Debug("Added PrisonStorageEntity component to InventoryPickupStation");
+                storageEntity = BBHelpers.AddComponentSafe<PrisonStorageEntity>(gameObject);
+                if (storageEntity != null)
+                {
+                    ModLogger.Debug("Added PrisonStorageEntity component to InventoryPickupStation");
+                }
+                else
+                {
+                    ModLogger.Warn("PrisonStorageEntity could not be resolved yet for InventoryPickupStation");
+                }
             }
             else
             {
@@ -137,17 +200,24 @@ namespace Behind_Bars.Systems.Jail
 
             // DO NOT add StorageEntityInteractable - it conflicts with our custom InteractableObject
             // We handle all interactions through OnInteractStart() which decides storage vs direct transfer
+#endif
         }
         
         private void OnInteractStart()
         {
+            if (!releaseAccessEnabled)
+            {
+                ModLogger.Debug("InventoryPickupStation interaction ignored - release access is not enabled");
+                return;
+            }
+
             // CRITICAL: If officer disabled this station, don't allow interaction
             if (isDisabledByOfficer)
             {
                 ModLogger.Info("InventoryPickupStation: Interaction blocked - officer has disabled this station");
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         "Storage closed - follow the officer",
                         NotificationType.Warning
                     );
@@ -162,13 +232,6 @@ namespace Behind_Bars.Systems.Jail
                 return;
             }
 
-            // Allow re-opening: Reset storageSessionActive if storage is actually closed
-            if (storageSessionActive && storageEntity != null && !storageEntity.IsOpened)
-            {
-                ModLogger.Info("Storage was closed externally - resetting session flag to allow re-opening");
-                storageSessionActive = false;
-            }
-
             if (storageSessionActive)
             {
                 ModLogger.Debug("Storage is currently open - interaction blocked");
@@ -179,117 +242,67 @@ namespace Behind_Bars.Systems.Jail
             {
                 ModLogger.Info($"Player {Player.Local.name} interacting with InventoryPickupStation");
 
-                // Show notification about items (block if no items, only change clothes)
+                // The station remains useful even with no personal property: it completes the
+                // release handoff by restoring the saved civilian attire.
                 if (legalItems == null || legalItems.Count == 0)
                 {
-                    if (BehindBarsUIManager.Instance != null)
+                    if (Core.ResolveUIManager() != null)
                     {
-                        BehindBarsUIManager.Instance.ShowNotification(
+                        Core.ResolveUIManager().ShowNotification(
                             "No personal items in storage - you can still change clothes",
                             NotificationType.Instruction
                         );
-                        RestorePlayerClothing(Player.Local);
-                        return;
                     }
-                    ModLogger.Info("No items in storage, but allowing access for clothing change");
+                    ModLogger.Info("No items in storage; release interaction will restore civilian attire");
                 }
 
-                // Open interactive storage (items were already populated in PrepareStorageForPlayer if any exist)
-                if (storageEntity != null)
-                {
-                    // Unlock cursor BEFORE opening storage (prevents cursor lock issues)
-                    //UnityEngine.Cursor.lockState = CursorLockMode.None;
-                    //UnityEngine.Cursor.visible = true;
-                    var playerCamera = PlayerSingleton<PlayerCamera>.Instance;
-                    playerCamera.FreeMouse();
-                    Singleton<HUD>.Instance.SetCrosshairVisible(false);
-
-                    try
-                    {
-                        // Restore player's original clothing from PersistentPlayerData
-                        RestorePlayerClothing(Player.Local);
-
-                        // Remove any remaining jail items before opening storage
-                        MelonCoroutines.Start(RemovePrisonItems(Player.Local));
-                        ModLogger.Info($"Attempting to open storage - IsOpened: {storageEntity.IsOpened}, CurrentAccessor: {storageEntity.CurrentPlayerAccessor?.name ?? "null"}");
-                        storageEntity.Open();
-                        storageSessionActive = true;
-                        ModLogger.Info($"Interactive storage opened for {Player.Local.name}");
-
-                        if (BehindBarsUIManager.Instance != null)
-                        {
-                            BehindBarsUIManager.Instance.ShowNotification(
-                                "Ctrl+Click items to transfer to inventory. Close storage when done.",
-                                NotificationType.Instruction
-                            );
-                        }
-                    }
-                    catch (System.Exception ex)
-                    {
-                        ModLogger.Warn($"Storage open had network error (expected, harmless)");
-                        storageSessionActive = true; // Mark as active anyway - storage UI is showing
-                        ModLogger.Info("Storage UI opened despite network error");
-                    }
-                }
-                else
-                {
-                    ModLogger.Error("StorageEntity is null - cannot open storage");
-                }
+                // The custom locker presentation proved unreliable in the active IL2CPP
+                // runtime: it could display an empty snapshot while the transfer occurred
+                // elsewhere, retain input, and obscure the release flow.  The property station
+                // is therefore the single authoritative release interaction.  Its one-shot
+                // transfer restores the persisted property and civilian outfit directly.
+                storageSessionActive = true;
+                ModLogger.Info($"InventoryPickupStation: Returning stored property directly for {Player.Local.name}");
+                MelonCoroutines.Start(DirectItemTransfer(Player.Local));
             }
         }
 
         /// <summary>
-        /// Prepare storage with player's items - DOES NOT open it (player must interact)
+        /// Prepare the release snapshot for a player without opening a storage UI.
         /// </summary>
+        /// <param name="player">Player whose persisted legal/contraband items should be staged.</param>
+        /// <remarks>The active path enables the station and waits for interaction; it also removes jail items before property return.</remarks>
         public void PrepareStorageForPlayer(Player player)
         {
-            if (storageEntity == null)
-            {
-                ModLogger.Error("StorageEntity not found when preparing storage");
-                return;
-            }
-
             currentPlayer = player;
-
-            // CRITICAL: Clear the officer-disabled flag for new release
+            releaseAccessEnabled = true;
             isDisabledByOfficer = false;
-            storageSessionActive = false; // Also reset session flag
-            ModLogger.Info("InventoryPickupStation: Cleared officer-disabled flag for new release");
-
-            // CRITICAL: Force reset the storage entity to clear old items
-            if (storageEntity != null)
-            {
-                storageEntity.ResetForNewRelease();
-                ModLogger.Info("Reset PrisonStorageEntity for new release");
-            }
-
-            // Prepare items for storage (from current arrest)
+            storageSessionActive = false;
             PrepareItemsForPickup(player);
 
             // Show contraband notification if any items were confiscated
             if (contrabandItems.Count > 0)
             {
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         $"{contrabandItems.Count} illegal items confiscated permanently",
                         NotificationType.Warning
                     );
                 }
             }
 
-            // Populate storage entity with player's legal items
-            storageEntity.PopulateWithPlayerItems(player);
-
-            ModLogger.Info($"Storage prepared for {player.name} with {legalItems.Count} legal items - waiting for player interaction");
-
-            // Remove any jail items that might still be in inventory (early cleanup)
+            // Keep the jail starter kit out of the release locker contract. The custom locker
+            // presents only persistent personal property and works identically on Mono/IL2CPP.
             MelonCoroutines.Start(RemovePrisonItems(player));
+            RemoveJailItemsFromInventory(player);
+
+            ModLogger.Info($"Property locker prepared for {player.name} with {legalItems.Count} legal item(s) - waiting for interaction");
 
             // Show instruction to interact
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Interact with storage to retrieve your personal belongings",
                     NotificationType.Instruction
                 );
@@ -297,18 +310,169 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Mark this station as disabled by officer (prevents reopening after close)
+        /// Disable this station after the release officer closes the property handoff.
         /// </summary>
+        /// <remarks>This clears release access and blocks reopening through both interaction and session flags.</remarks>
         public void MarkDisabledByOfficer()
         {
             isDisabledByOfficer = true;
             storageSessionActive = true; // Also prevent reopening via session flag
+            releaseAccessEnabled = false;
             ModLogger.Info("InventoryPickupStation: Marked as disabled by officer");
+        }
+
+        /// <summary>
+        /// Reset the personal-belongings pickup station for a new booking intake.
+        /// This hides the release-side cubby so it cannot overlap with intake storage.
+        /// </summary>
+        /// <remarks>The station is disabled until a release flow calls <see cref="EnableForRelease"/>.</remarks>
+        public void ResetForBooking()
+        {
+            isProcessing = false;
+            storageSessionActive = false;
+            currentPlayer = null;
+            legalItems.Clear();
+            contrabandItems.Clear();
+            isDisabledByOfficer = false;
+
+            if (storageEntity != null)
+            {
+                storageEntity.ResetStorage();
+            }
+
+            SetReleaseAccessEnabled(false);
+            enabled = false;
+
+            if (gameObject.activeSelf)
+            {
+                gameObject.SetActive(false);
+            }
+
+            ModLogger.Info("InventoryPickupStation: Reset for booking intake and hidden until release");
+        }
+
+        /// <summary>
+        /// Returns one persistent personal-property entry for the editor-authored locker UI.
+        /// The method is deliberately station-owned so the UI remains a pure native presentation.
+        /// </summary>
+        internal bool TryReturnPropertyItem(Player player, PersistentPlayerData.StoredItem item)
+        {
+            if (player == null || item == null)
+            {
+                return false;
+            }
+
+            try
+            {
+                var inventory = PlayerSingleton<PlayerInventory>.Instance;
+                if (inventory == null)
+                {
+                    ModLogger.Error("Property locker could not find PlayerInventory");
+                    return false;
+                }
+
+#if !MONO
+                var registry = Il2CppScheduleOne.Registry.Instance;
+#else
+                var registry = ScheduleOne.Registry.Instance;
+#endif
+                var itemDefinition = PrisonItemRegistry.GetRegistryItemDefinition(registry, item.itemId);
+                if (itemDefinition == null)
+                {
+                    ModLogger.Error($"Property locker cannot resolve item definition '{item.itemId}'");
+                    return false;
+                }
+
+                var defaultInstanceMethod = itemDefinition.GetType().GetMethod("GetDefaultInstance", new[] { typeof(int) });
+                object itemInstance = defaultInstanceMethod != null
+                    ? defaultInstanceMethod.Invoke(itemDefinition, new object[] { item.stackCount })
+                    : null;
+                if (itemInstance == null)
+                {
+                    ModLogger.Error($"Property locker failed to create '{item.itemId}'");
+                    return false;
+                }
+
+                if (item.itemType == "CashInstance" && item.cashBalance > 0f)
+                {
+                    var setBalanceMethod = itemInstance.GetType().GetMethod("SetBalance");
+                    setBalanceMethod?.Invoke(itemInstance, new object[] { item.cashBalance });
+                }
+
+                var addItemMethod = inventory.GetType().GetMethod("AddItemToInventory");
+                if (addItemMethod == null)
+                {
+                    ModLogger.Error("Property locker could not resolve PlayerInventory.AddItemToInventory");
+                    return false;
+                }
+
+                addItemMethod.Invoke(inventory, new[] { itemInstance });
+                ModLogger.Info($"Property locker returned {item.itemName} (ID: {item.itemId})");
+                return true;
+            }
+            catch (System.Exception exception)
+            {
+                ModLogger.Error($"Property locker failed to return {item.itemName}: {exception.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Completes the release handoff once the locker confirms every personal item has been collected.
+        /// </summary>
+        internal void CompletePropertyLockerRetrieval(Player player)
+        {
+            if (player == null)
+            {
+                return;
+            }
+
+            storageSessionActive = false;
+            RemoveJailItemsFromInventory(player);
+            RestorePlayerClothing(player);
+            MelonCoroutines.Start(RestoreFirstPersonCameraAfterClothingChange());
+            ClearStoredItemsForPlayer(player);
+            legalItems.Clear();
+            contrabandItems.Clear();
+            InventoryProcessor.UnlockPlayerInventory(player);
+
+            var releaseManager = Core.ResolveReleaseManager();
+            releaseManager?.OnInventoryProcessingComplete(player);
+            CompletePickup();
+            ModLogger.Info($"Property locker release handoff completed for {player.name}");
+        }
+
+        /// <summary>
+        /// Returns a dismissed locker to the station without finalizing the release. The
+        /// persistent snapshot remains intact and the player can reopen the locker.
+        /// </summary>
+        internal void SuspendPropertyLockerSession(Player player)
+        {
+            if (player != null && currentPlayer != null && player != currentPlayer)
+            {
+                return;
+            }
+
+            storageSessionActive = false;
+            ModLogger.Debug("InventoryPickupStation: Property locker dismissed without completing retrieval");
+        }
+
+        /// <summary>
+        /// Read the player's persisted original-clothing layers for the property locker UI.
+        /// </summary>
+        /// <param name="player">Player whose snapshot should be read.</param>
+        /// <returns>A new empty list when persistent data or the player's clothing snapshot is unavailable.</returns>
+        internal List<PersistentPlayerData.ClothingLayer> GetStoredClothing(Player player)
+        {
+            return Core.ResolvePersistentPlayerData()?.GetOriginalClothingForPlayer(player)
+                ?? new List<PersistentPlayerData.ClothingLayer>();
         }
 
         /// <summary>
         /// Open storage interface directly without delays
         /// </summary>
+        // Legacy interactive-storage entry point. The active release interaction uses
+        // DirectItemTransfer instead; on IL2CPP storageEntity remains unavailable.
         private void OpenStorageInterface(Player player)
         {
             ModLogger.Info($"Opening storage interface directly for {player.name}");
@@ -319,9 +483,9 @@ namespace Behind_Bars.Systems.Jail
             // Show contraband notification if any items were confiscated
             if (contrabandItems.Count > 0)
             {
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         $"{contrabandItems.Count} illegal items confiscated permanently",
                         NotificationType.Warning
                     );
@@ -338,9 +502,9 @@ namespace Behind_Bars.Systems.Jail
                     storageEntity.Open();
                     storageSessionActive = true;
 
-                    if (BehindBarsUIManager.Instance != null)
+                    if (Core.ResolveUIManager() != null)
                     {
-                        BehindBarsUIManager.Instance.ShowNotification(
+                        Core.ResolveUIManager().ShowNotification(
                             "Drag items between storage and inventory",
                             NotificationType.Instruction
                         );
@@ -362,13 +526,15 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Legacy combined drop-off/pickup coroutine. No current caller starts this path;
+        // it is retained for the older interactive StorageEntity workflow.
         private IEnumerator ProcessPrisonItemDropOffAndPickup(Player player)
         {
             isProcessing = true;
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Processing...");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                SetInteractionMessage("Processing...");
+                SetInteractionState(InteractableObject.EInteractableState.Invalid);
             }
 
             ModLogger.Info($"Starting complete inventory exchange for {player.name}");
@@ -389,9 +555,9 @@ namespace Behind_Bars.Systems.Jail
 
             if (legalItems.Count == 0 && contrabandItems.Count == 0)
             {
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         "No personal items in storage - prison items removed",
                         NotificationType.Progress
                     );
@@ -408,13 +574,15 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Legacy prison-item-only drop-off coroutine. The active release path uses the
+        // exact-ID RemoveJailItemsFromInventory pass instead of this name-based routine.
         private IEnumerator ProcessPrisonItemDropOff(Player player)
         {
             ModLogger.Info($"Starting prison item drop-off for {player.name}");
 
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Dropping off prison items...",
                     NotificationType.Instruction
                 );
@@ -454,9 +622,9 @@ namespace Behind_Bars.Systems.Jail
 
                 if (itemRemoved)
                 {
-                    if (BehindBarsUIManager.Instance != null)
+                    if (Core.ResolveUIManager() != null)
                     {
-                        BehindBarsUIManager.Instance.ShowNotification(
+                        Core.ResolveUIManager().ShowNotification(
                             $"Returned: {itemName}",
                             NotificationType.Progress
                         );
@@ -480,7 +648,7 @@ namespace Behind_Bars.Systems.Jail
             try
             {
                 // Get items from persistent storage
-                var persistentData = PersistentPlayerData.Instance;
+                var persistentData = Core.ResolvePersistentPlayerData();
                 var allLegalItems = persistentData.GetLegalItemsForPlayer(player);
                 var allContrabandItems = persistentData.GetContrabandItemsForPlayer(player);
 
@@ -492,9 +660,9 @@ namespace Behind_Bars.Systems.Jail
                 // Show contraband notification if any items are being kept
                 if (contrabandItems.Count > 0)
                 {
-                    if (BehindBarsUIManager.Instance != null)
+                    if (Core.ResolveUIManager() != null)
                     {
-                        BehindBarsUIManager.Instance.ShowNotification(
+                        Core.ResolveUIManager().ShowNotification(
                             $"{contrabandItems.Count} illegal items confiscated permanently",
                             NotificationType.Warning
                         );
@@ -510,18 +678,20 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Legacy modal storage presentation. If storageEntity is absent it falls through to
+        // direct completion, but current release setup starts DirectItemTransfer directly.
         private IEnumerator OpenInteractiveStorage(Player player)
         {
             ModLogger.Info($"Opening interactive storage for {player.name}");
 
             // Show initial notification with contraband info
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
                 string message = contrabandItems.Count > 0
                     ? $"Storage contains {legalItems.Count} legal items ({contrabandItems.Count} illegal items confiscated)"
                     : $"Storage contains {legalItems.Count} personal items";
 
-                BehindBarsUIManager.Instance.ShowNotification(message, NotificationType.Instruction);
+                Core.ResolveUIManager().ShowNotification(message, NotificationType.Instruction);
             }
 
             // Populate storage entity with legal items
@@ -541,13 +711,13 @@ namespace Behind_Bars.Systems.Jail
                     // Update interaction message
                     if (interactableObject != null)
                     {
-                        interactableObject.SetMessage("Storage open - drag items to retrieve them");
-                        interactableObject.SetInteractableState(InteractableObject.EInteractableState.Label);
+                        SetInteractionMessage("Storage open - drag items to retrieve them");
+                        SetInteractionState(InteractableObject.EInteractableState.Label);
                     }
 
-                    if (BehindBarsUIManager.Instance != null)
+                    if (Core.ResolveUIManager() != null)
                     {
-                        BehindBarsUIManager.Instance.ShowNotification(
+                        Core.ResolveUIManager().ShowNotification(
                             "Drag items from storage to your inventory. Close storage when done.",
                             NotificationType.Instruction
                         );
@@ -570,7 +740,9 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Direct item transfer fallback - give items back to player directly (no storage UI)
+        /// Return the release snapshot through the property-station interaction.
+        /// This is the authoritative path for both runtimes; it intentionally does not open
+        /// a custom storage UI.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -582,7 +754,8 @@ namespace Behind_Bars.Systems.Jail
 #endif
         {
             isProcessing = true;
-            ModLogger.Info($"Starting direct item transfer for {player.name} - {legalItems.Count} items to return");
+            int storedItemCount = legalItems?.Count ?? 0;
+            ModLogger.Info($"Returning stored property for {player.name} - {storedItemCount} item(s) to return");
 
             var inventory = PlayerSingleton<PlayerInventory>.Instance;
             if (inventory == null)
@@ -600,6 +773,16 @@ namespace Behind_Bars.Systems.Jail
             yield return RemovePrisonItems(player);
 #endif
 
+            // Do not depend on the older display-name removal route above for
+            // the actual starter kit. It can leave native items in hotbar or
+            // equippable slots even after reporting a completed cleanup.
+            RemoveJailItemsFromInventory(player);
+
+            // Restore through the same persistent-avatar path used by the release
+            // handoff rather than relying on UI teardown or a delayed native refresh.
+            RestorePlayerClothing(player);
+            yield return new WaitForEndOfFrame();
+
             yield return new WaitForSeconds(1f);
 
             // STEP 2: Unlock inventory
@@ -616,10 +799,11 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Info($"Attempting to return: {item.itemName} (ID: {item.itemId})");
 
 #if !MONO
-                var itemDef = Il2CppScheduleOne.Registry.GetItem(item.itemId);
+                var registry = Il2CppScheduleOne.Registry.Instance;
 #else
-                var itemDef = ScheduleOne.Registry.GetItem(item.itemId);
+                var registry = ScheduleOne.Registry.Instance;
 #endif
+                var itemDef = PrisonItemRegistry.GetRegistryItemDefinition(registry, item.itemId);
 
                 if (itemDef == null)
                 {
@@ -627,8 +811,11 @@ namespace Behind_Bars.Systems.Jail
                     continue;
                 }
 
-                // Create item instance using GetDefaultInstance
-                var itemInstance = itemDef.GetDefaultInstance(item.stackCount);
+                // Create item instance using reflection to stay IL2CPP-safe
+                var getDefaultInstanceMethod = itemDef.GetType().GetMethod("GetDefaultInstance", new[] { typeof(int) });
+                var itemInstance = getDefaultInstanceMethod != null
+                    ? getDefaultInstanceMethod.Invoke(itemDef, new object[] { item.stackCount })
+                    : null;
                 if (itemInstance == null)
                 {
                     ModLogger.Error($"Failed to create item instance for: {item.itemId}");
@@ -638,27 +825,27 @@ namespace Behind_Bars.Systems.Jail
                 // Special handling for CashInstance - restore the Balance
                 if (item.itemType == "CashInstance" && item.cashBalance > 0f)
                 {
-#if !MONO
-                    var cashInstance = itemInstance as Il2CppScheduleOne.ItemFramework.CashInstance;
-#else
-                    var cashInstance = itemInstance as ScheduleOne.ItemFramework.CashInstance;
-#endif
-                    if (cashInstance != null)
+                    var setBalanceMethod = itemInstance.GetType().GetMethod("SetBalance");
+                    if (setBalanceMethod != null)
                     {
-                        cashInstance.SetBalance(item.cashBalance);
-                        ModLogger.Info($"✓ Restored cash balance: ${item.cashBalance:N2}");
+                        setBalanceMethod.Invoke(itemInstance, new object[] { item.cashBalance });
+                        ModLogger.Info($"✓ Restored cash balance via reflection: ${item.cashBalance:N2}");
                     }
                 }
 
                 // Add to player inventory using AddItemToInventory (the ACTUAL method that exists)
-                inventory.AddItemToInventory(itemInstance);
+                var addItemToInventoryMethod = inventory.GetType().GetMethod("AddItemToInventory");
+                if (addItemToInventoryMethod != null)
+                {
+                    addItemToInventoryMethod.Invoke(inventory, new[] { itemInstance });
+                }
                 itemsTransferred++;
 
                 ModLogger.Info($"✓ Successfully returned {item.itemName} (ID: {item.itemId})");
 
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         $"Retrieved: {item.itemName}",
                         NotificationType.Progress
                     );
@@ -667,26 +854,61 @@ namespace Behind_Bars.Systems.Jail
                 yield return new WaitForSeconds(0.3f);
             }
 
-            ModLogger.Info($"Direct transfer complete - returned {itemsTransferred}/{legalItems.Count} items");
+            ModLogger.Info($"Stored-property return complete - returned {itemsTransferred}/{storedItemCount} item(s)");
+
+            // A final exact-ID pass keeps the release contract intact if a
+            // delayed inventory refresh made a jail starter item visible only
+            // after the personal-item transfer began.
+            RemoveJailItemsFromInventory(player);
+
+            // Apply the stored civilian outfit one final time before the
+            // snapshot is cleared. This guards against a late native avatar
+            // refresh from the property-transfer/unlock sequence.
+            RestorePlayerClothing(player);
+            MelonCoroutines.Start(RestoreFirstPersonCameraAfterClothingChange());
 
             // Clear stored items
             ClearStoredItemsForPlayer(player);
 
             // Notify completion
-            if (ReleaseManager.Instance != null)
+            var releaseManager = Core.ResolveReleaseManager();
+            if (releaseManager != null)
             {
-                ReleaseManager.Instance.OnInventoryProcessingComplete(player);
+                releaseManager.OnInventoryProcessingComplete(player);
             }
 
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     $"Retrieved {itemsTransferred} personal items - tell guard when ready",
                     NotificationType.Progress
                 );
             }
 
             CompletePickup();
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private IEnumerator RestoreFirstPersonCameraAfterClothingChange()
+        {
+            // Commit the avatar frame before restoring normal first-person input.  Do not
+            // clear camera overrides here: doing so can put the camera inside the newly
+            // restored head/hair mesh after the scanner interaction.
+            yield return new WaitForEndOfFrame();
+            yield return new WaitForEndOfFrame();
+
+            var playerCamera = PlayerSingleton<PlayerCamera>.Instance;
+            if (playerCamera == null || storageSessionActive)
+            {
+                yield break;
+            }
+
+            Player.Local?.SetVisibleToLocalPlayer(false);
+            playerCamera.LockMouse();
+            Singleton<HUD>.Instance?.SetCrosshairVisible(true);
+            ModLogger.Info("InventoryPickupStation restored first-person camera after civilian clothing refresh");
         }
 
         /// <summary>
@@ -757,9 +979,9 @@ namespace Behind_Bars.Systems.Jail
                 // Yield outside of try-catch block
                 if (itemRemoved)
                 {
-                    if (BehindBarsUIManager.Instance != null)
+                    if (Core.ResolveUIManager() != null)
                     {
-                        BehindBarsUIManager.Instance.ShowNotification(
+                        Core.ResolveUIManager().ShowNotification(
                             $"Returned prison item: {itemName}",
                             NotificationType.Progress
                         );
@@ -901,40 +1123,99 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
+        /// Remove all jail items from player inventory using item IDs (synchronous)
+        /// Called before opening storage to ensure jail items are removed first
+        /// </summary>
+        private void RemoveJailItemsFromInventory(Player player)
+        {
+            try
+            {
+                ModLogger.Info("Removing jail items from inventory before opening storage");
+
+#if !MONO
+                var inventory = Il2CppScheduleOne.PlayerScripts.PlayerInventory.Instance;
+#else
+                var inventory = ScheduleOne.PlayerScripts.PlayerInventory.Instance;
+#endif
+                if (inventory == null)
+                {
+                    ModLogger.Warn("PlayerInventory instance not found for jail item removal");
+                    return;
+                }
+
+                // Get all registered jail item IDs from PrisonItemRegistry
+                var jailItemIds = PrisonItemRegistry.GetPrisonItemIds();
+                int totalRemoved = 0;
+
+                foreach (string itemId in jailItemIds)
+                {
+                    try
+                    {
+                        // Check how many items the player has
+                        uint itemCount = inventory.GetAmountOfItem(itemId);
+                        
+                        if (itemCount > 0)
+                        {
+                            // Remove all instances of this item
+                            inventory.RemoveAmountOfItem(itemId, itemCount);
+                            totalRemoved += (int)itemCount;
+                            
+                            ModLogger.Info($"Removed {itemCount} of jail item {itemId} from inventory");
+                        }
+                    }
+                    catch (System.Exception ex)
+                    {
+                        ModLogger.Debug($"Error removing jail item {itemId}: {ex.Message}");
+                    }
+                }
+
+                if (totalRemoved > 0)
+                {
+                    ModLogger.Info($"Removed {totalRemoved} total jail items from inventory before opening storage");
+                }
+                else
+                {
+                    ModLogger.Debug("No jail items found in inventory");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error removing jail items from inventory: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// Fallback method when storage system fails
         /// </summary>
         private void CompletePickupWithoutStorage(Player player)
         {
-            ModLogger.Info("Completing pickup without storage interface");
+            ModLogger.Warn("Storage presentation failed; transferring property through the emergency direct-transfer path");
 
-            // Clear stored items from persistent storage
-            ClearStoredItemsForPlayer(player);
-
-            // Unlock player inventory
-            InventoryProcessor.UnlockPlayerInventory(player);
-            ModLogger.Info("Player inventory unlocked");
-
-            // Notify the ReleaseManager that inventory processing is complete
-            if (ReleaseManager.Instance != null)
+            // Never clear the persistent snapshot merely because its UI could
+            // not be created. DirectItemTransfer performs the same clothing
+            // restoration, exact-ID jail-item cleanup, property return, and
+            // completion notification in that order.
+            if (player == null)
             {
-                ReleaseManager.Instance.OnInventoryProcessingComplete(player);
+                ModLogger.Error("Cannot run emergency property transfer without a player");
+                return;
             }
 
-            // Show notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
-                    "Storage system unavailable - process completed",
+                Core.ResolveUIManager().ShowNotification(
+                    "Storage interface unavailable - returning property directly",
                     NotificationType.Warning
                 );
             }
 
-            CompletePickup();
+            MelonCoroutines.Start(DirectItemTransfer(player));
         }
 
         /// <summary>
-        /// Called by PrisonStorageEntity when storage session is completed
+        /// Close the legacy interactive storage session without finalizing property retrieval.
         /// </summary>
+        /// <remarks>Mono's PrisonStorageEntity may call this callback; the active IL2CPP direct-transfer path does not use it.</remarks>
         public void OnStorageSessionComplete()
         {
             ModLogger.Info("Storage session completed by player - can re-open if needed");
@@ -968,9 +1249,9 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info("Player inventory unlocked - can re-open storage or proceed");
 
             // Show notification that storage is closed but can be re-opened
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Storage closed - interact again to re-open, or tell guard when ready",
                     NotificationType.Progress
                 );
@@ -1014,38 +1295,34 @@ namespace Behind_Bars.Systems.Jail
 #endif
                         if (registry != null)
                         {
-                            var getItemMethod = registry.GetType().GetMethod("GetItem");
-                            if (getItemMethod != null)
+                            var itemDef = PrisonItemRegistry.GetRegistryItemDefinition(registry, itemId);
+                            if (itemDef != null)
                             {
-                                var itemDef = getItemMethod.Invoke(registry, new object[] { itemId });
-                                if (itemDef != null)
+                                // Create an ItemInstance from the definition
+                                var getDefaultInstanceMethod = itemDef.GetType().GetMethod("GetDefaultInstance");
+                                if (getDefaultInstanceMethod != null)
                                 {
-                                    // Create an ItemInstance from the definition
-                                    var getDefaultInstanceMethod = itemDef.GetType().GetMethod("GetDefaultInstance");
-                                    if (getDefaultInstanceMethod != null)
+                                    var itemInstance = getDefaultInstanceMethod.Invoke(itemDef, null);
+                                    if (itemInstance != null)
                                     {
-                                        var itemInstance = getDefaultInstanceMethod.Invoke(itemDef, null);
-                                        if (itemInstance != null)
+                                        // Set stack count if supported
+                                        try
                                         {
-                                            // Set stack count if supported
-                                            try
+                                            var stackCountProperty = itemInstance.GetType().GetProperty("StackCount");
+                                            if (stackCountProperty != null && stackCount > 1)
                                             {
-                                                var stackCountProperty = itemInstance.GetType().GetProperty("StackCount");
-                                                if (stackCountProperty != null && stackCount > 1)
-                                                {
-                                                    stackCountProperty.SetValue(itemInstance, stackCount);
-                                                }
+                                                stackCountProperty.SetValue(itemInstance, stackCount);
                                             }
-                                            catch { } // Ignore stack count errors
+                                        }
+                                        catch { } // Ignore stack count errors
 
-                                            // Add the ItemInstance to inventory
-                                            var addItemToInventoryMethod = inventory.GetType().GetMethod("AddItemToInventory");
-                                            if (addItemToInventoryMethod != null)
-                                            {
-                                                addItemToInventoryMethod.Invoke(inventory, new object[] { itemInstance });
-                                                ModLogger.Info($"Successfully added {itemName} (x{stackCount}) using ItemInstance from registry");
-                                                return;
-                                            }
+                                        // Add the ItemInstance to inventory
+                                        var addItemToInventoryMethod = inventory.GetType().GetMethod("AddItemToInventory");
+                                        if (addItemToInventoryMethod != null)
+                                        {
+                                            addItemToInventoryMethod.Invoke(inventory, new object[] { itemInstance });
+                                            ModLogger.Info($"Successfully added {itemName} (x{stackCount}) using ItemInstance from registry");
+                                            return;
                                         }
                                     }
                                 }
@@ -1120,21 +1397,17 @@ namespace Behind_Bars.Systems.Jail
 #endif
                         if (registry != null)
                         {
-                            var getItemMethod = registry.GetType().GetMethod("GetItem");
-                            if (getItemMethod != null)
+                            var item = PrisonItemRegistry.GetRegistryItemDefinition(registry, prisonItemId);
+                            if (item != null)
                             {
-                                var item = getItemMethod.Invoke(registry, new object[] { prisonItemId });
-                                if (item != null)
+                                // Get the name from the item definition
+                                var nameField = item.GetType().GetField("Name");
+                                if (nameField != null)
                                 {
-                                    // Get the name from the item definition
-                                    var nameField = item.GetType().GetField("Name");
-                                    if (nameField != null)
+                                    var defName = nameField.GetValue(item)?.ToString();
+                                    if (defName == itemName)
                                     {
-                                        var defName = nameField.GetValue(item)?.ToString();
-                                        if (defName == itemName)
-                                        {
-                                            return prisonItemId;
-                                        }
+                                        return prisonItemId;
                                     }
                                 }
                             }
@@ -1156,6 +1429,8 @@ namespace Behind_Bars.Systems.Jail
             }
         }
         
+        // Legacy phone-restoration helper. If no known phone API resolves, it only logs that
+        // the phone was marked returned; it does not guarantee the native phone is enabled.
         private void EnablePlayerPhone()
         {
             try
@@ -1240,7 +1515,7 @@ namespace Behind_Bars.Systems.Jail
             try
             {
                 // Clear from persistent storage
-                var persistentData = PersistentPlayerData.Instance;
+                var persistentData = Core.ResolvePersistentPlayerData();
                 persistentData.ClearPlayerSnapshot(player);
 
                 // Also clear from player handler for compatibility
@@ -1267,7 +1542,7 @@ namespace Behind_Bars.Systems.Jail
             {
                 ModLogger.Info("Restoring player's original clothing from persistent data...");
 
-                var persistentData = PersistentPlayerData.Instance;
+                var persistentData = Core.ResolvePersistentPlayerData();
                 if (persistentData != null)
                 {
                     persistentData.RestorePlayerClothing(player);
@@ -1287,14 +1562,17 @@ namespace Behind_Bars.Systems.Jail
         private void CompletePickup()
         {
             isProcessing = false;
+            // A direct property return has no modal session to close. Clear this guard before
+            // any queued camera restoration runs so it can restore normal first-person view.
+            storageSessionActive = false;
             legalItems.Clear();
             contrabandItems.Clear();
             
             // Update interaction state
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Items retrieved");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Label);
+                SetInteractionMessage("Items retrieved");
+                SetInteractionState(InteractableObject.EInteractableState.Label);
             }
             
             // Reset to default after a delay
@@ -1310,8 +1588,8 @@ namespace Behind_Bars.Systems.Jail
             
             if (interactableObject != null && !isProcessing && !storageSessionActive)
             {
-                interactableObject.SetMessage("Retrieve personal belongings");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                SetInteractionMessage("Retrieve personal belongings");
+                SetInteractionState(InteractableObject.EInteractableState.Default);
             }
         }
         
@@ -1321,6 +1599,11 @@ namespace Behind_Bars.Systems.Jail
         private float lastItemCheckTime = 0f;
         private const float ITEM_CHECK_INTERVAL = 5f; // Check every 5 seconds instead of every frame
 
+        /// <summary>
+        /// Check whether persistent legal or contraband property exists for a player.
+        /// </summary>
+        /// <param name="player">Player whose snapshot should be checked.</param>
+        /// <returns>A cached result for up to five seconds, or <c>false</c> on missing data/error.</returns>
         public bool HasItemsForPlayer(Player player)
         {
             if (player == null) return false;
@@ -1333,7 +1616,7 @@ namespace Behind_Bars.Systems.Jail
 
             try
             {
-                var persistentData = PersistentPlayerData.Instance;
+                var persistentData = Core.ResolvePersistentPlayerData();
                 var legalItems = persistentData.GetLegalItemsForPlayer(player);
                 var contrabandItems = persistentData.GetContrabandItemsForPlayer(player);
 
@@ -1356,46 +1639,84 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Enable the pickup station when a player is being released
+        /// Enable this station for an active release and invite the player to interact.
         /// </summary>
+        /// <param name="player">Player whose release handoff is being prepared.</param>
+        /// <remarks>This enables the interaction surface but does not teleport the player or return items until interaction.</remarks>
         public void EnableForRelease(Player player)
         {
             ModLogger.Info($"Enabling inventory pickup station for {player.name}");
             gameObject.SetActive(true);
+            currentPlayer = player;
+
+            if (storageEntity == null)
+            {
+                SetupStorageEntity();
+            }
+
+            SetReleaseAccessEnabled(true);
 
             if (interactableObject != null)
             {
-                interactableObject.SetMessage("Access personal belongings storage");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                SetInteractionMessage("Access personal belongings storage");
+                SetInteractionState(InteractableObject.EInteractableState.Default);
             }
 
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Visit the storage station to retrieve your personal belongings",
                     NotificationType.Instruction
                 );
             }
         }
 
-        /// <summary>
-        /// Note: Player teleportation is now handled by the ReleaseManager and ReleaseOfficer
-        /// This method is no longer used in the new release workflow
-        /// </summary>
-
+        // Player teleportation is owned by ReleaseManager/ReleaseOfficer. Update only keeps
+        // this station's interaction label synchronized and does not move the player.
         void Update()
         {
+            if (!releaseAccessEnabled)
+            {
+                if (interactableObject != null)
+                {
+                    SetInteractionMessage("Storage unavailable");
+                    SetInteractionState(InteractableObject.EInteractableState.Invalid);
+                }
+                return;
+            }
+
             // Update interaction state - allow access even if storage is empty (for clothing restoration)
             if (!isProcessing && !storageSessionActive && interactableObject != null)
             {
                 // Always allow access to storage, even if empty - player needs to restore clothing
-                interactableObject.SetMessage("Access personal belongings storage");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Default);
+                SetInteractionMessage("Access personal belongings storage");
+                SetInteractionState(InteractableObject.EInteractableState.Default);
             }
             else if (storageSessionActive && interactableObject != null)
             {
-                interactableObject.SetMessage("Collect Personal Belongings");
-                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Label);
+                SetInteractionMessage("Collect Personal Belongings");
+                SetInteractionState(InteractableObject.EInteractableState.Label);
+            }
+        }
+
+        private void SetReleaseAccessEnabled(bool enabled)
+        {
+            releaseAccessEnabled = enabled;
+
+            if (interactableObject == null)
+            {
+                return;
+            }
+
+            if (enabled)
+            {
+                SetInteractionMessage("Access personal belongings storage");
+                SetInteractionState(InteractableObject.EInteractableState.Default);
+            }
+            else
+            {
+                SetInteractionMessage("Storage unavailable");
+                SetInteractionState(InteractableObject.EInteractableState.Invalid);
             }
         }
     }

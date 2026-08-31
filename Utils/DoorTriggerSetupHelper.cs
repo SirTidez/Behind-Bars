@@ -2,6 +2,7 @@ using UnityEngine;
 using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.NPCs;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 namespace Behind_Bars.Utils
 {
@@ -9,11 +10,22 @@ namespace Behind_Bars.Utils
     /// Helper utility to automatically setup DoorTriggerHandler components on existing door triggers
     /// Run this once to configure all your door triggers with the new system
     /// </summary>
+    /// <remarks>
+    /// These are in-game scene mutation utilities. They add or reconfigure
+    /// components on the active jail hierarchy and provide no undo or cleanup
+    /// operation; callers should run them only when the jail controller and its
+    /// door references are ready.
+    /// </remarks>
     public static class DoorTriggerSetupHelper
     {
         /// <summary>
         /// Automatically find and setup all door triggers in the jail structure
         /// </summary>
+        /// <remarks>Configures existing trigger colliders for booking, holding,
+        /// and jail-cell doors. Existing handlers are updated as well as missing
+        /// handlers being added, so the reported count includes both actions.
+        /// The booking entry door is intentionally included in the traversal but
+        /// remains documented as being handled directly by the system.</remarks>
         public static void SetupAllDoorTriggers()
         {
             ModLogger.Info("=== DOOR TRIGGER SETUP HELPER ===");
@@ -61,6 +73,13 @@ namespace Behind_Bars.Utils
         /// <summary>
         /// Setup triggers for a specific door
         /// </summary>
+        /// <param name="door">The jail door whose holder hierarchy is searched.</param>
+        /// <param name="doorDisplayName">The diagnostic label used in logs.</param>
+        /// <returns>The number of existing handlers updated or new handlers
+        /// added; zero when the door/holder is absent or no trigger collider is found.</returns>
+        /// <remarks>Every matching trigger gets the supplied door association
+        /// and has auto-detection disabled. The hierarchy search includes child
+        /// objects recursively and does not filter inactive transforms.</remarks>
         private static int SetupTriggersForDoor(JailDoor door, string doorDisplayName)
         {
             if (door?.doorHolder == null) return 0;
@@ -78,7 +97,7 @@ namespace Behind_Bars.Utils
                 if (existingHandler == null)
                 {
                     // Add the handler
-                    var handler = trigger.gameObject.AddComponent<DoorTriggerHandler>();
+                    var handler = BBHelpers.AddComponentSafe<DoorTriggerHandler>(trigger.gameObject);
                     
                     // Configure it
                     handler.associatedDoor = door;
@@ -116,6 +135,10 @@ namespace Behind_Bars.Utils
         /// <summary>
         /// Find all trigger colliders in a hierarchy
         /// </summary>
+        /// <param name="root">The root transform to inspect, including itself.</param>
+        /// <returns>A newly allocated list of trigger colliders found recursively.</returns>
+        /// <remarks>The caller currently guards a null door holder; this helper
+        /// itself does not null-check <paramref name="root"/>.</remarks>
         private static System.Collections.Generic.List<Collider> FindTriggersInHierarchy(Transform root)
         {
             var triggers = new System.Collections.Generic.List<Collider>();
@@ -136,6 +159,10 @@ namespace Behind_Bars.Utils
         /// <summary>
         /// Recursively find trigger colliders
         /// </summary>
+        /// <param name="parent">The transform whose descendants are traversed.</param>
+        /// <param name="triggers">The list to which trigger colliders are appended.</param>
+        /// <remarks>Traversal includes inactive descendants and assumes both
+        /// arguments are non-null.</remarks>
         private static void FindTriggersRecursive(Transform parent, System.Collections.Generic.List<Collider> triggers)
         {
             for (int i = 0; i < parent.childCount; i++)
@@ -157,6 +184,11 @@ namespace Behind_Bars.Utils
         /// <summary>
         /// Create trigger colliders for doors that don't have them
         /// </summary>
+        /// <remarks>For each configured door without any trigger collider, adds
+        /// a child GameObject with a fixed-size trigger BoxCollider and a
+        /// manually associated DoorTriggerHandler. Existing triggers are left
+        /// unchanged; created objects are not tagged, layered, or tracked for
+        /// later removal.</remarks>
         public static void CreateMissingTriggers()
         {
             ModLogger.Info("=== CREATING MISSING DOOR TRIGGERS ===");
@@ -203,6 +235,12 @@ namespace Behind_Bars.Utils
         /// <summary>
         /// Create a trigger for a door if it doesn't have one
         /// </summary>
+        /// <param name="door">The jail door whose holder should receive a trigger child.</param>
+        /// <param name="doorDisplayName">The diagnostic label used in logs.</param>
+        /// <returns><c>1</c> when a trigger is created; otherwise <c>0</c>.</returns>
+        /// <remarks>Any existing trigger anywhere in the holder hierarchy
+        /// prevents creation. The new BoxCollider is centered at local zero,
+        /// sized <c>(3, 3, 1)</c>, and marked as a trigger.</remarks>
         private static int CreateTriggerIfMissing(JailDoor door, string doorDisplayName)
         {
             if (door?.doorHolder == null) return 0;
@@ -226,7 +264,7 @@ namespace Behind_Bars.Utils
             boxCollider.size = new Vector3(3f, 3f, 1f); // Reasonable size for a door trigger
 
             // Add and configure the DoorTriggerHandler
-            var handler = triggerGO.AddComponent<DoorTriggerHandler>();
+            var handler = BBHelpers.AddComponentSafe<DoorTriggerHandler>(triggerGO);
             handler.associatedDoor = door;
             handler.autoDetectDoor = false;
 
@@ -237,6 +275,10 @@ namespace Behind_Bars.Utils
         /// <summary>
         /// Debug method to list all doors and their trigger status
         /// </summary>
+        /// <remarks>Read-only with respect to scene objects. Trigger counts are
+        /// collected recursively, while Unity's default
+        /// <c>GetComponentsInChildren</c> handler query may omit inactive
+        /// objects, so the two counts can describe different active scopes.</remarks>
         public static void DebugListAllDoors()
         {
             ModLogger.Info("=== DOOR TRIGGER STATUS REPORT ===");
@@ -280,6 +322,10 @@ namespace Behind_Bars.Utils
         /// <summary>
         /// Debug a single door's trigger status
         /// </summary>
+        /// <param name="door">The jail door to inspect.</param>
+        /// <param name="doorDisplayName">The diagnostic label used in logs.</param>
+        /// <remarks>Logs the recursive trigger count and the handler count; it
+        /// does not add, update, or remove components.</remarks>
         private static void DebugDoorStatus(JailDoor door, string doorDisplayName)
         {
             if (door?.doorHolder == null)

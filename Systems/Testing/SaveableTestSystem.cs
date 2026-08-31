@@ -7,13 +7,12 @@ using Behind_Bars.Systems;
 using Behind_Bars.Systems.CrimeTracking;
 using Behind_Bars.Utils.Saveable;
 using UnityEngine;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
-using Il2CppScheduleOne.Persistence;
 #else
 using ScheduleOne.PlayerScripts;
-using ScheduleOne.Persistence;
 #endif
 
 namespace Behind_Bars.Systems.Testing
@@ -22,19 +21,47 @@ namespace Behind_Bars.Systems.Testing
     /// Test system for saving test data using Alt + letter keybinds.
     /// Provides unit testing capabilities for the saveable system.
     /// </summary>
+    /// <remarks>
+    /// This component is available only when developer shortcuts are enabled. Its hotkeys
+    /// write/load saveables and Alt+C permanently deletes the mod's BehindBars save folder;
+    /// use only with a disposable/test save and after confirming the loaded game path.
+    /// </remarks>
     public class SaveableTestSystem : MonoBehaviour
     {
+#if !MONO
+        /// <summary>Creates the IL2CPP component wrapper for Unity.</summary>
+        /// <param name="ptr">Native object pointer supplied by IL2CPP.</param>
+        public SaveableTestSystem(System.IntPtr ptr) : base(ptr) { }
+#endif
+
         private static SaveableTestSystem? _instance;
-        public static SaveableTestSystem Instance
+        /// <summary>
+        /// Gets the developer-only singleton, creating its persistent host on first access.
+        /// Returns null when developer shortcuts are disabled.
+        /// </summary>
+        public static SaveableTestSystem? Instance
         {
             get
             {
+                if (!Core.EnableDeveloperShortcuts)
+                {
+                    return null;
+                }
+
                 if (_instance == null)
                 {
                     GameObject go = new GameObject("SaveableTestSystem");
-                    _instance = go.AddComponent<SaveableTestSystem>();
+                    _instance = BBHelpers.GetOrAddComponentSafe<SaveableTestSystem>(go);
+                    if (_instance == null)
+                    {
+                        UnityEngine.Object.Destroy(go);
+                        ModLogger.Error("Failed to initialize SaveableTestSystem component");
+                        return null;
+                    }
+
                     DontDestroyOnLoad(go);
                 }
+
                 return _instance;
             }
         }
@@ -47,6 +74,9 @@ namespace Behind_Bars.Systems.Testing
 
         private void Update()
         {
+            // Manual hotkeys are intentionally gated on IsGameLoaded. Alt+S writes all
+            // registered saveables, Alt+L reloads them, Alt+R/P add test records, Alt+D
+            // dumps metadata, and Alt+C deletes only BehindBars save data.
             // Check for Alt + letter combinations
             // Only process if game is loaded to avoid errors
 #if !MONO
@@ -105,6 +135,8 @@ namespace Behind_Bars.Systems.Testing
         {
             try
             {
+                // This writes every registered saveable under the active save folder;
+                // it is a destructive test of serialization and can overwrite changes.
                 ModLogger.Info("=== TEST: Saving All Saveables ===");
                 
 #if !MONO
@@ -130,11 +162,7 @@ namespace Behind_Bars.Systems.Testing
                         string path = Path.Combine(basePath, folder);
                         Directory.CreateDirectory(path);
 
-#if !MONO
-                        Il2CppSystem.Collections.Generic.List<string> extra = new Il2CppSystem.Collections.Generic.List<string>();
-#else
                         System.Collections.Generic.List<string> extra = new System.Collections.Generic.List<string>();
-#endif
                         saveable.SaveInternal(path, ref extra);
                         ModLogger.Info($"✓ Saved {saveable.GetType().Name} to {path}");
                         savedCount++;
@@ -160,6 +188,8 @@ namespace Behind_Bars.Systems.Testing
         {
             try
             {
+                // Loading replaces each registered object's state from disk. Unsaved
+                // runtime changes are intentionally discarded by this manual test.
                 ModLogger.Info("=== TEST: Loading All Saveables ===");
                 
 #if !MONO
@@ -215,6 +245,8 @@ namespace Behind_Bars.Systems.Testing
         {
             try
             {
+                // This deliberately appends a synthetic crime to the local player's
+                // RapSheet before saving; run only against a test/disposable save.
                 ModLogger.Info("=== TEST: Saving RapSheet Test Data ===");
                 
                 var player = Player.Local;
@@ -224,7 +256,7 @@ namespace Behind_Bars.Systems.Testing
                     return;
                 }
 
-                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                var rapSheet = Core.GetRapSheet(player);
                 if (rapSheet == null)
                 {
                     ModLogger.Warn("No RapSheet found for player - creating test one");
@@ -259,11 +291,7 @@ namespace Behind_Bars.Systems.Testing
                 string path = Path.Combine(basePath, "RapSheet");
                 Directory.CreateDirectory(path);
 
-#if !MONO
-                Il2CppSystem.Collections.Generic.List<string> extra = new Il2CppSystem.Collections.Generic.List<string>();
-#else
                 System.Collections.Generic.List<string> extra = new System.Collections.Generic.List<string>();
-#endif
                 rapSheet.SaveInternal(path, ref extra);
                 
                 ModLogger.Info($"✓ Saved RapSheet test data to {path}");
@@ -284,6 +312,8 @@ namespace Behind_Bars.Systems.Testing
         {
             try
             {
+                // This deliberately starts a 1,440 game-minute parole term on the local
+                // player and persists it; it is not a read-only diagnostic.
                 ModLogger.Info("=== TEST: Saving ParoleRecord Test Data ===");
                 
                 var player = Player.Local;
@@ -293,7 +323,7 @@ namespace Behind_Bars.Systems.Testing
                     return;
                 }
 
-                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                var rapSheet = Core.GetRapSheet(player);
                 if (rapSheet == null)
                 {
                     ModLogger.Warn("No RapSheet found - creating one first");
@@ -325,11 +355,7 @@ namespace Behind_Bars.Systems.Testing
                 string path = Path.Combine(basePath, "RapSheet");
                 Directory.CreateDirectory(path);
 
-#if !MONO
-                Il2CppSystem.Collections.Generic.List<string> extra = new Il2CppSystem.Collections.Generic.List<string>();
-#else
                 System.Collections.Generic.List<string> extra = new System.Collections.Generic.List<string>();
-#endif
                 rapSheet.SaveInternal(path, ref extra);
                 
                 ModLogger.Info($"✓ Saved ParoleRecord test data to {path}");
@@ -357,10 +383,9 @@ namespace Behind_Bars.Systems.Testing
                 foreach (var saveable in saveables)
                 {
                     ModLogger.Info($"  - {saveable.GetType().FullName}");
-                    ScheduleOne.Persistence.ISaveable gameInterface = saveable;
-                    ModLogger.Info($"    Folder: {gameInterface.SaveFolderName}");
-                    ModLogger.Info($"    File: {gameInterface.SaveFileName}");
-                    ModLogger.Info($"    Save Under Folder: {gameInterface.ShouldSaveUnderFolder}");
+                    ModLogger.Info($"    Folder: {saveable.SaveFolderNameInternal}");
+                    ModLogger.Info($"    File: {saveable.SaveFileNameInternal}");
+                    ModLogger.Info($"    Save Under Folder: {saveable.ShouldSaveUnderFolderInternal}");
                     ModLogger.Info($"    Has Changed: {saveable.HasChanged}");
                 }
                 
@@ -380,6 +405,9 @@ namespace Behind_Bars.Systems.Testing
         {
             try
             {
+                // Destructive operation: Directory.Delete(..., true) removes the entire
+                // BehindBars save subtree. The path is rooted at the active game's
+                // LoadedGameFolderPath and is not recoverable by this component.
                 ModLogger.Info("=== TEST: Clearing Behind Bars Save Data ===");
                 
 #if !MONO
@@ -402,7 +430,7 @@ namespace Behind_Bars.Systems.Testing
                     ModLogger.Info($"✓ Deleted Behind Bars save data directory: {basePath}");
                     
                     // Also clear RapSheetManager cache
-                    RapSheetManager.Instance.ClearCache();
+                    Core.ClearRapSheetCache();
                     ModLogger.Info("✓ Cleared RapSheetManager cache");
                 }
                 else

@@ -25,17 +25,11 @@
         <Reference Include="Unity.InputSystem.ForUI">
             <HintPath>$(S1Dir)\Schedule I_Data\Managed\Unity.InputSystem.ForUI.dll</HintPath>
         </Reference>
-        <Reference Include="Unity.InputSystem.RebindingUI">
-            <HintPath>$(S1Dir)\Schedule I_Data\Managed\Unity.InputSystem.RebindingUI.dll</HintPath>
-        </Reference>
         <Reference Include="Unity.Mathematics">
             <HintPath>$(S1Dir)\Schedule I_Data\Managed\Unity.Mathematics.dll</HintPath>
         </Reference>
         <Reference Include="Unity.MemoryProfiler">
             <HintPath>$(S1Dir)\Schedule I_Data\Managed\Unity.MemoryProfiler.dll</HintPath>
-        </Reference>
-        <Reference Include="Unity.Postprocessing.Runtime">
-            <HintPath>$(S1Dir)\Schedule I_Data\Managed\Unity.Postprocessing.Runtime.dll</HintPath>
         </Reference>
         <Reference Include="Unity.ProGrids">
             <HintPath>$(S1Dir)\Schedule I_Data\Managed\Unity.ProGrids.dll</HintPath>
@@ -366,16 +360,16 @@
 		</Reference>
     </ItemGroup>
     <ItemGroup Label="AssembliesMono" Condition="'$(IsMono)' == 'true'">
-        <Reference Include="Assembly-CSharp">
+        <Reference Include="Assembly-CSharp" Publicize="true">
             <Private>false</Private>
             <HintPath>$(S1Dir)\Schedule I_Data\Managed\Assembly-CSharp.dll</HintPath>
         </Reference>
         <Reference Include="Assembly-CSharp-firstpass">
             <HintPath>$(S1Dir)\Schedule I_Data\Managed\Assembly-CSharp-firstpass.dll</HintPath>
         </Reference>
-        <Reference Include="Assembly-CSharp-publicized">
-			<HintPath>$(S1Dir)\Schedule I_Data\Managed\Assembly-CSharp-publicized.dll</HintPath>
-		</Reference>
+        <Reference Include="ScheduleOne.Core">
+            <HintPath>$(S1Dir)\Schedule I_Data\Managed\ScheduleOne.Core.dll</HintPath>
+        </Reference>
     </ItemGroup>
 
 </Project>

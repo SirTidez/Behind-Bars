@@ -1,4 +1,5 @@
 ﻿using Behind_Bars.Helpers;
+using Behind_Bars.Systems.Parole;
 using Behind_Bars.Utils;
 using Behind_Bars.Utils.Saveable;
 using System;
@@ -24,13 +25,15 @@ namespace Behind_Bars.Systems.CrimeTracking
         private bool isOnParole;
 
         [SaveableField("paroleStartTime")]
-        private float paroleStartTime; // Now stores game time (game minutes)
+        private float paroleStartTime; // Absolute game time in game minutes.
 
         [SaveableField("paroleEndTime")]
-        private float paroleEndTime; // Now stores game time (game minutes)
+        private float paroleEndTime; // Absolute game time in game minutes.
 
+        // The serialized key is an old public contract. Its value is now game minutes,
+        // not real seconds; keep the field name so existing saves continue to hydrate.
         [SaveableField("paroleTermLengthInSeconds")]
-        private float paroleTermLengthInSeconds; // Kept for JSON compatibility, but now stores game minutes
+        private float paroleTermLengthInSeconds;
 
         [SaveableField("paroleViolations")]
         private List<ViolationRecord> paroleViolations;
@@ -40,6 +43,79 @@ namespace Behind_Bars.Systems.CrimeTracking
 
         [SaveableField("pausedRemainingTime")]
         private float pausedRemainingTime; // Now stores game time (game minutes)
+
+        [SaveableField("lastCheckInGameTime")]
+        private float lastCheckInGameTime; // Last check-in time (game minutes)
+
+        [SaveableField("checkInCount")]
+        private int checkInCount; // Total number of check-ins
+
+        [SaveableField("missedCheckIns")]
+        private int missedCheckIns; // Number of missed check-ins
+
+        [SaveableField("complianceScore")]
+        private float complianceScore; // Compliance score (0-100)
+
+        [SaveableField("lastInteractionGameTime")]
+        private float lastInteractionGameTime; // Last interaction with officer (game minutes)
+
+        [SaveableField("officerRapport")]
+        private OfficerRapportRecord officerRapport;
+
+        [SaveableField("activeConditionIds")]
+        private List<string> activeConditionIds;
+
+        // Persists graduated condition warnings independently of formal violations.  A
+        // warning must survive save/load or a player can indefinitely avoid the next
+        // enforcement tier by reloading between check-ins.
+        [SaveableField("conditionWarningCounts")]
+        private Dictionary<string, int> conditionWarningCounts;
+
+        // A check-in window must survive save/load; the ParoleManager's runtime dictionary is
+        // only a cache of this record-owned schedule.
+        [SaveableField("scheduledCheckInDay")]
+        private int scheduledCheckInDay;
+
+        [SaveableField("scheduledCheckInStartMinute")]
+        private int scheduledCheckInStartMinute;
+
+        [SaveableField("scheduledCheckInEndMinute")]
+        private int scheduledCheckInEndMinute;
+
+        [SaveableField("scheduledCheckInReminderSent")]
+        private bool scheduledCheckInReminderSent;
+
+        // Warrant enforcement is runtime-driven, but the warrant itself is a parole outcome
+        // and must be restored when the player reloads before being arrested.
+        [SaveableField("activeAgentWarrant")]
+        private bool activeAgentWarrant;
+
+        [SaveableField("consecutiveHighComplianceDays")]
+        private int consecutiveHighComplianceDays;
+
+        [SaveableField("lastStepDownEvalGameTime")]
+        private float lastStepDownEvalGameTime;
+
+        [SaveableField("lsiStepDownCount")]
+        private int lsiStepDownCount;
+
+        [SaveableField("homeVisitsMissed")]
+        private int homeVisitsMissed;
+
+        [SaveableField("nextHomeVisitGameTime")]
+        private float nextHomeVisitGameTime;
+
+        [SaveableField("totalFeesOwed")]
+        private float totalFeesOwed;
+
+        [SaveableField("totalFeesPaid")]
+        private float totalFeesPaid;
+
+        [SaveableField("missedPayments")]
+        private int missedPayments;
+
+        [SaveableField("nextFeeGameTime")]
+        private float nextFeeGameTime;
 
         // Non-Serialized fields
         [NonSerialized]
@@ -51,6 +127,25 @@ namespace Behind_Bars.Systems.CrimeTracking
         public ParoleRecord()
         {
             this.paroleViolations = new List<ViolationRecord>();
+            this.checkInCount = 0;
+            this.missedCheckIns = 0;
+            this.complianceScore = 100f; // Start with perfect compliance
+            this.lastCheckInGameTime = 0f;
+            this.lastInteractionGameTime = 0f;
+            this.officerRapport = new OfficerRapportRecord();
+            this.activeConditionIds = new List<string>();
+            this.conditionWarningCounts = new Dictionary<string, int>();
+            this.scheduledCheckInDay = -1;
+            this.scheduledCheckInStartMinute = -1;
+            this.scheduledCheckInEndMinute = -1;
+            this.scheduledCheckInReminderSent = false;
+            this.activeAgentWarrant = false;
+            this.consecutiveHighComplianceDays = 0;
+            this.lsiStepDownCount = 0;
+            this.homeVisitsMissed = 0;
+            this.totalFeesOwed = 0f;
+            this.totalFeesPaid = 0f;
+            this.missedPayments = 0;
         }
 
         /// <summary>
@@ -61,6 +156,25 @@ namespace Behind_Bars.Systems.CrimeTracking
         {
             this.player = player;
             this.paroleViolations = new List<ViolationRecord>();
+            this.checkInCount = 0;
+            this.missedCheckIns = 0;
+            this.complianceScore = 100f; // Start with perfect compliance
+            this.lastCheckInGameTime = 0f;
+            this.lastInteractionGameTime = 0f;
+            this.officerRapport = new OfficerRapportRecord();
+            this.activeConditionIds = new List<string>();
+            this.conditionWarningCounts = new Dictionary<string, int>();
+            this.scheduledCheckInDay = -1;
+            this.scheduledCheckInStartMinute = -1;
+            this.scheduledCheckInEndMinute = -1;
+            this.scheduledCheckInReminderSent = false;
+            this.activeAgentWarrant = false;
+            this.consecutiveHighComplianceDays = 0;
+            this.lsiStepDownCount = 0;
+            this.homeVisitsMissed = 0;
+            this.totalFeesOwed = 0f;
+            this.totalFeesPaid = 0f;
+            this.missedPayments = 0;
             // Game's save system handles loading automatically - no manual file loading needed
         }
 
@@ -124,6 +238,8 @@ namespace Behind_Bars.Systems.CrimeTracking
             paroleStartTime = currentGameTime;
             paroleTermLengthInSeconds = termLengthInGameMinutes; // Store in game minutes (kept name for JSON compatibility)
             paroleEndTime = paroleStartTime + termLengthInGameMinutes;
+            ClearDailyCheckInSchedule();
+            SetActiveAgentWarrant(false);
 
             ModLogger.Info($"Started parole for {player.name}. Term: {termLengthInGameMinutes} game minutes ({GameTimeManager.FormatGameTime(termLengthInGameMinutes)}). Ends at game time: {paroleEndTime}");
             // Game's save system handles saving automatically - no manual file saving needed
@@ -143,6 +259,8 @@ namespace Behind_Bars.Systems.CrimeTracking
             }
 
             isOnParole = false;
+            ClearDailyCheckInSchedule();
+            SetActiveAgentWarrant(false);
             float actualEndGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
 
             ModLogger.Info($"Ended parole for {player.name}. Was scheduled to end at game time: {paroleEndTime}, actually ended at game time: {actualEndGameTime}");
@@ -255,6 +373,23 @@ namespace Behind_Bars.Systems.CrimeTracking
         }
 
         /// <summary>
+        /// Extends an active parole term and persists the new end time. Runtime trackers are
+        /// intentionally updated by their owning manager after this record mutation.
+        /// </summary>
+        public bool ExtendActiveParole(float additionalGameMinutes)
+        {
+            if (!isOnParole || isPaused || additionalGameMinutes <= 0f)
+            {
+                return false;
+            }
+
+            paroleEndTime += additionalGameMinutes;
+            paroleTermLengthInSeconds += additionalGameMinutes;
+            ModLogger.Info($"[PAROLE] Extended active parole for {player?.name ?? "player"} by {additionalGameMinutes} game minutes.");
+            return true;
+        }
+
+        /// <summary>
         /// Checks if parole is currently paused.
         /// </summary>
         /// <returns>True if parole is paused, false otherwise.</returns>
@@ -266,7 +401,7 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// <summary>
         /// Gets the remaining time that was preserved when parole was paused.
         /// </summary>
-        /// <returns>The paused remaining time in seconds, or 0 if not paused.</returns>
+        /// <returns>The paused remaining time in game minutes, or 0 if not paused.</returns>
         public float GetPausedRemainingTime()
         {
             return isPaused ? pausedRemainingTime : 0f;
@@ -382,6 +517,534 @@ namespace Behind_Bars.Systems.CrimeTracking
 
             // Format using GameTimeManager
             return GameTimeManager.FormatGameTime(remaining);
+        }
+
+        #endregion
+
+        #region Check-In Methods
+
+        /// <summary>
+        /// Record a check-in for the parolee
+        /// </summary>
+        /// <returns>True if check-in was recorded successfully</returns>
+        public bool RecordCheckIn()
+        {
+            if (!isOnParole)
+            {
+                ModLogger.Warn($"Player {player.name} is not on parole. Cannot record check-in.");
+                return false;
+            }
+
+            float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
+            lastCheckInGameTime = currentGameTime;
+            lastInteractionGameTime = currentGameTime;
+            checkInCount++;
+
+            // Update compliance score based on check-in (positive factor)
+            complianceScore = Mathf.Min(100f, complianceScore + 2f);
+
+            ModLogger.Info($"Recorded check-in for {player.name}. Total check-ins: {checkInCount}");
+            // Game's save system handles saving automatically
+            return true;
+        }
+
+        /// <summary>
+        /// Get the last check-in time
+        /// </summary>
+        /// <returns>Last check-in time in game minutes, or 0 if never checked in</returns>
+        public float GetLastCheckInGameTime()
+        {
+            return lastCheckInGameTime;
+        }
+
+        /// <summary>
+        /// Get the total number of check-ins
+        /// </summary>
+        /// <returns>Check-in count</returns>
+        public int GetCheckInCount()
+        {
+            return checkInCount;
+        }
+
+        /// <summary>
+        /// Record a missed check-in
+        /// </summary>
+        public void RecordMissedCheckIn()
+        {
+            if (!isOnParole)
+            {
+                ModLogger.Warn($"Player {player.name} is not on parole. Cannot record missed check-in.");
+                return;
+            }
+
+            if (isPaused)
+            {
+                ModLogger.Warn($"Player {player.name}'s parole is paused. Cannot record missed check-in.");
+                return;
+            }
+
+            missedCheckIns++;
+            // Decrease compliance score for missed check-in
+            complianceScore = Mathf.Max(0f, complianceScore - 5f);
+            ModLogger.Info($"Recorded missed check-in for {player.name}. Total missed: {missedCheckIns}");
+            // Game's save system handles saving automatically
+        }
+
+        /// <summary>
+        /// Get the number of missed check-ins
+        /// </summary>
+        /// <returns>Missed check-in count</returns>
+        public int GetMissedCheckIns()
+        {
+            return missedCheckIns;
+        }
+
+        #endregion
+
+        #region Compliance Methods
+
+        /// <summary>
+        /// Calculate compliance score based on various factors
+        /// </summary>
+        /// <returns>Compliance score (0-100)</returns>
+        public float CalculateComplianceScore()
+        {
+            float score = 100f;
+
+            // Deduct points for violations
+            int violationCount = GetViolationCount();
+            score -= violationCount * 10f; // -10 points per violation
+
+            // Deduct points for missed check-ins
+            score -= missedCheckIns * 5f; // -5 points per missed check-in
+
+            // Add points for check-ins
+            score += checkInCount * 2f; // +2 points per check-in
+
+            // Ensure score stays in valid range
+            complianceScore = Mathf.Clamp(score, 0f, 100f);
+            return complianceScore;
+        }
+
+        /// <summary>
+        /// Get the current compliance score
+        /// </summary>
+        /// <returns>Compliance score (0-100)</returns>
+        public float GetComplianceScore()
+        {
+            // Recalculate if needed
+            CalculateComplianceScore();
+            return complianceScore;
+        }
+
+        /// <summary>
+        /// Update compliance score directly
+        /// </summary>
+        /// <param name="newScore">New compliance score (will be clamped to 0-100)</param>
+        public void UpdateComplianceScore(float newScore)
+        {
+            complianceScore = Mathf.Clamp(newScore, 0f, 100f);
+            ModLogger.Debug($"Updated compliance score for {player.name} to {complianceScore}");
+            // Game's save system handles saving automatically
+        }
+
+        /// <summary>
+        /// Adjust compliance score by a delta amount
+        /// </summary>
+        /// <param name="delta">Amount to adjust (positive or negative)</param>
+        public void AdjustComplianceScore(float delta)
+        {
+            complianceScore = Mathf.Clamp(complianceScore + delta, 0f, 100f);
+            ModLogger.Debug($"Adjusted compliance score for {player.name} by {delta} to {complianceScore}");
+            // Game's save system handles saving automatically
+        }
+
+        #endregion
+
+        #region Interaction Methods
+
+        /// <summary>
+        /// Record an interaction with the supervising officer
+        /// </summary>
+        public void RecordInteraction()
+        {
+            float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
+            lastInteractionGameTime = currentGameTime;
+            // Game's save system handles saving automatically
+        }
+
+        /// <summary>
+        /// Get the last interaction time
+        /// </summary>
+        /// <returns>Last interaction time in game minutes, or 0 if never interacted</returns>
+        public float GetLastInteractionGameTime()
+        {
+            return lastInteractionGameTime;
+        }
+
+        #endregion
+
+        #region Conditions Methods
+
+        /// <summary>
+        /// Get a summary of parole conditions for display
+        /// </summary>
+        /// <returns>Formatted string with parole conditions</returns>
+        public string GetConditionsSummary()
+        {
+            if (!isOnParole)
+            {
+                return "Not on parole";
+            }
+
+            var (isParole, remainingTime) = GetParoleStatus();
+            if (!isParole)
+            {
+                return "Parole expired";
+            }
+
+            string summary = $"Parole Conditions:\n";
+            summary += $"Duration: {GameTimeManager.FormatGameTime(paroleTermLengthInSeconds)}\n";
+            summary += $"Remaining: {GetRemainingTimeFormatted()}\n";
+            summary += $"Check-ins: {checkInCount} (Missed: {missedCheckIns})\n";
+            summary += $"Violations: {GetViolationCount()}\n";
+            summary += $"Compliance Score: {complianceScore:F1}/100";
+
+            return summary;
+        }
+
+        #endregion
+
+        #region Rapport Methods
+
+        /// <summary>
+        /// Get the officer rapport record
+        /// </summary>
+        public OfficerRapportRecord GetOfficerRapport()
+        {
+            if (officerRapport == null)
+                officerRapport = new OfficerRapportRecord();
+            return officerRapport;
+        }
+
+        /// <summary>
+        /// Adjust officer rapport score
+        /// </summary>
+        public void AdjustRapport(float delta)
+        {
+            GetOfficerRapport().AdjustRapport(delta);
+        }
+
+        /// <summary>
+        /// Get the current rapport score
+        /// </summary>
+        public float GetRapportScore() => GetOfficerRapport().GetRapportScore();
+
+        /// <summary>
+        /// Get the current rapport tier
+        /// </summary>
+        public RapportTier GetRapportTier() => GetOfficerRapport().GetRapportTier();
+
+        /// <summary>
+        /// Initialize rapport from carry-over value (from previous parole term)
+        /// </summary>
+        public void InitializeRapportFromCarryOver(float carryOverScore)
+        {
+            GetOfficerRapport().SetRapportScore(carryOverScore);
+        }
+
+        #endregion
+
+        #region Active Conditions Methods
+
+        /// <summary>
+        /// Get the list of active condition IDs
+        /// </summary>
+        public List<string> GetActiveConditionIds()
+        {
+            return activeConditionIds ?? (activeConditionIds = new List<string>());
+        }
+
+        /// <summary>
+        /// Set the active condition IDs
+        /// </summary>
+        public void SetActiveConditionIds(List<string> conditionIds)
+        {
+            activeConditionIds = conditionIds ?? new List<string>();
+        }
+
+        /// <summary>
+        /// Add a condition ID to active conditions
+        /// </summary>
+        public void AddActiveCondition(string conditionId)
+        {
+            if (activeConditionIds == null)
+                activeConditionIds = new List<string>();
+            if (!activeConditionIds.Contains(conditionId))
+                activeConditionIds.Add(conditionId);
+        }
+
+        /// <summary>
+        /// Check if a condition is active
+        /// </summary>
+        public bool IsConditionActive(string conditionId)
+        {
+            return activeConditionIds != null && activeConditionIds.Contains(conditionId);
+        }
+
+        /// <summary>
+        /// Records and returns the next persisted warning count for a parole condition.
+        /// Formal violations remain separate entries in the parole record.
+        /// </summary>
+        public int RecordConditionWarning(string conditionId)
+        {
+            if (string.IsNullOrWhiteSpace(conditionId))
+            {
+                return 0;
+            }
+
+            conditionWarningCounts ??= new Dictionary<string, int>();
+            int nextCount = GetConditionWarningCount(conditionId) + 1;
+            conditionWarningCounts[conditionId] = nextCount;
+            return nextCount;
+        }
+
+        /// <summary>
+        /// Returns the persisted warning count for a condition.
+        /// </summary>
+        public int GetConditionWarningCount(string conditionId)
+        {
+            return !string.IsNullOrWhiteSpace(conditionId) && conditionWarningCounts != null &&
+                   conditionWarningCounts.TryGetValue(conditionId, out int warningCount)
+                ? warningCount
+                : 0;
+        }
+
+        /// <summary>
+        /// Clears persisted warnings after the player satisfies a condition.
+        /// </summary>
+        public void ResetConditionWarnings(string conditionId)
+        {
+            if (!string.IsNullOrWhiteSpace(conditionId))
+            {
+                conditionWarningCounts?.Remove(conditionId);
+            }
+        }
+
+        #endregion
+
+        #region Daily Check-In and Warrant Methods
+
+        /// <summary>
+        /// Reads the persisted daily check-in window and reminder state.
+        /// </summary>
+        /// <param name="dayIndex">Receives the scheduled in-game day, or -1 when no window is set.</param>
+        /// <param name="startMinuteOfDay">Receives the inclusive start minute within the in-game day.</param>
+        /// <param name="endMinuteOfDay">Receives the inclusive end minute within the in-game day.</param>
+        /// <param name="reminderSent">Receives whether the reminder for this window was already emitted.</param>
+        /// <returns>True when the day and ordered minute bounds describe an active schedule.</returns>
+        public bool TryGetDailyCheckInSchedule(out int dayIndex, out int startMinuteOfDay, out int endMinuteOfDay, out bool reminderSent)
+        {
+            dayIndex = scheduledCheckInDay;
+            startMinuteOfDay = scheduledCheckInStartMinute;
+            endMinuteOfDay = scheduledCheckInEndMinute;
+            reminderSent = scheduledCheckInReminderSent;
+            return dayIndex >= 0 && startMinuteOfDay >= 0 && endMinuteOfDay >= startMinuteOfDay;
+        }
+
+        /// <summary>
+        /// Persists a daily check-in window and clears its one-shot reminder marker.
+        /// </summary>
+        /// <param name="dayIndex">The in-game day on which the window applies.</param>
+        /// <param name="startMinuteOfDay">The inclusive start minute within the day.</param>
+        /// <param name="endMinuteOfDay">The inclusive end minute within the day.</param>
+        public void SetDailyCheckInSchedule(int dayIndex, int startMinuteOfDay, int endMinuteOfDay)
+        {
+            scheduledCheckInDay = dayIndex;
+            scheduledCheckInStartMinute = startMinuteOfDay;
+            scheduledCheckInEndMinute = endMinuteOfDay;
+            scheduledCheckInReminderSent = false;
+        }
+
+        /// <summary>
+        /// Marks the current persisted check-in window as having sent its reminder.
+        /// </summary>
+        public void MarkDailyCheckInReminderSent()
+        {
+            scheduledCheckInReminderSent = true;
+        }
+
+        /// <summary>
+        /// Removes the persisted daily check-in window and resets its reminder marker.
+        /// </summary>
+        public void ClearDailyCheckInSchedule()
+        {
+            scheduledCheckInDay = -1;
+            scheduledCheckInStartMinute = -1;
+            scheduledCheckInEndMinute = -1;
+            scheduledCheckInReminderSent = false;
+        }
+
+        /// <summary>
+        /// Gets whether parole currently carries an active agent warrant.
+        /// </summary>
+        /// <returns>True when warrant enforcement should be treated as active.</returns>
+        public bool HasActiveAgentWarrant() => activeAgentWarrant;
+
+        /// <summary>
+        /// Sets the persisted agent-warrant state used by runtime enforcement.
+        /// </summary>
+        /// <param name="active">Whether the warrant should be active.</param>
+        public void SetActiveAgentWarrant(bool active)
+        {
+            activeAgentWarrant = active;
+        }
+
+        #endregion
+
+        #region LSI Step-Down Methods
+
+        /// <summary>
+        /// Get consecutive high compliance days
+        /// </summary>
+        public int GetConsecutiveHighComplianceDays() => consecutiveHighComplianceDays;
+
+        /// <summary>
+        /// Increment consecutive high compliance days
+        /// </summary>
+        public void IncrementHighComplianceDays()
+        {
+            consecutiveHighComplianceDays++;
+        }
+
+        /// <summary>
+        /// Reset consecutive high compliance days
+        /// </summary>
+        public void ResetHighComplianceDays()
+        {
+            consecutiveHighComplianceDays = 0;
+        }
+
+        /// <summary>
+        /// Get the LSI step-down count
+        /// </summary>
+        public int GetLSIStepDownCount() => lsiStepDownCount;
+
+        /// <summary>
+        /// Increment the LSI step-down count
+        /// </summary>
+        public void IncrementLSIStepDownCount()
+        {
+            lsiStepDownCount++;
+        }
+
+        /// <summary>
+        /// Get the last step-down evaluation game time
+        /// </summary>
+        public float GetLastStepDownEvalGameTime() => lastStepDownEvalGameTime;
+
+        /// <summary>
+        /// Set the last step-down evaluation game time
+        /// </summary>
+        public void SetLastStepDownEvalGameTime(float gameTime)
+        {
+            lastStepDownEvalGameTime = gameTime;
+        }
+
+        #endregion
+
+        #region Home Visit Methods
+
+        /// <summary>
+        /// Get the number of missed home visits
+        /// </summary>
+        public int GetHomeVisitsMissed() => homeVisitsMissed;
+
+        /// <summary>
+        /// Increment missed home visits
+        /// </summary>
+        public void IncrementHomeVisitsMissed()
+        {
+            homeVisitsMissed++;
+        }
+
+        /// <summary>
+        /// Reset missed home visits (e.g. after successful visit)
+        /// </summary>
+        public void ResetHomeVisitsMissed()
+        {
+            homeVisitsMissed = 0;
+        }
+
+        /// <summary>
+        /// Get next scheduled home visit time
+        /// </summary>
+        public float GetNextHomeVisitGameTime() => nextHomeVisitGameTime;
+
+        /// <summary>
+        /// Set next scheduled home visit time
+        /// </summary>
+        public void SetNextHomeVisitGameTime(float gameTime)
+        {
+            nextHomeVisitGameTime = gameTime;
+        }
+
+        #endregion
+
+        #region Fee Methods
+
+        /// <summary>
+        /// Get total fees owed
+        /// </summary>
+        public float GetTotalFeesOwed() => totalFeesOwed;
+
+        /// <summary>
+        /// Add to total fees owed
+        /// </summary>
+        public void AddFeesOwed(float amount)
+        {
+            totalFeesOwed += amount;
+        }
+
+        /// <summary>
+        /// Record a fee payment
+        /// </summary>
+        public void RecordFeePayment(float amount)
+        {
+            totalFeesPaid += amount;
+            totalFeesOwed = Mathf.Max(0f, totalFeesOwed - amount);
+            missedPayments = 0; // Reset missed payments on successful payment
+        }
+
+        /// <summary>
+        /// Get total fees paid
+        /// </summary>
+        public float GetTotalFeesPaid() => totalFeesPaid;
+
+        /// <summary>
+        /// Get number of missed payments
+        /// </summary>
+        public int GetMissedPayments() => missedPayments;
+
+        /// <summary>
+        /// Increment missed payments count
+        /// </summary>
+        public void IncrementMissedPayments()
+        {
+            missedPayments++;
+        }
+
+        /// <summary>
+        /// Get next fee due game time
+        /// </summary>
+        public float GetNextFeeGameTime() => nextFeeGameTime;
+
+        /// <summary>
+        /// Set next fee due game time
+        /// </summary>
+        public void SetNextFeeGameTime(float gameTime)
+        {
+            nextFeeGameTime = gameTime;
         }
 
         #endregion

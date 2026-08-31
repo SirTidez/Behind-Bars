@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 using Behind_Bars.Helpers;
+using Behind_Bars.Utils;
 
 #if !MONO
 using Il2CppScheduleOne.AvatarFramework;
@@ -16,19 +17,24 @@ using ScheduleOne.Employees;
 namespace Behind_Bars.Systems.NPCs
 {
     /// <summary>
-    /// Centralized appearance management for BaseNPC spawns
-    /// Fixes the "marshmallow man" issue by providing proper avatar settings
+    /// Centralized appearance management for BaseNPC spawns. EmployeeManager is
+    /// the primary source; the scene cache and basic settings are fallback paths.
+    /// The later jail-customization helpers are extension points and currently
+    /// perform no visual mutation.
     /// </summary>
     public static class NPCAppearanceManager
     {
-        // Cache of existing avatar settings from scene NPCs
+        // Cache of live scene avatar-settings references keyed by role prefix.
+        // Entries are not cloned here, and cacheInitialized prevents another scan
+        // after a failed/empty scan until ClearCache is called.
         private static Dictionary<string, object> avatarSettingsCache = new Dictionary<string, object>();
         private static bool cacheInitialized = false;
 
         /// <summary>
-        /// Get appropriate avatar settings for an NPC role
-        /// This is the key method that fixes BaseNPC appearance issues
-        /// Uses EmployeeManager for guaranteed working avatar settings
+        /// Gets appearance settings for a role, preferring a cloned EmployeeManager
+        /// setting and then the one-time scene cache/basic fallback chain. The
+        /// firstName parameter is currently used only by cached-appearance logs;
+        /// it does not select a deterministic appearance.
         /// </summary>
         /// <param name="role">The role of the NPC</param>
         /// <param name="firstName">First name for variation</param>
@@ -76,7 +82,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Get avatar settings from EmployeeManager - guaranteed to work
+        /// Requests and clones a random EmployeeManager appearance, then applies
+        /// role-specific setting mutations. A missing manager, null settings, or
+        /// exception returns null so the caller can use its fallback chain.
         /// </summary>
         /// <param name="role">NPC role to get appearance for</param>
         /// <returns>Valid AvatarSettings or null</returns>
@@ -453,7 +461,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Initialize the appearance cache by finding existing NPCs with working avatars
+        /// Builds the one-time cache from NPCRegistry avatar settings. The cache may
+        /// remain empty after a failure, but cacheInitialized is still set to stop
+        /// repeated scans until explicitly cleared.
         /// </summary>
         private static void InitializeAppearanceCache()
         {
@@ -461,9 +471,9 @@ namespace Behind_Bars.Systems.NPCs
             {
                 ModLogger.Info("🎨 Initializing NPC appearance cache...");
 
-                // Find all existing NPCs with avatar settings
-                var existingNPCs = UnityEngine.Object.FindObjectsOfType<NPC>();
-                ModLogger.Info($"Found {existingNPCs.Length} existing NPCs to analyze");
+                // Use NPCRegistry for O(1) access instead of O(n) FindObjectsOfType
+                var existingNPCs = NPCRegistryHelper.GetNPCsExcluding("JailGuard", "JailInmate", "TestNPC", "BaseNPC");
+                ModLogger.Info($"Found {existingNPCs.Count} existing NPCs to analyze");
 
                 int cachedSettings = 0;
 
@@ -471,12 +481,6 @@ namespace Behind_Bars.Systems.NPCs
                 {
                     try
                     {
-                        // Skip our own spawned NPCs
-                        if (npc.gameObject.name.Contains("JailGuard") ||
-                            npc.gameObject.name.Contains("JailInmate") ||
-                            npc.gameObject.name.Contains("TestNPC") ||
-                            npc.gameObject.name.Contains("BaseNPC"))
-                            continue;
 
                         var avatar = npc.Avatar;
                         if (avatar != null && avatar.CurrentSettings != null)
@@ -570,7 +574,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Get guard appearance settings
+        /// Returns the first cached guard setting, or the generic fallback when no
+        /// guard-keyed entry exists. firstName does not affect selection.
         /// </summary>
         private static object GetGuardAppearance(string firstName)
         {
@@ -589,7 +594,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Get inmate appearance settings
+        /// Returns the first cached inmate setting, or the generic fallback when no
+        /// inmate-keyed entry exists. firstName does not affect selection.
         /// </summary>
         private static object GetInmateAppearance(string firstName)
         {
@@ -608,7 +614,7 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Get test NPC appearance settings
+        /// Returns the generic fallback appearance; firstName is ignored.
         /// </summary>
         private static object GetTestNPCAppearance(string firstName)
         {
@@ -617,8 +623,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Get fallback appearance when no specific type is available
-        /// Uses BasicAvatarSettings pattern as last resort
+        /// Returns a cached fallback/reference setting when available, otherwise
+        /// creates basic TestNPC settings. A basic fallback is not role-uniformed.
         /// </summary>
         private static object GetFallbackAppearance()
         {
@@ -886,7 +892,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Apply appearance customizations specific to jail NPCs
+        /// Applies role-specific jail customization after resolving the avatar. The
+        /// current guard/inmate extension methods only log, so this call does not
+        /// add uniforms or other role-specific layers itself.
         /// </summary>
         public static void ApplyJailCustomizations(GameObject npcInstance, BaseNPCSpawner.NPCRole role)
         {
@@ -936,7 +944,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Apply guard-specific visual customizations
+        /// Guard customization extension point; currently only emits a diagnostic
+        /// and leaves the avatar unchanged.
         /// </summary>
         private static void ApplyGuardCustomizations(object avatar)
         {
@@ -946,7 +955,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Apply inmate-specific visual customizations
+        /// Inmate customization extension point; currently only emits a diagnostic
+        /// and leaves the avatar unchanged.
         /// </summary>
         private static void ApplyInmateCustomizations(object avatar)
         {
@@ -956,7 +966,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Clear the appearance cache (useful for testing)
+        /// Clears cached scene references and permits the next lookup to rebuild the
+        /// cache. It does not alter avatars already loaded on NPC instances.
         /// </summary>
         public static void ClearCache()
         {
@@ -966,7 +977,7 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Get cache status for debugging
+        /// Returns a diagnostic summary of cache initialization and entry count.
         /// </summary>
         public static string GetCacheStatus()
         {

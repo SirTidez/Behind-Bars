@@ -28,6 +28,14 @@ namespace Behind_Bars.Utils
         /// Safely get the network ObjectId from a Player
         /// Returns -1 if Player or NetworkObject is null
         /// </summary>
+        /// <param name="player">The player whose network object should be inspected.</param>
+        /// <returns>The FishNet ObjectId, or the helper sentinel <c>-1</c> when the player or
+        /// its NetworkObject is unavailable.</returns>
+        /// <remarks>
+        /// The sentinel only represents this helper's null/error path; the
+        /// method does not independently validate whether a non-negative ID is
+        /// registered, connected, or otherwise usable by the network.
+        /// </remarks>
         public static int GetPlayerNetworkId(Player player)
         {
             if (player == null)
@@ -49,6 +57,9 @@ namespace Behind_Bars.Utils
         /// Safely get the network ObjectId as a string from a Player
         /// Returns empty string if Player or NetworkObject is null
         /// </summary>
+        /// <param name="player">The player whose network object should be inspected.</param>
+        /// <returns>The ObjectId converted to a string, or an empty string when
+        /// <see cref="GetPlayerNetworkId(Player)"/> returns its <c>-1</c> sentinel.</returns>
         public static string GetPlayerNetworkIdString(Player player)
         {
             int objectId = GetPlayerNetworkId(player);
@@ -63,6 +74,12 @@ namespace Behind_Bars.Utils
         /// <summary>
         /// Check if a player has a valid NetworkObject
         /// </summary>
+        /// <param name="player">The player to inspect.</param>
+        /// <returns><c>true</c> when both the player and its NetworkObject are non-null.</returns>
+        /// <remarks>
+        /// This is a reference-presence check only; it does not validate the
+        /// ObjectId, ownership, connection state, or spawned state.
+        /// </remarks>
         public static bool HasValidNetworkObject(Player player)
         {
             return player != null && player.NetworkObject != null;
@@ -72,6 +89,15 @@ namespace Behind_Bars.Utils
         /// Safely initiate foot pursuit on a police officer
         /// Handles network ID extraction and null checks
         /// </summary>
+        /// <param name="police">The officer that should receive the pursuit request.</param>
+        /// <param name="perpetrator">The player whose ObjectId is passed to the officer API.</param>
+        /// <returns><c>true</c> when the local method invocation is accepted without throwing;
+        /// <c>false</c> when input validation fails or the call throws.</returns>
+        /// <remarks>
+        /// A successful return confirms only that the current string-based
+        /// <c>BeginFootPursuit_Networked</c> call returned normally. It does not
+        /// confirm remote delivery or that the officer entered pursuit.
+        /// </remarks>
         public static bool TryBeginFootPursuit(PoliceOfficer police, Player perpetrator)
         {
             if (police == null)
@@ -92,7 +118,7 @@ namespace Behind_Bars.Utils
                 int networkId = perpetrator.NetworkObject.ObjectId;
                 ModLogger.Debug($"Initiating foot pursuit - Officer: {police.name}, Target ID: {networkId}");
                 
-                // Try with int first (preferred)
+                // Preserve the numeric ObjectId while satisfying the current string-based API.
                 police.BeginFootPursuit_Networked(networkId.ToString());
                 return true;
             }
@@ -107,6 +133,15 @@ namespace Behind_Bars.Utils
         /// Safely initiate body search on a police officer
         /// Handles network ID extraction and null checks
         /// </summary>
+        /// <param name="police">The officer that should receive the body-search request.</param>
+        /// <param name="perpetrator">The player whose ObjectId is passed to the officer API.</param>
+        /// <returns><c>true</c> when the local method invocation is accepted without throwing;
+        /// <c>false</c> when input validation fails or the call throws.</returns>
+        /// <remarks>
+        /// A successful return confirms only that the current string-based
+        /// <c>BeginBodySearch_Networked</c> call returned normally. It does not
+        /// confirm remote delivery or completion of the search.
+        /// </remarks>
         public static bool TryBeginBodySearch(PoliceOfficer police, Player perpetrator)
         {
             if (police == null)
@@ -127,7 +162,7 @@ namespace Behind_Bars.Utils
                 int networkId = perpetrator.NetworkObject.ObjectId;
                 ModLogger.Debug($"Initiating body search - Officer: {police.name}, Target ID: {networkId}");
                 
-                // Try with int first (preferred)
+                // Preserve the numeric ObjectId while satisfying the current string-based API.
                 police.BeginBodySearch_Networked(networkId.ToString());
                 return true;
             }

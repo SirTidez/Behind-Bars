@@ -32,6 +32,15 @@ namespace Behind_Bars.UI
         /// </summary>
         public bool IsEscorting { get; set; }
 
+        /// <summary>
+        /// Creates a display snapshot for one officer instruction. Stage values are presentation
+        /// data only; command ownership and shared-slot precedence remain in BehindBarsUIManager.
+        /// </summary>
+        /// <param name="officerType">Short officer role label.</param>
+        /// <param name="commandText">Instruction shown to the player.</param>
+        /// <param name="currentStage">Current process stage number.</param>
+        /// <param name="totalStages">Total process stages.</param>
+        /// <param name="isEscorting">Whether the follow indicator should be shown.</param>
         public OfficerCommandData(string officerType, string commandText, int currentStage, int totalStages, bool isEscorting = false)
         {
             OfficerType = officerType;

@@ -4,6 +4,7 @@ using UnityEngine;
 using UnityEngine.AI;
 using Behind_Bars.Helpers;
 using MelonLoader;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -233,7 +234,7 @@ namespace Behind_Bars.Systems.NPCs
         private Transform FindPatrolPointTarget()
         {
             // Use the patrol points registered in JailController
-            var jailController = UnityEngine.Object.FindObjectOfType<JailController>();
+            var jailController = BBHelpers.FindObjectOfTypeSafe<JailController>();
             if (jailController == null)
             {
                 ModLogger.Error("JailController not found for patrol points");
@@ -280,7 +281,7 @@ namespace Behind_Bars.Systems.NPCs
         private Transform FindNextPatrolPoint()
         {
             // Use the patrol points registered in JailController
-            var jailController = UnityEngine.Object.FindObjectOfType<JailController>();
+            var jailController = BBHelpers.FindObjectOfTypeSafe<JailController>();
             if (jailController == null)
             {
                 ModLogger.Error("JailController not found for next patrol point");
@@ -388,7 +389,7 @@ namespace Behind_Bars.Systems.NPCs
             // Check GuardBehavior patrol assignment and prevent it
             try
             {
-                var guardBehavior = GetComponent<GuardBehavior>();
+                var guardBehavior = BBHelpers.GetComponentSafe<GuardBehavior>(gameObject);
                 if (guardBehavior != null && guardBehavior.GetCurrentActivity() == GuardBehavior.GuardActivity.Patrolling)
                 {
                     ModLogger.Warn($"⚠️  TestNPC has patrol activity - this will conflict!");

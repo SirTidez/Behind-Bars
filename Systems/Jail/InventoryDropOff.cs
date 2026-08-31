@@ -5,6 +5,7 @@ using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.UI;
 using Behind_Bars.Systems.Jail;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 
 #if !MONO
@@ -23,13 +24,17 @@ using ScheduleOne.ItemFramework;
 namespace Behind_Bars.Systems.Jail
 {
     /// <summary>
-    /// Handles player inventory confiscation and jail gear assignment during booking
+    /// Legacy booking interaction that stages a simulated personal-item confiscation and
+    /// jail-gear handoff. It currently records/logs fixed item names; it does not perform
+    /// a native inventory transfer or provide a real storage container.
     /// </summary>
     public class InventoryDropOff : InteractableObject
     {
 #if !MONO
         public InventoryDropOff(System.IntPtr ptr) : base(ptr) { }
 #endif
+        // These settings describe the legacy simulation. allowedItems and the storage
+        // fields are retained for compatibility and are not authoritative inventory data.
         public bool confiscateAllItems = true;
         public List<string> allowedItems = new List<string> { "BasicClothing", "Shoes" };
         public List<string> jailGearItems = new List<string> { "PrisonUniform", "PrisonShoes" };
@@ -37,19 +42,56 @@ namespace Behind_Bars.Systems.Jail
         public Transform storageContainer;
         public int maxStorageSlots = 50;
 
+        // processingInventory gates repeat interaction while the coroutine is active;
+        // confiscatedItems is a volatile name snapshot, not a recoverable item store.
         private BookingProcess bookingProcess;
         private List<string> confiscatedItems = new List<string>();
         private bool processingInventory = false;
+        private bool hasCachedInteractionMessage;
+        private string cachedInteractionMessage;
+        private bool hasCachedInteractionState;
+        private int cachedInteractionState;
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void SetInteractionMessage(string message)
+        {
+            if (hasCachedInteractionMessage && cachedInteractionMessage == message)
+            {
+                return;
+            }
+
+            SetMessage(message);
+            cachedInteractionMessage = message;
+            hasCachedInteractionMessage = true;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void SetInteractionState(InteractableObject.EInteractableState state)
+        {
+            int stateValue = (int)state;
+            if (hasCachedInteractionState && cachedInteractionState == stateValue)
+            {
+                return;
+            }
+
+            SetInteractableState(state);
+            cachedInteractionState = stateValue;
+            hasCachedInteractionState = true;
+        }
 
         void Start()
         {
             // Find booking process
-            bookingProcess = FindObjectOfType<BookingProcess>();
+            bookingProcess = BBHelpers.FindObjectOfTypeSafe<BookingProcess>();
 
             // Set up interaction directly
-            SetMessage("Process inventory");
+            SetInteractionMessage("Process inventory");
             SetInteractionType(InteractableObject.EInteractionType.Key_Press);
-            SetInteractableState(InteractableObject.EInteractableState.Default);
+            SetInteractionState(InteractableObject.EInteractableState.Default);
             ModLogger.Info("InventoryDropOff interaction setup completed");
 
             // Find storage container
@@ -68,24 +110,28 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info("InventoryDropOff initialized");
         }
 
+        /// <summary>
+        /// Starts the legacy simulated inventory phase only after booking requirements are
+        /// complete. The phase marks BookingProcess inventory state after its timed effects.
+        /// </summary>
         public override void StartInteract()
         {
             if (processingInventory)
             {
-                SetMessage("Processing inventory...");
-                SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                SetInteractionMessage("Processing inventory...");
+                SetInteractionState(InteractableObject.EInteractableState.Invalid);
                 return;
             }
 
             // Check if booking stations are complete
             if (bookingProcess == null || !bookingProcess.IsBookingComplete())
             {
-                SetMessage("Complete mugshot and fingerprint scan first");
-                SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                SetInteractionMessage("Complete mugshot and fingerprint scan first");
+                SetInteractionState(InteractableObject.EInteractableState.Invalid);
 
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         "Complete booking stations first!",
                         NotificationType.Warning
                     );
@@ -110,18 +156,20 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Orchestrates the legacy delay -> simulated confiscation -> simulated gear sequence
+        // and publishes completion to BookingProcess; it does not move native item stacks.
         private IEnumerator ProcessPlayerInventory(Player player)
         {
             processingInventory = true;
-            SetMessage("Processing inventory...");
-            SetInteractableState(InteractableObject.EInteractableState.Invalid);
+            SetInteractionMessage("Processing inventory...");
+            SetInteractionState(InteractableObject.EInteractableState.Invalid);
 
             ModLogger.Info($"Processing inventory for {player.name}");
 
             // Show notification
-            if (BehindBarsUIManager.Instance != null)
+            if (Core.ResolveUIManager() != null)
             {
-                BehindBarsUIManager.Instance.ShowNotification(
+                Core.ResolveUIManager().ShowNotification(
                     "Storing personal items...",
                     NotificationType.Instruction
                 );
@@ -153,17 +201,17 @@ namespace Behind_Bars.Systems.Jail
                 }
 
                 // Show completion notification
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         "Inventory processed - booking complete!",
                         NotificationType.Progress
                     );
                 }
 
                 // Update interaction state
-                SetMessage("Inventory processed");
-                SetInteractableState(InteractableObject.EInteractableState.Label);
+                SetInteractionMessage("Inventory processed");
+                SetInteractionState(InteractableObject.EInteractableState.Label);
 
                 ModLogger.Info("Inventory processing completed successfully");
             }
@@ -172,9 +220,9 @@ namespace Behind_Bars.Systems.Jail
                 ModLogger.Error($"Error processing inventory: {ex.Message}");
 
                 // Show error notification
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         "Error processing inventory",
                         NotificationType.Warning
                     );
@@ -187,6 +235,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Current behavior intentionally records a fixed simulated list. Keep this warning
+        // adjacent to the method so future docs do not mistake the log for item removal.
         private IEnumerator ConfiscatePlayerItems(Player player)
         {
             confiscatedItems.Clear();
@@ -226,6 +276,8 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
+        // Logs each configured gear item and re-enables player inventory before marking the
+        // booking checkpoint; no native gear item is created by this legacy routine.
         private IEnumerator IssueJailGear(Player player)
         {
             ModLogger.Info("Issuing jail gear to player");
@@ -240,9 +292,9 @@ namespace Behind_Bars.Systems.Jail
             try
             {
                 // Show gear issued notification
-                if (BehindBarsUIManager.Instance != null)
+                if (Core.ResolveUIManager() != null)
                 {
-                    BehindBarsUIManager.Instance.ShowNotification(
+                    Core.ResolveUIManager().ShowNotification(
                         "Jail uniform issued",
                         NotificationType.Progress
                     );
@@ -256,7 +308,7 @@ namespace Behind_Bars.Systems.Jail
 
                 // Mark prison gear pickup as complete in booking process
                 ModLogger.Info("Attempting to find BookingProcess to mark gear pickup complete...");
-                var bookingProcess = FindObjectOfType<BookingProcess>();
+                var bookingProcess = BBHelpers.FindObjectOfTypeSafe<BookingProcess>();
                 if (bookingProcess != null)
                 {
                     ModLogger.Info($"Found BookingProcess! Current state - Mugshot: {bookingProcess.mugshotComplete}, Fingerprint: {bookingProcess.fingerprintComplete}, Prison Gear: {bookingProcess.prisonGearPickupComplete}");
@@ -286,8 +338,10 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Return confiscated items on player release
+        /// Logs the simulated confiscated-item names and clears the volatile list. Despite
+        /// the legacy method name, this implementation does not restore native inventory.
         /// </summary>
+        /// <param name="player">Player associated with the simulated record.</param>
         public void ReturnPlayerItems(Player player)
         {
             try
@@ -310,6 +364,10 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Returns whether the associated BookingProcess has marked inventory processing
+        /// complete. It does not prove that native items were stored or restored.
+        /// </summary>
         public bool IsComplete()
         {
             return bookingProcess != null && bookingProcess.inventoryProcessed;
@@ -322,18 +380,18 @@ namespace Behind_Bars.Systems.Jail
             {
                 if (IsComplete())
                 {
-                    SetMessage("Inventory processed");
-                    SetInteractableState(InteractableObject.EInteractableState.Label);
+                    SetInteractionMessage("Inventory processed");
+                    SetInteractionState(InteractableObject.EInteractableState.Label);
                 }
                 else if (bookingProcess != null && bookingProcess.IsBookingComplete())
                 {
-                    SetMessage("Process inventory");
-                    SetInteractableState(InteractableObject.EInteractableState.Default);
+                    SetInteractionMessage("Process inventory");
+                    SetInteractionState(InteractableObject.EInteractableState.Default);
                 }
                 else
                 {
-                    SetMessage("Complete booking stations first");
-                    SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                    SetInteractionMessage("Complete booking stations first");
+                    SetInteractionState(InteractableObject.EInteractableState.Invalid);
                 }
             }
         }

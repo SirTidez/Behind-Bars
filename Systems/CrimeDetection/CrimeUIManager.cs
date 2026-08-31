@@ -1,6 +1,7 @@
 using UnityEngine;
 using Behind_Bars.Helpers;
 using Behind_Bars.UI;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppInterop.Runtime.Attributes;
@@ -14,12 +15,27 @@ namespace Behind_Bars.Systems.CrimeDetection
     public class CrimeUIManager
     {
         private static CrimeUIManager _instance;
+
+        /// <summary>
+        /// Gets the process-wide crime UI coordinator, creating it lazily on first access.
+        /// </summary>
         public static CrimeUIManager Instance => _instance ??= new CrimeUIManager();
-        
+
+        // The GameObject is kept separate from the manager so Unity owns its lifetime;
+        // Initialize makes it persistent and Cleanup explicitly destroys it.
         private GameObject _uiManager;
         private WantedLevelUI _wantedLevelUI;
         private bool _isInitialized = false;
-        
+
+        /// <summary>
+        /// Creates the persistent crime UI host and its WantedLevelUI component once.
+        /// </summary>
+        /// <remarks>
+        /// Once setup completes, the initialization guard makes later calls no-ops. The UI
+        /// is manually created immediately so callers do not have to wait for Unity's normal
+        /// component Start lifecycle. Setup failures are logged; the current implementation
+        /// may leave a partially created host behind for cleanup or a later retry.
+        /// </remarks>
         public void Initialize()
         {
             if (_isInitialized)
@@ -39,9 +55,7 @@ namespace Behind_Bars.Systems.CrimeDetection
                 // Add the WantedLevelUI component using IL2CPP-safe method
 #if !MONO
                 // IL2CPP-safe component addition
-                var componentType = Il2CppInterop.Runtime.Il2CppType.Of<WantedLevelUI>();
-                var component = _uiManager.AddComponent(componentType);
-                _wantedLevelUI = component.Cast<WantedLevelUI>();
+                _wantedLevelUI = BBHelpers.AddComponentSafe<WantedLevelUI>(_uiManager);
 #else
                 _wantedLevelUI = _uiManager.AddComponent<WantedLevelUI>();
 #endif
@@ -67,6 +81,10 @@ namespace Behind_Bars.Systems.CrimeDetection
             }
         }
         
+        /// <summary>
+        /// Destroys the persistent crime UI host and resets initialization state.
+        /// </summary>
+        /// <remarks>Calling cleanup is safe when initialization did not complete.</remarks>
         public void Cleanup()
         {
             try
@@ -89,7 +107,7 @@ namespace Behind_Bars.Systems.CrimeDetection
         }
         
         /// <summary>
-        /// Show detailed crime information
+        /// Requests the WantedLevelUI to show detailed crime information when available.
         /// </summary>
         public void ShowCrimeDetails()
         {
@@ -97,7 +115,7 @@ namespace Behind_Bars.Systems.CrimeDetection
         }
         
         /// <summary>
-        /// Check if UI is ready
+        /// Gets whether the crime UI manager completed initialization.
         /// </summary>
         public bool IsInitialized => _isInitialized;
     }

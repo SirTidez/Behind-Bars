@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
 using Behind_Bars.Helpers;
+using Behind_Bars.Utils;
 using MelonLoader;
 
 #if !MONO
@@ -21,10 +22,14 @@ using ScheduleOne.Tools;
 namespace Behind_Bars.Systems.NPCs
 {
     /// <summary>
-    /// Handles avatar customization for prison NPCs with realistic appearances
+    /// Creates and applies prison-NPC avatar settings. When a role-specific source
+    /// is unavailable, the clothing paths copy an existing civilian avatar rather
+    /// than synthesizing a complete prison uniform.
     /// </summary>
     public static class PrisonAvatarCustomizer
     {
+        // Randomized source colors used only by the generated settings path; copied
+        // civilian settings retain the source avatar's colors.
         private static List<Color> SkinTones = new List<Color>
         {
             new Color(0.95f, 0.85f, 0.75f), // Light
@@ -34,6 +39,8 @@ namespace Behind_Bars.Systems.NPCs
             new Color(0.45f, 0.35f, 0.25f)  // Dark
         };
 
+        // Inmate generated-settings palette; civilian-copy fallbacks retain the
+        // source avatar's hair color instead.
         private static List<Color> HairColors = new List<Color>
         {
             Color.black,                        // Black
@@ -46,8 +53,12 @@ namespace Behind_Bars.Systems.NPCs
         };
 
         /// <summary>
-        /// Apply prison guard appearance to an NPC
+        /// Creates guard settings, loads them into the existing avatar, and then
+        /// copies a working officer/civilian appearance for clothing. A missing
+        /// source leaves the generated settings in place.
         /// </summary>
+        /// <param name="npc">NPC object whose existing Avatar is customized.</param>
+        /// <param name="badgeNumber">Optional badge used for diagnostics.</param>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -84,8 +95,13 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Apply prison inmate appearance to an NPC
+        /// Creates inmate settings, loads them into the existing avatar, and then
+        /// tries known civilian references before a random civilian fallback. The
+        /// fallback path does not construct an inmate uniform itself.
         /// </summary>
+        /// <param name="npc">NPC object whose existing Avatar is customized.</param>
+        /// <param name="prisonerID">Optional prisoner identifier used for diagnostics.</param>
+        /// <param name="crimeType">Crime label used by generated hair selection; copied civilian fallbacks ignore it.</param>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
@@ -122,7 +138,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Get existing avatar or create a basic one
+        /// Finds an existing Avatar on the NPC, its children, or an Avatar child.
+        /// Despite the historical method name, it does not create an Avatar and
+        /// returns null when DirectNPCBuilder/native setup did not provide one.
         /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
@@ -374,7 +392,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Apply guard uniform by copying from existing Officer NPC
+        /// Copies a complete working officer avatar when available. If no officer
+        /// exists, the current fallback selects a civilian reference; it does not
+        /// assemble a uniform layer set here.
         /// </summary>
         private static void ApplyGuardClothing(GameObject npc, 
 #if !MONO
@@ -386,14 +406,8 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                // Debug: List all available NPCs to understand what we have
-                var allAvailableNPCs = UnityEngine.Object.FindObjectsOfType<
-#if !MONO
-                    Il2CppScheduleOne.NPCs.NPC
-#else
-                    ScheduleOne.NPCs.NPC
-#endif
-                >()
+                // Debug: List all available NPCs to understand what we have - use NPCRegistry for O(1) access
+                var allAvailableNPCs = NPCRegistryHelper.GetAllNPCs()
                     .Where(npcComp => npcComp != null && npcComp.gameObject != npc)
                     .Take(20)
                     .ToArray();
@@ -466,7 +480,10 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Apply inmate appearance by finding and copying Billy's avatar
+        /// Copies a complete working civilian avatar for the inmate. It first tries
+        /// a fixed list of known civilian names, then FindCivilianNPC; if neither
+        /// yields settings, the current avatar is left unchanged and may remain
+        /// naked/faceless. This method does not apply an inmate uniform.
         /// </summary>
         private static void ApplyInmateClothing(GameObject npc,
 #if !MONO
@@ -821,13 +838,8 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                var allNPCs = UnityEngine.Object.FindObjectsOfType<
-#if !MONO
-                    Il2CppScheduleOne.NPCs.NPC
-#else
-                    ScheduleOne.NPCs.NPC
-#endif
-                >();
+                // Use NPCRegistry for O(1) access instead of O(n) FindObjectsOfType
+                var allNPCs = NPCRegistryHelper.GetAllNPCs();
                 
                 // Look for Billy specifically
                 foreach (var npcComp in allNPCs)
@@ -860,13 +872,8 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                var allNPCs = UnityEngine.Object.FindObjectsOfType<
-#if !MONO
-                    Il2CppScheduleOne.NPCs.NPC
-#else
-                    ScheduleOne.NPCs.NPC
-#endif
-                >();
+                // Use NPCRegistry for O(1) access instead of O(n) FindObjectsOfType
+                var allNPCs = NPCRegistryHelper.GetAllNPCs();
                 
                 foreach (var npcComp in allNPCs)
                 {
@@ -892,13 +899,8 @@ namespace Behind_Bars.Systems.NPCs
         {
             try
             {
-                var allNPCs = UnityEngine.Object.FindObjectsOfType<
-#if !MONO
-                    Il2CppScheduleOne.NPCs.NPC
-#else
-                    ScheduleOne.NPCs.NPC
-#endif
-                >();
+                // Use NPCRegistry for O(1) access instead of O(n) FindObjectsOfType
+                var allNPCs = NPCRegistryHelper.GetAllNPCs();
                 
                 // Priority list of reliable male NPCs for inmate appearance
                 string[] preferredMales = { "Brad", "Kevin", "Keith", "Jack", "Marco", "Stan", "Tobias" };
@@ -947,19 +949,16 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Find a suitable civilian NPC for fallback appearance
+        /// Finds a random civilian reference while excluding the target, prison
+        /// roles, player, and several named business NPC categories. Returns null
+        /// when the registry has no qualifying object.
         /// </summary>
         private static GameObject FindCivilianNPC(GameObject excludeNPC)
         {
             try
             {
-                var allNPCs = UnityEngine.Object.FindObjectsOfType<
-#if !MONO
-                    Il2CppScheduleOne.NPCs.NPC
-#else
-                    ScheduleOne.NPCs.NPC
-#endif
-                >()
+                // Use NPCRegistry for O(1) access instead of O(n) FindObjectsOfType
+                var allNPCs = NPCRegistryHelper.GetAllNPCs()
                     .Where(npcComp => npcComp != null && npcComp.gameObject != excludeNPC)
                     .Where(npcComp => !npcComp.name.Contains("Officer") &&
                                       !npcComp.name.Contains("Police") && 

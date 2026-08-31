@@ -23,9 +23,12 @@ namespace Behind_Bars.UI
     public class OfficerCommandUI : MonoBehaviour
     {
 #if !MONO
+        /// <summary>Creates the IL2CPP wrapper for the injected officer-command component.</summary>
         public OfficerCommandUI(System.IntPtr ptr) : base(ptr) { }
 #endif
 
+        // These references belong to the dynamically-created panel under the current HUD. The
+        // manager clears them at scene exit before the HUD canvas is destroyed or replaced.
         private GameObject _commandPanel;
         private Image _backgroundImage;
         private TextMeshProUGUI _officerTypeText;
@@ -34,9 +37,13 @@ namespace Behind_Bars.UI
         private TextMeshProUGUI _escortIndicator;
         private CanvasGroup _canvasGroup;
 
+        // Fade/retry handles are owned by this component and must be cancelled together; a
+        // command update replaces content without taking ownership away from the manager.
         private bool _isInitialized = false;
         private Coroutine _fadeCoroutine;
+        private Coroutine _canvasInitializationCoroutine;
 
+        /// <summary>Unity lifecycle entry point that lazily creates the shared command panel.</summary>
         public void Start()
         {
             if (!_isInitialized)
@@ -46,8 +53,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Create the persistent command UI elements
-        /// Can be called manually or via Unity's Start()
+        /// Creates the officer-command panel under the player HUD. It is safe to invoke from
+        /// either Unity's Start or the manager's manual bootstrap and retries once the HUD exists.
         /// </summary>
         public void CreateUI()
         {
@@ -60,7 +67,10 @@ namespace Behind_Bars.UI
                 if (hudCanvas == null)
                 {
                     ModLogger.Warn("OfficerCommandUI: Player HUD Canvas not found on first attempt, waiting...");
-                    MelonLoader.MelonCoroutines.Start(WaitForCanvasAndCreate());
+                    if (_canvasInitializationCoroutine == null)
+                    {
+                        _canvasInitializationCoroutine = MelonLoader.MelonCoroutines.Start(WaitForCanvasAndCreate()) as Coroutine;
+                    }
                     return;
                 }
 
@@ -73,7 +83,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Get the player's HUD canvas
+        /// Resolves the runtime-specific player HUD canvas and fails closed while its singleton
+        /// or IL2CPP native pointer is not ready.
         /// </summary>
         private Canvas GetPlayerHUDCanvas()
         {
@@ -109,8 +120,10 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Create UI with a known canvas
+        /// Builds the fixed-width shared-slot panel under a known HUD canvas. The panel starts
+        /// inactive and is initialized only once, preserving the approved command geometry.
         /// </summary>
+        /// <param name="mainCanvas">HUD canvas that owns the command panel.</param>
         private void CreateUIWithCanvas(Canvas mainCanvas)
         {
             try
@@ -118,6 +131,12 @@ namespace Behind_Bars.UI
                 if (_isInitialized)
                 {
                     ModLogger.Debug("OfficerCommandUI: Already initialized, skipping");
+                    return;
+                }
+
+                if (!TMPFontFix.EnsureFontCached(mainCanvas))
+                {
+                    ModLogger.Error("OfficerCommandUI: Could not resolve a valid TMP font/material pair; skipping UI creation");
                     return;
                 }
 
@@ -216,7 +235,7 @@ namespace Behind_Bars.UI
                 // Start hidden
                 _commandPanel.SetActive(false);
 
-                // Apply font fixes (including emoji fallbacks) to all text components
+                // Apply font fixes to all text components before the first canvas rebuild.
                 TMPFontFix.FixAllTMPFonts(_commandPanel, "base");
 
                 _isInitialized = true;
@@ -229,7 +248,8 @@ namespace Behind_Bars.UI
         }
 
         /// <summary>
-        /// Wait for HUD canvas to be available and then create UI
+        /// Retries HUD lookup for a bounded number of scaled-time intervals, then creates the
+        /// panel and clears its retry handle on success or failure.
         /// </summary>
         private IEnumerator WaitForCanvasAndCreate()
         {
@@ -244,6 +264,7 @@ namespace Behind_Bars.UI
                 if (hudCanvas != null)
                 {
                     ModLogger.Info($"OfficerCommandUI: Player HUD Canvas found after {attempts + 1} attempts");
+                    _canvasInitializationCoroutine = null;
                     CreateUIWithCanvas(hudCanvas);
                     yield break;
                 }
@@ -252,11 +273,14 @@ namespace Behind_Bars.UI
             }
 
             ModLogger.Error($"OfficerCommandUI: Could not find Player HUD Canvas after {maxAttempts} attempts");
+            _canvasInitializationCoroutine = null;
         }
 
         /// <summary>
-        /// Show officer command with data
+        /// Shows an officer command, replacing text/stage content and fading the shared slot in.
+        /// The manager is responsible for suppressing lower-priority tier status while visible.
         /// </summary>
+        /// <param name="data">Officer command snapshot to render.</param>
         public void ShowCommand(OfficerCommandData data)
         {
             if (!_isInitialized)
@@ -302,9 +326,8 @@ namespace Behind_Bars.UI
             }
         }
 
-        /// <summary>
-        /// Update command without re-fading
-        /// </summary>
+        /// <summary>Updates the current command content without restarting its fade.</summary>
+        /// <param name="data">Updated officer command snapshot.</param>
         public void UpdateCommand(OfficerCommandData data)
         {
             if (!_isInitialized || !_commandPanel.activeSelf)
@@ -345,9 +368,7 @@ namespace Behind_Bars.UI
             }
         }
 
-        /// <summary>
-        /// Hide the command UI with fade out
-        /// </summary>
+        /// <summary>Fades the officer command out and releases the shared slot when complete.</summary>
         public void Hide()
         {
             if (!_isInitialized || !_commandPanel.activeSelf)
@@ -372,50 +393,122 @@ namespace Behind_Bars.UI
             }
         }
 
-        /// <summary>
-        /// Check if command UI is currently visible
-        /// </summary>
+        /// <summary>Returns whether the initialized command panel is active with visible alpha.</summary>
         public bool IsVisible()
         {
-            return _isInitialized && _commandPanel != null && _commandPanel.activeSelf && _canvasGroup.alpha > 0;
+            return _isInitialized && _commandPanel != null && _canvasGroup != null && _commandPanel.activeSelf && _canvasGroup.alpha > 0;
         }
 
         /// <summary>
-        /// Fade in animation
+        /// Stops the UI's scene-bound routines before the HUD canvas is unloaded.
+        /// The component itself may persist between scenes, but its panel is owned by the current
+        /// HUD. References are cleared so the next scene can bind a fresh canvas.
+        /// </summary>
+        public void CancelForSceneExit()
+        {
+            if (_fadeCoroutine != null)
+            {
+                MelonLoader.MelonCoroutines.Stop(_fadeCoroutine);
+                _fadeCoroutine = null;
+            }
+
+            if (_canvasInitializationCoroutine != null)
+            {
+                MelonLoader.MelonCoroutines.Stop(_canvasInitializationCoroutine);
+                _canvasInitializationCoroutine = null;
+            }
+
+            if (_commandPanel != null)
+            {
+                _commandPanel.SetActive(false);
+            }
+
+            _commandPanel = null;
+            _backgroundImage = null;
+            _officerTypeText = null;
+            _commandText = null;
+            _progressText = null;
+            _escortIndicator = null;
+            _canvasGroup = null;
+            _isInitialized = false;
+        }
+
+        /// <summary>
+        /// Fades the command panel in using scaled frame time while the gameplay scene remains
+        /// active; scene exit cancels the transition through the lifecycle guard.
         /// </summary>
         private IEnumerator FadeIn()
         {
+            if (!Core.IsGameplaySceneActive || _canvasGroup == null || _commandPanel == null)
+            {
+                yield break;
+            }
+
             float fadeTime = 0.3f;
             float elapsed = 0f;
 
             while (elapsed < fadeTime)
             {
+                if (!Core.IsGameplaySceneActive || _canvasGroup == null || _commandPanel == null)
+                {
+                    yield break;
+                }
+
                 elapsed += Time.deltaTime;
                 _canvasGroup.alpha = Mathf.Lerp(0f, 1f, elapsed / fadeTime);
                 yield return null;
             }
 
+            if (_canvasGroup == null)
+            {
+                yield break;
+            }
+
             _canvasGroup.alpha = 1f;
+            _fadeCoroutine = null;
         }
 
         /// <summary>
-        /// Fade out animation
+        /// Fades the command panel out using scaled frame time and deactivates it only after the
+        /// transition completes. Scene teardown may end the coroutine before that point.
         /// </summary>
         private IEnumerator FadeOut()
         {
+            if (!Core.IsGameplaySceneActive || _canvasGroup == null || _commandPanel == null)
+            {
+                yield break;
+            }
+
             float fadeTime = 0.5f;
             float elapsed = 0f;
             float startAlpha = _canvasGroup.alpha;
 
             while (elapsed < fadeTime)
             {
+                if (!Core.IsGameplaySceneActive || _canvasGroup == null || _commandPanel == null)
+                {
+                    yield break;
+                }
+
                 elapsed += Time.deltaTime;
                 _canvasGroup.alpha = Mathf.Lerp(startAlpha, 0f, elapsed / fadeTime);
                 yield return null;
             }
 
+            if (_canvasGroup == null || _commandPanel == null)
+            {
+                yield break;
+            }
+
             _canvasGroup.alpha = 0f;
             _commandPanel.SetActive(false);
+            _fadeCoroutine = null;
+        }
+
+        /// <summary>Routes destruction through the same idempotent scene-exit cleanup path.</summary>
+        private void OnDestroy()
+        {
+            CancelForSceneExit();
         }
     }
 }

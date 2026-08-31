@@ -12,36 +12,47 @@ using ScheduleOne.VoiceOver;
 namespace Behind_Bars.Systems.NPCs
 {
     /// <summary>
-    /// ScriptableObject-based voice database for jail NPCs
-    /// Supports different voice types and randomized audio clips
+    /// Runtime voice database for jail NPCs. MONO stores it as a ScriptableObject asset; IL2CPP uses a plain
+    /// managed-compatible instance, so callers must treat the database as runtime-owned on both targets.
+    /// Supports command-specific clips, fallback voice types, and randomized selection.
     /// </summary>
     [System.Serializable]
 #if MONO
     [CreateAssetMenu(fileName = "JailVoiceDatabase", menuName = "Behind Bars/Jail Voice Database")]
 #endif
+#if MONO
     public class JailVoiceDatabase : ScriptableObject
+#else
+    public class JailVoiceDatabase
+#endif
     {
 #if MONO
         [Header("Database Settings")]
         [Range(0f, 2f)]
 #endif
+        /// <summary>Global multiplier applied to command-entry volume.</summary>
         public float globalVolumeMultiplier = 1f;
 
 #if MONO
         [Header("Voice Entries")]
 #endif
+        /// <summary>Command entries keyed by <see cref="JailNPCAudioController.GuardCommandType"/>.</summary>
         public List<JailVoiceEntry> voiceEntries = new List<JailVoiceEntry>();
 
 #if MONO
         [Header("Radio Effects")]
 #endif
+        /// <summary>Optional clip used for radio start/stop beeps.</summary>
         public AudioClip radioBeepSound;
+        /// <summary>Optional looping clip used for radio static.</summary>
         public AudioClip radioStaticSound;
+        /// <summary>Whether the audio controller may use radio effects.</summary>
         public bool enableRadioEffects = true;
 
 #if MONO
         [Header("Default Fallback Settings")]
 #endif
+        /// <summary>Legacy fallback preference retained for serialized compatibility; current callers select VO explicitly.</summary>
         public bool useScheduleOneVOFallback = true;
 
         /// <summary>
@@ -58,7 +69,9 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Get a random audio clip for a specific command type
+        /// Gets a random clip for a command when its entry has a populated clip array. A missing entry returns
+        /// null; the current implementation assumes an existing entry's array is non-null, so null arrays must
+        /// be prevented by entry initialization until the getter contract is hardened.
         /// </summary>
         /// <param name="commandType">Type of guard command</param>
         /// <returns>Audio clip or null if not found</returns>
@@ -119,7 +132,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Create default voice entries for testing (without actual audio clips)
+        /// Creates the runtime default command table without audio clips. This is used by the normal factory,
+        /// not only tests; bundle loading may subsequently replace the empty arrays.
         /// </summary>
         private void CreateDefaultVoiceEntries()
         {
@@ -239,10 +253,11 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Load voice clips from asset bundle or resources
+        /// Placeholder for asset-bundle clip loading. The current implementation logs the request but does not
+        /// load or assign clips, so callers must not treat this method as proof that bundle audio is available.
         /// </summary>
         /// <param name="bundleName">Name of the asset bundle</param>
-        /// <param name="assetPath">Path to voice assets</param>
+        /// <param name="assetPath">Requested asset path; currently retained for the future loader and unused.</param>
         public void LoadVoiceClipsFromBundle(string bundleName, string assetPath = "voices")
         {
             try
@@ -299,35 +314,43 @@ namespace Behind_Bars.Systems.NPCs
 #if MONO
         [Header("Command Configuration")]
 #endif
+        /// <summary>Command category represented by this entry.</summary>
         public JailNPCAudioController.GuardCommandType commandType;
 
 #if MONO
         [Header("Audio Clips")]
 #endif
+        /// <summary>Candidate clips; empty arrays produce no custom audio, while null must be avoided by initialization.</summary>
         public AudioClip[] audioClips;
 
 #if MONO
         [Header("Playback Settings")]
         [Range(0f, 2f)]
 #endif
+        /// <summary>Per-command volume multiplier.</summary>
         public float volumeMultiplier = 1f;
 
 #if MONO
         [Range(0.5f, 2f)]
 #endif
+        /// <summary>Random pitch range around neutral pitch.</summary>
         public float pitchVariation = 0.1f;
 
+        /// <summary>Whether the command should use radio effects when selected.</summary>
         public bool useRadioEffect = true;
 
 #if MONO
         [Header("Fallback")]
 #endif
+        /// <summary>Schedule I voice-line category used when native command audio is unavailable.</summary>
         public EVOLineType fallbackEVOType = EVOLineType.Command;
 
+        /// <summary>Last selected clip used for best-effort adjacent-repeat avoidance.</summary>
         private AudioClip lastPlayedClip;
 
         /// <summary>
-        /// Get a random audio clip, avoiding repetition
+        /// Gets a random clip and makes up to five additional attempts to avoid repeating the last clip. This
+        /// is best-effort only; a repeated clip remains valid when random selection does not change.
         /// </summary>
         /// <returns>Random audio clip</returns>
         public AudioClip GetRandomClip()
@@ -394,26 +417,48 @@ namespace Behind_Bars.Systems.NPCs
     public static class JailVoiceDatabaseFactory
     {
         /// <summary>
-        /// Create a default voice database for testing
+        /// Creates and initializes the runtime default database. MONO uses a ScriptableObject instance while
+        /// IL2CPP uses a plain managed-compatible object; neither path supplies real clips by itself.
         /// </summary>
         /// <returns>Configured voice database</returns>
         public static JailVoiceDatabase CreateDefault()
         {
-            var database = ScriptableObject.CreateInstance<JailVoiceDatabase>();
+            JailVoiceDatabase database;
+#if MONO
+            database = ScriptableObject.CreateInstance<JailVoiceDatabase>();
+#else
+            database = new JailVoiceDatabase();
+#endif
+            if (database == null)
+            {
+                ModLogger.Error("Failed to create JailVoiceDatabase instance");
+                return null;
+            }
             database.Initialize();
             return database;
         }
 
         /// <summary>
-        /// Create a voice database from asset bundle
+        /// Creates a default database and invokes the current placeholder bundle-loading hook. The returned
+        /// database is not guaranteed to contain bundle clips until that loader is implemented.
         /// </summary>
         /// <param name="bundlePath">Path to the asset bundle</param>
-        /// <returns>Voice database loaded from bundle</returns>
+        /// <returns>Initialized runtime database, possibly still containing only default empty entries.</returns>
         public static JailVoiceDatabase CreateFromBundle(string bundlePath)
         {
             try
             {
-                var database = ScriptableObject.CreateInstance<JailVoiceDatabase>();
+                JailVoiceDatabase database;
+#if MONO
+                database = ScriptableObject.CreateInstance<JailVoiceDatabase>();
+#else
+                database = new JailVoiceDatabase();
+#endif
+                if (database == null)
+                {
+                    ModLogger.Error("Failed to create JailVoiceDatabase instance from bundle");
+                    return CreateDefault();
+                }
                 database.Initialize();
                 database.LoadVoiceClipsFromBundle(bundlePath);
                 return database;

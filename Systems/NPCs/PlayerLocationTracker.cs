@@ -5,6 +5,7 @@ using Behind_Bars.Helpers;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
+using Il2CppInterop.Runtime.Attributes;
 // Try to use game's EMapRegion if available, otherwise use fallback
 // Note: If game's enum is not accessible, we'll use the fallback enum defined below
 #else
@@ -15,8 +16,9 @@ using ScheduleOne.PlayerScripts;
 namespace Behind_Bars.Systems.NPCs
 {
     /// <summary>
-    /// Monitors player movement and emits events when player changes regions or moves significantly.
-    /// Uses event-driven architecture instead of coroutines for better performance and responsiveness.
+    /// Tracks the local player and emits Mono-only notifications for coarse region
+    /// changes or large movements. Region identity is a coordinate approximation;
+    /// it is not a query against the game's authoritative map-region service.
     /// </summary>
     public class PlayerLocationTracker : MonoBehaviour
     {
@@ -27,26 +29,33 @@ namespace Behind_Bars.Systems.NPCs
         #region Events
 
         /// <summary>
-        /// Event fired when player changes map region
+        /// Mono-only event raised when the coordinate-derived region enum changes;
+        /// it is not emitted by the IL2CPP build and does not represent a native
+        /// map-region transition.
         /// </summary>
+#if MONO
         public static event Action<Player, EMapRegion> OnPlayerRegionChanged;
+#endif
 
         /// <summary>
-        /// Event fired when player moves significantly (beyond threshold)
+        /// Mono-only event raised when the local player moves at least fifty world
+        /// metres from the last emitted movement position.
         /// </summary>
+#if MONO
         public static event Action<Player, Vector3> OnPlayerSignificantMovement;
+#endif
 
         #endregion
 
         #region Configuration
 
         /// <summary>
-        /// Interval in seconds to check for region changes
+        /// Scaled Unity-time interval between coordinate-region checks.
         /// </summary>
         private const float REGION_CHECK_INTERVAL = 2f;
 
         /// <summary>
-        /// Distance threshold in meters for significant movement detection
+        /// World-unit distance threshold for the Mono-only movement notification.
         /// </summary>
         private const float SIGNIFICANT_MOVEMENT_THRESHOLD = 50f;
 
@@ -54,9 +63,12 @@ namespace Behind_Bars.Systems.NPCs
 
         #region State
 
+        // All state belongs to Player.Local; multiplayer tracking remains disabled
+        // in this implementation.
         private EMapRegion currentRegion;
         private Vector3 lastCheckedPosition;
         private Player trackedPlayer;
+        // Uses scaled Unity seconds for the two-second region polling cadence.
         private float lastRegionCheckTime;
         private bool isInitialized = false;
 
@@ -64,6 +76,10 @@ namespace Behind_Bars.Systems.NPCs
 
         #region Unity Lifecycle
 
+        /// <summary>
+        /// Enforces the single tracker instance. A duplicate component is destroyed
+        /// and never reaches initialization.
+        /// </summary>
         private void Awake()
         {
             // Ensure singleton behavior
@@ -76,11 +92,17 @@ namespace Behind_Bars.Systems.NPCs
             Instance = this;
         }
 
+        /// <summary>Starts local-player resolution and initial region capture.</summary>
         private void Start()
         {
             Initialize();
         }
 
+        /// <summary>
+        /// Polls region changes every two scaled seconds and, on Mono only, large
+        /// movement events every frame. IL2CPP has no exposed event subscribers;
+        /// its parole manager performs its own reconciliation pass.
+        /// </summary>
         private void Update()
         {
             if (!isInitialized) return;
@@ -92,10 +114,14 @@ namespace Behind_Bars.Systems.NPCs
                 lastRegionCheckTime = Time.time;
             }
 
-            // Check for significant movement
+#if MONO
+            // IL2CPP has no exposed subscribers for these Mono-only events. Its parole
+            // officer manager already performs a periodic spawn reconciliation pass.
             CheckSignificantMovement();
+#endif
         }
 
+        /// <summary>Clears the singleton reference when this tracker is destroyed.</summary>
         private void OnDestroy()
         {
             Cleanup();
@@ -106,7 +132,9 @@ namespace Behind_Bars.Systems.NPCs
         #region Initialization
 
         /// <summary>
-        /// Initialize the location tracker
+        /// Resolves the local player, captures its starting position/region, and
+        /// enables polling. If the player is not ready, initialization retries in
+        /// a coroutine rather than marking the tracker initialized.
         /// </summary>
         public void Initialize()
         {
@@ -117,7 +145,7 @@ namespace Behind_Bars.Systems.NPCs
                 if (trackedPlayer == null)
                 {
                     ModLogger.Debug("PlayerLocationTracker: Local player not found, will retry");
-                    StartCoroutine(RetryInitialize());
+                    MelonLoader.MelonCoroutines.Start(RetryInitialize());
                     return;
                 }
 
@@ -136,8 +164,12 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Retry initialization if player not found initially
+        /// Retries local-player resolution up to ten times at one-second intervals.
+        /// A failed retry sequence leaves the tracker uninitialized.
         /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
         private IEnumerator RetryInitialize()
         {
             int retries = 0;
@@ -166,7 +198,7 @@ namespace Behind_Bars.Systems.NPCs
         #region Player Access
 
         /// <summary>
-        /// Get the local player instance
+        /// Gets the game's local player reference for the active runtime.
         /// </summary>
         private Player GetLocalPlayer()
         {
@@ -213,7 +245,8 @@ namespace Behind_Bars.Systems.NPCs
         #region Region Detection
 
         /// <summary>
-        /// Check if player has changed regions
+        /// Re-evaluates the local player's coordinate region and raises the
+        /// Mono-only region event only when the coarse enum changes.
         /// </summary>
         private void CheckRegionChange()
         {
@@ -232,7 +265,9 @@ namespace Behind_Bars.Systems.NPCs
                 {
                     ModLogger.Debug($"PlayerLocationTracker: Region changed from {currentRegion} to {newRegion}");
                     currentRegion = newRegion;
+#if MONO
                     OnPlayerRegionChanged?.Invoke(trackedPlayer, newRegion);
+#endif
                 }
             }
             catch (Exception ex)
@@ -242,38 +277,21 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Get the map region for a given position
-        /// Uses EMapRegion enum from ScheduleOne.Map
+        /// Maps a world position through the coordinate fallback. The current game
+        /// build does not expose a native map-region detector to this component.
         /// </summary>
         private EMapRegion GetRegionForPosition(Vector3 position)
         {
-            try
-            {
-                // Try to use game's built-in region detection if available
-                // Fallback to coordinate-based detection if enum not accessible
-#if !MONO
-                // Attempt to use game's region detection system
-                // This may need adjustment based on actual game API
-                var mapRegion = Il2CppScheduleOne.Map.MapRegionDetector.GetRegion(position);
-                if (mapRegion != null)
-                {
-                    return (EMapRegion)mapRegion;
-                }
-#endif
-
-                // Fallback: Use coordinate-based region detection
-                return DetectRegionByCoordinates(position);
-            }
-            catch (Exception ex)
-            {
-                ModLogger.Debug($"PlayerLocationTracker: Error getting region, using fallback: {ex.Message}");
-                return DetectRegionByCoordinates(position);
-            }
+            // Use coordinate-based region detection
+            // MapRegionDetector is not available in the current game build
+            return DetectRegionByCoordinates(position);
         }
 
         /// <summary>
-        /// Fallback region detection based on world coordinates
-        /// Maps routes to approximate regions based on waypoint locations
+        /// Classifies a world position using broad route-derived rectangles. Checks
+        /// are ordered, overlapping rectangles take the first matching region, and
+        /// unknown positions default to Downtown; boundaries are maintenance data,
+        /// not authoritative game regions.
         /// </summary>
         private EMapRegion DetectRegionByCoordinates(Vector3 position)
         {
@@ -317,7 +335,8 @@ namespace Behind_Bars.Systems.NPCs
         #region Movement Detection
 
         /// <summary>
-        /// Check if player has moved significantly
+        /// Compares the local player's position with the last emitted movement
+        /// position and raises the Mono-only event after fifty metres.
         /// </summary>
         private void CheckSignificantMovement()
         {
@@ -332,7 +351,9 @@ namespace Behind_Bars.Systems.NPCs
                 {
                     ModLogger.Debug($"PlayerLocationTracker: Significant movement detected: {distance:F1}m");
                     lastCheckedPosition = currentPosition;
+#if MONO
                     OnPlayerSignificantMovement?.Invoke(trackedPlayer, currentPosition);
+#endif
                 }
             }
             catch (Exception ex)
@@ -346,18 +367,21 @@ namespace Behind_Bars.Systems.NPCs
         #region Public API
 
         /// <summary>
-        /// Get current tracked player
+        /// Gets the exact local player currently retained by the tracker.
         /// </summary>
+        /// <returns>The tracked local player, or null before initialization.</returns>
         public Player GetTrackedPlayer() => trackedPlayer;
 
         /// <summary>
-        /// Get current region
+        /// Gets the most recently computed approximate region.
         /// </summary>
+        /// <returns>The coordinate-derived current region.</returns>
         public EMapRegion GetCurrentRegion() => currentRegion;
 
         /// <summary>
-        /// Get current player position
+        /// Gets the tracked player's current world position.
         /// </summary>
+        /// <returns>The player position, or Vector3.zero when no player is tracked.</returns>
         public Vector3 GetCurrentPosition()
         {
             if (trackedPlayer == null) return Vector3.zero;
@@ -365,7 +389,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Force a region check (useful for testing or teleportation)
+        /// Runs a region check immediately, useful after teleportation. It does not
+        /// bypass the coordinate approximation or alter the polling timestamp.
         /// </summary>
         public void ForceRegionCheck()
         {
@@ -377,7 +402,8 @@ namespace Behind_Bars.Systems.NPCs
         #region Cleanup
 
         /// <summary>
-        /// Cleanup resources
+        /// Clears the singleton reference and logs tracker teardown. No event
+        /// unsubscription is required because the events are static Mono-only APIs.
         /// </summary>
         private void Cleanup()
         {
@@ -398,8 +424,9 @@ namespace Behind_Bars.Systems.NPCs
     }
 
     /// <summary>
-    /// Map region enum - matches ScheduleOne.Map.EMapRegion
-    /// Fallback enum if game's enum is not accessible
+    /// Coordinate-region labels used by the tracker. These values are a local
+    /// compatibility enum and should not be treated as proof of native map-region
+    /// identity when the game's enum/service differs.
     /// </summary>
     public enum EMapRegion
     {

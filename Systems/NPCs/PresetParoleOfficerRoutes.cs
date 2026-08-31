@@ -10,15 +10,44 @@ using Vector3 = UnityEngine.Vector3;
 
 namespace Behind_Bars.Systems.NPCs
 {
+    /// <summary>
+    /// Static authored waypoint registry for parole patrols and the supervising
+    /// officer's courthouse post.  The route objects here are separate from
+    /// ParoleOfficerBehavior.AssignmentToRouteMap; adding a route to one registry
+    /// does not update the other.
+    /// </summary>
     public static class PresetParoleOfficerRoutes
     {
+        // Main.unity's Courthouse access point resolves to approximately
+        // (78.50, 17.69). Its exterior/public approach is south of that doorway.
+        // Keep the supervising officer on the front apron rather than either
+        // side/rear bus-stop marker, so the check-in location is visibly in front
+        // of the courthouse as the player walks past it from the police station.
+        // This remains independent of S1API and is placed on the native-map surface.
+        private static readonly Vector3 SupervisingOfficerStation = new Vector3(78.500f, 1.065f, 14.200f);
+
+        // Registry consumed by GetRoute and route-existence helpers. It is not
+        // cleared by InitializePatrolPoints, so repeated initialization can leave
+        // the public route fields pointing at newer objects than this dictionary.
         private static Dictionary<string, PatrolRoute> AllRoutes = new Dictionary<string, PatrolRoute>();
+
+        /// <summary>Route around the police-station/courthouse area.</summary>
         public static PatrolRoute PoliceStation;
+        /// <summary>Route covering the authored northern circuit.</summary>
         public static PatrolRoute North;
+        /// <summary>Route covering the authored eastern/uptown circuit.</summary>
         public static PatrolRoute East;
+        /// <summary>Route covering the authored western circuit.</summary>
         public static PatrolRoute West;
+        /// <summary>Route covering the authored canal/docks circuit.</summary>
         public static PatrolRoute Canal;
         
+        /// <summary>
+        /// Rebuilds the five public preset route objects and adds them to the
+        /// registry when their names are not already present. This method is not
+        /// idempotent: after the first call, repeated calls replace the public
+        /// fields but leave the existing registry entries unchanged.
+        /// </summary>
         public static void InitializePatrolPoints()
         {
             PoliceStation = new PatrolRoute();
@@ -129,8 +158,29 @@ namespace Behind_Bars.Systems.NPCs
             AddRoute("Canal", Canal);
         }
 
+        /// <summary>
+        /// Gets a registered route by name. The dictionary indexer is used
+        /// directly, so callers must initialize the registry and provide an
+        /// existing key or a key-not-found exception is thrown.
+        /// </summary>
+        /// <param name="name">Registered route name.</param>
+        /// <returns>The route stored in the registry.</returns>
         public static PatrolRoute GetRoute(string name) { return AllRoutes[name]; }
 
+        /// <summary>
+        /// Gets the supervising officer's permanent check-in post in front of the courthouse.
+        /// </summary>
+        public static Vector3 GetSupervisingOfficerStation()
+        {
+            return SupervisingOfficerStation;
+        }
+
+        /// <summary>
+        /// Adds a route object to the registry if its name is unused. Duplicate
+        /// names are skipped, leaving the original object authoritative for lookup.
+        /// </summary>
+        /// <param name="name">Registry key and route display name.</param>
+        /// <param name="route">Route object to register.</param>
         public static void AddRoute(string name, PatrolRoute route) {
             if (AllRoutes.ContainsKey(name)) {
                 ModLogger.Warn($"Route {name} already exists, skipping!");
@@ -141,6 +191,9 @@ namespace Behind_Bars.Systems.NPCs
             ModLogger.Debug($"Added route {name} to Parole Officer Routes");
         }
 
+        /// <summary>Creates and registers a route from ordered world-space waypoints.</summary>
+        /// <param name="name">Registry key and route display name.</param>
+        /// <param name="waypoints">Ordered world-space patrol points.</param>
         public static void AddRoute(string name, Vector3[] waypoints)
         {
             PatrolRoute route = new PatrolRoute
@@ -150,6 +203,10 @@ namespace Behind_Bars.Systems.NPCs
             AddRoute(name, route);
         }
 
+        /// <summary>Creates and registers a route with a custom movement speed.</summary>
+        /// <param name="name">Registry key and route display name.</param>
+        /// <param name="waypoints">Ordered world-space patrol points.</param>
+        /// <param name="speed">NavMesh movement speed in world units per second.</param>
         public static void AddRoute(string name, Vector3[] waypoints, float speed)
         {
             PatrolRoute route = new PatrolRoute
@@ -160,8 +217,14 @@ namespace Behind_Bars.Systems.NPCs
             AddRoute(name, route);
         }
 
+        /// <summary>Removes a registered route by name.</summary>
+        /// <param name="name">Registry key to remove.</param>
+        /// <returns>True when an entry was removed.</returns>
         public static bool DeleteRoute(string name) { return AllRoutes.Remove(name); }
 
+        /// <summary>Removes the registry entry whose value is the supplied route object.</summary>
+        /// <param name="route">Route instance to remove.</param>
+        /// <returns>True when an entry was removed.</returns>
         public static bool DeleteRoute(PatrolRoute route)
         {
             if (AllRoutes.ContainsValue(route))
@@ -172,10 +235,17 @@ namespace Behind_Bars.Systems.NPCs
             return false;
         }
 
+        /// <summary>Checks whether a route name is registered.</summary>
+        /// <param name="name">Registry key to test.</param>
+        /// <returns>True when the key exists.</returns>
         public static bool RouteExists(string name) { return AllRoutes.ContainsKey(name); }
 
+        /// <summary>Checks whether the exact route object is registered.</summary>
+        /// <param name="route">Route instance to test.</param>
+        /// <returns>True when the value exists in the registry.</returns>
         public static bool RouteExists(PatrolRoute route) { return AllRoutes.ContainsValue(route); }
 
+        /// <summary>Returns a snapshot list of the currently registered route values.</summary>
         public static List<PatrolRoute> GetAllRoutes() 
         {
             return AllRoutes.Values.ToList();

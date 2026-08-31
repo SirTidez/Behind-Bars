@@ -16,6 +16,11 @@ namespace Behind_Bars.Systems.Jail
     public class FineCalculator
     {
         private static FineCalculator? _instance;
+
+        /// <summary>
+        /// Lazily created process-local fine calculator.
+        /// </summary>
+        /// <remarks>The instance and its configured table are not persisted or synchronized across multiplayer peers.</remarks>
         public static FineCalculator Instance => _instance ??= new FineCalculator();
 
         // Base fine amounts (reduced to prevent excessive scaling)
@@ -76,6 +81,10 @@ namespace Behind_Bars.Systems.Jail
         /// Prioritizes RapSheet as the source of truth (crimes are moved there after arrest)
         /// Falls back to CrimeData if RapSheet doesn't have crimes yet
         /// </summary>
+        /// <param name="player">The player to calculate fines for.</param>
+        /// <param name="rapSheet">The player's rap sheet, or <c>null</c> to resolve it from the current manager.</param>
+        /// <returns>The final fine in currency units, capped at <c>$50,000</c>, or zero when no usable crimes exist.</returns>
+        /// <remarks>RapSheet is preferred when non-empty; CrimeData is only used as a fallback. Repeat-offender scaling applies whenever a rap sheet object is available.</remarks>
         public float CalculateTotalFine(Player player, RapSheet? rapSheet = null)
         {
             if (player == null)
@@ -87,7 +96,7 @@ namespace Behind_Bars.Systems.Jail
             // Get rap sheet if not provided
             if (rapSheet == null)
             {
-                rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
             }
 
             float totalFine = 0f;
@@ -107,7 +116,7 @@ namespace Behind_Bars.Systems.Jail
                     var crimesByType = new Dictionary<Type, List<CrimeInstance>>();
                     foreach (var crimeInstance in rapSheetCrimes)
                     {
-                        if (crimeInstance?.Crime == null)
+                        if (crimeInstance == null)
                         {
                             ModLogger.Warn("[FINE CALC] Found null crime instance in RapSheet - skipping");
                             continue;
@@ -129,13 +138,11 @@ namespace Behind_Bars.Systems.Jail
                             string typeName = crimeInstance.GetCrimeTypeName();
                             ModLogger.Debug($"CrimeInstance has no Crime object, using inferred type: {typeName}");
                             // Calculate fine directly using inferred type name
-                            float fine = 25f; // Default fine
-                            if (_baseFines.TryGetValue(typeName, out float baseFine))
-                            {
-                                fine = baseFine;
-                            }
+                            float fine = GetBaseFine(typeName);
+                            float enhancementFine = CrimeEnhancementPenaltyCalculator.GetFineSurcharge(crimeInstance, typeName);
+                            fine += enhancementFine;
                             totalFine += fine * crimeInstance.Severity;
-                            ModLogger.Info($"[FINE CALC] Processed crime without Crime object: {typeName} = ${fine * crimeInstance.Severity:F2}");
+                            ModLogger.Info($"[FINE CALC] Processed persisted crime: {typeName} = ${fine * crimeInstance.Severity:F2} (enhancement=${enhancementFine:F2})");
                         }
                     }
 
@@ -186,10 +193,15 @@ namespace Behind_Bars.Systems.Jail
                         // Get base fine for this crime
                         if (_baseFines.TryGetValue(crimeName, out float baseFine))
                         {
-                            float crimeFine = baseFine * count;
+                            float crimeFine = 0f;
+                            for (int index = 0; index < crimeInstances.Count; index++)
+                            {
+                                var instanceFine = baseFine + CrimeEnhancementPenaltyCalculator.GetFineSurcharge(crimeInstances[index], crimeName);
+                                crimeFine += instanceFine;
+                            }
                             totalFine += crimeFine;
                             crimeCounts[crimeName] = (crimeCounts.ContainsKey(crimeName) ? crimeCounts[crimeName] : 0) + count;
-                            ModLogger.Info($"[FINE CALC]   {crimeName}: ${baseFine} x {count} = ${crimeFine:F2}");
+                            ModLogger.Info($"[FINE CALC]   {crimeName}: ${crimeFine:F2} from {count} charge(s), including contextual enhancements");
                         }
                         else
                         {
@@ -333,6 +345,9 @@ namespace Behind_Bars.Systems.Jail
         /// <summary>
         /// Get base fine for a crime type (without multipliers)
         /// </summary>
+        /// <param name="crimeClassName">Crime class/type name used as the lookup key.</param>
+        /// <param name="victimType">Optional murder victim category.</param>
+        /// <returns>The configured base fine, murder-specific fine, or the $25 unknown-crime fallback.</returns>
         public float GetBaseFine(string crimeClassName, string? victimType = null)
         {
             // Handle Murder crimes
@@ -357,7 +372,7 @@ namespace Behind_Bars.Systems.Jail
                 "Assault on Civilian" => "AssaultOnCivilian",
                 "Assault" => "Assault",
                 "Deadly Assault" => "DeadlyAssault",
-                "Assault on Officer" => "AssaultOnOfficer",
+                "Assault on Officer" or "Assault on an LEO" => "AssaultOnOfficer",
                 "Theft" => "Theft",
                 "Vehicle Theft" => "VehicleTheft",
                 "Burglary" => "Burglary",

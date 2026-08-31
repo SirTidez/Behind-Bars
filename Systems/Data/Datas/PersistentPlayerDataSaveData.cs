@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using UnityEngine;
 using Behind_Bars.Helpers;
+using Behind_Bars.Utils;
 
 #if !MONO
 using Il2CppScheduleOne.Persistence.Datas;
@@ -17,11 +18,18 @@ namespace Behind_Bars.Systems.Data.Datas
     [Serializable]
     public class Vector3SaveData
     {
+        /// <summary>Serialized X coordinate.</summary>
         public float x;
+        /// <summary>Serialized Y coordinate.</summary>
         public float y;
+        /// <summary>Serialized Z coordinate.</summary>
         public float z;
 
+        /// <summary>Reconstructs the Unity position represented by this DTO.</summary>
         public Vector3 ToVector3() => new Vector3(x, y, z);
+
+        /// <summary>Flattens a Unity position into fields supported by JsonUtility.</summary>
+        /// <param name="v">Position to serialize.</param>
         public static Vector3SaveData FromVector3(Vector3 v) => new Vector3SaveData { x = v.x, y = v.y, z = v.z };
     }
 
@@ -31,9 +39,14 @@ namespace Behind_Bars.Systems.Data.Datas
     [Serializable]
     public class StoredExitPositionSaveData
     {
+        /// <summary>Stable dictionary key for the stored exit.</summary>
         public string key;
+        /// <summary>Serialized world position associated with <see cref="key"/>.</summary>
         public Vector3SaveData position;
 
+        /// <summary>Creates a list-friendly DTO for one stored-exit dictionary entry.</summary>
+        /// <param name="key">Exit key; null is persisted as an empty string.</param>
+        /// <param name="position">Exit world position.</param>
         public static StoredExitPositionSaveData FromKeyValue(string key, Vector3 position)
         {
             return new StoredExitPositionSaveData
@@ -50,9 +63,13 @@ namespace Behind_Bars.Systems.Data.Datas
     [Serializable]
     public class ClothingLayerSaveData
     {
+        /// <summary>Addressable/resource path for the clothing layer.</summary>
         public string layerPath;
+        /// <summary>RGBA channels in order; shorter arrays hydrate with opaque-white defaults.</summary>
         public float[] colorRGBA = new float[4]; // r, g, b, a
 
+        /// <summary>Flattens a runtime clothing layer into primitive save fields.</summary>
+        /// <param name="layer">Layer to serialize, or null to omit.</param>
         public static ClothingLayerSaveData FromClothingLayer(PersistentPlayerData.ClothingLayer layer)
         {
             if (layer == null)
@@ -66,6 +83,10 @@ namespace Behind_Bars.Systems.Data.Datas
             };
         }
 
+        /// <summary>
+        /// Reconstructs a clothing layer, applying white/opaque defaults for truncated
+        /// or legacy color arrays.
+        /// </summary>
         public PersistentPlayerData.ClothingLayer ToClothingLayer()
         {
             Color color = new Color(
@@ -78,21 +99,70 @@ namespace Behind_Bars.Systems.Data.Datas
         }
     }
 
+    /// <summary>Serializable representation of a player-avatar accessory.</summary>
+    [Serializable]
+    public class ClothingAccessorySaveData
+    {
+        /// <summary>Addressable/resource path for the avatar accessory.</summary>
+        public string path;
+        /// <summary>RGBA channels in order; shorter or null arrays hydrate with opaque-white defaults.</summary>
+        public float[] colorRGBA = new float[4];
+
+        /// <summary>Flattens a runtime accessory into primitive save fields.</summary>
+        /// <param name="accessory">Accessory to serialize, or null to omit.</param>
+        public static ClothingAccessorySaveData FromClothingAccessory(PersistentPlayerData.ClothingAccessory accessory)
+        {
+            if (accessory == null)
+                return null;
+
+            var color = accessory.GetColor();
+            return new ClothingAccessorySaveData
+            {
+                path = accessory.path ?? "",
+                colorRGBA = new[] { color.r, color.g, color.b, color.a }
+            };
+        }
+
+        /// <summary>
+        /// Reconstructs an accessory, applying white/opaque defaults for truncated or
+        /// legacy color arrays.
+        /// </summary>
+        public PersistentPlayerData.ClothingAccessory ToClothingAccessory()
+        {
+            var color = new Color(
+                colorRGBA != null && colorRGBA.Length > 0 ? colorRGBA[0] : 1f,
+                colorRGBA != null && colorRGBA.Length > 1 ? colorRGBA[1] : 1f,
+                colorRGBA != null && colorRGBA.Length > 2 ? colorRGBA[2] : 1f,
+                colorRGBA != null && colorRGBA.Length > 3 ? colorRGBA[3] : 1f);
+            return new PersistentPlayerData.ClothingAccessory(path, color);
+        }
+    }
+
     /// <summary>
     /// Serializable representation of a stored item
     /// </summary>
     [Serializable]
     public class StoredItemSaveData
     {
+        /// <summary>Persisted item identifier, if the source item exposed one.</summary>
         public string itemId;
+        /// <summary>Display name captured at confiscation time.</summary>
         public string itemName;
+        /// <summary>Captured stack quantity.</summary>
         public int stackCount;
+        /// <summary>Whether the item was classified as contraband at capture time.</summary>
         public bool isContraband;
+        /// <summary>Runtime item-type name used for display and restoration diagnostics.</summary>
         public string itemType;
+        /// <summary>ISO-8601 serialization of the confiscation timestamp.</summary>
         public string confiscationTime;         // DateTime as ISO 8601 string
+        /// <summary>Additional handling note retained with the item.</summary>
         public string specialHandling;
+        /// <summary>Cash value associated with this stored item.</summary>
         public float cashBalance;
 
+        /// <summary>Flattens a stored item into save-safe primitive fields.</summary>
+        /// <param name="item">Stored item to serialize, or null to omit.</param>
         public static StoredItemSaveData FromStoredItem(PersistentPlayerData.StoredItem item)
         {
             if (item == null)
@@ -111,6 +181,10 @@ namespace Behind_Bars.Systems.Data.Datas
             };
         }
 
+        /// <summary>
+        /// Reconstructs a stored item. Malformed or missing timestamps fall back to the
+        /// current local time so a legacy item remains loadable.
+        /// </summary>
         public PersistentPlayerData.StoredItem ToStoredItem()
         {
             DateTime parsedTime;
@@ -134,16 +208,35 @@ namespace Behind_Bars.Systems.Data.Datas
     [Serializable]
     public class PlayerInventorySnapshotSaveData
     {
+        /// <summary>Player identifier captured when the arrest snapshot was created.</summary>
         public string playerId;
+        /// <summary>Player display name captured with the snapshot.</summary>
         public string playerName;
+        /// <summary>
+        /// Confiscated item DTOs. Null source entries are omitted while flattening; a null
+        /// element encountered during hydration can abort the remaining snapshot conversion.
+        /// </summary>
         public List<StoredItemSaveData> items = new List<StoredItemSaveData>();
+        /// <summary>Last known player position at snapshot time.</summary>
         public Vector3SaveData lastPosition;
+        /// <summary>ISO-8601 serialization of the arrest timestamp.</summary>
         public string arrestTime;              // DateTime as ISO 8601 string
+        /// <summary>Stable arrest/incident identifier.</summary>
         public string arrestId;
+        /// <summary>Crime payload preserved as a string for compatibility with current saves.</summary>
         public string crimeData;                // Serialized crime data (as string)
+        /// <summary>Whether this snapshot is still active in the persistent state.</summary>
         public bool isActive;
+        /// <summary>Original clothing layers captured before custody.</summary>
         public List<ClothingLayerSaveData> originalClothing = new List<ClothingLayerSaveData>();
+        /// <summary>Original accessories captured before custody.</summary>
+        public List<ClothingAccessorySaveData> originalAccessories = new List<ClothingAccessorySaveData>();
 
+        /// <summary>
+        /// Converts a runtime inventory snapshot to the JSON-friendly DTO shape. Complex
+        /// collections are copied entry-by-entry and null source entries are omitted.
+        /// </summary>
+        /// <param name="snapshot">Snapshot to serialize, or null to omit.</param>
         public static PlayerInventorySnapshotSaveData FromSnapshot(PersistentPlayerData.PlayerInventorySnapshot snapshot)
         {
             if (snapshot == null)
@@ -194,9 +287,29 @@ namespace Behind_Bars.Systems.Data.Datas
                 }
             }
 
+            if (snapshot.originalAccessories != null)
+            {
+                foreach (var accessory in snapshot.originalAccessories)
+                {
+                    var accessorySaveData = ClothingAccessorySaveData.FromClothingAccessory(accessory);
+                    if (accessorySaveData != null)
+                    {
+                        saveData.originalAccessories.Add(accessorySaveData);
+                    }
+                }
+            }
+
             return saveData;
         }
 
+        /// <summary>
+        /// Reconstructs a runtime snapshot. Invalid arrest timestamps use local now,
+        /// absent positions use <see cref="Vector3.zero"/>, and crime data remains text.
+        /// </summary>
+        /// <remarks>
+        /// The current payload loader catches an exception around the whole snapshot list,
+        /// so a malformed nested item or clothing DTO can stop later snapshots in that payload.
+        /// </remarks>
         public PersistentPlayerData.PlayerInventorySnapshot ToSnapshot()
         {
             DateTime parsedTime;
@@ -243,6 +356,18 @@ namespace Behind_Bars.Systems.Data.Datas
                 }
             }
 
+            if (originalAccessories != null)
+            {
+                foreach (var accessorySaveData in originalAccessories)
+                {
+                    var accessory = accessorySaveData?.ToClothingAccessory();
+                    if (accessory != null)
+                    {
+                        snapshot.originalAccessories.Add(accessory);
+                    }
+                }
+            }
+
             return snapshot;
         }
     }
@@ -254,29 +379,34 @@ namespace Behind_Bars.Systems.Data.Datas
     [Serializable]
     public class PersistentPlayerDataSaveData : GenericSaveData
     {
-        // Key constants for consistent key naming
+        // Simple values use GenericSaveData's key/value store; nested collections use
+        // JSON strings because the native save surface cannot represent dictionaries
+        // and object graphs directly. These keys are part of the persisted schema.
         private const string KEY_LAST_SAVE_TIME = "lastSaveTime";
         private const string KEY_VERSION = "version";
         private const string KEY_PLAYER_SNAPSHOTS_JSON = "playerSnapshotsJson";
         private const string KEY_STORED_EXIT_POSITIONS_JSON = "storedExitPositionsJson";
 
         /// <summary>
-        /// Creates a new PersistentPlayerDataSaveData with a GUID
+        /// Creates a new save DTO with the supplied GenericSaveData identifier.
         /// </summary>
+        /// <param name="guid">Identifier assigned to the native save-data wrapper.</param>
         public PersistentPlayerDataSaveData(string guid) : base(guid)
         {
         }
 
         /// <summary>
-        /// Default constructor (required for serialization)
+        /// Creates a save DTO with a new identifier for serializers that require a default constructor.
         /// </summary>
         public PersistentPlayerDataSaveData() : base(Guid.NewGuid().ToString())
         {
         }
 
         /// <summary>
-        /// Creates a PersistentPlayerDataSaveData from PersistentGameData
+        /// Flattens runtime persistent game data into the current GenericSaveData schema.
         /// </summary>
+        /// <param name="gameData">Runtime data to convert, or null to omit.</param>
+        /// <returns>A save DTO, or null when <paramref name="gameData"/> is null.</returns>
         public static PersistentPlayerDataSaveData FromGameData(PersistentPlayerData.PersistentGameData gameData)
         {
             if (gameData == null)
@@ -285,11 +415,13 @@ namespace Behind_Bars.Systems.Data.Datas
             string guid = $"persistentplayerdata_{Guid.NewGuid()}";
             var saveData = new PersistentPlayerDataSaveData(guid);
 
-            // Store simple fields as key-value pairs
+            // Store simple fields as key-value pairs. DateTime uses round-trip text;
+            // version is retained for migration decisions made by the owning system.
             saveData.Add(KEY_LAST_SAVE_TIME, gameData.lastSaveTime.ToString("O"));
             saveData.Add(KEY_VERSION, gameData.version);
 
-            // Convert snapshots to JSON string (complex nested data)
+            // Convert snapshots to JSON string (complex nested data). Empty collections
+            // are omitted, and ToGameData supplies initialized empty lists on read.
             if (gameData.playerSnapshots != null && gameData.playerSnapshots.Count > 0)
             {
                 var snapshotsList = new List<PlayerInventorySnapshotSaveData>();
@@ -301,11 +433,12 @@ namespace Behind_Bars.Systems.Data.Datas
                         snapshotsList.Add(snapshotSaveData);
                     }
                 }
-                string snapshotsJson = JsonUtility.ToJson(snapshotsList);
+                string snapshotsJson = JsonHelper.SerializeObject(snapshotsList);
                 saveData.Add(KEY_PLAYER_SNAPSHOTS_JSON, snapshotsJson);
             }
 
-            // Convert exit positions to JSON string (Dictionary to List)
+            // Convert exit positions to JSON string (Dictionary to List), because JSON
+            // object keys are less portable across the native serializer boundary.
             if (gameData.storedExitPositions != null && gameData.storedExitPositions.Count > 0)
             {
                 var positionsList = new List<StoredExitPositionSaveData>();
@@ -314,7 +447,7 @@ namespace Behind_Bars.Systems.Data.Datas
                     var positionSaveData = StoredExitPositionSaveData.FromKeyValue(kvp.Key, kvp.Value);
                     positionsList.Add(positionSaveData);
                 }
-                string positionsJson = JsonUtility.ToJson(positionsList);
+                string positionsJson = JsonHelper.SerializeObject(positionsList);
                 saveData.Add(KEY_STORED_EXIT_POSITIONS_JSON, positionsJson);
             }
 
@@ -322,13 +455,15 @@ namespace Behind_Bars.Systems.Data.Datas
         }
 
         /// <summary>
-        /// Converts this SaveData back to PersistentGameData
+        /// Rehydrates runtime persistent data from key/value fields and nested JSON.
         /// </summary>
+        /// <returns>Initialized game data; malformed optional JSON is skipped with a warning.</returns>
         public PersistentPlayerData.PersistentGameData ToGameData()
         {
             var gameData = new PersistentPlayerData.PersistentGameData();
 
-            // Parse DateTime from key-value storage
+            // Parse DateTime from key-value storage. A missing or malformed timestamp
+            // leaves the runtime default rather than invalidating the whole save.
             string lastSaveTimeStr = GetString(KEY_LAST_SAVE_TIME, "");
             if (!string.IsNullOrEmpty(lastSaveTimeStr))
             {
@@ -340,13 +475,15 @@ namespace Behind_Bars.Systems.Data.Datas
 
             gameData.version = GetInt(KEY_VERSION, 1);
 
-            // Deserialize snapshots from JSON string
+            // Deserialize snapshots from JSON string. Payload-level failure is contained
+            // so exit positions and the rest of the save can still be restored; a malformed
+            // entry currently aborts the remaining snapshot entries in this payload.
             string snapshotsJson = GetString(KEY_PLAYER_SNAPSHOTS_JSON, "");
             if (!string.IsNullOrEmpty(snapshotsJson))
             {
                 try
                 {
-                    var snapshotsList = JsonUtility.FromJson<List<PlayerInventorySnapshotSaveData>>(snapshotsJson);
+                    var snapshotsList = JsonHelper.DeserializeObject<List<PlayerInventorySnapshotSaveData>>(snapshotsJson);
                     if (snapshotsList != null)
                     {
                         foreach (var snapshotSaveData in snapshotsList)
@@ -365,13 +502,16 @@ namespace Behind_Bars.Systems.Data.Datas
                 }
             }
 
-            // Deserialize exit positions from JSON string (List to Dictionary)
+            // Deserialize exit positions from JSON string (List to Dictionary). Entries
+            // without keys are ignored; duplicate keys use normal dictionary overwrite.
+            // The current loop does not null-check position, so a null position aborts
+            // the remaining position payload through the surrounding catch.
             string positionsJson = GetString(KEY_STORED_EXIT_POSITIONS_JSON, "");
             if (!string.IsNullOrEmpty(positionsJson))
             {
                 try
                 {
-                    var positionsList = JsonUtility.FromJson<List<StoredExitPositionSaveData>>(positionsJson);
+                    var positionsList = JsonHelper.DeserializeObject<List<StoredExitPositionSaveData>>(positionsJson);
                     if (positionsList != null)
                     {
                         foreach (var positionSaveData in positionsList)

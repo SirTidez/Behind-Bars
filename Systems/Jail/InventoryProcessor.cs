@@ -18,20 +18,49 @@ using ScheduleOne.Vehicles;
 namespace Behind_Bars.Systems.Jail
 {
     /// <summary>
-    /// Handles proper inventory processing during arrest - confiscates contraband and locks legal items
-    /// Uses the game's actual contraband detection system for accurate identification
+    /// Coordinates arrest-time inventory handling through the game's inventory objects.
+    /// Slot discovery and contraband classification use reflection and type/name heuristics
+    /// so the same source can target Mono and IL2CPP. Missing legal-status metadata fails
+    /// open as legal, while product instances are treated as contraband during arrest.
+    /// Locking disables the live PlayerInventory component; it is not a durable property
+    /// locker or proof that a native inventory transfer completed.
     /// </summary>
     public class InventoryProcessor
     {
         /// <summary>
-        /// Result of inventory processing
+        /// Result of the legacy slot-processing pipeline.
+        /// The active arrest flow primarily relies on the player's live inventory state and
+        /// the separate arrest-property snapshot, so callers must not interpret this object
+        /// as a durable confiscation record unless they own the call that populated it.
         /// </summary>
         public class InventoryProcessResult
         {
+            /// <summary>
+            /// Display names added for items classified as contraband, repeated per stack unit.
+            /// </summary>
             public List<string> ConfiscatedItems { get; set; } = new List<string>();
+
+            /// <summary>
+            /// Display names added for items classified as legal, repeated per stack unit.
+            /// This list describes classification only; it does not itself lock a slot.
+            /// </summary>
             public List<string> LockedItems { get; set; } = new List<string>();
+
+            /// <summary>
+            /// Number of non-empty slots visited by the legacy processor.
+            /// </summary>
             public int TotalItemsProcessed { get; set; } = 0;
+
+            /// <summary>
+            /// Whether the legacy processor completed without an outer processing exception.
+            /// A true value does not prove that every slot was classified or cleared.
+            /// </summary>
             public bool Success { get; set; } = true;
+
+            /// <summary>
+            /// Last or aggregate error text supplied by a caller of the legacy pipeline.
+            /// The current helpers generally log failures instead of populating this field.
+            /// </summary>
             public string ErrorMessage { get; set; } = "";
         }
 
@@ -41,6 +70,10 @@ namespace Behind_Bars.Systems.Jail
         /// <summary>
         /// Get all inventory slots from the player's inventory
         /// </summary>
+        // Reflection keeps this helper compatible with both runtime type surfaces. If the
+        // native method is unavailable, the fallback only inspects hotbarSlots; vehicle,
+        // storage, or other non-hotbar slots are not guaranteed to be included. A null or
+        // failed lookup returns an empty list after logging, rather than throwing outward.
         private static List<object> GetAllInventorySlots(PlayerInventory inventory)
         {
             var slots = new List<object>();
@@ -98,6 +131,9 @@ namespace Behind_Bars.Systems.Jail
         /// <summary>
         /// Get vehicle storage slots if player recently exited a vehicle
         /// </summary>
+        // Legacy helper retained from an earlier arrest-search path. There is no current
+        // caller in this processor, so its existence does not mean vehicle storage is part
+        // of the active arrest-property flow.
         private static List<object> GetVehicleStorageSlots(Player player)
         {
             var slots = new List<object>();
@@ -148,6 +184,9 @@ namespace Behind_Bars.Systems.Jail
         /// <summary>
         /// Process a single inventory slot for contraband detection and confiscation
         /// </summary>
+        // Legacy per-slot pipeline. Current arrest handling uses the native inventory
+        // snapshot/property-security path instead; clearing a slot here is not equivalent
+        // to handing property to a persistent locker.
         private static void ProcessInventorySlot(object slot, InventoryProcessResult result)
         {
             try
@@ -216,7 +255,10 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Check if an item is contraband using the game's legal status system
+        /// Resolve whether an item is contraband from reflected legal-status data.
+        /// Product instances use the arrest-specific product policy below. Missing metadata
+        /// or reflection failures deliberately fail open as legal, so a false result is not
+        /// proof that the native game considers the item legal.
         /// </summary>
         private static bool IsItemContraband(object itemInstance)
         {
@@ -250,17 +292,23 @@ namespace Behind_Bars.Systems.Jail
                     }
                 }
 
-                return false; // Default to legal if we can't determine status
+                // Preserve the current fail-open policy when a definition/status field is
+                // missing. This avoids blocking the arrest flow but can under-classify an
+                // item whose native status could not be reflected.
+                return false;
             }
             catch (System.Exception ex)
             {
                 ModLogger.Debug($"[INVENTORY] Error checking contraband status: {ex.Message}");
-                return false; // Default to legal on error
+                // Reflection errors also fail open as legal; callers must treat the result
+                // as best-effort classification rather than authoritative game state.
+                return false;
             }
         }
 
         /// <summary>
-        /// Check if an item instance is a product (drug)
+        /// Identify product instances using the runtime type name.
+        /// This is a compatibility heuristic, not a complete native type check.
         /// </summary>
         private static bool IsProductInstance(object itemInstance)
         {
@@ -277,7 +325,10 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Check if a product (drug) is contraband based on packaging stealth
+        /// Apply the arrest-time product contraband policy.
+        /// Packaging stealth is intentionally not used here: every recognized product is
+        /// treated as contraband during arrest, including stealth-packaged products. A
+        /// missing product field or reflection error also fails closed as contraband.
         /// </summary>
         private static bool IsProductContraband(object productInstance)
         {
@@ -294,14 +345,14 @@ namespace Behind_Bars.Systems.Jail
                         return true;
                     }
 
-                    // Check stealth level - police can detect up to a certain level
                     var stealthLevelProperty = appliedPackaging.GetType().GetProperty("StealthLevel");
                     if (stealthLevelProperty != null)
                     {
                         var stealthLevel = stealthLevelProperty.GetValue(appliedPackaging);
 
-                        // For arrest processing, assume police can detect all stealth levels
-                        // (in body searches, this would be different based on officer skill)
+                        // Read the property only for compatibility with product variants;
+                        // arrest processing intentionally ignores the value and classifies
+                        // every product as contraband.
                         return true; // Products are always contraband during arrest
                     }
                 }
@@ -316,7 +367,9 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Get display name for an item
+        /// Get a best-effort display name for an item.
+        /// The lookup falls back from instance name to definition name, then ID, then
+        /// <c>Unknown Item</c>; the returned text is for logs/snapshots, not identity.
         /// </summary>
         private static string GetItemDisplayName(object itemInstance)
         {
@@ -362,7 +415,9 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Get stack count for an item
+        /// Get a best-effort stack count for an item.
+        /// Missing or invalid StackCount/Amount metadata defaults to one unit, which can
+        /// make legacy result lists differ from the native stack quantity.
         /// </summary>
         private static int GetItemStackCount(object itemInstance)
         {
@@ -391,8 +446,11 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Lock the player's inventory to prevent use during jail time
-        /// COMPLETELY disable inventory access - no weapons or items should be usable in jail
+        /// Lock the player's live inventory for the jail interval.
+        /// The compatibility sequence removes ammunition, attempts several unequip/visual
+        /// refresh paths, then disables inventory/equipping and the PlayerInventory component.
+        /// Reflection failures are logged per step, so this is a best-effort lock rather than
+        /// a transactional guarantee that every native inventory surface is disabled.
         /// </summary>
         public static void LockPlayerInventory(Player player)
         {
@@ -675,7 +733,8 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Fallback method to lock individual inventory slots
+        /// Legacy per-slot lock fallback retained for older inventory surfaces.
+        /// It is not the active component-wide lock path and has no current caller here.
         /// </summary>
         private static void LockIndividualSlots(PlayerInventory inventory)
         {
@@ -712,8 +771,9 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Unlock the player's inventory when released from jail
-        /// Restores full inventory functionality
+        /// Re-enable the player's live inventory after release.
+        /// The component is enabled before reflected inventory/equipping methods are retried;
+        /// missing methods or failures can therefore leave a partially restored inventory.
         /// </summary>
         public static void UnlockPlayerInventory(Player player)
         {
@@ -772,7 +832,8 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Fallback method to unlock individual inventory slots
+        /// Legacy per-slot unlock fallback retained for older inventory surfaces.
+        /// It is not the active component-wide unlock path and has no current caller here.
         /// </summary>
         private static void UnlockIndividualSlots(PlayerInventory inventory)
         {
@@ -809,9 +870,12 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Remove ALL ammunition from player inventory for safety
-        /// Prevents weapons from being loaded/fired in prison
-        /// Public so it can be called from Harmony patch BEFORE inventory snapshot
+        /// Remove ammunition and unload recognizable weapons before the arrest snapshot.
+        /// Classification is based on reflected type/name heuristics, and ammo is cleared
+        /// only when the slot exposes ClearStoredInstance; an absent method or incomplete
+        /// slot enumeration can leave ammunition behind.
+        /// This public entry point is also used by the arrest Harmony path before it captures
+        /// the player's inventory state.
         /// </summary>
         public static void RemoveAllAmmo(PlayerInventory inventory)
         {
@@ -884,6 +948,59 @@ namespace Behind_Bars.Systems.Jail
             {
                 ModLogger.Error($"[INVENTORY] Error removing ammo: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Moves all non-cash property out of the live inventory after the arrest snapshot
+        /// and contraband inspection have completed. The snapshot remains the sole release
+        /// authority; cash is deliberately left untouched.
+        /// </summary>
+        public static int SecureArrestProperty(PlayerInventory inventory)
+        {
+            if (inventory == null)
+            {
+                return 0;
+            }
+
+            int secured = 0;
+            try
+            {
+                foreach (var slot in inventory.GetAllInventorySlots())
+                {
+                    if (slot == null || slot.ItemInstance == null)
+                    {
+                        continue;
+                    }
+
+                    var itemInstance = slot.ItemInstance;
+                    string typeName = itemInstance.GetType().Name ?? string.Empty;
+                    string itemName = itemInstance.GetType().GetProperty("Name")?.GetValue(itemInstance)?.ToString() ?? string.Empty;
+                    if (typeName.Contains("CashInstance", StringComparison.OrdinalIgnoreCase) ||
+                        itemName.Contains("Cash", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    var clearMethod = slot.GetType().GetMethod("ClearStoredInstance");
+                    if (clearMethod == null)
+                    {
+                        ModLogger.Warn($"[INVENTORY] Could not secure '{itemName}': ItemSlot.ClearStoredInstance was unavailable");
+                        continue;
+                    }
+
+                    var parameters = clearMethod.GetParameters();
+                    clearMethod.Invoke(slot, parameters.Length == 1 ? new object[] { true } : null);
+                    secured++;
+                    ModLogger.Info($"[INVENTORY] Secured arrest property: {itemName}");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"[INVENTORY] Error securing arrest property: {ex.Message}");
+            }
+
+            ModLogger.Info($"[INVENTORY] Secured {secured} non-cash item stack(s) for the property locker");
+            return secured;
         }
 
         /// <summary>

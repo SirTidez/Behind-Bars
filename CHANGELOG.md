@@ -1,5 +1,58 @@
 # Changelog
 
+## alpha-1.2.0
+- **IL2CPP Jail/NPC Parity Pass**: Integrated the latest jail and parole IL2CPP fixes to preserve canonical NPC flows and improve runtime stability
+  - Expanded IL2CPP-safe handling across jail processing, NPC coordination, spawn/behavior paths, and supporting utilities
+  - Added post-release compliance flow updates and parole officer runtime fixes
+- **Crime and Witness Reliability**: Reworked witness/crime handling to prioritize Behind Bars tracking while preventing duplicate crime entries
+  - Added mod-managed assault registration with mirrored native crime suppression to avoid double counting in wanted/crime UI
+  - Excluded mod law-enforcement officers from civilian witness behavior and routed officer assaults to immediate re-arrest with an added Assault charge
+  - Suppressed stale/delayed witness police calls once arrest/jail flow is already in progress
+- **Post-Release Dialogue/Voice Fixes**: Fixed post-release dialogue flow and jail voice database creation for IL2CPP paths
+
+## alpha-1.1.0
+- **Security Camera Performance**: Cameras now only render when you are close enough and can actually see a monitor screen
+  - Added monitor face visibility checks and tightened the activation range to 10m
+  - Disabled all cameras when no monitors are visible and forced unmapped cameras off
+- **Palm Scanner UX**: Restored auto-complete behavior for palm scans
+- **NPC Lookup Optimization**: Improved NPC lookups using NPCRegistryHelper for better performance
+
+## alpha-1.0.8
+- **Advanced Performance Optimizations**: Additional performance improvements building on alpha-1.0.7
+  - **NavMesh Caching System**: Implemented comprehensive caching for NavMesh pathfinding operations
+    - Added caching for `NavMeshUtility.GetReachableAccessPoint` with time-to-live (TTL) and position-based cache invalidation
+    - Integrated path caching for `NPCMovement.CanGetTo` using existing PathCache system
+    - Reduced redundant pathfinding calculations by reusing cached results when NPC position hasn't changed significantly
+  - **Employee Update Throttling**: Throttled `Employee.UpdateBehaviour` calls from every frame to 1.5-second intervals, significantly reducing CPU usage for employee NPCs
+  - **Event-Driven NPC Architecture**: Migrated NPC update system from per-frame Update() calls to event-driven architecture
+    - BaseJailNPC now uses NPCUpdateManager for throttled, event-driven state updates
+    - Improved performance by batching NPC updates instead of processing every frame
+  - **Event-Driven Player Tracking**: Replaced coroutine-based player location tracking with event-driven system
+    - PlayerLocationTracker now uses event-driven architecture for better performance and responsiveness
+    - Reduced overhead from continuous coroutine execution
+  - **NPC System Performance**: Additional optimizations in NPC behavior systems
+    - Optimized patrol point movement checks in ParoleOfficerBehavior
+    - Improved dialogue lookup caching in ReleaseOfficerBehavior
+    - Enhanced destination update logic to reduce redundant path calculations
+
+## alpha-1.0.7
+- **Performance Optimizations**: Comprehensive performance improvements across multiple systems
+  - **NavMesh Optimization**: Optimized NavMesh operations and improved jail scanner interaction efficiency
+  - **Jail System Performance**: Enhanced jail systems performance with reduced allocations and improved processing
+  - **NPC Performance**: Improved NPC patrol and search performance, optimized update loops for better frame rates
+  - **UI Performance**: Optimized UI update loops to reduce overhead and improve responsiveness
+  - **Memory Management**: Improved asset bundle stream disposal and memory usage patterns
+
+## alpha-1.0.6
+- **Event-Driven Status Updates**: Implemented event-driven system for jail and parole status updates, improving real-time UI responsiveness and system synchronization
+- **Release Escort Improvements**: Refactored release escort system to use dedicated prison door state tracking for more reliable release processes
+- **Parole Check-In and Intake Systems**: Added comprehensive parole check-in and intake systems for supervising officers, enhancing parole officer interactions
+- **Dialogue System Integration**: Integrated dialogue system with improved jail time tracking for better player-NPC interactions
+- **Bug Fixes**: 
+  - Fixed release error notification display issues
+  - Resolved stuck release cleanup error messages
+- **Testing Improvements**: Updated jail managed testing keybinds to require Left Alt modifier for safer testing
+
 ## alpha-1.0.5
 - **Save System Overhaul**: Migrated save system from UserDataDirectory to game save folders and fixed critical save/load issues
   - **Migration to Game Save Folders**: Changed from saving to MelonEnvironment.UserDataDirectory to game's save folder structure (Modded/Saveables/) for proper integration with game saves

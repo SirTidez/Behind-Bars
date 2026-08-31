@@ -4,6 +4,7 @@ using System.Linq;
 using MelonLoader;
 using HarmonyLib;
 using System;
+using System.Runtime.CompilerServices;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.NPCs;
 using Behind_Bars.UI;
@@ -12,6 +13,7 @@ using Behind_Bars.Systems.Jail;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using static Behind_Bars.Systems.NPCs.PresetParoleOfficerRoutes;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 using Object = UnityEngine.Object;
 #if !MONO
@@ -21,10 +23,17 @@ using ScheduleOne.PlayerScripts;
 #endif
 using Behind_Bars.Players;
 using Behind_Bars.Systems;
-using Behind_Bars.Systems.Jail;
 using Behind_Bars.Systems.CrimeTracking;
+using Behind_Bars.Systems.Data;
 using Behind_Bars.Harmony;
 using Behind_Bars.Utils;
+using Behind_Bars.Systems.Parole;
+using UnityEngine.AI;
+#if !MONO
+using Il2CppScheduleOne.NPCs;
+#else
+using ScheduleOne.NPCs;
+#endif
 
 #if !MONO
 using Il2CppScheduleOne.Law;
@@ -51,27 +60,50 @@ using Il2CppScheduleOne.DevUtilities;
     Constants.MOD_AUTHOR
 )]
 [assembly: MelonColor(0, 255, 0, 255)]
-[assembly: MelonAdditionalCredits("Dreous - Jail Scripting and Unity work | Spec - Assets")]
+[assembly: MelonAdditionalCredits("Dreous - Jail Scripting and Unity work")]
 [assembly: MelonGame("TVGS", "Schedule I")]
 
 namespace Behind_Bars
 {
+    /// <summary>
+    /// Melon entry point and lifecycle owner for Behind Bars. The core service graph persists
+    /// across scenes, while gameplay-session state, native loading holds, and HUD presentation
+    /// are explicitly invalidated when the Main scene ends.
+    /// </summary>
     public class Core : MelonMod
     {
+        /// <summary>Gets the currently initialized Behind Bars mod instance, if startup completed.</summary>
         public static Core? Instance { get; private set; }
 
-        // Core systems
-        private JailSystem? _jailSystem;
-        private BailSystem? _bailSystem;
-        private CourtSystem? _courtSystem;
-        private ParoleSystem? _paroleSystem;
-        private FileUtilities _fileUtilities;
+        /// <summary>
+        /// True only while the loaded Main scene owns Behind Bars gameplay work.
+        /// Long-running routines use this as their scene-transition cancellation boundary.
+        /// </summary>
+        public static bool IsGameplaySceneActive => Instance?._gameplaySceneActive == true;
 
-        // Player management
+        // Core systems. The session version invalidates stale coroutine continuations; the
+        // active/ready flags are separate because a gameplay scene can exist before player
+        // systems finish bootstrapping.
+        private BehindBarsSystemManager? _systemManager;
+        private Coroutine? _loadModCoroutine;
+        private Coroutine? _playerInitializationCoroutine;
+        private int _gameplaySessionVersion;
+        private bool _gameplaySceneActive;
+        private bool _playerSystemsReady;
+
+        // Player management is keyed by native Player wrappers. Bootstrap overwrites an entry
+        // when the same wrapper is seen again; the current scene teardown does not clear this map,
+        // so callers should not treat it as a complete historical/session registry.
         private Dictionary<Player, PlayerHandler> _playerHandlers = new();
 
         // Jail management
+        /// <summary>Gets the jail controller for the active gameplay scene, if it was created.</summary>
         public static JailController? JailController { get; private set; }
+
+        /// <summary>
+        /// Gets the cached jail asset bundle. The concrete type follows the Mono/IL2CPP runtime;
+        /// callers should treat a null value as a load failure and use the idempotent loader.
+        /// </summary>
         public static
 #if !MONO
             Il2CppAssetBundle
@@ -80,15 +112,434 @@ namespace Behind_Bars
 #endif
             ? CachedJailBundle { get; private set; }
 
-        public JailSystem? JailSystem => _jailSystem;
-        public BailSystem? BailSystem => _bailSystem;
-        public CourtSystem? CourtSystem => _courtSystem;
-        public ParoleSystem? ParoleSystem => _paroleSystem;
-        public FileUtilities FileUtilities => _fileUtilities;
+        /// <summary>
+        /// Gets the manager-owned root for the justice-system service graph. Temporary
+        /// compatibility accessors below should migrate to this root over time.
+        /// </summary>
+        public BehindBarsSystemManager? SystemManager => _systemManager;
+
+        /// <summary>Gets the manager-owned jail system, or null before manager initialization.</summary>
+        public JailSystem? JailSystem => _systemManager?.JailSystem;
+        /// <summary>Gets the manager-owned jail manager, or null before manager initialization.</summary>
+        public JailManager? JailManager => _systemManager?.JailManager;
+        /// <summary>Gets the manager-owned bail system, or null before manager initialization.</summary>
+        public BailSystem? BailSystem => _systemManager?.BailSystem;
+        /// <summary>Gets the manager-owned crime manager, or null before manager initialization.</summary>
+        public CrimeManager? CrimeManager => _systemManager?.CrimeManager;
+        /// <summary>Gets the manager-owned NPC manager, or null before manager initialization.</summary>
+        public NpcManager? NpcManager => _systemManager?.NpcManager;
+        /// <summary>Gets the manager-owned UI manager, or null before manager initialization.</summary>
+        public JusticeUIManager? UIManager => _systemManager?.UIManager;
+        /// <summary>Gets the manager-owned court system, or null before manager initialization.</summary>
+        public CourtSystem? CourtSystem => _systemManager?.CourtSystem;
+        /// <summary>Gets the manager-owned parole system, or null before manager initialization.</summary>
+        public ParoleSystem? ParoleSystem => _systemManager?.ParoleSystem;
+        /// <summary>Gets the manager-owned parole manager, or null before manager initialization.</summary>
+        public ParoleManager? ParoleManager => _systemManager?.ParoleManager;
+        /// <summary>Gets the manager-owned file service, with the compatibility singleton as fallback.</summary>
+        public FileUtilities FileUtilities => _systemManager?.FileUtilitiesService ?? Utils.FileUtilities.Instance;
+
+        /// <summary>
+        /// Resolve the canonical runtime key for a player using the manager-owned key service.
+        /// Falls back to the player's current name only if startup/bootstrap regressed and the service is unavailable.
+        /// </summary>
+        public static string ResolvePlayerKey(Player? player)
+        {
+            if (player == null)
+            {
+                return string.Empty;
+            }
+
+            return Instance?.GetPlayerKeyService()?.GetPlayerKey(player) ?? player.name;
+        }
+
+        /// <summary>
+        /// Loads the jail bundle on demand once and caches the result for the current process.
+        /// A null result is reported but not retried recursively, allowing scene/bootstrap
+        /// callers to fail closed without creating duplicate bundle handles.
+        /// </summary>
+        /// <param name="reason">Diagnostic context for the on-demand load attempt.</param>
+        /// <returns>The cached runtime-specific bundle, or null when loading fails.</returns>
+        public static
+#if !MONO
+            Il2CppAssetBundle
+#else
+            AssetBundle
+#endif
+            ? EnsureJailBundleLoaded(string reason = "general use")
+        {
+            if (CachedJailBundle != null)
+            {
+                return CachedJailBundle;
+            }
+
+            ModLogger.Debug($"Loading jail asset bundle on demand for {reason}...");
+            CachedJailBundle = Utils.AssetBundleUtils.LoadAssetBundle("Behind_Bars.behind_bars");
+
+            if (CachedJailBundle == null)
+            {
+                ModLogger.Warn($"Failed to load behind-bars bundle on demand for {reason}");
+            }
+
+            return CachedJailBundle;
+        }
+
+        /// <summary>
+        /// Resolve the canonical rap-sheet manager through the manager-owned crime domain.
+        /// Falls back to the compatibility singleton only while call sites are still migrating.
+        /// </summary>
+        public static RapSheetManager ResolveRapSheetManager()
+        {
+            var managedRapSheetManager = Instance?._systemManager?.CrimeManager?.RapSheetManagerService;
+            if (managedRapSheetManager != null)
+            {
+                return managedRapSheetManager;
+            }
+
+            return ResolveCompatibilityRapSheetManager();
+        }
+
+        /// <summary>
+        /// Resolve the manager-owned UI root.
+        /// Falls back to a thin compatibility wrapper while scene startup is still bootstrapping.
+        /// </summary>
+        public static JusticeUIManager ResolveUIManager()
+        {
+            var managedUiManager = Instance?._systemManager?.UIManager;
+            if (managedUiManager != null)
+            {
+                return managedUiManager;
+            }
+
+            return ResolveCompatibilityUIManager();
+        }
+
+        /// <summary>
+        /// Resolve the parole-condition support service through an explicit compatibility shim
+        /// until the parole domain wires manager-owned construction.
+        /// </summary>
+        public static ParoleConditionManager ResolveParoleConditionManager()
+        {
+            if (ParoleConditionManager.TryGetRegisteredInstance(out var registeredInstance))
+            {
+                return registeredInstance;
+            }
+
+            return ResolveCompatibilityParoleConditionManager();
+        }
+
+        /// <summary>
+        /// Resolve the parole-fee support service through an explicit compatibility shim
+        /// until the parole domain wires manager-owned construction.
+        /// </summary>
+        public static ParoleFeeSystem ResolveParoleFeeSystem()
+        {
+            if (ParoleFeeSystem.TryGetRegisteredInstance(out var registeredInstance))
+            {
+                return registeredInstance;
+            }
+
+            return ResolveCompatibilityParoleFeeSystem();
+        }
+
+        /// <summary>
+        /// Resolve the home-visit support service through an explicit compatibility shim
+        /// until the parole domain wires manager-owned construction.
+        /// </summary>
+        public static HomeVisitSystem ResolveHomeVisitSystem()
+        {
+            if (HomeVisitSystem.TryGetRegisteredInstance(out var registeredInstance))
+            {
+                return registeredInstance;
+            }
+
+            return ResolveCompatibilityHomeVisitSystem();
+        }
+
+        /// <summary>
+        /// Resolve the active jail cell-assignment manager through an explicit compatibility shim
+        /// until jail ownership is fully moved behind the manager graph.
+        /// </summary>
+        public static CellAssignmentManager? ResolveCellAssignmentManager()
+        {
+            return ResolveCompatibilityCellAssignmentManager();
+        }
+
+        /// <summary>
+        /// Resolve the active prison NPC registry/manager through an explicit compatibility shim
+        /// until NPC ownership is fully moved behind the manager graph.
+        /// </summary>
+        public static PrisonNPCManager? ResolvePrisonNpcManager()
+        {
+            var managedNpcManager = Instance?._systemManager?.NpcManager?.PrisonNpcManager;
+            if (managedNpcManager != null)
+            {
+                return managedNpcManager;
+            }
+
+            return ResolveCompatibilityPrisonNpcManager();
+        }
+
+        /// <summary>
+        /// Resolve the manager-owned release service through an explicit compatibility shim
+        /// until the jail domain fully owns release orchestration.
+        /// </summary>
+        public static ReleaseManager ResolveReleaseManager()
+        {
+            var managedReleaseManager = Instance?._systemManager?.ReleaseManagerService;
+            if (managedReleaseManager != null)
+            {
+                return managedReleaseManager;
+            }
+
+            if (ReleaseManager.TryGetRegisteredInstance(out var registeredInstance))
+            {
+                return registeredInstance;
+            }
+
+            var compatibilityInstance = ResolveCompatibilityReleaseManager();
+            if (compatibilityInstance != null)
+            {
+                return compatibilityInstance;
+            }
+
+            ModLogger.Warn("ResolveReleaseManager: no active release manager found; attempting late bootstrap");
+            return ReleaseManager.BootstrapManagedInstance();
+        }
+
+        /// <summary>
+        /// Resolve the active booking-process controller through an explicit compatibility shim
+        /// until booking ownership is fully moved behind the jail manager graph.
+        /// </summary>
+        public static BookingProcess? ResolveBookingProcess()
+        {
+            return ResolveCompatibilityBookingProcess();
+        }
+
+        /// <summary>
+        /// Resolve persistent-player justice state through an explicit compatibility shim
+        /// until persistence ownership is fully moved behind the manager graph.
+        /// </summary>
+        public static PersistentPlayerData ResolvePersistentPlayerData()
+        {
+            return ResolveCompatibilityPersistentPlayerData();
+        }
+
+        /// <summary>
+        /// Resolve jail-time tracking through an explicit compatibility shim
+        /// until jail runtime ownership is fully moved behind the manager graph.
+        /// </summary>
+        public static JailTimeTracker ResolveJailTimeTracker()
+        {
+            return ResolveCompatibilityJailTimeTracker();
+        }
+
+        /// <summary>
+        /// Resolve parole-time tracking through an explicit compatibility shim
+        /// until parole runtime ownership is fully moved behind the manager graph.
+        /// </summary>
+        public static ParoleTimeTracker ResolveParoleTimeTracker()
+        {
+            var managedParoleTracker = Instance?._systemManager?.ParoleManager?.ParoleTimeTracker;
+            if (managedParoleTracker != null)
+            {
+                return managedParoleTracker;
+            }
+
+            return ResolveCompatibilityParoleTimeTracker();
+        }
+
+        /// <summary>
+        /// Resolve the manager-owned parole subsystem shell.
+        /// Falls back to the compatibility wiring while the manager graph is still bootstrapping.
+        /// </summary>
+        public static ParoleManager ResolveParoleManager()
+        {
+            var managedParoleManager = Instance?._systemManager?.ParoleManager;
+            if (managedParoleManager != null)
+            {
+                return managedParoleManager;
+            }
+
+            throw new InvalidOperationException("ParoleManager is not available.");
+        }
+
+        /// <summary>
+        /// Resolve the active bail system through the manager-led runtime graph.
+        /// Returns null while the runtime graph is still bootstrapping.
+        /// </summary>
+        public static BailSystem? ResolveBailSystem()
+        {
+            return Instance?._systemManager?.BailSystem;
+        }
+
+        /// <summary>
+        /// Resolve the active dynamic parole-officer manager through an explicit compatibility shim
+        /// until NPC orchestration is fully moved behind the manager graph.
+        /// </summary>
+        public static DynamicParoleOfficerManager? ResolveDynamicParoleOfficerManager()
+        {
+            return ResolveCompatibilityDynamicParoleOfficerManager();
+        }
+
+        /// <summary>
+        /// Explicit compatibility shim for rap-sheet access before the manager graph is available.
+        /// </summary>
+        private static RapSheetManager ResolveCompatibilityRapSheetManager()
+        {
+            return RapSheetManager.Instance;
+        }
+
+        /// <summary>
+        /// Explicit compatibility shim for UI access before the manager graph is available.
+        /// </summary>
+        private static JusticeUIManager ResolveCompatibilityUIManager()
+        {
+            return JusticeUIManager.CompatibilityInstance;
+        }
+
+        /// <summary>
+        /// Explicit compatibility shim for parole-condition access before manager ownership is wired.
+        /// </summary>
+        private static ParoleConditionManager ResolveCompatibilityParoleConditionManager()
+        {
+            return ParoleConditionManager.Instance;
+        }
+
+        /// <summary>
+        /// Explicit compatibility shim for parole-fee access before manager ownership is wired.
+        /// </summary>
+        private static ParoleFeeSystem ResolveCompatibilityParoleFeeSystem()
+        {
+            return ParoleFeeSystem.Instance;
+        }
+
+        /// <summary>
+        /// Explicit compatibility shim for home-visit access before manager ownership is wired.
+        /// </summary>
+        private static HomeVisitSystem ResolveCompatibilityHomeVisitSystem()
+        {
+            return HomeVisitSystem.Instance;
+        }
+
+        /// <summary>
+        /// Explicit compatibility shim for jail cell-assignment access before manager ownership is wired.
+        /// </summary>
+        private static CellAssignmentManager? ResolveCompatibilityCellAssignmentManager()
+        {
+            return CellAssignmentManager.Instance;
+        }
+
+        /// <summary>
+        /// Explicit compatibility shim for prison NPC access before manager ownership is wired.
+        /// </summary>
+        private static PrisonNPCManager? ResolveCompatibilityPrisonNpcManager()
+        {
+            return PrisonNPCManager.Instance;
+        }
+
+        /// <summary>
+        /// Explicit compatibility shim for release-manager access before manager ownership is fully wired.
+        /// </summary>
+        private static ReleaseManager? ResolveCompatibilityReleaseManager()
+        {
+            return ReleaseManager.TryGetRegisteredInstance(out var registered) ? registered : null;
+        }
+
+        /// <summary>
+        /// Explicit compatibility shim for booking-process access before manager ownership is wired.
+        /// </summary>
+        private static BookingProcess? ResolveCompatibilityBookingProcess()
+        {
+            return JailController?.BookingProcessController ?? BookingProcess.Instance;
+        }
+
+        /// <summary>
+        /// Explicit compatibility shim for persistent-player-data access before manager ownership is wired.
+        /// </summary>
+        private static PersistentPlayerData ResolveCompatibilityPersistentPlayerData()
+        {
+            return PersistentPlayerData.Instance;
+        }
+
+        /// <summary>
+        /// Explicit compatibility shim for jail-time-tracker access before manager ownership is wired.
+        /// </summary>
+        private static JailTimeTracker ResolveCompatibilityJailTimeTracker()
+        {
+            return JailTimeTracker.Instance;
+        }
+
+        /// <summary>
+        /// Explicit compatibility shim for parole-time-tracker access before manager ownership is wired.
+        /// </summary>
+        private static ParoleTimeTracker ResolveCompatibilityParoleTimeTracker()
+        {
+            return ParoleTimeTracker.Instance;
+        }
+
+        /// <summary>
+        /// Explicit compatibility shim for dynamic parole-officer-manager access before manager ownership is wired.
+        /// </summary>
+        private static DynamicParoleOfficerManager? ResolveCompatibilityDynamicParoleOfficerManager()
+        {
+            return DynamicParoleOfficerManager.Instance;
+        }
+
+        /// <summary>
+        /// Resolve a player's rap sheet through the manager-owned crime domain.
+        /// </summary>
+        public static RapSheet? GetRapSheet(Player? player)
+        {
+            return Instance?._systemManager?.CrimeManager?.GetRapSheet(player) ?? ResolveRapSheetManager().GetRapSheet(player);
+        }
+
+        /// <summary>
+        /// Mark a player's rap sheet as changed through the manager-owned crime domain.
+        /// </summary>
+        public static void MarkRapSheetChanged(Player? player)
+        {
+            if (player == null)
+            {
+                return;
+            }
+
+            if (Instance?._systemManager?.CrimeManager != null)
+            {
+                Instance._systemManager.CrimeManager.MarkRapSheetChanged(player);
+                return;
+            }
+
+            ResolveRapSheetManager().MarkRapSheetChanged(player);
+        }
+
+        /// <summary>
+        /// Enumerate all known rap sheets through the manager-owned crime domain.
+        /// </summary>
+        public static IEnumerable<RapSheet> GetAllRapSheets()
+        {
+            return Instance?._systemManager?.CrimeManager?.GetAllRapSheets() ?? ResolveRapSheetManager().GetAllRapSheets();
+        }
+
+        /// <summary>
+        /// Clear cached rap-sheet instances through the manager-owned crime domain.
+        /// </summary>
+        public static void ClearRapSheetCache()
+        {
+            if (Instance?._systemManager?.CrimeManager != null)
+            {
+                Instance._systemManager.CrimeManager.ClearRapSheetCache();
+                return;
+            }
+
+            ResolveRapSheetManager().ClearCache();
+        }
 
         // MelonPreferences
         private static MelonPreferences_Category? _prefsCategory;
         private static MelonPreferences_Entry<KeyCode>? _bailoutKeyPreference;
+
+        /// <summary>Gets the configured bailout key, falling back to <see cref="KeyCode.B"/> before preferences load.</summary>
         public static KeyCode BailoutKey => _bailoutKeyPreference?.Value ?? KeyCode.B;
         
         // Update checking preferences
@@ -98,86 +549,173 @@ namespace Behind_Bars
         
         // Debug logging preference
         private static MelonPreferences_Entry<bool>? _enableDebugLoggingEntry;
+
+        /// <summary>Gets whether verbose diagnostic logging was explicitly enabled in preferences.</summary>
         public static bool EnableDebugLogging => _enableDebugLoggingEntry?.Value ?? false;
 
+        // Explicitly opt-in developer controls. These manipulate prison doors,
+        // lighting, and booking state, so they must never be active in normal
+        // play merely because the debug assembly is installed.
+        private static MelonPreferences_Entry<bool>? _enableDeveloperShortcutsEntry;
+
+        /// <summary>Gets whether developer shortcuts that mutate jail state are explicitly enabled.</summary>
+        public static bool EnableDeveloperShortcuts => _enableDeveloperShortcutsEntry?.Value ?? false;
+
+        // Retains native-event correlation metadata long enough for an arrest that occurs
+        // well after the crime, while ensuring stale incidents cannot bleed into a later run.
+        private static MelonPreferences_Entry<float>? _crimeIncidentRetentionSecondsEntry;
+
+        /// <summary>Gets the real-time retention window used to correlate native crime incidents.</summary>
+        public static float CrimeIncidentRetentionSeconds => _crimeIncidentRetentionSecondsEntry?.Value ?? 900f;
+
+#if !MONO
+        /// <summary>
+        /// Registers all IL2CPP types with ClassInjector before any scene code can spawn them.
+        /// Registration failures are accumulated and then abort initialization so a canonical NPC
+        /// flow can never silently fall back to a partial/static implementation.
+        /// </summary>
+        private static void RegisterIl2CppTypes()
+        {
+            var registrationFailures = new List<string>();
+
+            void TryRegister<T>(string name) where T : class
+            {
+                try
+                {
+                    ModLogger.Debug($"[IL2CPP] Registering {name}");
+                    ClassInjector.RegisterTypeInIl2Cpp<T>();
+
+                    try
+                    {
+                        var resolvedType = Il2CppInterop.Runtime.Il2CppType.Of<T>();
+                        if (resolvedType == null)
+                        {
+                            const string message = "type pointer resolution returned null";
+                            registrationFailures.Add($"{name}: {message}");
+                            ModLogger.Error($"[IL2CPP] Registered {name} but {message}");
+                        }
+                        else
+                        {
+                            ModLogger.Debug($"[IL2CPP] Registered {name} (type pointer resolved)");
+                        }
+                    }
+                    catch (Exception resolveEx)
+                    {
+                        registrationFailures.Add($"{name}: failed to resolve type pointer ({resolveEx.Message})");
+                        ModLogger.Error($"[IL2CPP] Failed to resolve {name} after registration: {resolveEx}");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    registrationFailures.Add($"{name}: {ex.Message}");
+                    ModLogger.Error($"[IL2CPP] Failed to register {name}: {ex}");
+                }
+            }
+
+            // Jail System Components
+            TryRegister<JailController>("JailController");
+            TryRegister<SecurityCamera>("SecurityCamera");
+            TryRegister<MonitorController>("MonitorController");
+            TryRegister<JailMonitorController>("JailMonitorController");
+            TryRegister<SecurityCameraCullingManager>("SecurityCameraCullingManager");
+            TryRegister<JailLightingController>("JailLightingController");
+            TryRegister<JailCellManager>("JailCellManager");
+            TryRegister<JailAreaManager>("JailAreaManager");
+            TryRegister<JailDoorController>("JailDoorController");
+            TryRegister<JailPatrolManager>("JailPatrolManager");
+            TryRegister<GuardAssaultLockdownManager>("GuardAssaultLockdownManager");
+            TryRegister<JailLifecycleManager>("JailLifecycleManager");
+
+            // Prison NPC System Components
+            TryRegister<NPCUpdateManager>("NPCUpdateManager");
+            TryRegister<PrisonNPCManager>("PrisonNPCManager");
+            TryRegister<DynamicParoleOfficerManager>("DynamicParoleOfficerManager");
+            TryRegister<PlayerLocationTracker>("PlayerLocationTracker");
+            TryRegister<InmateBehavior>("InmateBehavior");
+            TryRegister<PrisonGuard>("PrisonGuard");
+            TryRegister<PrisonInmate>("PrisonInmate");
+
+            // NPC support components (register before behavior classes)
+            TryRegister<SecurityDoorBehavior>("SecurityDoorBehavior");
+            TryRegister<JailNPCDialogueController>("JailNPCDialogueController");
+            TryRegister<JailNPCAudioController>("JailNPCAudioController");
+            TryRegister<StationaryBehavior>("StationaryBehavior");
+            TryRegister<ParoleCheckInSystem>("ParoleCheckInSystem");
+
+            // BaseJailNPC-derived behavior classes
+            TryRegister<BaseJailNPC>("BaseJailNPC");
+            TryRegister<IntakeOfficerStateMachine>("IntakeOfficerStateMachine");
+            TryRegister<GuardBehavior>("GuardBehavior");
+            TryRegister<ParoleIntakeStateMachine>("ParoleIntakeStateMachine");
+            TryRegister<ParoleOfficerBehavior>("ParoleOfficerBehavior");
+            TryRegister<OfficerCoordinator>("OfficerCoordinator");
+            TryRegister<DoorTriggerHandler>("DoorTriggerHandler");
+
+            // Test Components
+            TryRegister<TestNPCController>("TestNPCController");
+            TryRegister<MoveableTargetController>("MoveableTargetController");
+
+            // UI Components
+            TryRegister<BehindBarsUIWrapper>("BehindBarsUIWrapper");
+            TryRegister<WantedLevelUI>("WantedLevelUI");
+            TryRegister<OfficerCommandUI>("OfficerCommandUI");
+            TryRegister<TierStatusUI>("TierStatusUI");
+            TryRegister<UpdateNotificationUI>("UpdateNotificationUI");
+            TryRegister<UI.ParoleStatusUI>("ParoleStatusUI");
+            TryRegister<UI.ParoleConditionsUI>("ParoleConditionsUI");
+            TryRegister<UI.BailUI>("BailUI");
+
+            // Booking System Components
+            TryRegister<BookingProcess>("BookingProcess");
+            TryRegister<MugshotStation>("MugshotStation");
+            TryRegister<ScannerStation>("ScannerStation");
+            TryRegister<InventoryDropOff>("InventoryDropOff");          // extends InteractableObject (game class)
+            TryRegister<InventoryDropOffStation>("InventoryDropOffStation");
+            TryRegister<JailBed>("JailBed");
+            TryRegister<PrisonBedInteractable>("PrisonBedInteractable");
+            TryRegister<PrisonItemEquippable>("PrisonItemEquippable");  // extends Equippable_Viewmodel (game class)
+
+            // Cell Management Components
+            TryRegister<CellAssignmentManager>("CellAssignmentManager");
+
+            // Jail Inventory System
+            TryRegister<JailInventoryPickupStation>("JailInventoryPickupStation");
+            TryRegister<InventoryPickupStation>("InventoryPickupStation");
+            TryRegister<ExitScannerStation>("ExitScannerStation");
+            TryRegister<ExitReleaseTriggerRelay>("ExitReleaseTriggerRelay");
+            TryRegister<SimpleExitDoor>("SimpleExitDoor");
+            // StorageEntity derives from FishNet.NetworkBehaviour. The current IL2CPP bridge cannot
+            // inject a managed subclass because its inherited RPC surface includes NetworkConnection.
+            // InventoryPickupStation uses its managed direct-transfer path on IL2CPP instead.
+            ModLogger.Warn("[IL2CPP] PrisonStorageEntity is unavailable on this runtime; release inventory uses direct transfer");
+
+            // Release System
+            TryRegister<ReleaseManager>("ReleaseManager");
+            TryRegister<ReleaseOfficerBehavior>("ReleaseOfficerBehavior");
+            TryRegister<ParoleOfficer>("ParoleOfficer");
+
+            // Testing
+            TryRegister<Systems.Testing.SaveableTestSystem>("SaveableTestSystem");
+
+            if (registrationFailures.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    $"[IL2CPP] Behind Bars startup blocked because type registration failed: {string.Join(" | ", registrationFailures)}");
+            }
+        }
+#endif
+
+        /// <summary>
+        /// Initializes preferences, runtime registrations, Harmony, and the persistent manager
+        /// graph in dependency order. IL2CPP type registration completes before any injected
+        /// component or canonical NPC can be created.
+        /// </summary>
         public override void OnInitializeMelon()
         {
             Instance = this;
+            Utils.MelonLoaderVersionChecker.CheckMelonLoaderVersion();
 #if !MONO
-            /*ClassInjector.RegisterTypeInIl2Cpp<ToiletSink>();
-            ClassInjector.RegisterTypeInIl2Cpp<ToiletSinkManager>();
-            ClassInjector.RegisterTypeInIl2Cpp<BunkBed>();
-            ClassInjector.RegisterTypeInIl2Cpp<BunkBedManager>();
-            ClassInjector.RegisterTypeInIl2Cpp<CommonRoomTable>();
-            ClassInjector.RegisterTypeInIl2Cpp<CommonRoomTableManager>();
-            ClassInjector.RegisterTypeInIl2Cpp<CellTable>();
-            ClassInjector.RegisterTypeInIl2Cpp<CellTableManager>();
-            ClassInjector.RegisterTypeInIl2Cpp<JailAsset>();
-            ClassInjector.RegisterTypeInIl2Cpp<JailManager>();*/
-
-            // Register Jail System Components
-            ClassInjector.RegisterTypeInIl2Cpp<JailController>();
-            ClassInjector.RegisterTypeInIl2Cpp<SecurityCamera>();
-            ClassInjector.RegisterTypeInIl2Cpp<MonitorController>();
-            ClassInjector.RegisterTypeInIl2Cpp<JailMonitorController>();
-            ClassInjector.RegisterTypeInIl2Cpp<JailLightingController>();
-            ClassInjector.RegisterTypeInIl2Cpp<JailCellManager>();
-            ClassInjector.RegisterTypeInIl2Cpp<JailAreaManager>();
-            ClassInjector.RegisterTypeInIl2Cpp<JailDoorController>();
-            ClassInjector.RegisterTypeInIl2Cpp<JailPatrolManager>();
-
-            // Register Prison NPC System Components
-            // NOTE: BaseJailNPC is abstract and shouldn't be registered directly
-            ClassInjector.RegisterTypeInIl2Cpp<PrisonNPCManager>();
-            ClassInjector.RegisterTypeInIl2Cpp<PrisonGuard>();
-            ClassInjector.RegisterTypeInIl2Cpp<PrisonInmate>();
-
-            // Testing BaseJailNPC-derived types one at a time
-            // ClassInjector.RegisterTypeInIl2Cpp<ParoleOfficerBehavior>();
-            ClassInjector.RegisterTypeInIl2Cpp<IntakeOfficerStateMachine>();
-            // ClassInjector.RegisterTypeInIl2Cpp<ReleaseOfficerBehavior>(); // Moved here for testing
-
-            // Re-enabling registrations after fixing trampoline error
-            ClassInjector.RegisterTypeInIl2Cpp<SecurityDoorBehavior>();
-            ClassInjector.RegisterTypeInIl2Cpp<JailNPCDialogueController>();
-            ClassInjector.RegisterTypeInIl2Cpp<JailNPCAudioController>();
-            ClassInjector.RegisterTypeInIl2Cpp<OfficerCoordinator>();
-            ClassInjector.RegisterTypeInIl2Cpp<DoorTriggerHandler>();
-
-            // Register Test Components
-            ClassInjector.RegisterTypeInIl2Cpp<TestNPCController>();
-            ClassInjector.RegisterTypeInIl2Cpp<MoveableTargetController>();
-
-            // Register UI Components
-            ClassInjector.RegisterTypeInIl2Cpp<BehindBarsUIWrapper>();
-            ClassInjector.RegisterTypeInIl2Cpp<WantedLevelUI>();
-            ClassInjector.RegisterTypeInIl2Cpp<OfficerCommandUI>();
-            ClassInjector.RegisterTypeInIl2Cpp<UpdateNotificationUI>();
-
-            // Register Booking System Components
-            ClassInjector.RegisterTypeInIl2Cpp<BookingProcess>();
-            ClassInjector.RegisterTypeInIl2Cpp<MugshotStation>();
-            ClassInjector.RegisterTypeInIl2Cpp<ScannerStation>();
-            ClassInjector.RegisterTypeInIl2Cpp<InventoryDropOff>();
-            ClassInjector.RegisterTypeInIl2Cpp<JailBed>();
-            ClassInjector.RegisterTypeInIl2Cpp<PrisonBedInteractable>();
-            ClassInjector.RegisterTypeInIl2Cpp<PrisonItemEquippable>();
-
-            // Register Cell Management Components
-            ClassInjector.RegisterTypeInIl2Cpp<CellAssignmentManager>();
-
-            // Register Jail Inventory System
-            ClassInjector.RegisterTypeInIl2Cpp<JailInventoryPickupStation>();
-            ClassInjector.RegisterTypeInIl2Cpp<InventoryPickupStation>();
-            // ClassInjector.RegisterTypeInIl2Cpp<PrisonStorageEntity>(); // REMOVED - inherits from StorageEntity which has NetworkConnection methods
-            ClassInjector.RegisterTypeInIl2Cpp<ExitScannerStation>();
-            ClassInjector.RegisterTypeInIl2Cpp<SimpleExitDoor>();
-
-            // Register Release System
-            ClassInjector.RegisterTypeInIl2Cpp<ReleaseManager>();
-            ClassInjector.RegisterTypeInIl2Cpp<ReleaseOfficerBehavior>(); // Re-enabled after fixing IEnumerator issue
-            ClassInjector.RegisterTypeInIl2Cpp<ParoleOfficer>();
-            // NOTE: ParoleOfficerBehavior and PrisonNPCManager already registered above - removed duplicates
+            RegisterIl2CppTypes();
 #endif
             // Initialize MelonPreferences
             _prefsCategory = MelonPreferences.CreateCategory(Constants.PREF_CATEGORY);
@@ -216,6 +754,20 @@ namespace Behind_Bars
                 "Enable debug logging",
                 "Show detailed debug logs. Enable this if you're experiencing issues and need to report bugs. Warning: This will produce a lot of log output."
             );
+
+            _enableDeveloperShortcutsEntry = _prefsCategory.CreateEntry<bool>(
+                "EnableDeveloperShortcuts",
+                false,
+                "Enable developer jail shortcuts",
+                "Enables destructive Alt-key jail and door test shortcuts. Keep disabled during normal gameplay."
+            );
+
+            _crimeIncidentRetentionSecondsEntry = _prefsCategory.CreateEntry<float>(
+                "CrimeIncidentRetentionSeconds",
+                900f,
+                "Crime incident retention (real seconds)",
+                "How long Behind Bars retains native crime-to-enhancement correlations before arrest. Increase this if police take longer to arrest the player."
+            );
             
             // Initialize UpdateChecker with preferences
             Utils.UpdateChecker.InitializePreferences(
@@ -225,34 +777,35 @@ namespace Behind_Bars
             );
             ModLogger.Debug("Update checking preferences initialized");
             ModLogger.Info($"Debug logging: {(EnableDebugLogging ? "ENABLED" : "DISABLED")} (default: disabled)");
+            ModLogger.Info($"Developer jail shortcuts: {(EnableDeveloperShortcuts ? "ENABLED" : "DISABLED")} (default: disabled)");
+            ModLogger.Info($"Crime incident retention: {CrimeIncidentRetentionSeconds:F0} real seconds");
 
             // Initialize core systems
             HarmonyPatches.Initialize(this);
             
+            // Initialize NavMesh optimization patches (manual patch for CanGetTo method)
+            InitializeNavMeshOptimizationPatches();
+            
             // Initialize GameTimeManager first (needed by other systems)
             GameTimeManager.Instance.Initialize();
             ModLogger.Debug("GameTimeManager initialized");
-            
-            _jailSystem = new JailSystem();
-            _jailSystem.Initialize(); // Initialize JailSystem components
 
-            // Initialize ReleaseManager for coordinated prisoner releases
-            MelonLogger.Msg("[Core] Initializing ReleaseManager from Core.cs");
-            var releaseManager = ReleaseManager.Instance; // This will create the singleton
-            ModLogger.Debug("ReleaseManager initialized and ready for coordinated releases");
+            _systemManager = new BehindBarsSystemManager();
+            _systemManager.Initialize();
 
-            _bailSystem = new BailSystem();
-            
             // Note: BehindBarsUIManager (including WantedLevelUI) initialization moved to OnSceneWasLoaded to avoid initializing in menu
-            _courtSystem = new CourtSystem();
-            _paroleSystem = new ParoleSystem();
-            FileUtilities.Initialize();
-            _fileUtilities = FileUtilities.Instance;
 
-            // Initialize SaveableTestSystem for testing (Alt + letter keybinds)
-            // Accessing Instance will create the GameObject and component
-            var testSystem = Systems.Testing.SaveableTestSystem.Instance;
-            ModLogger.Debug("SaveableTestSystem initialized - Use Alt+S/L/R/P/D/C for testing");
+            if (EnableDeveloperShortcuts)
+            {
+                // Initialize SaveableTestSystem for testing (Alt + letter keybinds).
+                // The singleton uses the IL2CPP-safe component helper for injected types.
+                var saveableTestSystem = Systems.Testing.SaveableTestSystem.Instance;
+                if (saveableTestSystem != null)
+                {
+                    saveableTestSystem.enabled = true;
+                    ModLogger.Debug("SaveableTestSystem initialized - Use Alt+S/L/R/P/D/C for testing");
+                }
+            }
 
             // Initialize preset parole officer routes
             PresetParoleOfficerRoutes.InitializePatrolPoints();
@@ -271,6 +824,12 @@ namespace Behind_Bars
             ModLogger.Debug("Behind Bars initialized with all systems");
         }
 
+        /// <summary>
+        /// Begins a new Main-scene gameplay session and holds the native loading surface while
+        /// scene-owned systems bootstrap. Non-gameplay scenes do not start the jail load coroutine.
+        /// </summary>
+        /// <param name="buildIndex">Unity build index reported for the initialized scene.</param>
+        /// <param name="sceneName">Unity scene name used to select gameplay initialization.</param>
         public override void OnSceneWasInitialized(int buildIndex, string sceneName)
         {
             ModLogger.Debug($"Scene initialized: {sceneName} (Build Index: {buildIndex})");
@@ -280,8 +839,12 @@ namespace Behind_Bars
             {
                 if (sceneName == "Main")
                 {
-                    // Show loading screen and coordinate all loading phases
-                    MelonCoroutines.Start(LoadModWithProgress());
+                    BeginGameplaySceneSession();
+                    // Retain the game's loading surface until the scene-owned Behind Bars
+                    // systems have completed their real startup work. Do not create a second
+                    // overlay after the player has already loaded into the world.
+                    HarmonyPatches.BeginNativeLoadingScreenHold(_gameplaySessionVersion);
+                    _loadModCoroutine = MelonCoroutines.Start(LoadModWithProgress()) as Coroutine;
                 }
             }
             catch (Exception e)
@@ -291,24 +854,23 @@ namespace Behind_Bars
         }
 
         /// <summary>
-        /// Master loading coroutine that shows progress and coordinates all loading phases
+        /// Master loading coroutine that coordinates the scene-owned startup work while the
+        /// game's native loading screen displays the final Behind Bars preparation step.
         /// </summary>
         private IEnumerator LoadModWithProgress()
         {
-            // Show loading screen immediately
-            BehindBarsUIManager.Instance.ShowLoadingScreen("Loading Behind Bars Mod...");
-            BehindBarsUIManager.Instance.UpdateLoadingProgress(0f, "Initializing...");
-
-            yield return new WaitForSeconds(0.1f); // Small delay to ensure UI is visible
-
-            // Phase 1: UI System Initialization (0-20%)
-            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.05f, "Waiting for UI systems...");
-            yield return new WaitForSeconds(0.2f);
+            var uiManager = ResolveUIManager();
+            HarmonyPatches.SetNativeLoadingScreenStatus(_gameplaySessionVersion, "Preparing Behind Bars...");
 
             // Wait for essential systems to be ready
 #if !MONO
             while (true)
             {
+                if (!IsGameplaySceneActive)
+                {
+                    yield break;
+                }
+
                 try
                 {
                     var instance = PlayerSingleton<AppsCanvas>.Instance;
@@ -324,14 +886,17 @@ namespace Behind_Bars
 #else
             while (PlayerSingleton<AppsCanvas>.Instance == null)
             {
+                if (!IsGameplaySceneActive)
+                {
+                    yield break;
+                }
+
                 yield return null;
             }
 #endif
 
             // Load asset bundle BEFORE initializing UI manager (UI prefab is in the bundle)
-            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.10f, "Loading asset bundle...");
-            yield return new WaitForSeconds(0.2f);
-            
+            HarmonyPatches.SetNativeLoadingScreenStatus(_gameplaySessionVersion, "Loading Behind Bars assets...");
             // Load the behind-bars bundle and cache it
             if (CachedJailBundle == null)
             {
@@ -347,12 +912,9 @@ namespace Behind_Bars
                 }
             }
 
-            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.15f, "Initializing UI manager...");
-            yield return new WaitForSeconds(0.5f);
-
             try
             {
-                BehindBarsUIManager.Instance.Initialize();
+                uiManager.InitializeSceneUI();
                 ModLogger.Debug("✓ Behind Bars UI system initialized successfully");
             }
             catch (Exception e)
@@ -360,105 +922,120 @@ namespace Behind_Bars
                 ModLogger.Error($"Error initializing UI system: {e.Message}");
             }
 
-            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.20f, "UI system ready");
+            if (!IsGameplaySceneActive)
+            {
+                yield break;
+            }
 
-            // Phase 2: Jail Setup and Asset Spawning (20-70%)
-            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.25f, "Setting up jail...");
-            yield return new WaitForSeconds(0.2f);
-
-            // Start jail setup in parallel
+            // Jail setup owns the canonical prison asset and NPC bootstrap sequence.
+            HarmonyPatches.SetNativeLoadingScreenStatus(_gameplaySessionVersion, "Setting up the jail...");
             var setupJailCoroutine = SetupJail();
-            MelonCoroutines.Start(setupJailCoroutine);
-
-            // Track jail setup progress (simulated - actual progress depends on SetupJail implementation)
-            float jailProgress = 0.25f;
             while (setupJailCoroutine.MoveNext())
             {
-                // Increment progress gradually during jail setup
-                jailProgress = Mathf.Min(jailProgress + 0.01f, 0.70f);
-                BehindBarsUIManager.Instance.UpdateLoadingProgress(jailProgress, "Spawning jail assets...");
+                if (!IsGameplaySceneActive)
+                {
+                    yield break;
+                }
+
                 yield return setupJailCoroutine.Current;
             }
 
-            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.70f, "Jail setup complete");
-
-            // Phase 3: Wait for NPC Spawning (70-90%)
-            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.75f, "Spawning NPCs...");
-            yield return new WaitForSeconds(0.5f);
-
-            // Wait for PrisonNPCManager to finish spawning all NPCs
-            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.80f, "Spawning guards and inmates...");
-            
-            var npcManager = Systems.NPCs.PrisonNPCManager.Instance;
-            if (npcManager != null)
+            // Do not use fixed, simulated progress to close the native loading screen.
+            // Keep the native loading screen through the complete canonical NPC pass,
+            // including guards, parole setup, and inmates.
+            HarmonyPatches.SetNativeLoadingScreenStatus(_gameplaySessionVersion, "Initializing jail NPCs...");
+            const float npcManagerTimeoutSeconds = 15f;
+            float npcManagerWaitElapsed = 0f;
+            PrisonNPCManager? npcManager = ResolvePrisonNpcManager();
+            while (npcManager == null && npcManagerWaitElapsed < npcManagerTimeoutSeconds)
             {
-                // Wait for NPC spawning to complete
-                float npcProgress = 0.80f;
-                int maxWaitSeconds = 30; // Wait up to 30 seconds for NPC spawning
-                int waitSeconds = 0;
-                
-                while (!npcManager.IsSpawningComplete && waitSeconds < maxWaitSeconds)
+                if (!IsGameplaySceneActive)
                 {
-                    // Increment progress gradually
-                    npcProgress = Mathf.Min(npcProgress + 0.002f, 0.90f);
-                    BehindBarsUIManager.Instance.UpdateLoadingProgress(npcProgress, "Spawning NPCs...");
-                    
-                    yield return new WaitForSeconds(0.5f);
-                    waitSeconds++;
+                    yield break;
                 }
-                
-                if (npcManager.IsSpawningComplete)
-                {
-                    ModLogger.Debug("✓ NPC spawning completed");
-                }
-                else
-                {
-                    ModLogger.Warn("NPC spawning timeout - proceeding anyway");
-                }
+
+                yield return null;
+                npcManagerWaitElapsed += Time.unscaledDeltaTime;
+                npcManager = ResolvePrisonNpcManager();
+            }
+
+            if (npcManager == null)
+            {
+                ModLogger.Warn("PrisonNPCManager was unavailable after jail setup; continuing after native loading fail-safe");
             }
             else
             {
-                // NPC Manager not ready yet, wait a bit
-                ModLogger.Warn("PrisonNPCManager not found - waiting for initialization");
-                yield return new WaitForSeconds(3f);
+                HarmonyPatches.SetNativeLoadingScreenStatus(_gameplaySessionVersion, "Spawning guards and inmates...");
+                const float npcSpawnTimeoutSeconds = 75f;
+                float npcSpawnWaitElapsed = 0f;
+                while (!npcManager.IsSpawningComplete && npcSpawnWaitElapsed < npcSpawnTimeoutSeconds)
+                {
+                    if (!IsGameplaySceneActive)
+                    {
+                        yield break;
+                    }
+
+                    yield return null;
+                    npcSpawnWaitElapsed += Time.unscaledDeltaTime;
+                }
+
+                if (npcManager.IsSpawningComplete)
+                {
+                    ModLogger.Debug("✓ Canonical jail NPC spawning completed");
+                }
+                else
+                {
+                    ModLogger.Warn($"NPC spawning did not complete within {npcSpawnTimeoutSeconds:F0}s; releasing native loading screen with startup diagnostics intact");
+                }
             }
 
-            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.90f, "NPCs spawned");
-
-            // Phase 4: Player Systems Initialization (90-100%)
-            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.92f, "Initializing player systems...");
-            yield return new WaitForSeconds(0.3f);
-
-            // Wait for player to be ready
-            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.94f, "Waiting for player...");
-            
-            // Start player systems initialization
-            MelonCoroutines.Start(InitializePlayerSystems());
-            
-            // Simulate progress while player systems initialize
-            float playerProgress = 0.94f;
-            for (int i = 0; i < 20; i++) // Wait up to 2 seconds for player systems
+            HarmonyPatches.SetNativeLoadingScreenStatus(_gameplaySessionVersion, "Finalizing player systems...");
+            // OnSceneWasLoaded also starts this routine. Only start it here if the
+            // other lifecycle callback has not already established the player state.
+            if (!_playerSystemsReady && _playerInitializationCoroutine == null)
             {
-                playerProgress = Mathf.Min(playerProgress + 0.002f, 0.98f);
-                BehindBarsUIManager.Instance.UpdateLoadingProgress(playerProgress, "Setting up player systems...");
-                yield return new WaitForSeconds(0.1f);
+                _playerInitializationCoroutine = MelonCoroutines.Start(InitializePlayerSystems()) as Coroutine;
             }
 
-            BehindBarsUIManager.Instance.UpdateLoadingProgress(0.98f, "Finalizing...");
-            yield return new WaitForSeconds(0.5f);
+            const float playerSystemsTimeoutSeconds = 30f;
+            float playerSystemsWaitElapsed = 0f;
+            while (!_playerSystemsReady && playerSystemsWaitElapsed < playerSystemsTimeoutSeconds)
+            {
+                if (!IsGameplaySceneActive)
+                {
+                    yield break;
+                }
 
-            // Complete
-            BehindBarsUIManager.Instance.UpdateLoadingProgress(1.0f, "Complete!");
-            yield return new WaitForSeconds(1.0f); // Show completion message for 1 second
+                yield return null;
+                playerSystemsWaitElapsed += Time.unscaledDeltaTime;
+            }
 
-            // Hide loading screen
-            BehindBarsUIManager.Instance.HideLoadingScreen();
-            ModLogger.Debug("✓ Behind Bars mod loading complete");
+            if (!_playerSystemsReady)
+            {
+                ModLogger.Warn($"Player systems did not complete within {playerSystemsTimeoutSeconds:F0}s; releasing native loading screen with startup diagnostics intact");
+            }
+
+            HarmonyPatches.CompleteNativeLoadingScreenHold(_gameplaySessionVersion);
+            ModLogger.Debug("✓ Behind Bars scene startup complete");
         }
 
+        /// <summary>
+        /// Handles the reliable post-load boundary for scene-owned UI and player bootstrap.
+        /// Menu loads force cleanup because they may not emit the outgoing active-scene event.
+        /// </summary>
+        /// <param name="buildIndex">Unity build index reported for the loaded scene.</param>
+        /// <param name="sceneName">Unity scene name used to select cleanup or bootstrap work.</param>
         public override void OnSceneWasLoaded(int buildIndex, string sceneName)
         {
             ModLogger.Debug($"Scene loaded: {sceneName}");
+
+            // The game can load Menu without emitting activeSceneChanged for the outgoing
+            // gameplay scene. This callback is the reliable boundary for clearing all
+            // Main-scene UI that has opted into DontDestroyOnLoad.
+            if (sceneName == "Menu")
+            {
+                ShutdownGameplayScene("Menu scene loaded", forceUiCleanup: true);
+            }
             
             // Check for updates when entering Menu scene (always check on first load, ignore cache)
             if (sceneName == "Menu" && _enableUpdateCheckingEntry?.Value == true)
@@ -470,16 +1047,29 @@ namespace Behind_Bars
             if (sceneName == "Main")
             {
                 ModLogger.Debug("Main scene loaded, initializing player systems");
-                MelonCoroutines.Start(InitializePlayerSystems());
+                if (!_gameplaySceneActive)
+                {
+                    BeginGameplaySceneSession();
+                }
+                // Build and register the inactive native jail-NPC template on every local
+                // process before managers request a network spawn. This is deliberately
+                // independent from S1API and never uses a live NPC as a donor.
+                MelonCoroutines.Start(BaseNPCSpawner.PrewarmNativeNpcTemplate());
+                _playerInitializationCoroutine = MelonCoroutines.Start(InitializePlayerSystems()) as Coroutine;
             }
             else if (sceneName != "Menu" && sceneName != "Loading")
             {
-                // Initialize BehindBarsUIManager (includes wanted level UI) when entering any game scene (not Main menu, Menu, or Loading)
-                ModLogger.Debug($"Initializing BehindBarsUIManager for scene: {sceneName}");
-                BehindBarsUIManager.Instance.Initialize();
+                // Initialize the manager-owned UI forwarding layer for gameplay scenes.
+                ModLogger.Debug($"Initializing JusticeUIManager for scene: {sceneName}");
+                ResolveUIManager().InitializeSceneUI();
             }
         }
 
+        /// <summary>
+        /// Waits for the runtime HUD/player prerequisites, then creates the local PlayerHandler
+        /// and restores persisted parole state. The Mono/IL2CPP readiness checks are deliberately
+        /// separate because IL2CPP wrappers require a valid native pointer before use.
+        /// </summary>
         private IEnumerator InitializePlayerSystems()
         {
             ModLogger.Debug("Waiting for player to be ready...");
@@ -487,6 +1077,10 @@ namespace Behind_Bars
             // IL2CPP - More robust null checking
             while (true)
             {
+                if (!IsGameplaySceneActive)
+                {
+                    yield break;
+                }
                 try
                 {
                     var instance = PlayerSingleton<AppsCanvas>.Instance;
@@ -502,7 +1096,13 @@ namespace Behind_Bars
 #else
             // Mono - Standard Unity null check
             while (PlayerSingleton<AppsCanvas>.Instance == null)
+            {
+                if (!IsGameplaySceneActive)
+                {
+                    yield break;
+                }
                 yield return null;
+            }
 #endif
 
             // Initialize player handler for local player
@@ -513,6 +1113,7 @@ namespace Behind_Bars
                 // Arrest handling is centralized in HarmonyPatches; no direct listener needed here
 
                 ModLogger.Debug("Player systems initialized successfully");
+                _playerSystemsReady = true;
                 
                 // Restore parole tracking if player is on parole
                 MelonCoroutines.Start(RestoreParoleIfActive(Player.Local));
@@ -521,13 +1122,20 @@ namespace Behind_Bars
             {
                 ModLogger.Warn("Player.Local is null, retrying in 2 seconds...");
                 yield return new WaitForSeconds(2f);
-                MelonCoroutines.Start(InitializePlayerSystems());
+                if (IsGameplaySceneActive)
+                {
+                    _playerInitializationCoroutine = MelonCoroutines.Start(InitializePlayerSystems()) as Coroutine;
+                }
             }
         }
 
         /// <summary>
-        /// Restore parole tracking if the player is actively on parole when scene loads
+        /// Restores tracking and the runtime parole record if the player is actively on parole
+        /// when the scene loads. The persisted rap-sheet state is authoritative; the private
+        /// runtime dictionary/monitor are repopulated through reflection because no public restore
+        /// API is available.
         /// </summary>
+        /// <param name="player">Local player whose persisted parole state is being restored.</param>
         private IEnumerator RestoreParoleIfActive(Player player)
         {
             // Wait a moment for systems to be ready
@@ -535,14 +1143,15 @@ namespace Behind_Bars
             
             try
             {
-                if (_paroleSystem == null)
+                var paroleSystem = ParoleSystem;
+                if (paroleSystem == null)
                 {
                     ModLogger.Warn("ParoleSystem is null, cannot restore parole");
                     yield break;
                 }
                 
                 // Get the player's rap sheet
-                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                var rapSheet = ResolveRapSheetManager().GetRapSheet(player);
                 if (rapSheet == null)
                 {
                     ModLogger.Debug($"No rap sheet found for {player.name}, skipping parole restoration");
@@ -563,15 +1172,16 @@ namespace Behind_Bars
                 {
                     ModLogger.Info($"Player {player.name} has expired parole, completing it");
                     // Parole expired while away - complete it
-                    if (_paroleSystem != null)
+                    if (paroleSystem != null)
                     {
-                        _paroleSystem.CompleteParoleForPlayer(player);
+                        paroleSystem.CompleteParoleForPlayer(player);
                     }
                     yield break;
                 }
                 
                 // Check if tracking is already active
-                if (ParoleTimeTracker.Instance.IsTracking(player))
+                var paroleTimeTracker = ResolveParoleTimeTracker();
+                if (paroleTimeTracker.IsTracking(player))
                 {
                     ModLogger.Debug($"Parole tracking already active for {player.name}");
                     yield break;
@@ -580,12 +1190,13 @@ namespace Behind_Bars
                 ModLogger.Debug($"Restoring parole tracking for {player.name}: {remainingTime} game minutes remaining ({GameTimeManager.FormatGameTime(remainingTime)})");
                 
                 // Restore parole tracking
-                ParoleTimeTracker.Instance.StartTracking(player, remainingTime, (p) =>
+                paroleTimeTracker.StartTracking(player, remainingTime, (p) =>
                 {
                     ModLogger.Debug($"Restored parole completed for {p.name}");
-                    if (_paroleSystem != null)
+                    var currentParoleSystem = ParoleSystem;
+                    if (currentParoleSystem != null)
                     {
-                        _paroleSystem.CompleteParoleForPlayer(p);
+                        currentParoleSystem.CompleteParoleForPlayer(p);
                     }
                 });
                 
@@ -599,27 +1210,28 @@ namespace Behind_Bars
                     StartGameTimeMinutes = currentGameTime - (termLength - remainingTime),
                     DurationGameMinutes = termLength,
                     TimeRemainingGameMinutes = remainingTime,
-                    ViolationCount = paroleRecord.GetViolationCount(),
-                    LastSearchGameTimeMinutes = 0f,
-                    NextSearchGameTimeMinutes = currentGameTime + UnityEngine.Random.Range(0.5f, 2f) // Randomize next search
+                    ViolationCount = paroleRecord.GetViolationCount()
                 };
                 
-                // Restore parole runtime record using reflection to access private field
+                // Restore the runtime record through the private field because ParoleSystem does
+                // not expose a public bootstrap API. If that shape is unavailable, persisted
+                // parole remains intact but runtime monitoring cannot be restarted here.
                 var paroleSystemType = typeof(ParoleSystem);
                 var paroleRecordsField = paroleSystemType.GetField("_paroleRecords", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
                 if (paroleRecordsField != null)
                 {
-                    var paroleRecords = paroleRecordsField.GetValue(_paroleSystem) as System.Collections.Generic.Dictionary<Player, ParoleSystem.ParoleRuntimeRecord>;
+                    var paroleRecords = paroleRecordsField.GetValue(paroleSystem) as System.Collections.Generic.Dictionary<Player, ParoleSystem.ParoleRuntimeRecord>;
                     if (paroleRecords != null)
                     {
                         paroleRecords[player] = runtimeRecord;
                         ModLogger.Debug($"Restored parole runtime record for {player.name}");
                         
-                        // Start parole monitoring coroutine using reflection
+                        // Restart the private monitor only after the runtime record is installed;
+                        // otherwise the monitor would observe an incomplete or duplicate record.
                         var monitorMethod = paroleSystemType.GetMethod("MonitorParole", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
                         if (monitorMethod != null)
                         {
-                            var coroutine = monitorMethod.Invoke(_paroleSystem, new object[] { runtimeRecord });
+                            var coroutine = monitorMethod.Invoke(paroleSystem, new object[] { runtimeRecord });
                             if (coroutine != null)
                             {
                                 MelonCoroutines.Start(coroutine as IEnumerator);
@@ -646,15 +1258,17 @@ namespace Behind_Bars
         {
             yield return new WaitForSeconds(2f);
             
-            if (_paroleSystem != null && BehindBarsUIManager.Instance != null)
+            var paroleSystem = ParoleSystem;
+            var uiManager = ResolveUIManager();
+            if (paroleSystem != null)
             {
-                var rapSheet = RapSheetManager.Instance.GetRapSheet(player);
+                var rapSheet = ResolveRapSheetManager().GetRapSheet(player);
                 if (rapSheet != null && rapSheet.CurrentParoleRecord != null && rapSheet.CurrentParoleRecord.IsOnParole())
                 {
                     var (isParole, remainingTime) = rapSheet.CurrentParoleRecord.GetParoleStatus();
                     if (isParole && remainingTime > 0)
                     {
-                        BehindBarsUIManager.Instance.ShowParoleStatus();
+                        uiManager.ShowParoleStatus();
                         ModLogger.Debug($"Showed parole UI for {player.name} after scene load");
                     }
                 }
@@ -692,7 +1306,7 @@ namespace Behind_Bars
             // Initialize the UI manager
             try
             {
-                BehindBarsUIManager.Instance.Initialize();
+                ResolveUIManager().InitializeSceneUI();
                 ModLogger.Debug("✓ Behind Bars UI system initialized successfully");
             }
             catch (Exception e)
@@ -715,8 +1329,9 @@ namespace Behind_Bars
             
             try
             {
+                var uiManager = ResolveUIManager();
                 // Show test jail info UI
-                BehindBarsUIManager.Instance.ShowJailInfoUI(
+                uiManager.ShowJailInfoUI(
                     crime: "Major Possession, Assaulting Officer, Resisting Arrest", 
                     timeInfo: "2 days", 
                     bailInfo: "$500"
@@ -736,7 +1351,7 @@ namespace Behind_Bars
         private static IEnumerator AutoHideTestUI()
         {
             yield return new WaitForSeconds(10f);
-            BehindBarsUIManager.Instance.HideJailInfoUI();
+            ResolveUIManager().HideJailInfoUI();
             ModLogger.Debug("Test UI auto-hidden after 10 seconds");
         }
 
@@ -748,6 +1363,7 @@ namespace Behind_Bars
             if (CachedJailBundle == null)
             {
                 CachedJailBundle = Utils.AssetBundleUtils.LoadAssetBundle("Behind_Bars.behind_bars");
+                
             }
 
             var jailBundle = CachedJailBundle;
@@ -758,7 +1374,7 @@ namespace Behind_Bars
             }
 
             // Safety: Retry loading UI prefab now that bundle is confirmed loaded
-            BehindBarsUIManager.Instance.RetryLoadUIPrefab();
+            ResolveUIManager().RetryLoadUIPrefab();
 
             // Debug: List all assets in the bundle
             var allAssets = jailBundle.GetAllAssetNames();
@@ -818,6 +1434,12 @@ namespace Behind_Bars
             var jail = Object.Instantiate(jailPrefab, new Vector3(66.5362f, 8.5001f, -220.6056f), Quaternion.identity);
             jail.name = "[Prefab] JailHouseBlues";
 
+            // The clean authoring project deliberately does not embed the
+            // full Schedule I shader library. Rebind the material references
+            // to the game's loaded URP shaders immediately after instantiation
+            // so editor-local shader variants can never render the jail magenta.
+            Utils.JailMaterialCompatibility.RepairForScheduleOne(jail);
+
             ModLogger.Debug($"Jail spawned successfully at {jail.transform.position}");
 
             // Attach NavMesh data from asset bundle (asset bundles don't preserve NavMesh data)
@@ -836,7 +1458,7 @@ namespace Behind_Bars
                 ModLogger.Debug("Initializing JailController system...");
 
                 // Check if the jail already has a JailController
-                var existingController = jail.GetComponent<JailController>();
+                var existingController = BBHelpers.GetComponentSafe<JailController>(jail);
                 if (existingController != null)
                 {
                     ModLogger.Debug("Found existing JailController on jail prefab");
@@ -845,7 +1467,7 @@ namespace Behind_Bars
                 else
                 {
                     ModLogger.Debug("Adding JailController component to jail");
-                    JailController = jail.AddComponent<JailController>();
+                    JailController = BBHelpers.AddComponentSafe<JailController>(jail);
                 }
 
                 // Load and assign prefabs from bundle, then trigger door setup
@@ -855,8 +1477,15 @@ namespace Behind_Bars
                     ModLogger.Debug("✓ JailController prefabs loaded");
 
                     // Manually call SetupDoors after prefabs are loaded
-                    JailController.SetupDoors();
-                    ModLogger.Debug("✓ Door setup completed after prefab loading");
+                    if (JailController.jailDoorPrefab != null || JailController.steelDoorPrefab != null)
+                    {
+                        JailController.SetupDoors();
+                        ModLogger.Debug("✓ Door setup completed after prefab loading");
+                    }
+                    else
+                    {
+                        ModLogger.Error("Skipping door setup - no door prefabs were resolved from bundle");
+                    }
 
                     // Setup exit door specifically
                     SetupExitDoor(JailController);
@@ -900,12 +1529,15 @@ namespace Behind_Bars
             // Create PrisonNPCManager to handle all NPC spawning and management
             if (JailController != null)
             {
-                var npcManager = JailController.gameObject.AddComponent<PrisonNPCManager>();
+                var npcManager = BBHelpers.AddComponentSafe<PrisonNPCManager>(JailController.gameObject);
                 ModLogger.Debug("✓ PrisonNPCManager added to JailController");
                 
                 // Add CellAssignmentManager for cell tracking
-                var cellManager = JailController.gameObject.AddComponent<CellAssignmentManager>();
+                var cellManager = BBHelpers.AddComponentSafe<CellAssignmentManager>(JailController.gameObject);
                 ModLogger.Debug("✓ CellAssignmentManager added to JailController");
+
+                var lifecycleManager = BBHelpers.AddComponentSafe<JailLifecycleManager>(JailController.gameObject);
+                ModLogger.Debug("✓ JailLifecycleManager added to JailController");
             }
             else
             {
@@ -959,15 +1591,23 @@ namespace Behind_Bars
                 GameObject jailGameObject = JailController.gameObject;
 
                 // Add BookingProcess component if it doesn't exist
-                JailController.BookingProcessController = jailGameObject.GetComponent<Behind_Bars.Systems.Jail.BookingProcess>();
+                JailController.BookingProcessController = BBHelpers.GetComponentSafe<Behind_Bars.Systems.Jail.BookingProcess>(jailGameObject);
                 if (JailController.BookingProcessController == null)
                 {
-                    JailController.BookingProcessController = jailGameObject.AddComponent<Behind_Bars.Systems.Jail.BookingProcess>();
+                    JailController.BookingProcessController = BBHelpers.AddComponentSafe<Behind_Bars.Systems.Jail.BookingProcess>(jailGameObject);
                     ModLogger.Debug("✓ BookingProcess component added to jail");
                 }
                 else
                 {
                     ModLogger.Debug("✓ BookingProcess component already exists");
+                }
+
+                // A single scene-local owner prevents duplicate guard-damage callbacks from
+                // creating competing lockdowns during the same custody incident.
+                if (BBHelpers.GetComponentSafe<GuardAssaultLockdownManager>(jailGameObject) == null)
+                {
+                    BBHelpers.AddComponentSafe<GuardAssaultLockdownManager>(jailGameObject);
+                    ModLogger.Debug("✓ GuardAssaultLockdownManager added to jail");
                 }
                 
                 // Find and set up booking stations
@@ -1000,10 +1640,10 @@ namespace Behind_Bars
                 Transform mugshotStation = bookingArea.Find("MugshotStation");
                 if (mugshotStation != null)
                 {
-                    var mugshotComponent = mugshotStation.GetComponent<Behind_Bars.Systems.Jail.MugshotStation>();
+                    var mugshotComponent = BBHelpers.GetComponentSafe<Behind_Bars.Systems.Jail.MugshotStation>(mugshotStation.gameObject);
                     if (mugshotComponent == null)
                     {
-                        mugshotComponent = mugshotStation.gameObject.AddComponent<Behind_Bars.Systems.Jail.MugshotStation>();
+                        mugshotComponent = BBHelpers.AddComponentSafe<Behind_Bars.Systems.Jail.MugshotStation>(mugshotStation.gameObject);
                         ModLogger.Debug("✓ MugshotStation component added to main GameObject");
                     }
                     
@@ -1019,10 +1659,10 @@ namespace Behind_Bars
                 Transform scannerStation = bookingArea.Find("ScannerStation");
                 if (scannerStation != null)
                 {
-                    var scannerComponent = scannerStation.GetComponent<Behind_Bars.Systems.Jail.ScannerStation>();
+                    var scannerComponent = BBHelpers.GetComponentSafe<Behind_Bars.Systems.Jail.ScannerStation>(scannerStation.gameObject);
                     if (scannerComponent == null)
                     {
-                        scannerComponent = scannerStation.gameObject.AddComponent<Behind_Bars.Systems.Jail.ScannerStation>();
+                        scannerComponent = BBHelpers.AddComponentSafe<Behind_Bars.Systems.Jail.ScannerStation>(scannerStation.gameObject);
                         ModLogger.Debug("✓ ScannerStation component added to main GameObject");
                     }
                     
@@ -1068,10 +1708,10 @@ namespace Behind_Bars
 
                 if (exitScannerStation != null)
                 {
-                    var exitScannerComponent = exitScannerStation.GetComponent<Behind_Bars.Systems.Jail.ExitScannerStation>();
+                    var exitScannerComponent = BBHelpers.GetComponentSafe<Behind_Bars.Systems.Jail.ExitScannerStation>(exitScannerStation.gameObject);
                     if (exitScannerComponent == null)
                     {
-                        exitScannerComponent = exitScannerStation.gameObject.AddComponent<Behind_Bars.Systems.Jail.ExitScannerStation>();
+                        exitScannerComponent = BBHelpers.AddComponentSafe<Behind_Bars.Systems.Jail.ExitScannerStation>(exitScannerStation.gameObject);
                         ModLogger.Debug("✓ ExitScannerStation component added to GameObject at " + exitScannerStation.name);
                     }
                     else
@@ -1115,10 +1755,10 @@ namespace Behind_Bars
                 
                 if (inventoryDropOff != null)
                 {
-                    var inventoryComponent = inventoryDropOff.GetComponent<Behind_Bars.Systems.Jail.InventoryDropOffStation>();
+                    var inventoryComponent = BBHelpers.GetComponentSafe<Behind_Bars.Systems.Jail.InventoryDropOffStation>(inventoryDropOff.gameObject);
                     if (inventoryComponent == null)
                     {
-                        inventoryComponent = inventoryDropOff.gameObject.AddComponent<Behind_Bars.Systems.Jail.InventoryDropOffStation>();
+                        inventoryComponent = BBHelpers.AddComponentSafe<Behind_Bars.Systems.Jail.InventoryDropOffStation>(inventoryDropOff.gameObject);
                         ModLogger.Debug("✓ InventoryDropOffStation component added to InventoryDropOff GameObject");
                     }
                     
@@ -1138,10 +1778,10 @@ namespace Behind_Bars
 
                 if (jailInventoryPickup != null)
                 {
-                    var jailPickupComponent = jailInventoryPickup.GetComponent<Behind_Bars.Systems.Jail.JailInventoryPickupStation>();
+                    var jailPickupComponent = BBHelpers.GetComponentSafe<Behind_Bars.Systems.Jail.JailInventoryPickupStation>(jailInventoryPickup.gameObject);
                     if (jailPickupComponent == null)
                     {
-                        jailPickupComponent = jailInventoryPickup.gameObject.AddComponent<Behind_Bars.Systems.Jail.JailInventoryPickupStation>();
+                        jailPickupComponent = BBHelpers.AddComponentSafe<Behind_Bars.Systems.Jail.JailInventoryPickupStation>(jailInventoryPickup.gameObject);
                         ModLogger.Debug("✓ JailInventoryPickupStation component added to JailInventoryPickup GameObject");
                     }
 
@@ -1161,10 +1801,10 @@ namespace Behind_Bars
 
                 if (inventoryPickup != null)
                 {
-                    var pickupComponent = inventoryPickup.GetComponent<Behind_Bars.Systems.Jail.InventoryPickupStation>();
+                    var pickupComponent = BBHelpers.GetComponentSafe<Behind_Bars.Systems.Jail.InventoryPickupStation>(inventoryPickup.gameObject);
                     if (pickupComponent == null)
                     {
-                        pickupComponent = inventoryPickup.gameObject.AddComponent<Behind_Bars.Systems.Jail.InventoryPickupStation>();
+                        pickupComponent = BBHelpers.AddComponentSafe<Behind_Bars.Systems.Jail.InventoryPickupStation>(inventoryPickup.gameObject);
                         ModLogger.Debug("✓ InventoryPickupStation component added to InventoryPickup GameObject");
                     }
 
@@ -1183,6 +1823,31 @@ namespace Behind_Bars
             }
         }
 
+        private static string NormalizeAssetLookup(string value)
+        {
+            if (string.IsNullOrEmpty(value))
+                return string.Empty;
+
+            var chars = value.ToLowerInvariant().Where(char.IsLetterOrDigit).ToArray();
+            return new string(chars);
+        }
+
+        private static bool AssetNameMatchesCandidate(string assetName, string candidate)
+        {
+            if (string.IsNullOrWhiteSpace(assetName) || string.IsNullOrWhiteSpace(candidate))
+                return false;
+
+            string normalizedAsset = NormalizeAssetLookup(assetName);
+            string normalizedFileName = NormalizeAssetLookup(System.IO.Path.GetFileNameWithoutExtension(assetName));
+            string normalizedCandidate = NormalizeAssetLookup(candidate);
+            string normalizedCandidateFile = NormalizeAssetLookup(System.IO.Path.GetFileNameWithoutExtension(candidate));
+
+            return normalizedAsset == normalizedCandidate ||
+                   normalizedFileName == normalizedCandidate ||
+                   normalizedAsset == normalizedCandidateFile ||
+                   normalizedFileName == normalizedCandidateFile;
+        }
+
         private static void LoadAndAssignJailPrefabs(JailController controller)
         {
             try
@@ -1197,16 +1862,70 @@ namespace Behind_Bars
                     return;
                 }
 
-                // Load JailDoor prefab - try multiple naming variations
 #if MONO
-                var jailDoorPrefab = jailBundle.LoadAsset<GameObject>("JailDoor") ??
-                                   jailBundle.LoadAsset<GameObject>("jaildoor") ??
-                                   jailBundle.LoadAsset<GameObject>("assets/behindbars/jaildoor.prefab");
+                var allAssetNames = jailBundle.GetAllAssetNames() ?? Array.Empty<string>();
+                int allAssetNameCount = allAssetNames.Length;
 #else
-                var jailDoorPrefab = jailBundle.LoadAsset("JailDoor", Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>() ??
-                                   jailBundle.LoadAsset("jaildoor", Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>() ??
-                                   jailBundle.LoadAsset("assets/behindbars/jaildoor.prefab", Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>();
+                var allAssetNames = new List<string>();
+                var il2CppAssetNames = jailBundle.GetAllAssetNames();
+                if (il2CppAssetNames != null)
+                {
+                    for (int i = 0; i < il2CppAssetNames.Length; i++)
+                    {
+                        if (il2CppAssetNames[i] != null)
+                            allAssetNames.Add(il2CppAssetNames[i].ToString());
+                    }
+                }
+                int allAssetNameCount = allAssetNames.Count;
 #endif
+
+                GameObject TryLoadPrefabByName(string assetName)
+                {
+#if MONO
+                    return jailBundle.LoadAsset<GameObject>(assetName);
+#else
+                    return jailBundle.LoadAsset(assetName, Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>();
+#endif
+                }
+
+                GameObject LoadPrefabWithFallback(string label, params string[] candidates)
+                {
+                    foreach (var candidate in candidates)
+                    {
+                        var prefab = TryLoadPrefabByName(candidate);
+                        if (prefab != null)
+                            return prefab;
+                    }
+
+                    foreach (var assetName in allAssetNames)
+                    {
+                        foreach (var candidate in candidates)
+                        {
+                            if (!AssetNameMatchesCandidate(assetName, candidate))
+                                continue;
+
+                            var matchedPrefab = TryLoadPrefabByName(assetName);
+                            if (matchedPrefab != null)
+                            {
+                                ModLogger.Warn($"{label} matched by asset name fallback: {assetName}");
+                                return matchedPrefab;
+                            }
+                        }
+                    }
+
+                    return null;
+                }
+
+                // Load JailDoor prefab - try multiple naming variations
+                var jailDoorPrefab = LoadPrefabWithFallback(
+                    "JailDoor prefab",
+                    "JailDoor",
+                    "jaildoor",
+                    "CellDoor",
+                    "celldoor",
+                    "assets/behindbars/jaildoor.prefab",
+                    "assets/behindbars/celldoor.prefab"
+                );
                 if (jailDoorPrefab != null)
                 {
                     controller.jailDoorPrefab = jailDoorPrefab;
@@ -1218,15 +1937,18 @@ namespace Behind_Bars
                 }
 
                 // Load GuardDoors prefab - try multiple naming variations
-#if MONO
-                var steelDoorPrefab = jailBundle.LoadAsset<GameObject>("GuardDoors") ??
-                                    jailBundle.LoadAsset<GameObject>("guarddoors") ??
-                                    jailBundle.LoadAsset<GameObject>("assets/behindbars/guarddoors.prefab");
-#else
-                var steelDoorPrefab = jailBundle.LoadAsset("GuardDoors", Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>() ??
-                                    jailBundle.LoadAsset("guarddoors", Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>() ??
-                                    jailBundle.LoadAsset("assets/behindbars/guarddoors.prefab", Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>();
-#endif
+                var steelDoorPrefab = LoadPrefabWithFallback(
+                    "Steel door prefab",
+                    "GuardDoors",
+                    "guarddoors",
+                    "GuardDoor",
+                    "guarddoor",
+                    "SteelDoor",
+                    "steeldoor",
+                    "assets/behindbars/guarddoors.prefab",
+                    "assets/behindbars/guarddoor.prefab",
+                    "assets/behindbars/steeldoor.prefab"
+                );
                 if (steelDoorPrefab != null)
                 {
                     controller.steelDoorPrefab = steelDoorPrefab;
@@ -1238,11 +1960,13 @@ namespace Behind_Bars
                 }
 
                 // Load SecurityCamera prefab (if available)
-#if MONO
-                var cameraPrefab = jailBundle.LoadAsset<GameObject>("SecurityCameraPlaceHolder");
-#else
-                var cameraPrefab = jailBundle.LoadAsset("SecurityCameraPlaceHolder", Il2CppInterop.Runtime.Il2CppType.Of<GameObject>())?.TryCast<GameObject>();
-#endif
+                var cameraPrefab = LoadPrefabWithFallback(
+                    "SecurityCamera prefab",
+                    "SecurityCameraPlaceHolder",
+                    "SecurityCameraPlaceholder",
+                    "securitycameraplaceholder",
+                    "assets/behindbars/securitycameraplaceholder.prefab"
+                );
                 if (cameraPrefab != null)
                 {
                     controller.securityCameraPrefab = cameraPrefab;
@@ -1251,6 +1975,11 @@ namespace Behind_Bars
                 else
                 {
                     ModLogger.Warn("SecurityCamera prefab not found in bundle (optional)");
+                }
+
+                if (controller.jailDoorPrefab == null && controller.steelDoorPrefab == null)
+                {
+                    ModLogger.Error($"No door prefabs resolved from bundle. Asset count scanned: {allAssetNameCount}");
                 }
 
                 ModLogger.Debug("Jail prefab loading completed");
@@ -1302,11 +2031,11 @@ namespace Behind_Bars
             }
         }
 
-
-        public JailSystem GetJailSystem() => _jailSystem!;
-        public BailSystem GetBailSystem() => _bailSystem!;
-        public CourtSystem GetCourtSystem() => _courtSystem!;
-        public ParoleSystem GetParoleSystem() => _paroleSystem!;
+        /// <summary>
+        /// Temporary compatibility accessor for the manager-owned player key service.
+        /// New code should prefer <see cref="SystemManager"/> ownership directly.
+        /// </summary>
+        public IPlayerKeyService? GetPlayerKeyService() => _systemManager?.PlayerKeyService;
 
         // Jail Controller convenience methods
         public static bool IsJailControllerReady() => JailController != null;
@@ -1378,7 +2107,7 @@ namespace Behind_Bars
         {
             try
             {
-                BehindBarsUIManager.Instance.ShowJailInfoUI(crime, timeInfo, bailInfo);
+                ResolveUIManager().ShowJailInfoUI(crime, timeInfo, bailInfo);
                 ModLogger.Info($"Jail info UI shown: Crime={crime}, Time={timeInfo}, Bail={bailInfo}");
             }
             catch (Exception e)
@@ -1394,7 +2123,7 @@ namespace Behind_Bars
         {
             try
             {
-                BehindBarsUIManager.Instance.HideJailInfoUI();
+                ResolveUIManager().HideJailInfoUI();
                 ModLogger.Info("Jail info UI hidden");
             }
             catch (Exception e)
@@ -1456,6 +2185,13 @@ namespace Behind_Bars
         {
             try
             {
+                // The property locker is a native uGUI modal.  Keep the game's first-person
+                // camera from reclaiming the mouse while it owns the interaction.
+                if (PropertyLockerUI.IsPresentationOpen)
+                {
+                    PropertyLockerUI.MaintainOpenPresentation();
+                }
+
                 // Home key - Teleport to jail for testing
                 if (Input.GetKeyDown(KeyCode.Home))
                 {
@@ -1471,7 +2207,7 @@ namespace Behind_Bars
                 // F9 key - Show crime details (debug)
                 if (Input.GetKeyDown(KeyCode.F9))
                 {
-                    BehindBarsUIManager.Instance.ShowCrimeDetails();
+                    ResolveUIManager().ShowCrimeDetails();
                 }
 
                 // F6 key - Quick 10-second jail sentence for release testing
@@ -1495,21 +2231,22 @@ namespace Behind_Bars
                 // Alt+0 key - Show/hide instructions screen (Message of the Day)
                 if (Input.GetKey(KeyCode.LeftAlt) && Input.GetKeyDown(KeyCode.Alpha0))
                 {
-                    if (BehindBarsUIManager.Instance != null)
+                    var uiManager = ResolveUIManager();
+                    if (uiManager != null)
                     {
                         // Toggle instructions screen
-                        if (BehindBarsUIManager.Instance.IsLoadingScreenVisible())
+                        if (uiManager.IsLoadingScreenVisible())
                         {
-                            BehindBarsUIManager.Instance.HideLoadingScreen();
+                            uiManager.HideLoadingScreen();
                         }
                         else
                         {
-                            BehindBarsUIManager.Instance.ShowInstructions();
+                            uiManager.ShowInstructions();
                         }
                     }
                 }
             }
-            catch (Exception e)
+            catch (Exception)
             {
                 // Silently ignore input errors to avoid spam
             }
@@ -1660,7 +2397,7 @@ namespace Behind_Bars
                         ModLogger.Debug("Skipping booking process for quick test...");
 
                         // Assign player to a cell
-                        var cellManager = Behind_Bars.Systems.Jail.CellAssignmentManager.Instance;
+                        var cellManager = ResolveCellAssignmentManager();
                         if (cellManager != null)
                         {
                             int cellNumber = cellManager.AssignPlayerToCell(player);
@@ -1683,10 +2420,11 @@ namespace Behind_Bars
                                     }
 
                                     // Start UI timer
-                                    if (BehindBarsUIManager.Instance?.GetUIWrapper() != null)
+                                    var uiWrapper = ResolveUIManager().GetUIWrapper();
+                                    if (uiWrapper != null)
                                     {
                                         float bailAmount = JailSystem.CalculateBailAmount(testSentence.FineAmount, testSentence.Severity);
-                                        BehindBarsUIManager.Instance.GetUIWrapper().StartDynamicUpdates(testSentence.JailTime, bailAmount);
+                                        uiWrapper.StartDynamicUpdates(testSentence.JailTime, bailAmount);
                                         ModLogger.Debug($"✓ UI timer started: 10s jail time, ${bailAmount} bail");
                                     }
 
@@ -1764,7 +2502,9 @@ namespace Behind_Bars
         }
 
         /// <summary>
-        /// Handle scene changes for cleanup (especially when game is quit)
+        /// Handles active-scene transitions, cancelling a Main gameplay session before Unity
+        /// destroys scene-owned objects. Menu loading also has an explicit post-load cleanup path
+        /// because this event is not guaranteed for every outgoing scene.
         /// </summary>
         private void OnSceneChanged(Scene oldScene, Scene newScene)
         {
@@ -1772,18 +2512,12 @@ namespace Behind_Bars
             {
                 ModLogger.Debug($"Scene changed from '{oldScene.name}' to '{newScene.name}'");
 
-                // Clean up UI when leaving the main game scene
-                if (oldScene.name == "Main" || newScene.name == "Menu" || newScene.name == "Loading")
+                // A Main -> Menu/Loading transition destroys scene objects but does not deinitialize
+                // the Melon mod. Cancel the active gameplay session before Unity begins invoking
+                // callbacks against those destroyed objects.
+                if (oldScene.name == "Main" && newScene.name != "Main")
                 {
-                    ModLogger.Debug("Game scene exiting - cleaning up Behind Bars UI");
-                    HideJailInfoUI();
-                    
-                    // Stop any dynamic updates that might be running
-                    if (BehindBarsUIManager.Instance != null)
-                    {
-                        BehindBarsUIManager.Instance.DestroyJailInfoUI();
-                    }
-                    
+                    ShutdownGameplayScene($"scene change {oldScene.name} -> {newScene.name}");
                 }
             }
             catch (Exception e)
@@ -1793,13 +2527,126 @@ namespace Behind_Bars
         }
 
         /// <summary>
-        /// Cleanup when mod is being destroyed
+        /// Schedule I reclaims first-person input after normal update work. Reassert the
+        /// locker modal after that pass so its cursor is the final UI owner for the frame.
+        /// The panel's native exit listener consumes the first menu/back action.
+        /// </summary>
+        public override void OnLateUpdate()
+        {
+            if (PropertyLockerUI.IsPresentationOpen)
+            {
+                PropertyLockerUI.MaintainOpenPresentation();
+            }
+        }
+
+        /// <summary>
+        /// Opens a new gameplay session, invalidating continuations from any earlier Main scene
+        /// and resetting player-bootstrap readiness before scene-owned trackers are started.
+        /// </summary>
+        private void BeginGameplaySceneSession()
+        {
+            _gameplaySessionVersion++;
+            _gameplaySceneActive = true;
+            _playerSystemsReady = false;
+            try { ResolveJailTimeTracker().BeginGameplaySession(); }
+            catch (Exception ex) { ModLogger.Warn($"Jail sentence tracker startup reported an issue: {ex.Message}"); }
+            ModLogger.Debug($"Behind Bars gameplay session {_gameplaySessionVersion} started");
+        }
+
+        /// <summary>
+        /// Cancels scene-bound gameplay owners without tearing down the persistent mod service graph.
+        /// The session is invalidated before coroutines and systems are stopped, then UI fades,
+        /// listeners, and scene hosts are released. This is intentionally separate from
+        /// OnDeinitializeMelon so loading another save can bootstrap cleanly.
+        /// </summary>
+        /// <param name="reason">Diagnostic context for the transition or teardown.</param>
+        /// <param name="forceUiCleanup">Whether UI cleanup runs even without an active session.</param>
+        private void ShutdownGameplayScene(string reason, bool forceUiCleanup = false)
+        {
+            var hasActiveGameplaySession = _gameplaySceneActive || _loadModCoroutine != null || _playerInitializationCoroutine != null;
+            if (!hasActiveGameplaySession && !forceUiCleanup)
+            {
+                return;
+            }
+
+            if (hasActiveGameplaySession)
+            {
+                ModLogger.Info($"Behind Bars gameplay session {_gameplaySessionVersion} ending ({reason})");
+                _gameplaySceneActive = false;
+                _playerSystemsReady = false;
+                _gameplaySessionVersion++;
+
+                StopSceneCoroutine(ref _loadModCoroutine);
+                StopSceneCoroutine(ref _playerInitializationCoroutine);
+
+                try { ResolveBookingProcess()?.CancelForSceneExit(); }
+                catch (Exception ex) { ModLogger.Warn($"Booking shutdown reported an issue: {ex.Message}"); }
+
+                try { ResolveJailTimeTracker().EndGameplaySession(); }
+                catch (Exception ex) { ModLogger.Warn($"Jail sentence tracker shutdown reported an issue: {ex.Message}"); }
+
+                try { Core.JailController?.BookingProcessController?.scannerStation?.CancelForSceneExit(); }
+                catch (Exception ex) { ModLogger.Warn($"Scanner shutdown reported an issue: {ex.Message}"); }
+
+                try { Core.JailController?.BookingProcessController?.mugshotStation?.CancelForSceneExit(); }
+                catch (Exception ex) { ModLogger.Warn($"Mugshot shutdown reported an issue: {ex.Message}"); }
+
+                try { ResolvePrisonNpcManager()?.CancelForSceneExit(); }
+                catch (Exception ex) { ModLogger.Warn($"NPC manager shutdown reported an issue: {ex.Message}"); }
+
+                try { JailNpcPrefabLifecycle.CancelForSceneExit(); }
+                catch (Exception ex) { ModLogger.Warn($"NPC spawn lifecycle shutdown reported an issue: {ex.Message}"); }
+
+                try
+                {
+                    if (ReleaseManager.TryGetRegisteredInstance(out var releaseManager))
+                    {
+                        releaseManager.CancelForSceneExit();
+                    }
+                }
+                catch (Exception ex) { ModLogger.Warn($"Release shutdown reported an issue: {ex.Message}"); }
+
+                try { HarmonyPatches.ResetSceneTransientState(); }
+                catch (Exception ex) { ModLogger.Warn($"Harmony transient-state reset reported an issue: {ex.Message}"); }
+
+                try { ClearRapSheetCache(); }
+                catch (Exception ex) { ModLogger.Warn($"Rap-sheet cache reset reported an issue: {ex.Message}"); }
+            }
+
+            try
+            {
+                // ShutdownSceneUI directly owns the jail overlay. Do not call the public
+                // HideJailInfoUI facade here: it lazily initializes scene UI when absent,
+                // which is the opposite of what a Menu transition needs.
+                ResolveUIManager()?.ShutdownSceneUI();
+            }
+            catch (Exception ex) { ModLogger.Warn($"UI shutdown reported an issue: {ex.Message}"); }
+        }
+
+        /// <summary>Stops one scene-owned coroutine and clears its handle idempotently.</summary>
+        /// <param name="coroutine">Reference to the coroutine handle owned by the current session.</param>
+        private static void StopSceneCoroutine(ref Coroutine? coroutine)
+        {
+            if (coroutine == null)
+            {
+                return;
+            }
+
+            MelonCoroutines.Stop(coroutine);
+            coroutine = null;
+        }
+
+        /// <summary>
+        /// Performs final mod teardown after scene-owned cleanup has completed. Static scene
+        /// listeners are removed, the persistent UI is released, and the manager service graph
+        /// is shut down; this path is not a substitute for the per-scene session boundary.
         /// </summary>
         public override void OnDeinitializeMelon()
         {
             try
             {
                 ModLogger.Debug("Behind Bars shutting down - cleaning up...");
+                ShutdownGameplayScene("mod deinitialization");
 
                 // Unsubscribe from scene events
 #if !MONO
@@ -1809,11 +2656,18 @@ namespace Behind_Bars
 #endif
 
                 // Clean up UI
+                // The public facade is retained here for legacy callers; scene shutdown above
+                // is the authoritative non-creating cleanup path. If the facade initializes a
+                // missing manager, DestroyJailInfoUI immediately removes that final artifact.
                 HideJailInfoUI();
-                if (BehindBarsUIManager.Instance != null)
+                var uiManager = ResolveUIManager();
+                if (uiManager != null)
                 {
-                    BehindBarsUIManager.Instance.DestroyJailInfoUI();
+                    uiManager.DestroyJailInfoUI();
                 }
+
+                _systemManager?.Shutdown();
+                _systemManager = null;
             }
             catch (Exception e)
             {
@@ -1822,7 +2676,9 @@ namespace Behind_Bars
         }
 
         /// <summary>
-        /// Setup exit door using GuardDoor prefab like other doors
+        /// Resolves the authored exit-scanner hierarchy, assigns the available steel/jail door
+        /// prefab, and instantiates the door once. Missing hierarchy or prefab data fails closed
+        /// with diagnostics so repeated setup calls do not create duplicate doors.
         /// </summary>
         private static void SetupExitDoor(JailController jailController)
         {
@@ -1830,19 +2686,63 @@ namespace Behind_Bars
             {
                 ModLogger.Debug("Setting up exit door...");
 
-                // Get the ExitScannerArea
-                if (jailController.exitScanner?.exitDoor != null)
+                if (jailController == null)
                 {
-                    var exitDoor = jailController.exitScanner.exitDoor;
+                    return;
+                }
+
+                var exitScannerArea = jailController.areaManager?.GetExitScanner();
+                if ((exitScannerArea == null || exitScannerArea.exitDoor == null) && jailController.transform != null)
+                {
+                    var exitScannerRoot = jailController.transform.Find("Hallway/ExitScannerStation") ??
+                                          jailController.transform.Find("ExitScannerStation");
+                    if (exitScannerRoot != null)
+                    {
+                        if (exitScannerArea == null)
+                        {
+                            exitScannerArea = new BehindBars.Areas.ExitScannerArea();
+                            if (jailController.areaManager != null)
+                            {
+                                jailController.areaManager.exitScanner = exitScannerArea;
+                            }
+                        }
+
+                        if (exitScannerArea.exitDoor == null || exitScannerArea.areaRoot == null)
+                        {
+                            exitScannerArea.Initialize(exitScannerRoot);
+                            ModLogger.Debug($"SetupExitDoor: Initialized exit scanner area directly from hierarchy at {exitScannerRoot.name}");
+                        }
+                    }
+                }
+
+                if (exitScannerArea?.exitDoor != null)
+                {
+                    var exitDoor = exitScannerArea.exitDoor;
                     ModLogger.Debug($"Found exitDoor in ExitScannerArea: {exitDoor.doorName}");
 
-                    // Instantiate using steelDoorPrefab (GuardDoor)
-                    if (jailController.doorController?.steelDoorPrefab != null && exitDoor.doorHolder != null)
+                    if ((jailController.steelDoorPrefab == null && jailController.jailDoorPrefab == null) && CachedJailBundle != null)
+                    {
+                        LoadAndAssignJailPrefabs(jailController);
+                    }
+
+                    if (jailController.doorController != null)
+                    {
+                        jailController.doorController.steelDoorPrefab ??= jailController.steelDoorPrefab;
+                        jailController.doorController.jailDoorPrefab ??= jailController.jailDoorPrefab;
+                    }
+
+                    var exitDoorPrefab = jailController.steelDoorPrefab ??
+                                         jailController.doorController?.steelDoorPrefab ??
+                                         jailController.jailDoorPrefab ??
+                                         jailController.doorController?.jailDoorPrefab;
+
+                    // Instantiate using the guard-door prefab when available, otherwise the jail-door fallback.
+                    if (exitDoorPrefab != null && exitDoor.doorHolder != null)
                     {
                         if (!exitDoor.IsInstantiated())
                         {
-                            exitDoor.doorInstance = UnityEngine.Object.Instantiate(jailController.doorController.steelDoorPrefab, exitDoor.doorHolder);
-                            ModLogger.Debug("✓ Exit door instantiated using steelDoorPrefab");
+                            exitDoor.doorInstance = UnityEngine.Object.Instantiate(exitDoorPrefab, exitDoor.doorHolder);
+                            ModLogger.Debug($"✓ Exit door instantiated using {(exitDoorPrefab == jailController.steelDoorPrefab || exitDoorPrefab == jailController.doorController?.steelDoorPrefab ? "steelDoorPrefab" : "jailDoorPrefab fallback")}");
 
                             // Enable SecuritySlots for visual difference
                             var hingePoint = exitDoor.doorInstance.transform.Find("HingePoint");
@@ -1867,18 +2767,78 @@ namespace Behind_Bars
                     }
                     else
                     {
-                        ModLogger.Warn($"Cannot instantiate exit door - steelDoorPrefab: {jailController.doorController?.steelDoorPrefab != null}, doorHolder: {exitDoor.doorHolder != null}");
+                        ModLogger.Warn($"Cannot instantiate exit door - controllerSteelDoorPrefab: {jailController.steelDoorPrefab != null}, doorControllerSteelDoorPrefab: {jailController.doorController?.steelDoorPrefab != null}, controllerJailDoorPrefab: {jailController.jailDoorPrefab != null}, doorControllerJailDoorPrefab: {jailController.doorController?.jailDoorPrefab != null}, doorHolder: {exitDoor.doorHolder != null}");
                     }
                 }
                 else
                 {
-                    ModLogger.Warn("No exitScanner or exitDoor found in JailController for setup");
+                    var hasHallwayScanner = jailController.transform?.Find("Hallway/ExitScannerStation") != null ||
+                                            jailController.transform?.Find("ExitScannerStation") != null;
+                    var hasExitDoorObject = jailController.transform?.Find("Hallway/ExitDoor") != null ||
+                                            jailController.transform?.Find("ExitDoor") != null;
+
+                    if (hasHallwayScanner || hasExitDoorObject)
+                    {
+                        ModLogger.Warn($"Exit scanner hierarchy exists but exit door binding is incomplete - ExitScannerStation: {hasHallwayScanner}, ExitDoor: {hasExitDoorObject}");
+                    }
+                    else
+                    {
+                        ModLogger.Warn("No ExitScannerStation or ExitDoor GameObjects found in jail hierarchy for setup");
+                    }
                 }
             }
             catch (System.Exception ex)
             {
                 ModLogger.Error($"Error setting up exit door: {ex.Message}");
             }
+        }
+        
+        /// <summary>
+        /// Initializes the NavMesh optimization patch manually because the target method's
+        /// <c>ref NavMeshPath</c> parameter is not reliably discovered by the normal patch scan.
+        /// </summary>
+        private void InitializeNavMeshOptimizationPatches()
+        {
+            ModLogger.Info("Initializing NavMesh optimization patches...");
+            
+            try
+            {
+#if !MONO
+                var npcMovementType = typeof(Il2CppScheduleOne.NPCs.NPCMovement);
+#else
+                var npcMovementType = typeof(ScheduleOne.NPCs.NPCMovement);
+#endif
+                var canGetToMethod = npcMovementType.GetMethod("CanGetTo",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance,
+                    null,
+                    new[] { typeof(Vector3), typeof(float), typeof(NavMeshPath).MakeByRefType() },
+                    null);
+
+                if (canGetToMethod != null)
+                {
+                    var prefixMethod = typeof(Harmony.NavMeshOptimizationPatches.NPCMovementCanGetToPatch).GetMethod("Prefix", 
+                        System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public);
+                    if (prefixMethod != null)
+                    {
+                        HarmonyInstance.Patch(canGetToMethod, new HarmonyLib.HarmonyMethod(prefixMethod));
+                        ModLogger.Info("✓ NavMesh optimization: NPCMovement.CanGetTo patch applied");
+                    }
+                    else
+                    {
+                        ModLogger.Error("Could not find NPCMovementCanGetToPatch.Prefix method");
+                    }
+                }
+                else
+                {
+                    ModLogger.Error("Could not find NPCMovement.CanGetTo method with ref NavMeshPath parameter");
+                }
+            }
+            catch (System.Exception ex)
+            {
+                ModLogger.Error($"Error while manually patching NPCMovement.CanGetTo: {ex.Message}");
+            }
+            
+            ModLogger.Info("NavMesh optimization patches initialized");
         }
     }
 }

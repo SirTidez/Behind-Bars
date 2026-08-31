@@ -11,6 +11,11 @@ using Il2CppInterop.Runtime;
 
 namespace Behind_Bars.Systems.Jail
 {
+    /// <summary>
+    /// Owns the jail's serializable area models and rebuilds them from the authored scene hierarchy.
+    /// Missing areas are omitted from <c>allAreas</c>; this manager does not add authorization,
+    /// occupancy, navigation, or activity behavior beyond delegating to each area model.
+    /// </summary>
 #if MONO
     public sealed class JailAreaManager : MonoBehaviour
 #else
@@ -20,6 +25,8 @@ namespace Behind_Bars.Systems.Jail
 #if MONO
         [Header("Jail Areas")]
 #endif
+        // Serialized area instances. Initialize rebuilds their scene references; callers should
+        // use the accessors below when they need the manager's current discovery result.
         public KitchenArea kitchen = new KitchenArea();
         public LaundryArea laundry = new LaundryArea();
         public PhoneArea phoneArea = new PhoneArea();
@@ -33,11 +40,19 @@ namespace Behind_Bars.Systems.Jail
 #if MONO
         [Header("Area Configuration")]
 #endif
+        // These flags control discovery and editor gizmo output only. They do not enforce access
+        // on their own and showAreaBounds has no runtime rendering effect outside gizmos.
         public bool enableAreaSystem = true;
         public bool showAreaBounds = false;
 
+        // Initialization order is also query precedence for overlapping area colliders.
         private List<JailAreaBase> allAreas = new List<JailAreaBase>();
 
+        /// <summary>
+        /// Discover configured jail areas below <paramref name="jailRoot"/>.
+        /// </summary>
+        /// <param name="jailRoot">Root whose direct named children contain the area hierarchy.</param>
+        /// <remarks>When disabled, the method leaves the existing discovery list untouched and returns.</remarks>
         public void Initialize(Transform jailRoot)
         {
             if (!enableAreaSystem)
@@ -100,6 +115,12 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Return the first discovered area whose collider bounds contain a world position.
+        /// </summary>
+        /// <param name="playerPosition">World-space position to test.</param>
+        /// <returns>The first matching area name, or <c>Unknown</c> when none match.</returns>
+        /// <remarks>Overlapping areas resolve by initialization order, not by nearest or smallest bounds.</remarks>
         public string GetPlayerCurrentArea(Vector3 playerPosition)
         {
             foreach (var area in allAreas)
@@ -113,6 +134,12 @@ namespace Behind_Bars.Systems.Jail
             return "Unknown";
         }
 
+        /// <summary>
+        /// Find a discovered area by case-insensitive name.
+        /// </summary>
+        /// <param name="areaName">Area name to look up.</param>
+        /// <returns>The first matching area, or <c>null</c> when discovery did not register it.</returns>
+        /// <remarks>The current implementation expects a non-null name.</remarks>
         public JailAreaBase GetAreaByName(string areaName)
         {
             foreach (var area in allAreas)
@@ -126,11 +153,21 @@ namespace Behind_Bars.Systems.Jail
             return null;
         }
 
+        /// <summary>
+        /// Return a shallow copy of the currently discovered area list.
+        /// </summary>
+        /// <returns>A new list whose area objects remain manager-owned and mutable.</returns>
         public List<JailAreaBase> GetAllAreas()
         {
             return new List<JailAreaBase>(allAreas);
         }
 
+        /// <summary>
+        /// Test whether a position is inside a discovered area marked as requiring authorization.
+        /// </summary>
+        /// <param name="playerPosition">World-space position to test.</param>
+        /// <returns><c>true</c> when any matching restricted area is found.</returns>
+        /// <remarks>This checks only the model flag and collider bounds; it does not inspect player permissions.</remarks>
         public bool IsPlayerInRestrictedArea(Vector3 playerPosition)
         {
             foreach (var area in allAreas)
@@ -144,6 +181,12 @@ namespace Behind_Bars.Systems.Jail
             return false;
         }
 
+        /// <summary>
+        /// Delegate an accessibility change to a discovered area.
+        /// </summary>
+        /// <param name="areaName">Case-insensitive area name.</param>
+        /// <param name="accessible">New accessibility value.</param>
+        /// <remarks>Unknown names are logged and ignored.</remarks>
         public void SetAreaAccessible(string areaName, bool accessible)
         {
             var area = GetAreaByName(areaName);
@@ -158,6 +201,9 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Mark every discovered area inaccessible and invoke its door-lock behavior.
+        /// </summary>
         public void LockDownAllAreas()
         {
             foreach (var area in allAreas)
@@ -168,6 +214,9 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info("🔒 All areas locked down");
         }
 
+        /// <summary>
+        /// Mark every discovered area accessible and invoke its door-unlock behavior.
+        /// </summary>
         public void OpenAllAreas()
         {
             foreach (var area in allAreas)
@@ -178,6 +227,9 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info("🔓 All areas opened");
         }
 
+        /// <summary>
+        /// Log the local player's current area and restricted-area result for diagnostics.
+        /// </summary>
         public void TestPlayerPosition()
         {
             GameObject player = GameObject.FindGameObjectWithTag("Player");
@@ -198,6 +250,10 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Log discovered area metadata and run the local-player position diagnostic.
+        /// </summary>
+        /// <remarks>This is diagnostic output only; it does not repair missing scene objects.</remarks>
         public void TestAreaSystem()
         {
             ModLogger.Info("=== TESTING AREA SYSTEM ===");
@@ -275,16 +331,26 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>Return the configured kitchen area model.</summary>
         public KitchenArea GetKitchen() => kitchen;
+        /// <summary>Return the configured laundry area model.</summary>
         public LaundryArea GetLaundry() => laundry;
+        /// <summary>Return the configured phone area model.</summary>
         public PhoneArea GetPhoneArea() => phoneArea;
+        /// <summary>Return the configured booking area model.</summary>
         public BookingArea GetBooking() => booking;
+        /// <summary>Return the configured storage area model.</summary>
         public StorageArea GetStorage() => storage;
+        /// <summary>Return the configured exit-scanner area model.</summary>
         public ExitScannerArea GetExitScanner() => exitScanner;
+        /// <summary>Return the configured guard-room area model.</summary>
         public GuardRoomArea GetGuardRoom() => guardRoom;
+        /// <summary>Return the configured main-recreation area model.</summary>
         public MainRecArea GetMainRec() => mainRec;
+        /// <summary>Return the configured shower area model.</summary>
         public ShowerArea GetShowers() => showers;
 
+        /// <summary>Log the enabled state and accessibility of every discovered area.</summary>
         public void LogAreaStatus()
         {
             ModLogger.Info($"=== AREA SYSTEM STATUS ===");

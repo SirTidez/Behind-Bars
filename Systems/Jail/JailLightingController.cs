@@ -11,6 +11,12 @@ using Il2CppInterop.Runtime;
 
 namespace Behind_Bars.Systems.Jail
 {
+    /// <summary>
+    /// Discovers named jail light groups and applies normal, emergency, or blackout states.
+    /// The controller treats every discovered light as real-time during discovery; baked-light
+    /// preference and LOD therefore describe the controller's culling policy, not a baked-light
+    /// conversion pass.
+    /// </summary>
 #if MONO
     public sealed class JailLightingController : MonoBehaviour
 #else
@@ -20,12 +26,16 @@ namespace Behind_Bars.Systems.Jail
 #if MONO
         [Header("Lighting System")]
 #endif
+        // Area state is rebuilt from JailRoot/Lights during Initialize. The list is mutable and
+        // may be empty when the authored Lights parent or named child is missing.
         public List<AreaLighting> areaLights = new List<AreaLighting>();
         public LightingState currentLightingState = LightingState.Normal;
 
 #if MONO
         [Header("Lighting LOD")]
 #endif
+        // LOD controls a distance poll around the player; maxRealTimeLights limits enabled
+        // lights only when the player is nearby. It does not affect baked lightmaps.
         public bool enableLightingLOD = true;
         public float lightCullingDistance = 50f;
         public int maxRealTimeLights = 20;
@@ -34,6 +44,8 @@ namespace Behind_Bars.Systems.Jail
 #if MONO
         [Header("Emissive Material Control")]
 #endif
+        // Emissive control searches renderer.materials by name and mutates material instances;
+        // absence of a matching material leaves lights usable but skips emissive updates.
         public Material emissiveMaterial;
         public List<Material> allEmissiveMaterials = new List<Material>();
         public string emissiveMaterialName = "M_LightEmissive";
@@ -42,6 +54,7 @@ namespace Behind_Bars.Systems.Jail
 #if MONO
         [Header("Emissive Colors")]
 #endif
+        // Target colors selected for each lighting state.
         public Color emissiveNormalColor = Color.white;
         public Color emissiveEmergencyColor = Color.red;
         public Color emissiveBlackoutColor = Color.black;
@@ -49,15 +62,24 @@ namespace Behind_Bars.Systems.Jail
 #if MONO
         [Header("Emissive Intensities")]
 #endif
+        // Target emission multipliers. Blackout disables the _EMISSION keyword when supported.
         public float emissiveNormalIntensity = 1.0f;
         public float emissiveEmergencyIntensity = 0.8f;
         public float emissiveBlackoutIntensity = 0.0f;
 
+        private const float LightingLodPollInterval = 0.25f;
         private Transform playerTransform;
+        private float nextLightingLodPollTime;
+        private bool hasAppliedLightingState;
 
+        /// <summary>
+        /// Runtime state and discovered light references for one named lighting area.
+        /// </summary>
         [System.Serializable]
         public class AreaLighting
         {
+            // Authored identity and light references. Discovery currently places every found
+            // Light in realTimeLights; bakedLights remains an optional caller-provided list.
             public string areaName;
             public Transform lightsParent;
             public List<Light> lights = new List<Light>();
@@ -70,6 +92,10 @@ namespace Behind_Bars.Systems.Jail
             public List<Light> bakedLights = new List<Light>();
             public bool isPlayerNearby = true;
 
+            /// <summary>
+            /// Apply the configured intensity/color for a named lighting state.
+            /// </summary>
+            /// <param name="state">State whose per-area settings should be applied.</param>
             public void SetLightingState(LightingState state)
             {
                 switch (state)
@@ -86,6 +112,12 @@ namespace Behind_Bars.Systems.Jail
                 }
             }
 
+            /// <summary>
+            /// Apply an explicit enabled state, intensity, and color to managed lights.
+            /// </summary>
+            /// <param name="enabled">Whether managed lights should be enabled.</param>
+            /// <param name="intensity">Intensity assigned to eligible real-time/uncategorized lights.</param>
+            /// <param name="color">Color assigned to eligible real-time/uncategorized lights.</param>
             public void SetLights(bool enabled, float intensity, Color color)
             {
                 isOn = enabled;
@@ -111,6 +143,10 @@ namespace Behind_Bars.Systems.Jail
                 }
             }
 
+            /// <summary>
+            /// Toggle all lights in the area's aggregate <see cref="lights"/> list.
+            /// </summary>
+            /// <remarks>This bypasses per-list LOD limits and does not update emissive materials.</remarks>
             public void ToggleLights()
             {
                 isOn = !isOn;
@@ -124,23 +160,34 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>Global lighting modes understood by the jail controller.</summary>
         public enum LightingState
         {
+            /// <summary>Lights on using normal intensity/color.</summary>
             Normal,
+            /// <summary>Lights on using emergency intensity/color.</summary>
             Emergency,
+            /// <summary>Lights disabled and emissive emission reduced/disabled.</summary>
             Blackout
         }
 
         void Update()
         {
-            if (enableLightingLOD)
+            if (enableLightingLOD && Time.time >= nextLightingLodPollTime)
             {
+                nextLightingLodPollTime = Time.time + LightingLodPollInterval;
                 UpdateLightingLOD();
             }
         }
 
+        /// <summary>
+        /// Rebuild named light groups and apply the initial LOD/emissive setup.
+        /// </summary>
+        /// <param name="jailRoot">Root containing the <c>Lights</c> hierarchy.</param>
+        /// <remarks>The current discovery uses the exact child names Booking, MainRec, Phones, Kitchen, and Laundry.</remarks>
         public void Initialize(Transform jailRoot)
         {
+            hasAppliedLightingState = false;
             DiscoverAreaLighting(jailRoot);
             FindEmissiveMaterial();
 
@@ -150,8 +197,17 @@ namespace Behind_Bars.Systems.Jail
             {
                 playerTransform = player.transform;
             }
+
+            nextLightingLodPollTime = Time.time + LightingLodPollInterval;
+            if (enableLightingLOD)
+            {
+                UpdateLightingLOD(true);
+            }
         }
 
+        // Discovery intentionally uses exact authored names and registers every child Light as
+        // real-time for simplicity. A missing group is logged and omitted; this is not a scene
+        // lightmap/baked-light discovery pass.
         void DiscoverAreaLighting(Transform jailRoot)
         {
             areaLights.Clear();
@@ -215,23 +271,36 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Debug($"✓ Lighting discovery complete: {areaLights.Count} areas, {totalLights} total lights");
         }
 
-        void UpdateLightingLOD()
+        // LOD is distance-based from each area's root position and runs only when a player
+        // transform was found. No player means no culling update, even when LOD is enabled.
+        void UpdateLightingLOD(bool forceApply = false)
         {
             if (playerTransform == null) return;
+
+            Vector3 playerPosition = playerTransform.position;
+            float cullingDistanceSquared = lightCullingDistance * lightCullingDistance;
 
             foreach (var areaLighting in areaLights)
             {
                 if (areaLighting.lightsParent == null) continue;
 
-                float distance = Vector3.Distance(playerTransform.position, areaLighting.lightsParent.position);
-                bool playerNearby = distance <= lightCullingDistance;
+                Vector3 offset = playerPosition - areaLighting.lightsParent.position;
+                bool playerNearby = offset.sqrMagnitude <= cullingDistanceSquared;
 
-                UpdateAreaLightingLOD(areaLighting, playerNearby);
+                UpdateAreaLightingLOD(areaLighting, playerNearby, forceApply);
             }
         }
 
-        void UpdateAreaLightingLOD(AreaLighting areaLighting, bool playerNearby)
+        // The nearby branch enables at most maxRealTimeLights; the far branch disables
+        // real-time lights only when preferBakedLighting is true. Baked lightmaps themselves
+        // are never toggled or generated here.
+        void UpdateAreaLightingLOD(AreaLighting areaLighting, bool playerNearby, bool forceApply = false)
         {
+            if (!forceApply && areaLighting.isPlayerNearby == playerNearby)
+            {
+                return;
+            }
+
             areaLighting.isPlayerNearby = playerNearby;
 
             if (!playerNearby && preferBakedLighting)
@@ -262,13 +331,31 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Apply a lighting state to every discovered area and update the cached emissive material.
+        /// </summary>
+        /// <param name="state">Normal, emergency, or blackout mode to apply.</param>
+        /// <remarks>Repeated calls still log the state; light state work is skipped when the mode is unchanged.</remarks>
         public void SetJailLighting(LightingState state)
         {
+            bool stateChanged = !hasAppliedLightingState || currentLightingState != state;
             currentLightingState = state;
 
-            foreach (var areaLighting in areaLights)
+            if (stateChanged)
             {
-                areaLighting.SetLightingState(state);
+                foreach (var areaLighting in areaLights)
+                {
+                    areaLighting.SetLightingState(state);
+                }
+
+                // State transitions are immediate, while retaining the current LOD culling decision.
+                if (enableLightingLOD)
+                {
+                    UpdateLightingLOD(true);
+                    nextLightingLodPollTime = Time.time + LightingLodPollInterval;
+                }
+
+                hasAppliedLightingState = true;
             }
 
             SetEmissiveMaterial(state);
@@ -284,12 +371,22 @@ namespace Behind_Bars.Systems.Jail
             ModLogger.Info($"💡 Jail lighting set to {stateName}");
         }
 
+        /// <summary>
+        /// Toggle one discovered area's aggregate light list by name.
+        /// </summary>
+        /// <param name="areaName">Case-insensitive discovered area name.</param>
+        /// <remarks>Unknown names are logged and ignored; this does not change emissive material state.</remarks>
         public void ToggleAreaLighting(string areaName)
         {
             AreaLighting area = areaLights.FirstOrDefault(a => a.areaName.Equals(areaName, System.StringComparison.OrdinalIgnoreCase));
             if (area != null)
             {
                 area.ToggleLights();
+                if (enableLightingLOD)
+                {
+                    UpdateAreaLightingLOD(area, area.isPlayerNearby, true);
+                }
+
                 ModLogger.Info($"💡 Toggled {areaName} lights: {(area.isOn ? "ON" : "OFF")}");
             }
             else
@@ -298,12 +395,23 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>
+        /// Set one discovered area's aggregate light list to an explicit state.
+        /// </summary>
+        /// <param name="areaName">Case-insensitive discovered area name.</param>
+        /// <param name="enabled">Whether the area's lights should be enabled.</param>
+        /// <remarks>The area's normal intensity/color are used even when the global mode is emergency.</remarks>
         public void SetAreaLighting(string areaName, bool enabled)
         {
             AreaLighting area = areaLights.FirstOrDefault(a => a.areaName.Equals(areaName, System.StringComparison.OrdinalIgnoreCase));
             if (area != null)
             {
                 area.SetLights(enabled, area.normalIntensity, area.normalColor);
+                if (enableLightingLOD)
+                {
+                    UpdateAreaLightingLOD(area, area.isPlayerNearby, true);
+                }
+
                 ModLogger.Info($"💡 Set {areaName} lights: {(enabled ? "ON" : "OFF")}");
             }
             else
@@ -312,6 +420,9 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        // The search examines renderer.materials instances whose names contain the configured
+        // token. It caches the first match as emissiveMaterial and all matches in the list;
+        // no match is a warning, not a fatal lighting failure.
         void FindEmissiveMaterial()
         {
             if (!enableEmissiveControl)
@@ -410,6 +521,8 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        // Emissive updates are best-effort: only the first supported shader property on each
+        // cached material is written, and unsupported materials are counted as failures.
         void SetEmissiveMaterial(LightingState state)
         {
             if (!enableEmissiveControl)
@@ -509,16 +622,19 @@ namespace Behind_Bars.Systems.Jail
             }
         }
 
+        /// <summary>Diagnostic wrapper that applies <see cref="LightingState.Emergency"/>.</summary>
         public void EmergencyLightingTest()
         {
             SetJailLighting(LightingState.Emergency);
         }
 
+        /// <summary>Diagnostic wrapper that applies <see cref="LightingState.Normal"/>.</summary>
         public void NormalLightingTest()
         {
             SetJailLighting(LightingState.Normal);
         }
 
+        /// <summary>Diagnostic wrapper that applies <see cref="LightingState.Blackout"/>.</summary>
         public void BlackoutTest()
         {
             SetJailLighting(LightingState.Blackout);

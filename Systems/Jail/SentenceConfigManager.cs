@@ -5,17 +5,24 @@ using System.Collections.Generic;
 namespace Behind_Bars.Systems.Jail
 {
     /// <summary>
-    /// Manages sentence configuration via MelonPreferences
-    /// Provides centralized access to all sentence lengths and multipliers
+    /// Manages sentence configuration via MelonPreferences and provides centralized access to sentence lengths and multipliers.
+    /// Sentence-length values are stored and returned as game minutes; multiplier values are dimensionless factors.
+    /// This manager creates its preference entries once through the lazy singleton and does not perform input validation.
     /// </summary>
     public class SentenceConfigManager
     {
         private static SentenceConfigManager? _instance;
+
+        /// <summary>
+        /// Lazily creates the process-local configuration manager and initializes its preference entries on first access.
+        /// There is no reload or reset operation on this singleton.
+        /// </summary>
         public static SentenceConfigManager Instance => _instance ??= new SentenceConfigManager();
 
         private MelonPreferences_Category? _category;
 
-        // Minor crime preferences (in game minutes)
+        // Minor-crime sentence preferences. Values are MelonPreferences floats measured in game minutes; no real-time
+        // conversion or lower-bound validation occurs in this manager.
         private MelonPreferences_Entry<float>? _trespassing;
         private MelonPreferences_Entry<float>? _vandalism;
         private MelonPreferences_Entry<float>? _publicIntoxication;
@@ -27,7 +34,7 @@ namespace Behind_Bars.Systems.Jail
         private MelonPreferences_Entry<float>? _drugPossessionLow;
         private MelonPreferences_Entry<float>? _illegalWeaponPossession;
 
-        // Moderate crime preferences (in game minutes)
+        // Moderate-crime sentence preferences, in game minutes (see the minor-crime group above).
         private MelonPreferences_Entry<float>? _theft;
         private MelonPreferences_Entry<float>? _vehicleTheft;
         private MelonPreferences_Entry<float>? _assault;
@@ -39,7 +46,7 @@ namespace Behind_Bars.Systems.Jail
         private MelonPreferences_Entry<float>? _hitAndRun;
         private MelonPreferences_Entry<float>? _violatingCurfew;
 
-        // Major crime preferences (in game minutes)
+        // Major-crime sentence preferences, in game minutes (see the minor-crime group above).
         private MelonPreferences_Entry<float>? _deadlyAssault;
         private MelonPreferences_Entry<float>? _assaultOnOfficer;
         private MelonPreferences_Entry<float>? _burglary;
@@ -48,13 +55,13 @@ namespace Behind_Bars.Systems.Jail
         private MelonPreferences_Entry<float>? _attemptingToSell;
         private MelonPreferences_Entry<float>? _witnessIntimidation;
 
-        // Severe crime preferences (in game minutes)
+        // Severe-crime sentence preferences, in game minutes (see the minor-crime group above).
         private MelonPreferences_Entry<float>? _manslaughter;
         private MelonPreferences_Entry<float>? _murderCivilian;
         private MelonPreferences_Entry<float>? _murderEmployee;
         private MelonPreferences_Entry<float>? _murderPolice;
 
-        // Multiplier preferences
+        // Dimensionless multiplier preferences. Configured values are returned as-is; they are not clamped here.
         private MelonPreferences_Entry<float>? _severity1_0;
         private MelonPreferences_Entry<float>? _severity1_5;
         private MelonPreferences_Entry<float>? _severity2_0;
@@ -67,13 +74,16 @@ namespace Behind_Bars.Systems.Jail
         private MelonPreferences_Entry<float>? _unwitnessed;
         private MelonPreferences_Entry<float>? _witnessBonus;
 
-        // Global preferences
+        // Global preferences. Missing toggle entries are treated as enabled by the calculation methods; a missing global
+        // sentence multiplier is treated as 1.0.
         private MelonPreferences_Entry<float>? _globalMultiplier;
         private MelonPreferences_Entry<bool>? _enableRepeatOffenderPenalties;
         private MelonPreferences_Entry<bool>? _enableWitnessMultipliers;
         private MelonPreferences_Entry<bool>? _enableSeverityMultipliers;
 
-        // Cache for crime name to preference mapping
+        // Case-sensitive aliases from crime class names to live preference entries. The cache is populated once during
+        // initialization; changing an entry's Value is visible through the stored entry reference, but new aliases are not
+        // discovered automatically.
         private Dictionary<string, MelonPreferences_Entry<float>?> _crimePreferenceCache = new();
 
         private SentenceConfigManager()
@@ -81,11 +91,16 @@ namespace Behind_Bars.Systems.Jail
             InitializePreferences();
         }
 
+        /// <summary>
+        /// Creates the MelonPreferences category and all sentence/multiplier entries, builds the exact-name lookup cache,
+        /// and saves the preference file immediately. Sentence entries use game minutes; multiplier entries have no units.
+        /// Existing preference values are loaded by MelonPreferences, and this method does not validate or normalize them.
+        /// </summary>
         private void InitializePreferences()
         {
             _category = MelonPreferences.CreateCategory(Constants.PREF_CATEGORY);
 
-            // Minor crimes (defaults in game minutes)
+            // Minor crimes (defaults in game minutes).
             _trespassing = _category.CreateEntry<float>("Sentence_Trespassing", 15f, "Trespassing sentence (game minutes)");
             _vandalism = _category.CreateEntry<float>("Sentence_Vandalism", 30f, "Vandalism sentence (game minutes)");
             _publicIntoxication = _category.CreateEntry<float>("Sentence_PublicIntoxication", 30f, "Public Intoxication sentence (game minutes)");
@@ -97,7 +112,7 @@ namespace Behind_Bars.Systems.Jail
             _drugPossessionLow = _category.CreateEntry<float>("Sentence_DrugPossessionLow", 30f, "Drug Possession (Low) sentence (game minutes)");
             _illegalWeaponPossession = _category.CreateEntry<float>("Sentence_IllegalWeaponPossession", 30f, "Illegal Weapon Possession sentence (game minutes)");
 
-            // Moderate crimes
+            // Moderate crimes (defaults in game minutes).
             _theft = _category.CreateEntry<float>("Sentence_Theft", 120f, "Theft sentence (game minutes)");
             _vehicleTheft = _category.CreateEntry<float>("Sentence_VehicleTheft", 240f, "Vehicle Theft sentence (game minutes)");
             _assault = _category.CreateEntry<float>("Sentence_Assault", 180f, "Assault sentence (game minutes)");
@@ -109,7 +124,7 @@ namespace Behind_Bars.Systems.Jail
             _hitAndRun = _category.CreateEntry<float>("Sentence_HitAndRun", 480f, "Hit and Run sentence (game minutes)");
             _violatingCurfew = _category.CreateEntry<float>("Sentence_ViolatingCurfew", 120f, "Violating Curfew sentence (game minutes)");
 
-            // Major crimes
+            // Major crimes (defaults in game minutes).
             _deadlyAssault = _category.CreateEntry<float>("Sentence_DeadlyAssault", 1440f, "Deadly Assault sentence (game minutes) - 1 day");
             _assaultOnOfficer = _category.CreateEntry<float>("Sentence_AssaultOnOfficer", 2880f, "Assault on Officer sentence (game minutes) - 2 days");
             _burglary = _category.CreateEntry<float>("Sentence_Burglary", 2160f, "Burglary sentence (game minutes) - 1.5 days");
@@ -118,13 +133,13 @@ namespace Behind_Bars.Systems.Jail
             _attemptingToSell = _category.CreateEntry<float>("Sentence_AttemptingToSell", 2160f, "Attempting to Sell sentence (game minutes) - 1.5 days");
             _witnessIntimidation = _category.CreateEntry<float>("Sentence_WitnessIntimidation", 2880f, "Witness Intimidation sentence (game minutes) - 2 days");
 
-            // Severe crimes
+            // Severe crimes (defaults in game minutes).
             _manslaughter = _category.CreateEntry<float>("Sentence_Manslaughter", 4320f, "Manslaughter sentence (game minutes) - 3 days");
             _murderCivilian = _category.CreateEntry<float>("Sentence_MurderCivilian", 5760f, "Murder (Civilian) sentence (game minutes) - 4 days");
             _murderEmployee = _category.CreateEntry<float>("Sentence_MurderEmployee", 6480f, "Murder (Employee) sentence (game minutes) - 4.5 days");
             _murderPolice = _category.CreateEntry<float>("Sentence_MurderPolice", 7200f, "Murder (Police) sentence (game minutes) - 5 days (Maximum)");
 
-            // Multipliers
+            // Multipliers (dimensionless factors; configured values are not clamped).
             _severity1_0 = _category.CreateEntry<float>("Multiplier_Severity1_0", 1.0f, "Severity 1.0 multiplier (no change)");
             _severity1_5 = _category.CreateEntry<float>("Multiplier_Severity1_5", 1.5f, "Severity 1.5 multiplier (+50%)");
             _severity2_0 = _category.CreateEntry<float>("Multiplier_Severity2_0", 2.0f, "Severity 2.0 multiplier (+100%)");
@@ -137,13 +152,13 @@ namespace Behind_Bars.Systems.Jail
             _unwitnessed = _category.CreateEntry<float>("Multiplier_Unwitnessed", 0.8f, "Unwitnessed crime multiplier (-20%)");
             _witnessBonus = _category.CreateEntry<float>("Multiplier_WitnessBonus", 0.1f, "Witness bonus per additional witness (+10% per witness, max +30%)");
 
-            // Global preferences
+            // Global preferences (toggles default to enabled; global multiplier defaults to 1.0).
             _globalMultiplier = _category.CreateEntry<float>("Global_SentenceMultiplier", 1.0f, "Global multiplier for all sentences (1.0 = normal, 2.0 = double)");
             _enableRepeatOffenderPenalties = _category.CreateEntry<bool>("Enable_RepeatOffenderPenalties", true, "Enable repeat offender penalties");
             _enableWitnessMultipliers = _category.CreateEntry<bool>("Enable_WitnessMultipliers", true, "Enable witness multipliers");
             _enableSeverityMultipliers = _category.CreateEntry<bool>("Enable_SeverityMultipliers", true, "Enable severity multipliers");
 
-            // Build crime name to preference mapping
+            // Build the exact, case-sensitive crime-name aliases used by GetSentenceLength.
             BuildCrimePreferenceCache();
 
             MelonPreferences.Save();
@@ -151,7 +166,10 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Build cache mapping crime class names to preference entries
+        /// Builds the exact, case-sensitive aliases from crime class names to preference entries.
+        /// The aliases intentionally include names used by crime classes that differ from the preference-entry names;
+        /// Murder is mapped to the civilian entry here and is resolved by victim type through GetMurderSentenceLength.
+        /// This method does not normalize names, clear old keys, or create missing entries.
         /// </summary>
         private void BuildCrimePreferenceCache()
         {
@@ -194,7 +212,10 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Get sentence length for a crime by its class name
+        /// Gets a configured sentence length for an exact crime class-name alias, in game minutes.
+        /// Unknown or unmapped non-null names log a warning and receive the fixed 120-game-minute fallback; because the
+        /// underlying dictionary lookup rejects a null key, a null name currently throws before reaching that fallback.
+        /// The fallback is not category-aware and is not a minimum applied to known preference values.
         /// </summary>
         public float GetSentenceLength(string crimeClassName)
         {
@@ -203,13 +224,15 @@ namespace Behind_Bars.Systems.Jail
                 return entry.Value;
             }
 
-            // Fallback to default based on crime category
+            // Unknown names use the fixed fallback; the fallback is not derived from the crime category.
             ModLogger.Warn($"No preference found for crime: {crimeClassName}, using default");
             return GetDefaultSentenceLength(crimeClassName);
         }
 
         /// <summary>
-        /// Get sentence length for Murder based on victim type
+        /// Gets the configured Murder sentence length for an exact victim-type label, in game minutes.
+        /// "Police", "Employee", and "Civilian" select their corresponding entries; any other or null label falls back
+        /// to the civilian entry. Missing entries use the literal defaults for that victim category.
         /// </summary>
         public float GetMurderSentenceLength(string victimType)
         {
@@ -223,17 +246,22 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Get default sentence length if preference doesn't exist
+        /// Returns the fixed fallback sentence length used when no crime-name preference exists, in game minutes.
+        /// The value is always 120 and is not a general minimum or a category-based calculation.
         /// </summary>
         private float GetDefaultSentenceLength(string crimeClassName)
         {
-            // Return minimum sentence (120 minutes = 2 game hours) as safe default
+            // Return the fixed fallback (120 game minutes = 2 game hours), not a minimum applied to configured values. The
+            // existing diagnostic text still labels this fallback as a "minimum" for compatibility with current logs.
             ModLogger.Warn($"[SENTENCE CONFIG] No preference found for {crimeClassName}, using minimum sentence: 120 game minutes");
             return 120f;
         }
 
         /// <summary>
-        /// Get severity multiplier based on severity value
+        /// Gets the dimensionless severity multiplier selected by the severity threshold.
+        /// Values at or below 1.0 use the 1.0 entry, values above 3.0 use the 4.0 entry, and the intervening thresholds
+        /// select their matching entries. When disabled or unavailable, the calculation returns 1.0; configured values
+        /// and negative/otherwise unusual severity inputs are not validated here.
         /// </summary>
         public float GetSeverityMultiplier(float severity)
         {
@@ -254,7 +282,9 @@ namespace Behind_Bars.Systems.Jail
         }
 
         /// <summary>
-        /// Get repeat offender multiplier based on offense count
+        /// Gets the dimensionless repeat-offender multiplier for the supplied offense count.
+        /// One offense has no penalty, two and three select their dedicated entries, and every other count—including zero
+        /// or negative values—currently falls through to the 4+ entry. Disabled or unavailable penalties return 1.0.
         /// </summary>
         public float GetRepeatOffenderMultiplier(int offenseCount)
         {
@@ -265,15 +295,18 @@ namespace Behind_Bars.Systems.Jail
 
             return offenseCount switch
             {
-                1 => 1.0f, // First offense - no penalty
+                1 => 1.0f, // First offense - no penalty.
                 2 => _repeatOffender2?.Value ?? 1.25f,
                 3 => _repeatOffender3?.Value ?? 1.5f,
-                _ => _repeatOffender4Plus?.Value ?? 2.0f // 4+ offenses
+                _ => _repeatOffender4Plus?.Value ?? 2.0f // 4+ offenses, including other input values.
             };
         }
 
         /// <summary>
-        /// Get witness multiplier based on witness count and whether crime was witnessed
+        /// Gets the dimensionless witness multiplier for the witness count and witnessed flag.
+        /// Disabled or unavailable settings return 1.0. An unwitnessed crime—or a witnessed flag with a zero count—uses
+        /// the unwitnessed entry; otherwise each additional witness adds the configured bonus up to a +0.30 cap. Inputs
+        /// and configured values are not range-validated, so the cap is only an upper bound.
         /// </summary>
         public float GetWitnessMultiplier(int witnessCount, bool wasWitnessed)
         {
@@ -284,17 +317,17 @@ namespace Behind_Bars.Systems.Jail
 
             if (!wasWitnessed || witnessCount == 0)
             {
-                return _unwitnessed?.Value ?? 0.8f; // -20% for unwitnessed
+                return _unwitnessed?.Value ?? 0.8f; // -20% for unwitnessed.
             }
 
-            // Base witnessed crime: 1.0 (no change)
-            // Additional witnesses: +10% each, max +30%
+            // Base witnessed crime: 1.0 (no change). Additional witnesses use the configured bonus, capped above at +30%.
             float bonus = Math.Min((witnessCount - 1) * (_witnessBonus?.Value ?? 0.1f), 0.3f);
             return 1.0f + bonus;
         }
 
         /// <summary>
-        /// Get global sentence multiplier
+        /// Gets the dimensionless global sentence multiplier, or 1.0 when the preference entry is unavailable.
+        /// The value is returned as configured without clamping.
         /// </summary>
         public float GetGlobalMultiplier()
         {

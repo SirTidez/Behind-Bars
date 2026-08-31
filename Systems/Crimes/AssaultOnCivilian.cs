@@ -7,9 +7,17 @@ using ScheduleOne.Law;
 
 namespace Behind_Bars.Systems.Crimes
 {
+    /// <summary>
+    /// Crime type used for a non-law-enforcement NPC assault.
+    /// </summary>
     [Serializable]
     public class AssaultOnCivilian : Crime
     {
-        public override string CrimeName { get; set; } = "Assault on Civilian";
+        /// <summary>Gets or sets the native display label for this charge.</summary>
+        public override string CrimeName
+        {
+            get;
+            set;
+        } = "Assault on Civilian";
     }
 }

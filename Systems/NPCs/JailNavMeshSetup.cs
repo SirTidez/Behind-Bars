@@ -7,15 +7,24 @@ using Behind_Bars.Utils;
 namespace Behind_Bars.Systems.NPCs
 {
     /// <summary>
-    /// Attaches NavMesh data to the jail from the asset bundle
+    /// Attaches the jail's authored NavMesh data from the cached asset bundle.
+    /// This helper owns only the static <see cref="NavMeshDataInstance"/> registration;
+    /// it does not validate every room, route, agent type, or NPC destination.
     /// </summary>
     public static class JailNavMeshSetup
     {
+        /// <summary>
+        /// Handle returned by Unity for the currently attached jail NavMesh data. A valid
+        /// handle means the data was registered, not that all jail locations are connected.
+        /// </summary>
         private static NavMeshDataInstance _jailNav;
 
         /// <summary>
-        /// Attaches NavMesh data from the cached asset bundle to the jail
+        /// Attaches NavMesh data from the cached asset bundle at the jail root's transform.
+        /// The bundle must already be cached and <paramref name="jailRoot"/> must represent
+        /// the same world transform used by the authored data.
         /// </summary>
+        /// <param name="jailRoot">World transform used as the NavMesh data origin.</param>
         public static void AttachJailNavMesh(Transform jailRoot)
         {
             ModLogger.Debug("Attaching NavMesh data from cached asset bundle...");
@@ -31,7 +40,8 @@ namespace Behind_Bars.Systems.NPCs
 
                 ModLogger.Debug("Cached bundle found, listing all assets to find NavMesh...");
                 
-                // List all assets to see what's available
+                // Log the bundle inventory for asset-name diagnosis; this is not a
+                // substitute for validating the resulting NavMesh graph.
                 var allAssets = bundle.GetAllAssetNames();
                 ModLogger.Debug($"Bundle contains {allAssets.Length} assets:");
                 foreach (var asset in allAssets)
@@ -39,7 +49,8 @@ namespace Behind_Bars.Systems.NPCs
                     ModLogger.Debug($"  Asset: {asset}");
                 }
 
-                // Try different possible NavMesh asset names (including exact name from IL2CPP logs)
+                // Try known names, including the name observed in IL2CPP logs. The first
+                // successful load wins, so a matching name does not prove route parity.
                 string[] possibleNames = { 
                     "navmesh-jail.asset", // Exact name from IL2CPP logs
                     "assets/csec_exporting/navmesh-jail.asset", // Full path from IL2CPP
@@ -81,7 +92,8 @@ namespace Behind_Bars.Systems.NPCs
                 _jailNav = NavMesh.AddNavMeshData(navMeshData, jailRoot.position, jailRoot.rotation);
                 ModLogger.Debug($"NavMesh.AddNavMeshData returned: valid={_jailNav.valid}, owner={_jailNav.owner}");
                 
-                // Verify the NavMesh is working
+                // Probe a few positions after registration. This is a smoke test only;
+                // it cannot certify every jail room or agent-specific path.
                 VerifyNavMeshAttachment(jailRoot);
             }
             catch (System.Exception e)
@@ -92,7 +104,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Removes the attached NavMesh data
+        /// Removes the currently registered jail NavMesh data, if its Unity handle is valid.
+        /// This does not restore NPC positions or re-enable agents that failed validation.
         /// </summary>
         public static void DetachJailNavMesh()
         {
@@ -104,8 +117,11 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Verify that the NavMesh was attached successfully
+        /// Performs a small smoke test around the jail root and logs how many sample points
+        /// can be projected. A passing sample does not guarantee complete connectivity or
+        /// successful paths for every NPC agent.
         /// </summary>
+        /// <param name="jailRoot">Origin used to choose the four probe points.</param>
         private static void VerifyNavMeshAttachment(Transform jailRoot)
         {
             // Test a few positions to see if NavMesh is working
@@ -138,8 +154,12 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Check if jail has valid NavMesh
+        /// Checks the registration handle and samples one point near the jail root.
+        /// This is intentionally a coarse readiness check, not a route- or room-level
+        /// validation; callers still need to validate their own destination paths.
         /// </summary>
+        /// <param name="jailRoot">Origin used for the readiness sample.</param>
+        /// <returns>True when the handle is valid and the local sample succeeds.</returns>
         public static bool HasValidNavMesh(Transform jailRoot)
         {
             if (!_jailNav.valid)

@@ -15,17 +15,20 @@ namespace Behind_Bars.Systems.NPCs
         #region Static Mappings
 
         /// <summary>
-        /// Mapping dictionary: Region -> List of assignments that patrol this region
+        /// Mapping dictionary: Region -> List of assignments that patrol this region.
+        /// Values are rebuilt only by a successful Initialize call.
         /// </summary>
         private static Dictionary<EMapRegion, List<ParoleOfficerAssignment>> regionToAssignments;
 
         /// <summary>
-        /// Mapping dictionary: Assignment -> Route name (from existing AssignmentToRouteMap)
+        /// Snapshot of AssignmentToRouteMap copied during Initialize. Changes to
+        /// the source map afterward are not reflected here.
         /// </summary>
         private static Dictionary<ParoleOfficerAssignment, string> assignmentToRoute;
 
         /// <summary>
-        /// Flag to track if mappings have been initialized
+        /// True only after both mapping dictionaries are populated and LogMappings
+        /// has been reached without an exception.
         /// </summary>
         private static bool isInitialized = false;
 
@@ -34,7 +37,9 @@ namespace Behind_Bars.Systems.NPCs
         #region Initialization
 
         /// <summary>
-        /// Initialize the region-to-assignment mappings
+        /// Initializes the route/region snapshots once. Exceptions are caught and
+        /// leave isInitialized false; no fallback dictionaries are installed, so
+        /// a caller after repeated failure may still encounter a null mapping.
         /// </summary>
         public static void Initialize()
         {
@@ -100,7 +105,7 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Log the mappings for debugging
+        /// Logs the successfully built region-to-assignment snapshot.
         /// </summary>
         private static void LogMappings()
         {
@@ -117,7 +122,9 @@ namespace Behind_Bars.Systems.NPCs
         #region Public API
 
         /// <summary>
-        /// Get list of assignments that patrol a specific region
+        /// Gets a copy of the assignments in the initialized region snapshot.
+        /// An unknown region returns an empty list; initialization failure is not
+        /// converted into a usable fallback map.
         /// </summary>
         /// <param name="region">The map region</param>
         /// <returns>List of assignments, or empty list if region not found</returns>
@@ -135,7 +142,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Get route name for a specific assignment
+        /// Gets the route name from the initialization-time assignment snapshot.
+        /// A missing assignment returns null.
         /// </summary>
         /// <param name="assignment">The parole officer assignment</param>
         /// <returns>Route name, or null if assignment not found</returns>
@@ -153,7 +161,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Check if an assignment patrols a specific region
+        /// Checks the initialized region snapshot for an assignment. The
+        /// supervising officer is explicitly non-region-based.
         /// </summary>
         /// <param name="assignment">The parole officer assignment</param>
         /// <param name="region">The map region</param>
@@ -177,7 +186,8 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Get all patrol assignments (excludes supervising officer)
+        /// Returns all route assignments in the initialization-time route
+        /// snapshot, excluding the supervising officer.
         /// </summary>
         /// <returns>List of all patrol assignments</returns>
         public static List<ParoleOfficerAssignment> GetAllPatrolAssignments()
@@ -190,7 +200,7 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Check if an assignment is a patrol assignment (not supervising)
+        /// Classifies an assignment without consulting the initialized mappings.
         /// </summary>
         /// <param name="assignment">The assignment to check</param>
         /// <returns>True if it's a patrol assignment</returns>
@@ -204,7 +214,9 @@ namespace Behind_Bars.Systems.NPCs
         #region Helper Methods
 
         /// <summary>
-        /// Ensure mappings are initialized
+        /// Attempts lazy initialization when needed. It logs and retries after a
+        /// failed initialization but does not validate that either dictionary is
+        /// non-null before the caller continues.
         /// </summary>
         private static void EnsureInitialized()
         {

@@ -26,6 +26,13 @@ namespace Behind_Bars.Harmony
     [HarmonyPatch]
     internal static class SaveablePatches
     {
+        /// <summary>
+        /// Appends mod saveables after the game's SaveManager has written its base
+        /// files. It first whitelists Modded/Saveables, saves auto-discovered entries,
+        /// then writes changed per-player RapSheets and marks each one unchanged only
+        /// after its own write succeeds.
+        /// </summary>
+        /// <param name="saveFolderPath">Root folder selected by the game's save call.</param>
         [HarmonyPatch(typeof(S1Persistence.SaveManager), "Save", new Type[] { typeof(string) })]
         [HarmonyPostfix]
         private static void SaveManager_Save_Postfix(string saveFolderPath)
@@ -55,7 +62,7 @@ namespace Behind_Bars.Harmony
                 {
                     try
                     {
-                        ListString extra = new ListString();
+                        System.Collections.Generic.List<string> extra = new System.Collections.Generic.List<string>();
                         string folder = saveable.GetType().Name;
                         string path = Path.Combine(basePath, folder);
                         Directory.CreateDirectory(path);
@@ -73,10 +80,9 @@ namespace Behind_Bars.Harmony
                 int perPlayerCount = 0;
                 try
                 {
-                    var rapSheetManager = RapSheetManager.Instance;
-                    if (rapSheetManager != null)
+                    var allRapSheets = Core.GetAllRapSheets().ToList();
+                    if (allRapSheets != null)
                     {
-                        var allRapSheets = rapSheetManager.GetAllRapSheets().ToList();
                         ModLogger.Debug($"[SAVEABLE] Found {allRapSheets.Count} RapSheet(s) to save");
                         
                         foreach (var rapSheet in allRapSheets)
@@ -93,13 +99,12 @@ namespace Behind_Bars.Harmony
                                     continue;
                                 }
                                 
-                                // Use the SaveFolderName from RapSheet via ISaveable interface to determine the save path
-                                ScheduleOne.Persistence.ISaveable saveableInterface = rapSheet;
-                                string rapSheetFolder = saveableInterface.SaveFolderName;
+                                // Use RapSheet save folder to determine the save path
+                                string rapSheetFolder = rapSheet.SaveFolderNameInternal;
                                 string rapSheetPath = Path.Combine(basePath, rapSheetFolder);
                                 Directory.CreateDirectory(rapSheetPath);
                                 
-                                List<string> extra = new List<string>();
+                                System.Collections.Generic.List<string> extra = new System.Collections.Generic.List<string>();
                                 rapSheet.SaveInternal(rapSheetPath, ref extra);
                                 
                                 // Mark as unchanged after successful save
@@ -128,6 +133,14 @@ namespace Behind_Bars.Harmony
             }
         }
 
+        /// <summary>
+        /// Restores mod saveables after the base NPC loader has completed. Existing
+        /// folders load immediately; missing folders register a one-shot
+        /// onLoadComplete callback so new saveables initialize only after the full game
+        /// load. The supplied loader path is retained by Harmony for signature parity;
+        /// the active LoadManager folder is the path used for mod data.
+        /// </summary>
+        /// <param name="mainPath">Base loader path supplied by the game's load call.</param>
         [HarmonyPatch(typeof(S1Loaders.NPCsLoader), "Load")]
         [HarmonyPostfix]
         private static void AfterBaseLoaders(string mainPath)
@@ -157,6 +170,8 @@ namespace Behind_Bars.Harmony
                         else
                         {
                             // No save data yet for this save -> initialize once after full game load
+                            // Keep this local function instance so removal targets the
+                            // exact listener that was added; initialization is one-shot.
                             void InitializeOnLoadComplete()
                             {
                                 try
