@@ -7,6 +7,7 @@ using Behind_Bars.Systems;
 using Behind_Bars.Systems.CrimeTracking;
 using Behind_Bars.Utils.Saveable;
 using UnityEngine;
+using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
 using Il2CppScheduleOne.PlayerScripts;
@@ -27,16 +28,29 @@ namespace Behind_Bars.Systems.Testing
 #endif
 
         private static SaveableTestSystem? _instance;
-        public static SaveableTestSystem Instance
+        public static SaveableTestSystem? Instance
         {
             get
             {
+                if (!Core.EnableDeveloperShortcuts)
+                {
+                    return null;
+                }
+
                 if (_instance == null)
                 {
                     GameObject go = new GameObject("SaveableTestSystem");
-                    _instance = go.AddComponent<SaveableTestSystem>();
+                    _instance = BBHelpers.GetOrAddComponentSafe<SaveableTestSystem>(go);
+                    if (_instance == null)
+                    {
+                        UnityEngine.Object.Destroy(go);
+                        ModLogger.Error("Failed to initialize SaveableTestSystem component");
+                        return null;
+                    }
+
                     DontDestroyOnLoad(go);
                 }
+
                 return _instance;
             }
         }
