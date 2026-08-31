@@ -591,7 +591,6 @@ namespace Behind_Bars
             TryRegister<DynamicParoleOfficerManager>("DynamicParoleOfficerManager");
             TryRegister<PlayerLocationTracker>("PlayerLocationTracker");
             TryRegister<InmateBehavior>("InmateBehavior");
-            TryRegister<NPCAttackMonitor>("NPCAttackMonitor");
             TryRegister<PrisonGuard>("PrisonGuard");
             TryRegister<PrisonInmate>("PrisonInmate");
 
@@ -749,9 +748,17 @@ namespace Behind_Bars
 
             // Note: BehindBarsUIManager (including WantedLevelUI) initialization moved to OnSceneWasLoaded to avoid initializing in menu
 
-            // Initialize SaveableTestSystem for testing (Alt + letter keybinds)
-            Systems.Testing.SaveableTestSystem.Instance.enabled = true;
-            ModLogger.Debug("SaveableTestSystem initialized - Use Alt+S/L/R/P/D/C for testing");
+            if (EnableDeveloperShortcuts)
+            {
+                // Initialize SaveableTestSystem for testing (Alt + letter keybinds).
+                // The singleton uses the IL2CPP-safe component helper for injected types.
+                var saveableTestSystem = Systems.Testing.SaveableTestSystem.Instance;
+                if (saveableTestSystem != null)
+                {
+                    saveableTestSystem.enabled = true;
+                    ModLogger.Debug("SaveableTestSystem initialized - Use Alt+S/L/R/P/D/C for testing");
+                }
+            }
 
             // Initialize preset parole officer routes
             PresetParoleOfficerRoutes.InitializePatrolPoints();

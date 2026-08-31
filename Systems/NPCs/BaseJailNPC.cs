@@ -50,11 +50,6 @@ namespace Behind_Bars.Systems.NPCs
         protected float stateStartTime = 0f;
 
         // Health and Combat
-#if !MONO
-        protected Il2CppScheduleOne.NPCs.NPCHealth npcHealth;
-#else
-        protected ScheduleOne.NPCs.NPCHealth npcHealth;
-#endif
 
         // Avatar and Animation Support
 #if !MONO
@@ -103,7 +98,6 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             InitializeAvatar();
-            SetupAttackDetection();
             InitializeNPC();
             isInitialized = true;
 
@@ -158,7 +152,6 @@ namespace Behind_Bars.Systems.NPCs
         {
             navAgent = GetComponent<NavMeshAgent>();
             npcComponent = GetComponent<NPC>();
-            npcHealth = GetComponent<NPCHealth>();
             lastPosition = transform.position;
         }
 
@@ -193,28 +186,6 @@ namespace Behind_Bars.Systems.NPCs
         protected virtual void InitializeStateHandlers()
         {
             // Intentionally empty. State dispatch uses a direct switch for IL2CPP safety.
-        }
-
-        protected virtual void SetupAttackDetection()
-        {
-            if (npcHealth != null)
-            {
-                try
-                {
-                    // Create a wrapper component to monitor health changes
-                    var attackMonitor = BBHelpers.GetComponentSafe<NPCAttackMonitor>(gameObject);
-                    if (attackMonitor == null)
-                    {
-                        attackMonitor = BBHelpers.AddComponentSafe<NPCAttackMonitor>(gameObject);
-                        attackMonitor.Initialize(this);
-                    }
-                    ModLogger.Debug($"BaseJailNPC: Attack detection setup for {gameObject.name}");
-                }
-                catch (System.Exception ex)
-                {
-                    ModLogger.Warn($"BaseJailNPC: Could not setup attack detection for {gameObject.name}: {ex.Message}");
-                }
-            }
         }
 
         /// <summary>

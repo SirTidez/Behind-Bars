@@ -97,8 +97,11 @@ namespace Behind_Bars.Systems.NPCs
                 lastRegionCheckTime = Time.time;
             }
 
-            // Check for significant movement
+#if MONO
+            // IL2CPP has no exposed subscribers for these Mono-only events. Its parole
+            // officer manager already performs a periodic spawn reconciliation pass.
             CheckSignificantMovement();
+#endif
         }
 
         private void OnDestroy()
