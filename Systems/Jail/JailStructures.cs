@@ -193,12 +193,11 @@ public class JailDoor
         // Apply rotation to hinge (on Z axis for your doors)
         doorHinge.localEulerAngles = new Vector3(0, 0, currentAngle);
 
-        // Lerp approaches its target asymptotically.  Waiting for the last tenth of a
-        // degree on a closing door leaves a visibly closed doorway in its Closing state
-        // for an extra beat, which unnecessarily stalls the officer waiting on Closed.
-        // Snap that imperceptible tail shut so the Closed event represents the point at
-        // which an escort can safely resume, while retaining the tighter opening finish.
-        float completionTolerance = currentState == DoorState.Closing ? 2f : 0.1f;
+        // Lerp approaches its target asymptotically. Waiting for the last fraction of a
+        // degree leaves a visually complete door in Opening/Closing for an extra beat and
+        // stalls an escort waiting on the completion event. Snap the imperceptible final
+        // two degrees for both directions so the event matches the visible animation.
+        const float completionTolerance = 2f;
         if (Mathf.Abs(Mathf.DeltaAngle(currentAngle, targetAngle)) < completionTolerance)
         {
             currentAngle = targetAngle;

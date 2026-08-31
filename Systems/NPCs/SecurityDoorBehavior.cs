@@ -619,6 +619,7 @@ namespace Behind_Bars.Systems.NPCs
                 $"clearance={clearanceSource})");
 
             float lastReminderTime = Time.time;
+            float nextClearanceDiagnosticTime = Time.time;
             float timeoutAt = Time.time + Mathf.Max(10f, timingConfig.escortWaitTime);
 
             // Send initial message to inmate
@@ -636,9 +637,13 @@ namespace Behind_Bars.Systems.NPCs
                     out float signedDoorwayDistance,
                     out float lateralDoorwayDistance);
 
-                ModLogger.Debug(
-                    $"SecurityDoor: Doorway clearance for {currentTransition.doorName}: " +
-                    $"signed={signedDoorwayDistance:F2}m, lateral={lateralDoorwayDistance:F2}m, crossed={crossedDoorway}");
+                if (Time.time >= nextClearanceDiagnosticTime)
+                {
+                    ModLogger.Debug(
+                        $"SecurityDoor: Doorway clearance for {currentTransition.doorName}: " +
+                        $"signed={signedDoorwayDistance:F2}m, lateral={lateralDoorwayDistance:F2}m, crossed={crossedDoorway}");
+                    nextClearanceDiagnosticTime = Time.time + 0.5f;
+                }
 
                 if (crossedDoorway)
                 {
@@ -659,7 +664,10 @@ namespace Behind_Bars.Systems.NPCs
                     lastReminderTime = Time.time;
                 }
 
-                yield return new WaitForSeconds(0.5f);
+                // Doorway clearance is a brief, active escort phase. Check every frame so
+                // the officer resumes movement immediately after the player crosses; the
+                // previous half-second polling interval made the handoff visibly stall.
+                yield return null;
             }
 
             if (!lastEscortWaitSucceeded)
@@ -766,6 +774,7 @@ namespace Behind_Bars.Systems.NPCs
                 ModLogger.Debug($"SecurityDoorBehavior: Unlocked door {currentTransition.doorName} for authorized transit");
             }
 
+            float openRequestedAt = Time.time;
             door.OpenDoor();
             ModLogger.Debug($"SecurityDoorBehavior: Requested open for {currentTransition.doorName}; awaiting completed-open event");
 
@@ -781,6 +790,12 @@ namespace Behind_Bars.Systems.NPCs
                     $"SecurityDoorBehavior: Door {currentTransition?.doorName ?? door.doorName} did not raise opened " +
                     $"before the animation watchdog (state={door.currentState}, locked={door.IsLocked()}, " +
                     $"animating={door.IsAnimating()}, hinge={(door.doorHinge != null)})");
+            }
+            else
+            {
+                ModLogger.Info(
+                    $"SecurityDoorBehavior: {currentTransition.doorName} reached operational open " +
+                    $"in {Time.time - openRequestedAt:F2}s");
             }
         }
 
