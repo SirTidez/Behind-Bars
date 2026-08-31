@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using UnityEngine;
+using UnityEngine.AI;
 using MelonLoader;
 using Behind_Bars.Helpers;
 using Behind_Bars.Systems.Jail;
@@ -107,6 +108,12 @@ namespace Behind_Bars.Systems.NPCs
         private Transform assignedSpawnPoint;
         private int currentPatrolIndex = 0;
         private float lastPatrolTime = 0f;
+        private bool hasActivePatrolDestination;
+        private bool patrolArrivalConfirmed;
+        private int patrolRetryCount;
+        private float lastPatrolProgressTime;
+        private Vector3 lastPatrolProgressPosition;
+        private bool patrolRetryLimitLogged;
         private bool isOnDuty = true;
         private Vector3 dayRoomInspectionTarget;
         private bool hasDayRoomInspectionTarget;
@@ -121,6 +128,10 @@ namespace Behind_Bars.Systems.NPCs
         private const string DayRoomPatrolSpeedControlId = "BehindBars.DayRoomPatrol";
         private const float DayRoomPatrolWaitTime = 2.5f;
         private const float DayRoomLookTurnSpeed = 360f;
+        private const float PatrolRetryDelay = 2f;
+        private const float PatrolStallTimeout = 8f;
+        private const float PatrolProgressDistance = 0.1f;
+        private const int MaxPatrolRetries = 2;
         private const string DayRoomPatrolBatonResourcePath = "Avatar/Equippables/Baton";
         private const string EmptyEquippableResourcePath = "";
 
@@ -420,6 +431,18 @@ namespace Behind_Bars.Systems.NPCs
         {
             base.HandleMovingState();
 
+            if (currentActivity == GuardActivity.Patrolling)
+            {
+                if (currentState == NPCState.Idle)
+                {
+                    HandlePatrolLogic();
+                }
+                else
+                {
+                    HandlePatrolMovementRecovery();
+                }
+            }
+
             // Check for prisoner compliance if escorting
             if (currentActivity == GuardActivity.EscortingPrisoner && currentPrisoner != null)
             {
@@ -448,6 +471,30 @@ namespace Behind_Bars.Systems.NPCs
         {
             if (!patrolInitialized || GetPatrolPointCount() == 0) return;
 
+            if (!hasActivePatrolDestination)
+            {
+                DispatchCurrentPatrolPoint(true);
+                return;
+            }
+
+            if (!patrolArrivalConfirmed)
+            {
+                if (HasReachedDestination())
+                {
+                    patrolArrivalConfirmed = true;
+                    lastPatrolTime = Time.time;
+                    patrolRetryCount = 0;
+                    patrolRetryLimitLogged = false;
+                    ModLogger.Debug($"Guard {badgeNumber} reached patrol point {currentPatrolIndex}");
+                }
+                else
+                {
+                    HandlePatrolMovementRecovery();
+                }
+
+                return;
+            }
+
             float waitTime =
 #if MONO
                 patrolRoute.waitTime;
@@ -457,7 +504,8 @@ namespace Behind_Bars.Systems.NPCs
 
             if (Time.time - lastPatrolTime >= waitTime)
             {
-                MoveToNextPatrolPoint();
+                currentPatrolIndex = (currentPatrolIndex + 1) % GetPatrolPointCount();
+                DispatchCurrentPatrolPoint(true);
             }
         }
 
@@ -468,6 +516,10 @@ namespace Behind_Bars.Systems.NPCs
             EnsureDayRoomPatrolBaton();
             currentActivity = GuardActivity.Patrolling;
             currentPatrolIndex = 0;
+            hasActivePatrolDestination = false;
+            patrolArrivalConfirmed = false;
+            patrolRetryCount = 0;
+            patrolRetryLimitLogged = false;
 
             // Play patrol start announcement
             if (dialogueController != null)
@@ -476,10 +528,10 @@ namespace Behind_Bars.Systems.NPCs
                     "Beginning patrol.", true);
             }
 
-            MoveToNextPatrolPoint();
+            DispatchCurrentPatrolPoint(true);
         }
 
-        private void MoveToNextPatrolPoint()
+        private void DispatchCurrentPatrolPoint(bool resetRetryCount)
         {
             int patrolPointCount = GetPatrolPointCount();
             if (patrolPointCount == 0) return;
@@ -488,12 +540,64 @@ namespace Behind_Bars.Systems.NPCs
             Vector3 targetPosition = GetPatrolPointPosition(targetIndex);
             SetDayRoomInspectionTarget(targetPosition, targetIndex);
             ApplyDayRoomPatrolSpeedControl();
-            MoveTo(targetPosition);
+            hasActivePatrolDestination = true;
+            patrolArrivalConfirmed = false;
+            if (resetRetryCount)
+            {
+                patrolRetryCount = 0;
+                patrolRetryLimitLogged = false;
+            }
 
-            currentPatrolIndex = (currentPatrolIndex + 1) % patrolPointCount;
-            lastPatrolTime = Time.time;
+            lastPatrolProgressPosition = transform.position;
+            lastPatrolProgressTime = Time.time;
 
-            ModLogger.Debug($"Guard {badgeNumber} patrolling to point {currentPatrolIndex}");
+            if (MoveTo(targetPosition))
+            {
+                ModLogger.Debug($"Guard {badgeNumber} patrolling to point {targetIndex}");
+            }
+            else
+            {
+                ModLogger.Warn($"Guard {badgeNumber} could not start path to patrol point {targetIndex}");
+            }
+        }
+
+        private void HandlePatrolMovementRecovery()
+        {
+            if (!hasActivePatrolDestination || patrolArrivalConfirmed || patrolRetryCount >= MaxPatrolRetries)
+            {
+                if (patrolRetryCount >= MaxPatrolRetries && !patrolRetryLimitLogged)
+                {
+                    patrolRetryLimitLogged = true;
+                    ModLogger.Warn($"Guard {badgeNumber} exhausted patrol recovery attempts at point {currentPatrolIndex}; retaining the waypoint until arrival or patrol restart");
+                }
+
+                return;
+            }
+
+            Vector3 progressOffset = transform.position - lastPatrolProgressPosition;
+            if (progressOffset.sqrMagnitude >= PatrolProgressDistance * PatrolProgressDistance)
+            {
+                lastPatrolProgressPosition = transform.position;
+                lastPatrolProgressTime = Time.time;
+                return;
+            }
+
+            bool pathFailed = navAgent != null && navAgent.enabled && navAgent.isOnNavMesh &&
+                !navAgent.pathPending && navAgent.pathStatus != NavMeshPathStatus.PathComplete;
+            bool pathStalled = Time.time - lastPatrolProgressTime >= PatrolStallTimeout;
+            if (!pathFailed && !pathStalled)
+            {
+                return;
+            }
+
+            if (Time.time - lastDestinationTime < PatrolRetryDelay)
+            {
+                return;
+            }
+
+            patrolRetryCount++;
+            ModLogger.Warn($"Guard {badgeNumber} retrying patrol point {currentPatrolIndex} after {(pathFailed ? "path failure" : "movement stall")} ({patrolRetryCount}/{MaxPatrolRetries})");
+            DispatchCurrentPatrolPoint(false);
         }
 
         public override bool MoveTo(Vector3 destination, float tolerance = -1f)
