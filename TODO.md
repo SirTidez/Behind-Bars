@@ -94,7 +94,10 @@ This document outlines all development tasks for the Behind Bars mod, organized 
   - [ ] Add plea bargain options
   - [ ] Implement court costs and fees
 
-## 👮 Probation System
+## 👮 Parole / Probation System
+
+> Status reconciled 2026-09-01. The runtime names this lifecycle parole; several
+> older checklist items below were already implemented under parole-specific systems.
 
 ### Core Implementation
 - [x] Create ProbationSystem class structure
@@ -102,26 +105,33 @@ This document outlines all development tasks for the Behind Bars mod, organized 
 - [x] Add probation duration system (10 minutes default)
 - [x] Add violation tracking system
 
-### Probation Mechanics
-- [ ] **HIGH PRIORITY**: Implement actual probation system
-  - [ ] Implement random body search mechanics
-  - [ ] Create probation violation consequences
-  - [ ] Add probation completion rewards
+### Parole Mechanics
+- [x] **HIGH PRIORITY**: Implement the core parole lifecycle
+  - [ ] Replace direct random-search inventory scans with the native concealment search UI
+  - [x] Create parole violation consequences
+  - [x] Add idempotent parole completion rewards
+  - [ ] Make roaming parole officers respond to witnessed crimes like law enforcement
 
-### Probation Monitoring
-- [ ] **MEDIUM PRIORITY**: Enhance probation system
-  - [ ] Add probation violation detection
-  - [ ] Implement probation completion tracking
-  - [ ] Create probation extension system
-  - [ ] Add probation violation consequences
+### Parole Monitoring
+- [x] **MEDIUM PRIORITY**: Establish parole monitoring foundations
+  - [x] Add parole violation detection
+  - [x] Implement parole completion tracking
+  - [x] Create parole extension system
+  - [x] Add parole violation consequences
+  - [ ] Surface the next check-in window and outstanding fees consistently in UI/dialogue
+  - [ ] Replace hidden instant home visits with announced visit windows
 
-### Probation Activities
-- [ ] **LOW PRIORITY**: Add probation requirements
+### Parole Activities
+- [ ] **LOW PRIORITY**: Complete parole requirements
   - [ ] Implement community service
-  - [ ] Add drug testing requirements
-  - [ ] Create curfew system
-  - [ ] Implement employment requirements
+  - [ ] Finish time-windowed drug-use tracking and random check-in UAs
+    - [x] Add saveable drug-use records and native-calendar expiration foundation
+    - [ ] Record weed, methamphetamine, cocaine, and shroom consumption
+    - [ ] Evaluate non-expired records during selected check-ins
+  - [x] Create curfew system
+  - [x] Implement employment condition foundation
   - [ ] Add counseling sessions
+  - [ ] Add earned early discharge evaluation
 
 ## 🔧 Technical Infrastructure
 

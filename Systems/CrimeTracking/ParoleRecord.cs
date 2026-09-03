@@ -56,6 +56,21 @@ namespace Behind_Bars.Systems.CrimeTracking
         [SaveableField("complianceScore")]
         private float complianceScore; // Compliance score (0-100)
 
+        // Choice-driven supervision outcomes are independent of the mechanical
+        // violation/check-in totals used by CalculateComplianceScore. Persist the
+        // adjustment so dialogue answers still matter after the next recalculation.
+        [SaveableField("dialogueComplianceAdjustment")]
+        private float dialogueComplianceAdjustment;
+
+        // The initial supervising-officer interview is a one-time assessment for
+        // this parole term. Its risk modifier feeds the live LSI calculation while
+        // the record remains current and cannot be farmed by reopening dialogue.
+        [SaveableField("initialInterviewCompleted")]
+        private bool initialInterviewCompleted;
+
+        [SaveableField("initialInterviewRiskModifier")]
+        private int initialInterviewRiskModifier;
+
         [SaveableField("lastInteractionGameTime")]
         private float lastInteractionGameTime; // Last interaction with officer (game minutes)
 
@@ -84,6 +99,9 @@ namespace Behind_Bars.Systems.CrimeTracking
 
         [SaveableField("scheduledCheckInReminderSent")]
         private bool scheduledCheckInReminderSent;
+
+        [SaveableField("scheduledCheckInInstructionSent")]
+        private bool scheduledCheckInInstructionSent;
 
         // Warrant enforcement is runtime-driven, but the warrant itself is a parole outcome
         // and must be restored when the player reloads before being arrested.
@@ -117,6 +135,12 @@ namespace Behind_Bars.Systems.CrimeTracking
         [SaveableField("nextFeeGameTime")]
         private float nextFeeGameTime;
 
+        // Persist reward ownership on the term itself. Archived records retain this
+        // marker, preventing a repeated completion callback from paying the same term
+        // more than once.
+        [SaveableField("completionRewardsGranted")]
+        private bool completionRewardsGranted;
+
         // Non-Serialized fields
         [NonSerialized]
         private Player player;
@@ -130,6 +154,9 @@ namespace Behind_Bars.Systems.CrimeTracking
             this.checkInCount = 0;
             this.missedCheckIns = 0;
             this.complianceScore = 100f; // Start with perfect compliance
+            this.dialogueComplianceAdjustment = 0f;
+            this.initialInterviewCompleted = false;
+            this.initialInterviewRiskModifier = 0;
             this.lastCheckInGameTime = 0f;
             this.lastInteractionGameTime = 0f;
             this.officerRapport = new OfficerRapportRecord();
@@ -139,6 +166,7 @@ namespace Behind_Bars.Systems.CrimeTracking
             this.scheduledCheckInStartMinute = -1;
             this.scheduledCheckInEndMinute = -1;
             this.scheduledCheckInReminderSent = false;
+            this.scheduledCheckInInstructionSent = false;
             this.activeAgentWarrant = false;
             this.consecutiveHighComplianceDays = 0;
             this.lsiStepDownCount = 0;
@@ -159,6 +187,9 @@ namespace Behind_Bars.Systems.CrimeTracking
             this.checkInCount = 0;
             this.missedCheckIns = 0;
             this.complianceScore = 100f; // Start with perfect compliance
+            this.dialogueComplianceAdjustment = 0f;
+            this.initialInterviewCompleted = false;
+            this.initialInterviewRiskModifier = 0;
             this.lastCheckInGameTime = 0f;
             this.lastInteractionGameTime = 0f;
             this.officerRapport = new OfficerRapportRecord();
@@ -168,6 +199,7 @@ namespace Behind_Bars.Systems.CrimeTracking
             this.scheduledCheckInStartMinute = -1;
             this.scheduledCheckInEndMinute = -1;
             this.scheduledCheckInReminderSent = false;
+            this.scheduledCheckInInstructionSent = false;
             this.activeAgentWarrant = false;
             this.consecutiveHighComplianceDays = 0;
             this.lsiStepDownCount = 0;
@@ -184,6 +216,51 @@ namespace Behind_Bars.Systems.CrimeTracking
         public void SetPlayer(Player player)
         {
             this.player = player;
+        }
+
+        /// <summary>
+        /// Gets whether successful-completion rewards have already been claimed for this term.
+        /// </summary>
+        public bool WereCompletionRewardsGranted() => completionRewardsGranted;
+
+        /// <summary>
+        /// Claims successful-completion rewards for this term exactly once.
+        /// </summary>
+        /// <returns>True for the first claim; false after the term has already been rewarded.</returns>
+        public bool TryClaimCompletionRewards()
+        {
+            if (completionRewardsGranted)
+            {
+                return false;
+            }
+
+            completionRewardsGranted = true;
+            return true;
+        }
+
+        /// <summary>Gets whether the initial supervising-officer interview was scored for this term.</summary>
+        public bool WasInitialInterviewCompleted() => initialInterviewCompleted;
+
+        /// <summary>Gets the persisted risk points contributed by the initial interview.</summary>
+        public int GetInitialInterviewRiskModifier() => initialInterviewRiskModifier;
+
+        /// <summary>
+        /// Applies the initial interview outcome exactly once. Risk points are
+        /// bounded so dialogue can influence supervision without overwhelming
+        /// the criminal-history factors in the LSI model.
+        /// </summary>
+        public bool TryApplyInitialInterviewOutcome(int riskModifier, float complianceDelta, float rapportDelta)
+        {
+            if (initialInterviewCompleted)
+            {
+                return false;
+            }
+
+            initialInterviewCompleted = true;
+            initialInterviewRiskModifier = Math.Max(-5, Math.Min(riskModifier, 10));
+            AdjustComplianceScore(complianceDelta);
+            AdjustRapport(rapportDelta);
+            return true;
         }
 
         #region Parole Status Methods
@@ -621,6 +698,10 @@ namespace Behind_Bars.Systems.CrimeTracking
             // Add points for check-ins
             score += checkInCount * 2f; // +2 points per check-in
 
+            // Conversation choices provide a bounded persistent adjustment rather
+            // than mutating the derived score that this method would overwrite.
+            score += dialogueComplianceAdjustment;
+
             // Ensure score stays in valid range
             complianceScore = Mathf.Clamp(score, 0f, 100f);
             return complianceScore;
@@ -643,7 +724,9 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// <param name="newScore">New compliance score (will be clamped to 0-100)</param>
         public void UpdateComplianceScore(float newScore)
         {
-            complianceScore = Mathf.Clamp(newScore, 0f, 100f);
+            float baseScore = CalculateComplianceScore() - dialogueComplianceAdjustment;
+            dialogueComplianceAdjustment = Mathf.Clamp(newScore - baseScore, -50f, 25f);
+            complianceScore = Mathf.Clamp(baseScore + dialogueComplianceAdjustment, 0f, 100f);
             ModLogger.Debug($"Updated compliance score for {player.name} to {complianceScore}");
             // Game's save system handles saving automatically
         }
@@ -654,7 +737,8 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// <param name="delta">Amount to adjust (positive or negative)</param>
         public void AdjustComplianceScore(float delta)
         {
-            complianceScore = Mathf.Clamp(complianceScore + delta, 0f, 100f);
+            dialogueComplianceAdjustment = Mathf.Clamp(dialogueComplianceAdjustment + delta, -50f, 25f);
+            CalculateComplianceScore();
             ModLogger.Debug($"Adjusted compliance score for {player.name} by {delta} to {complianceScore}");
             // Game's save system handles saving automatically
         }
@@ -668,8 +752,11 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// </summary>
         public void RecordInteraction()
         {
-            float currentGameTime = GameTimeManager.Instance.GetCurrentGameTimeInMinutes();
-            lastInteractionGameTime = currentGameTime;
+            var gameTimeManager = GameTimeManager.Instance;
+            if (gameTimeManager != null)
+            {
+                lastInteractionGameTime = gameTimeManager.GetCurrentGameTimeInMinutes();
+            }
             // Game's save system handles saving automatically
         }
 
@@ -843,12 +930,13 @@ namespace Behind_Bars.Systems.CrimeTracking
         /// <param name="endMinuteOfDay">Receives the inclusive end minute within the in-game day.</param>
         /// <param name="reminderSent">Receives whether the reminder for this window was already emitted.</param>
         /// <returns>True when the day and ordered minute bounds describe an active schedule.</returns>
-        public bool TryGetDailyCheckInSchedule(out int dayIndex, out int startMinuteOfDay, out int endMinuteOfDay, out bool reminderSent)
+        public bool TryGetDailyCheckInSchedule(out int dayIndex, out int startMinuteOfDay, out int endMinuteOfDay, out bool reminderSent, out bool instructionSent)
         {
             dayIndex = scheduledCheckInDay;
             startMinuteOfDay = scheduledCheckInStartMinute;
             endMinuteOfDay = scheduledCheckInEndMinute;
             reminderSent = scheduledCheckInReminderSent;
+            instructionSent = scheduledCheckInInstructionSent;
             return dayIndex >= 0 && startMinuteOfDay >= 0 && endMinuteOfDay >= startMinuteOfDay;
         }
 
@@ -864,6 +952,7 @@ namespace Behind_Bars.Systems.CrimeTracking
             scheduledCheckInStartMinute = startMinuteOfDay;
             scheduledCheckInEndMinute = endMinuteOfDay;
             scheduledCheckInReminderSent = false;
+            scheduledCheckInInstructionSent = false;
         }
 
         /// <summary>
@@ -872,6 +961,12 @@ namespace Behind_Bars.Systems.CrimeTracking
         public void MarkDailyCheckInReminderSent()
         {
             scheduledCheckInReminderSent = true;
+        }
+
+        /// <summary>Marks the appointment-day instruction as sent for the current window.</summary>
+        public void MarkDailyCheckInInstructionSent()
+        {
+            scheduledCheckInInstructionSent = true;
         }
 
         /// <summary>
@@ -883,6 +978,7 @@ namespace Behind_Bars.Systems.CrimeTracking
             scheduledCheckInStartMinute = -1;
             scheduledCheckInEndMinute = -1;
             scheduledCheckInReminderSent = false;
+            scheduledCheckInInstructionSent = false;
         }
 
         /// <summary>

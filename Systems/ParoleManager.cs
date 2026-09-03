@@ -44,6 +44,8 @@ namespace Behind_Bars.Systems
             public int WindowEndMinuteOfDay { get; set; }
             /// <summary>Whether the one-hour reminder has already been sent.</summary>
             public bool ReminderSent { get; set; }
+            /// <summary>Whether the appointment-day instruction has already been sent.</summary>
+            public bool InstructionSent { get; set; }
             /// <summary>Whether this transient requirement has been completed by the player.</summary>
             public bool Completed { get; set; }
         }
@@ -243,6 +245,7 @@ namespace Behind_Bars.Systems
 
                 ProcessExpiredDailyCheckIn(record.Player, currentDayIndex, currentMinuteOfDay);
                 ScheduleDailyCheckIn(record.Player, currentDayIndex, currentMinuteOfDay);
+                ProcessDailyCheckInInstruction(record.Player, currentDayIndex);
             }
         }
 
@@ -304,13 +307,42 @@ namespace Behind_Bars.Systems
                 WindowStartMinuteOfDay = windowStartMinuteOfDay,
                 WindowEndMinuteOfDay = windowEndMinuteOfDay,
                 ReminderSent = false,
+                InstructionSent = false,
                 Completed = false
             };
             dailyCheckInScheduledDay[playerKey] = currentDayIndex;
             PersistDailyCheckInRequirement(player, dailyCheckInRequirements[playerKey]);
 
-            SendDailyCheckInInstructionText(player, windowStartMinuteOfDay, windowEndMinuteOfDay);
             ModLogger.Info($"ParoleManager: Scheduled daily check-in for {player.name} (day index {currentDayIndex}, {FormatMinuteOfDay(windowStartMinuteOfDay)} - {FormatMinuteOfDay(windowEndMinuteOfDay)})");
+        }
+
+        /// <summary>Sends the appointment instruction no earlier than its scheduled native day.</summary>
+        internal void ProcessDailyCheckInInstruction(Player player, int currentDayIndex)
+        {
+            if (player == null)
+            {
+                return;
+            }
+
+            string playerKey = GetPlayerRuntimeKey(player);
+            if (!dailyCheckInRequirements.TryGetValue(playerKey, out var requirement) || requirement == null)
+            {
+                if (!TryRestorePersistedDailyCheckIn(player, out requirement))
+                {
+                    return;
+                }
+
+                dailyCheckInRequirements[playerKey] = requirement;
+            }
+
+            if (requirement.Completed || requirement.InstructionSent || currentDayIndex < requirement.DayIndex)
+            {
+                return;
+            }
+
+            requirement.InstructionSent = true;
+            PersistDailyCheckInRequirement(player, requirement);
+            SendDailyCheckInInstructionText(player, requirement.WindowStartMinuteOfDay, requirement.WindowEndMinuteOfDay);
         }
 
         /// <summary>
@@ -575,7 +607,8 @@ namespace Behind_Bars.Systems
                     out int dayIndex,
                     out int startMinuteOfDay,
                     out int endMinuteOfDay,
-                    out bool reminderSent))
+                    out bool reminderSent,
+                    out bool instructionSent))
             {
                 return false;
             }
@@ -586,6 +619,7 @@ namespace Behind_Bars.Systems
                 WindowStartMinuteOfDay = startMinuteOfDay,
                 WindowEndMinuteOfDay = endMinuteOfDay,
                 ReminderSent = reminderSent,
+                InstructionSent = instructionSent,
                 Completed = false
             };
             return true;
@@ -621,6 +655,10 @@ namespace Behind_Bars.Systems
             if (requirement.ReminderSent)
             {
                 paroleRecord.MarkDailyCheckInReminderSent();
+            }
+            if (requirement.InstructionSent)
+            {
+                paroleRecord.MarkDailyCheckInInstructionSent();
             }
 
             Core.ResolveRapSheetManager().MarkRapSheetChanged(player);

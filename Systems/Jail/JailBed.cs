@@ -41,6 +41,10 @@ public class JailBed : MonoBehaviour
     private NetworkObject networkObject;
     
     private bool isInitialized = false;
+    // Prevent the interaction that completes bed construction from carrying through
+    // to the newly attached sleep listener during the same input press.
+    private float sleepInteractionEnabledTime;
+    private const float SleepInteractionArmDelay = 0.25f;
     
     void Start()
     {
@@ -126,6 +130,7 @@ public class JailBed : MonoBehaviour
         }
         
         isInitialized = true;
+        sleepInteractionEnabledTime = Time.unscaledTime + SleepInteractionArmDelay;
         ModLogger.Info($"Initialized jail bed: {bedName} (Top Bunk: {isTopBunk})");
     }
     
@@ -154,10 +159,24 @@ public class JailBed : MonoBehaviour
     {
         try
         {
+            if (Time.unscaledTime < sleepInteractionEnabledTime)
+            {
+                ModLogger.Debug($"Ignored carried-through setup interaction for {bedName}");
+                return;
+            }
+
             var player = Player.Local;
             if (player == null)
             {
                 ModLogger.Warn("Local player not found - cannot start sleep");
+                return;
+            }
+
+            if (!CanSleep(out string noSleepReason))
+            {
+                interactableObject.SetInteractableState(InteractableObject.EInteractableState.Invalid);
+                interactableObject.SetMessage(noSleepReason);
+                ModLogger.Info($"Blocked out-of-hours sleep interaction for {bedName}: {noSleepReason}");
                 return;
             }
             
@@ -168,11 +187,12 @@ public class JailBed : MonoBehaviour
                 ModLogger.Debug("Jail bed has no NetworkObject; opening the native sleep menu without a bed binding");
             }
 
-            // Open Schedule I's current native sleep menu.
+            // Match the native Bed interaction: open the menu and let the player press
+            // its Sleep button. Calling SleepButtonPressed here skipped the normal UI/input
+            // handoff and could leave DailySummary open without cursor ownership.
             try
             {
                 Singleton<SleepCanvas>.Instance.OpenMenu();
-                Singleton<SleepCanvas>.Instance.SleepButtonPressed();
                 ModLogger.Info($"Opened sleep canvas for {bedName}");
             }
             catch (System.Exception ex)
@@ -188,51 +208,24 @@ public class JailBed : MonoBehaviour
         }
     }
     
-    // CanSleep method for jail beds - allow sleep at 6PM (18:00) or later, or before 7AM (end of day cycle)
-    // Day cycle is 7am-4am, so allow sleep from 6PM to 7AM next day
+    // Match Schedule I's native Bed eligibility window exactly: 18:00 through 04:00.
     private bool CanSleep(out string noSleepReason)
     {
         noSleepReason = string.Empty;
-        
-        // Get current game hour (0-23)
-        int currentHour = GameTimeManager.Instance.GetCurrentGameHour();
-        
-        // Get current game minute for more accurate logging
-        int currentMinute = GameTimeManager.Instance.GetCurrentGameMinute();
-        
-        // Allow sleep if:
-        // - It's 6PM (18:00) or later (evening/night)
-        // - OR it's before 7AM (0-6) (early morning - end of day cycle)
-        // This covers the full day cycle from 7am to 4am next day
-        bool canSleep = currentHour >= 18 || currentHour < 7;
-        
-        if (canSleep)
+
+        if (GameManager.IS_TUTORIAL)
         {
-            // Format time for display (handle 12-hour format)
-            string timeDisplay = FormatTimeForDisplay(currentHour, currentMinute);
-            ModLogger.Debug($"[JailBed] Sleep check - Current game time: {timeDisplay} ({currentHour:00}:{currentMinute:00}) - Sleep ALLOWED (after 6PM or before 7AM)");
             return true;
         }
-        else
+
+        var timeManager = NetworkSingleton<TimeManager>.Instance;
+        if (timeManager == null || !timeManager.IsCurrentTimeWithinRange(1800, 400))
         {
-            // Format time for display
-            string timeDisplay = FormatTimeForDisplay(currentHour, currentMinute);
-            noSleepReason = $"Cannot sleep until 6PM (current time: {timeDisplay})";
-            ModLogger.Debug($"[JailBed] Sleep check - Current game time: {timeDisplay} ({currentHour:00}:{currentMinute:00}) - Sleep NOT ALLOWED (between 7AM and 6PM)");
+            noSleepReason = "Can't sleep before " + TimeManager.Get12HourTime(1800f);
             return false;
         }
-    }
-    
-    /// <summary>
-    /// Format game hour and minute into a readable time string
-    /// </summary>
-    private string FormatTimeForDisplay(int hour, int minute)
-    {
-        // Convert to 12-hour format for better readability
-        int displayHour = hour % 12;
-        if (displayHour == 0) displayHour = 12;
-        string period = hour < 12 ? "AM" : "PM";
-        return $"{displayHour}:{minute:00} {period}";
+
+        return true;
     }
     
     void OnValidate()

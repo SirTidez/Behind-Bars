@@ -39,6 +39,12 @@ namespace Behind_Bars.Systems.NPCs
         private float minMoveDistance = 0.5f;
         /// <summary>Maximum local candidate displacement used by temporary wandering, in world units.</summary>
         private float maxMoveDistance = 2.5f;
+        /// <summary>Normal pace used for a short scheduled return to the assigned cell.</summary>
+        private const float CellReturnWalkSpeed = 1.75f;
+        /// <summary>Urgent pace used when the complete cell-return route is too long to walk comfortably.</summary>
+        private const float CellReturnRunSpeed = 3f;
+        /// <summary>Route length above which an inmate runs so the 30-real-second recall remains generous.</summary>
+        private const float CellReturnRunDistance = 35f;
 
         // Cell ownership/home bounds. These are intentionally not used to
         // constrain temporary wandering: the prison NavMesh does not align
@@ -57,15 +63,19 @@ namespace Behind_Bars.Systems.NPCs
         private NavMeshPath reusablePath;
 #if !MONO
         /// <summary>IL2CPP-compatible reusable corner buffer for path completeness checks.</summary>
-        private readonly Il2CppStructArray<Vector3> reusablePathCorners = new Il2CppStructArray<Vector3>(2);
+        private readonly Il2CppStructArray<Vector3> reusablePathCorners = new Il2CppStructArray<Vector3>(64);
 #else
         /// <summary>MONO reusable corner buffer for path completeness checks.</summary>
-        private readonly Vector3[] reusablePathCorners = new Vector3[2];
+        private readonly Vector3[] reusablePathCorners = new Vector3[64];
 #endif
         /// <summary>Destination for which <see cref="reusablePath"/> was most recently validated.</summary>
         private Vector3 validatedPathDestination;
         /// <summary>True only between successful path validation and the matching path assignment.</summary>
         private bool hasValidatedPath;
+        /// <summary>Length of the most recently validated complete path, including all copied corners.</summary>
+        private float validatedPathLength;
+        /// <summary>Distance-based pace retained for the entire scheduled return, including any repath.</summary>
+        private float scheduledCellReturnSpeed = CellReturnWalkSpeed;
         /// <summary>Whether the scheduler currently owns an active movement request.</summary>
         private bool isMoving = false;
         /// <summary>Next Unity-time at which a non-moving inmate may select a destination.</summary>
@@ -271,6 +281,7 @@ namespace Behind_Bars.Systems.NPCs
                     if (!isMoving && TryGetCellReturnDestination(out Vector3 returnDestination) &&
                         TrySetValidatedWanderDestination(returnDestination))
                     {
+                        navAgent.speed = scheduledCellReturnSpeed;
                         isMoving = true;
                         currentDestination = returnDestination;
                     }
@@ -538,6 +549,7 @@ namespace Behind_Bars.Systems.NPCs
         private bool HasCompletePathTo(Vector3 destination)
         {
             hasValidatedPath = false;
+            validatedPathLength = 0f;
             if (!EnsureAgentOnNavMesh())
             {
                 return false;
@@ -549,10 +561,20 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             if (!navAgent.CalculatePath(destination, reusablePath) ||
-                reusablePath.status != NavMeshPathStatus.PathComplete ||
-                reusablePath.GetCornersNonAlloc(reusablePathCorners) < 2)
+                reusablePath.status != NavMeshPathStatus.PathComplete)
             {
                 return false;
+            }
+
+            int cornerCount = reusablePath.GetCornersNonAlloc(reusablePathCorners);
+            if (cornerCount < 2)
+            {
+                return false;
+            }
+
+            for (int index = 1; index < cornerCount; index++)
+            {
+                validatedPathLength += Vector3.Distance(reusablePathCorners[index - 1], reusablePathCorners[index]);
             }
 
             validatedPathDestination = destination;
@@ -893,17 +915,47 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             scheduledActivity = ScheduledActivity.Recreation;
-            if (navAgent != null && navAgent.enabled && navAgent.isOnNavMesh)
+            scheduledCellReturnSpeed = CellReturnWalkSpeed;
+            if (navAgent != null && EnsureAgentOnNavMesh())
             {
+                navAgent.speed = moveSpeed;
                 navAgent.ResetPath();
             }
             isMoving = false;
             nextMoveTime = Time.time + UnityEngine.Random.Range(0.2f, 1.5f);
         }
 
-        /// <summary>Clears recreation anchors and schedules a complete-path return to the assigned cell.</summary>
+        /// <summary>
+        /// Clears recreation anchors and schedules a complete-path return to the assigned cell. The complete
+        /// route length selects a walk for nearby cells or a run for distant cells. Repeated lifecycle commands
+        /// preserve an active return path instead of restarting the inmate at the schedule boundary.
+        /// </summary>
         public void ReturnToAssignedCell()
         {
+            if (IsAtAssignedCell())
+            {
+                scheduledActivity = ScheduledActivity.Confined;
+                scheduledRecreationAnchors.Clear();
+                if (navAgent != null && navAgent.enabled && navAgent.isOnNavMesh)
+                {
+                    navAgent.ResetPath();
+                    navAgent.speed = moveSpeed;
+                }
+                isMoving = false;
+                nextMoveTime = float.PositiveInfinity;
+                return;
+            }
+
+            // The warning and the exact tier boundary both issue a return command. Do
+            // not erase a valid route at the boundary; doing so costs the inmate the
+            // progress already made during the 30-real-second warning window.
+            if (scheduledActivity == ScheduledActivity.ReturningToCell && isMoving &&
+                navAgent != null && navAgent.enabled && navAgent.isOnNavMesh && navAgent.hasPath)
+            {
+                navAgent.speed = scheduledCellReturnSpeed;
+                return;
+            }
+
             scheduledActivity = ScheduledActivity.ReturningToCell;
             scheduledRecreationAnchors.Clear();
             if (navAgent != null && navAgent.enabled && navAgent.isOnNavMesh)
@@ -912,6 +964,29 @@ namespace Behind_Bars.Systems.NPCs
             }
             isMoving = false;
             nextMoveTime = Time.time;
+
+            if (TryGetCellReturnDestination(out _))
+            {
+                scheduledCellReturnSpeed = validatedPathLength > CellReturnRunDistance
+                    ? CellReturnRunSpeed
+                    : CellReturnWalkSpeed;
+                if (navAgent != null)
+                {
+                    navAgent.speed = scheduledCellReturnSpeed;
+                }
+
+                ModLogger.Info(
+                    $"[JAIL LIFECYCLE] Inmate {gameObject.name} returning to cell {assignedCellNumber}: " +
+                    $"route {validatedPathLength:F1}m, {(scheduledCellReturnSpeed == CellReturnRunSpeed ? "run" : "walk")} pace {scheduledCellReturnSpeed:F2}m/s");
+            }
+            else
+            {
+                scheduledCellReturnSpeed = CellReturnRunSpeed;
+                if (navAgent != null)
+                {
+                    navAgent.speed = scheduledCellReturnSpeed;
+                }
+            }
         }
 
         /// <summary>Returns the assigned jail-cell index, or -1 when no assignment is known.</summary>
@@ -926,14 +1001,165 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         public bool IsConfinedToAssignedCell()
         {
-            if (scheduledActivity != ScheduledActivity.Confined)
+            // Physical custody is authoritative at the boundary. The movement loop only
+            // samples arrival twice per second, so requiring its state transition here can
+            // falsely punish an inmate who has already crossed into the assigned cell.
+            return IsAtAssignedCell();
+        }
+
+        /// <summary>Returns the native NPC root used as an emergency-combat target.</summary>
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
+        public GameObject GetEmergencyTarget()
+        {
+            return npcComponent != null ? npcComponent.gameObject : gameObject;
+        }
+
+        /// <summary>Reports whether native combat has knocked out or killed this inmate.</summary>
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
+        public bool IsSubduedByOfficers()
+        {
+            return npcComponent?.Health != null &&
+                   (npcComponent.Health.IsKnockedOut || npcComponent.Health.IsDead);
+        }
+
+        /// <summary>
+        /// Completes the explicitly authorized post-subdual transfer through the inmate's
+        /// canonical behavior, revives native health, and leaves the inmate confined.
+        /// </summary>
+        /// <returns>True when a usable assigned-cell NavMesh destination was reached.</returns>
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
+        public bool SecureInAssignedCellAfterSubdual()
+        {
+            return SecureInAssignedCell(reviveAfterSubdual: true, "after native officer subdual");
+        }
+
+        /// <summary>
+        /// Recovers an autonomous inmate whose NavMesh return did not complete before the
+        /// final schedule deadline. This is owned by the canonical inmate behavior and does
+        /// not create an officer-combat incident or hold the jail clock.
+        /// </summary>
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
+        public bool SecureInAssignedCellForScheduleRecovery(string reason)
+        {
+            return SecureInAssignedCell(reviveAfterSubdual: false, $"for schedule recovery ({reason})");
+        }
+
+#if !MONO
+        [Il2CppInterop.Runtime.Attributes.HideFromIl2Cpp]
+#endif
+        private bool SecureInAssignedCell(bool reviveAfterSubdual, string logContext)
+        {
+            var cell = Core.JailController?.GetCellByIndex(assignedCellNumber);
+            if (cell == null)
             {
                 return false;
             }
 
+            Transform destination = null;
+            if (cell.spawnPoints != null)
+            {
+                for (int index = 0; index < cell.spawnPoints.Count; index++)
+                {
+                    if (cell.spawnPoints[index] != null)
+                    {
+                        destination = cell.spawnPoints[index];
+                        break;
+                    }
+                }
+            }
+            destination = destination ?? cell.cellBounds ?? cell.cellTransform;
+            if (destination == null)
+            {
+                return false;
+            }
+
+            bool placedOnNavMesh = false;
+            if (navAgent != null &&
+                NavMesh.SamplePosition(destination.position, out NavMeshHit hit, 4f, NavMesh.AllAreas))
+            {
+                navAgent.enabled = true;
+                placedOnNavMesh = navAgent.Warp(hit.position);
+            }
+
+            if (!placedOnNavMesh)
+            {
+                // The authored cell point remains a safe custody destination when a
+                // transient NavMesh/door state prevents Warp. Disable the agent before
+                // placement; its normal scheduler will recover it on the next recreation.
+                if (navAgent != null)
+                {
+                    navAgent.enabled = false;
+                }
+                transform.position = destination.position;
+            }
+
+            transform.rotation = Quaternion.LookRotation(Vector3.left, Vector3.up);
+            if (reviveAfterSubdual && npcComponent?.Health != null &&
+                (npcComponent.Health.IsKnockedOut || npcComponent.Health.IsDead))
+            {
+                npcComponent.Health.Revive();
+            }
+
+            scheduledActivity = ScheduledActivity.Confined;
+            scheduledRecreationAnchors.Clear();
+            if (navAgent != null && navAgent.enabled && navAgent.isOnNavMesh)
+            {
+                navAgent.ResetPath();
+                navAgent.speed = moveSpeed;
+            }
+            isMoving = false;
+            nextMoveTime = float.PositiveInfinity;
+            Core.JailController?.doorController?.SecureJailCellDoor(assignedCellNumber);
+            ModLogger.Info(
+                $"[JAIL LIFECYCLE] Inmate {gameObject.name} transferred to cell {assignedCellNumber} {logContext}; " +
+                $"placement={(placedOnNavMesh ? "NavMesh warp" : "authored cell fallback")}");
+            return true;
+        }
+
+        /// <summary>Checks physical proximity to the assigned cell independently of scheduler state.</summary>
+        private bool IsAtAssignedCell()
+        {
             var cell = Core.JailController?.GetCellByIndex(assignedCellNumber);
             Transform home = cell?.cellBounds ?? cell?.cellTransform;
-            return home != null && Vector3.Distance(transform.position, home.position) <= 3.5f;
+            if (home == null)
+            {
+                return false;
+            }
+
+            BoxCollider boundsCollider = home.GetComponent<BoxCollider>();
+            if (boundsCollider != null)
+            {
+                Bounds bounds = boundsCollider.bounds;
+                bounds.Expand(0.2f);
+                if (bounds.Contains(transform.position))
+                {
+                    return true;
+                }
+            }
+
+            // Some completed bunk spawn points sit just outside the authored cellBounds
+            // collider. They are still canonical custody positions and must count as home.
+            if (cell?.spawnPoints != null)
+            {
+                for (int index = 0; index < cell.spawnPoints.Count; index++)
+                {
+                    Transform spawnPoint = cell.spawnPoints[index];
+                    if (spawnPoint != null && Vector3.Distance(transform.position, spawnPoint.position) <= 2.5f)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return Vector3.Distance(transform.position, home.position) <= 3.5f;
         }
     }
 }

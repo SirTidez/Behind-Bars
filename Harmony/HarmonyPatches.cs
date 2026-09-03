@@ -400,6 +400,12 @@ namespace Behind_Bars.Harmony
         {
             return GuardAssaultLockdownManager.TryBeginJailStaffAssault(guard, player, _crimeDetectionSystem);
         }
+
+        /// <summary>Routes a confirmed recreation-time inmate assault into jail-owned discipline.</summary>
+        public static bool TryBeginJailInmateAssault(InmateBehavior inmate, Player player)
+        {
+            return GuardAssaultLockdownManager.TryBeginInmateAssault(player, inmate);
+        }
         
         /// <summary>
         /// Restore UI interactions without teleporting (used during jail processing)
@@ -662,7 +668,7 @@ namespace Behind_Bars.Harmony
                 return true;
             }
 
-            ModLogger.Info("[Crime Tracking] Deferred native civilian Assault escalation until a witness calls police");
+            ModLogger.Info("[Crime Tracking] Suppressed immediate native Assault insertion for a mod-owned response");
             return false;
         }
 
@@ -858,6 +864,18 @@ namespace Behind_Bars.Harmony
                 VictimId = victim.ID ?? string.Empty,
                 ExpiresAt = Time.time + PENDING_CIVILIAN_ASSAULT_SECONDS
             };
+        }
+
+        /// <summary>Clears an unconsumed marker after its exact damage event is handled in jail.</summary>
+        private static void ClearPendingCivilianAssault(NPC victim, Player player)
+        {
+            var pending = _pendingCivilianAssault;
+            if (pending != null && victim != null && player != null &&
+                string.Equals(pending.PlayerKey, GetPlayerCrimeKey(player), StringComparison.Ordinal) &&
+                string.Equals(pending.VictimId, victim.ID ?? string.Empty, StringComparison.Ordinal))
+            {
+                _pendingCivilianAssault = null;
+            }
         }
 
         /// <summary>
@@ -1725,6 +1743,7 @@ namespace Behind_Bars.Harmony
                     return true;
 
                 var guard = Behind_Bars.Helpers.Helpers.GetComponentSafe<GuardBehavior>(__instance.npc.gameObject);
+                var inmate = Behind_Bars.Helpers.Helpers.GetComponentSafe<InmateBehavior>(__instance.npc.gameObject);
                 float distanceToPlayer = Vector3.Distance(__instance.npc.transform.position, localPlayer.transform.position);
                 if (Core.ResolveJailTimeTracker().IsInJail(localPlayer) &&
                     guard != null &&
@@ -1733,6 +1752,21 @@ namespace Behind_Bars.Harmony
                 {
                     ModLogger.Info($"[LOCKDOWN] Suppressed native damage/wanted path for in-jail assault on {__instance.npc.name}");
                     return false;
+                }
+
+                if (Core.ResolveJailTimeTracker().IsInJail(localPlayer) && inmate != null &&
+                    damage > 0f && distanceToPlayer <= 5f)
+                {
+                    JailLifecycleManager lifecycle = Core.JailController == null
+                        ? null
+                        : Behind_Bars.Helpers.Helpers.GetComponentSafe<JailLifecycleManager>(Core.JailController.gameObject);
+                    if (lifecycle?.IsPlayerOnActiveRecreation(localPlayer) == true)
+                    {
+                        // Keep the native damage and hit reaction, but correlate the
+                        // immediate generic Assault insertion so institutional discipline
+                        // owns this event instead of the street wanted system.
+                        TrackPendingCivilianAssault(__instance.npc, localPlayer);
+                    }
                 }
 
                 // Native police submit the authoritative generic Assault crime. Leave
@@ -1832,6 +1866,17 @@ namespace Behind_Bars.Harmony
 
                     if (!playerAttacked)
                     {
+                        return;
+                    }
+
+                    var inmate = Behind_Bars.Helpers.Helpers.GetComponentSafe<InmateBehavior>(__instance.npc.gameObject);
+                    if (inmate != null && TryBeginJailInmateAssault(inmate, localPlayer))
+                    {
+                        _assaultCooldown[npcId] = currentTime;
+                        ClearPendingCivilianAssault(__instance.npc, localPlayer);
+                        ModLogger.Warn(
+                            $"[SEGREGATION] Confirmed local-player damage to inmate {__instance.npc.name}; " +
+                            "street crime escalation was replaced by jail discipline");
                         return;
                     }
 

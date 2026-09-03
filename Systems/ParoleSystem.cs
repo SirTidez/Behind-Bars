@@ -1085,6 +1085,7 @@ namespace Behind_Bars.Systems
                     int currentDayIndex = GetCurrentDayIndexInternal();
                     int currentMinuteOfDay = GetCurrentMinuteOfDayInternal();
                     var paroleManager = Core.ResolveParoleManager();
+                    paroleManager.ProcessDailyCheckInInstruction(record.Player, currentDayIndex);
                     paroleManager.ProcessUpcomingCheckInReminder(record.Player, currentDayIndex, currentMinuteOfDay);
                     paroleManager.ProcessExpiredDailyCheckIn(record.Player, currentDayIndex, currentMinuteOfDay);
                     EnforceActiveWarrant(record.Player);
@@ -1354,7 +1355,19 @@ namespace Behind_Bars.Systems
                     var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(player);
                     if (rapSheet?.CurrentParoleRecord != null && rapSheet.CurrentParoleRecord.IsOnParole())
                     {
-                        rapSheet.CurrentParoleRecord.EndParole();
+                        var completingRecord = rapSheet.CurrentParoleRecord;
+                        completingRecord.EndParole();
+                        try
+                        {
+                            ParoleCompletionRewards.GrantCompletionRewards(
+                                player,
+                                rapSheet,
+                                completingRecord);
+                        }
+                        catch (System.Exception rewardEx)
+                        {
+                            ModLogger.Error($"Error granting parole completion rewards for {player.name}: {rewardEx.Message}");
+                        }
                         rapSheet.ArchiveCurrentParoleRecord();
                         Core.ResolveRapSheetManager().MarkRapSheetChanged(player);
                         ModLogger.Info($"Completed parole in RapSheet for {player.name}");
@@ -1570,13 +1583,28 @@ namespace Behind_Bars.Systems
             // Clear release time grace period (parole is complete)
             ParoleSearchSystem.Instance.ClearReleaseTime(record.Player);
 
-            // End parole in RapSheet and archive it
+            // End parole, claim rewards while the completing record is still current,
+            // then archive that exact rewarded record.
             try
             {
                 var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(record.Player);
                 if (rapSheet?.CurrentParoleRecord != null)
                 {
-                    rapSheet.CurrentParoleRecord.EndParole();
+                    var completingRecord = rapSheet.CurrentParoleRecord;
+                    completingRecord.EndParole();
+
+                    try
+                    {
+                        ParoleCompletionRewards.GrantCompletionRewards(
+                            record.Player,
+                            rapSheet,
+                            completingRecord);
+                    }
+                    catch (System.Exception rewardEx)
+                    {
+                        ModLogger.Error($"Error granting parole completion rewards for {record.Player.name}: {rewardEx.Message}");
+                    }
+
                     // Move current parole record to past records
                     rapSheet.ArchiveCurrentParoleRecord();
                     Core.ResolveRapSheetManager().MarkRapSheetChanged(record.Player);
@@ -1602,20 +1630,6 @@ namespace Behind_Bars.Systems
             // Emit parole ended event
             RaiseParoleEnded(record.Player);
             ModLogger.Debug($"ParoleSystem: Emitted parole-end lifecycle event for {record.Player.name} (completed)");
-
-            // Grant parole completion rewards
-            try
-            {
-                var rewardRapSheet = Core.ResolveRapSheetManager().GetRapSheet(record.Player);
-                if (rewardRapSheet != null)
-                {
-                    ParoleCompletionRewards.GrantCompletionRewards(record.Player, rewardRapSheet);
-                }
-            }
-            catch (System.Exception ex)
-            {
-                ModLogger.Error($"Error granting parole completion rewards: {ex.Message}");
-            }
 
             // Remove from active parole
             _paroleRecords.Remove(record.PlayerKey);

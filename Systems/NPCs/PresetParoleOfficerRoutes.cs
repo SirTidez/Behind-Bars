@@ -25,6 +25,7 @@ namespace Behind_Bars.Systems.NPCs
         // of the courthouse as the player walks past it from the police station.
         // This remains independent of S1API and is placed on the native-map surface.
         private static readonly Vector3 SupervisingOfficerStation = new Vector3(78.500f, 1.065f, 14.200f);
+        private static readonly Vector3 CourthouseExteriorApproach = new Vector3(78.500f, 1.065f, 17.000f);
 
         // Registry consumed by GetRoute and route-existence helpers. It is not
         // cleared by InitializePatrolPoints, so repeated initialization can leave
@@ -173,6 +174,12 @@ namespace Behind_Bars.Systems.NPCs
         public static Vector3 GetSupervisingOfficerStation()
         {
             return SupervisingOfficerStation;
+        }
+
+        /// <summary>Gets the exterior NavMesh point immediately in front of the courthouse entrance.</summary>
+        public static Vector3 GetCourthouseExteriorApproach()
+        {
+            return CourthouseExteriorApproach;
         }
 
         /// <summary>

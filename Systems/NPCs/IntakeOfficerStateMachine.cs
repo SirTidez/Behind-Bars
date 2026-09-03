@@ -136,10 +136,26 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private bool requiresBookingInnerDoorBeforeCellEscort;
 
+        /// <summary>Ordered secured-door legs used after a completed cell escort.</summary>
+        private enum ReturnTransitStage
+        {
+            None,
+            PrisonToHall,
+            HallToBooking,
+            MovingToPost
+        }
+
+        /// <summary>Current leg of the officer-only return route through the intake corridor.</summary>
+        private ReturnTransitStage returnTransitStage = ReturnTransitStage.None;
+        /// <summary>True after the prisoner reaches a cell and the officer must traverse both corridor doors.</summary>
+        private bool requiresSecuredReturnTransit;
+
         /// <summary>Prevents repeated holding-cell exit handling before the door is secured.</summary>
         private bool playerExitDetected = false;
         /// <summary>Tracks whether the current holding/cell door close request has already begun.</summary>
         private bool doorCloseInitiated = false;
+        /// <summary>Unity time at which the prisoner first achieved full doorway clearance.</summary>
+        private float holdingExitConfirmationStart = -1f;
 
         /// <summary>Unity-time start of the detailed intake state; shadows the base state timestamp.</summary>
         private new float stateStartTime;
@@ -149,6 +165,8 @@ namespace Behind_Bars.Systems.NPCs
         private float nextCellAssignmentRetryTime;
         /// <summary>Minimum interval between cell-assignment retries, in Unity seconds.</summary>
         private const float CellAssignmentRetryInterval = 2f;
+        /// <summary>Continuous clearance required before the holding-cell door may close.</summary>
+        private const float HoldingExitConfirmationSeconds = 0.5f;
 
         /// <summary>Station definitions keyed by the names used by navigation and dialogue mapping.</summary>
         private Dictionary<string, IntakeStation> intakeStations;
@@ -789,6 +807,10 @@ namespace Behind_Bars.Systems.NPCs
                     NavigateToStation("HoldingCell");
                     break;
 
+                case IntakeState.WaitingForPlayerExit:
+                    holdingExitConfirmationStart = -1f;
+                    break;
+
                 case IntakeState.EscortToMugshot:
                     NavigateToStation("MugshotStation");
                     break;
@@ -864,15 +886,35 @@ namespace Behind_Bars.Systems.NPCs
                 var jailController = Core.JailController;
                 if (jailController != null && currentHoldingCellIndex >= 0)
                 {
-                    if (jailController.HasPlayerExitedHoldingCell(currentPrisoner, currentHoldingCellIndex))
+                    bool hasClearedDoorway = jailController.HasPlayerExitedHoldingCell(
+                        currentPrisoner,
+                        currentHoldingCellIndex);
+                    if (!hasClearedDoorway)
+                    {
+                        // Stepping back into the doorway cancels the pending close rather than
+                        // allowing a stale timer to secure the door around the player.
+                        holdingExitConfirmationStart = -1f;
+                        return;
+                    }
+
+                    if (holdingExitConfirmationStart < 0f)
+                    {
+                        holdingExitConfirmationStart = Time.time;
+                        ModLogger.Debug(
+                            $"IntakeOfficer: Player fully cleared holding cell {currentHoldingCellIndex}; " +
+                            $"confirming exit for {HoldingExitConfirmationSeconds:F2}s");
+                        return;
+                    }
+
+                    if (Time.time - holdingExitConfirmationStart >= HoldingExitConfirmationSeconds)
                     {
                         playerExitDetected = true;
                         doorCloseInitiated = true;
+                        holdingExitConfirmationStart = -1f;
                         ModLogger.Info($"IntakeOfficer: Player cleared holding cell {currentHoldingCellIndex} doorway");
 
-                        // The doorway detector already requires the player to be beyond the
-                        // door plane.  The old fixed two-second wait made the officer visibly
-                        // idle after the player had cleared the threshold.
+                        // Full-body clearance plus a continuous confirmation window prevents
+                        // a hesitant player from being caught by the closing door.
                         ChangeIntakeState(IntakeState.ClosingHoldingDoor);
                     }
                 }
@@ -1083,6 +1125,7 @@ namespace Behind_Bars.Systems.NPCs
             // stations are complete. That route intentionally bypasses the legacy escort
             // monitor, so finalize the booking only after the prisoner is actually secured.
             bookingProcess?.FinishBookingAfterCellEscort(currentPrisoner);
+            requiresSecuredReturnTransit = true;
             ChangeIntakeState(IntakeState.ReturningToPost);
         }
 
@@ -1092,6 +1135,14 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private void HandleEscortState()
         {
+            // SecurityDoorBehavior owns the intermediate destinations while returning.
+            // Suppress the stale cell destination during the one-frame handoff between doors.
+            if (currentState == IntakeState.ReturningToPost &&
+                returnTransitStage != ReturnTransitStage.MovingToPost)
+            {
+                return;
+            }
+
             // Monitor movement progress during escort states
             if (currentDestination != Vector3.zero)
             {
@@ -1265,26 +1316,90 @@ namespace Behind_Bars.Systems.NPCs
         }
 
         /// <summary>
-        /// Moves the officer back to the booking post while securing intake doors. If no post exists, completes
-        /// the workflow immediately after door cleanup rather than leaving the prisoner/coordinator state live.
+        /// Starts the secured officer-only route back through the prison-entry and booking-inner doors before
+        /// the final walk to the booking post. If no post exists, the workflow completes after door cleanup.
         /// </summary>
         private void ReturnToGuardPost()
         {
-            if (guardPostTransform != null)
+            if (guardPostTransform == null)
             {
-                MoveTo(guardPostTransform.position);
-                ModLogger.Info("IntakeOfficer: Returning to guard post");
-
-                // Keep the intake active until the officer is physically back at the post.
-                // A release cannot safely begin while this officer still owns the cell-return
-                // portion of the booking flow.
+                ModLogger.Warn("IntakeOfficer: Guard post was unavailable; completing intake without a return walk");
                 CloseAllIntakeDoors();
+                CompleteIntakeProcess();
                 return;
             }
 
-            ModLogger.Warn("IntakeOfficer: Guard post was unavailable; completing intake without a return walk");
-            CloseAllIntakeDoors();
-            CompleteIntakeProcess();
+            // Only a successfully completed cell escort is known to end on the prison side
+            // of both secured corridor doors. Earlier recovery exits retain the direct route.
+            if (requiresSecuredReturnTransit)
+            {
+                returnTransitStage = ReturnTransitStage.PrisonToHall;
+                if (TryStartReturnDoorTransit(
+                        "PrisonDoorTrigger_FromPrison",
+                        "prison entry door from prison to hall"))
+                {
+                    return;
+                }
+
+                BeginFallbackReturnToPost("prison-to-hall SecurityDoor transition was unavailable");
+                return;
+            }
+
+            BeginFinalReturnToPost();
+        }
+
+        /// <summary>Starts one canonical officer-only SecurityDoor transit during the return route.</summary>
+        private bool TryStartReturnDoorTransit(string triggerName, string description)
+        {
+            var securityDoor = GetSecurityDoor();
+            if (securityDoor == null)
+            {
+                ModLogger.Error($"IntakeOfficer: No SecurityDoor component for return through {description}");
+                return false;
+            }
+
+            if (securityDoor.IsBusy())
+            {
+                ModLogger.Warn($"IntakeOfficer: SecurityDoor was unexpectedly busy before return through {description}");
+                return false;
+            }
+
+            if (!securityDoor.HandleDoorTrigger(triggerName, false, null))
+            {
+                ModLogger.Warn($"IntakeOfficer: SecurityDoor rejected return through {description}");
+                return false;
+            }
+
+            isSecurityDoorActive = true;
+            ModLogger.Info($"IntakeOfficer: Returning through {description}");
+            return true;
+        }
+
+        /// <summary>Begins the final unobstructed leg from booking to the officer's post.</summary>
+        private void BeginFinalReturnToPost()
+        {
+            returnTransitStage = ReturnTransitStage.MovingToPost;
+            MoveTo(guardPostTransform.position);
+            ModLogger.Info("IntakeOfficer: Returning to guard post");
+        }
+
+        /// <summary>
+        /// Recovery-only route used when the canonical SecurityDoor sequence cannot start or complete. Both
+        /// corridor doors are opened directly, then secured together once the officer reaches the post.
+        /// </summary>
+        private void BeginFallbackReturnToPost(string reason)
+        {
+            isSecurityDoorActive = false;
+            returnTransitStage = ReturnTransitStage.MovingToPost;
+
+            var doorController = Core.JailController?.doorController;
+            bool prisonDoorOpened = doorController?.OpenPrisonEntryDoor() ?? false;
+            bool bookingDoorOpened = doorController?.UnlockAndOpenBookingInnerDoor() ?? false;
+            ModLogger.Warn(
+                $"IntakeOfficer: Using direct-door fallback for return to post ({reason}); " +
+                $"prisonOpen={prisonDoorOpened}, bookingOpen={bookingDoorOpened}");
+
+            MoveTo(guardPostTransform.position);
         }
 
         #endregion
@@ -1446,6 +1561,23 @@ namespace Behind_Bars.Systems.NPCs
                 ModLogger.Info("IntakeOfficer: Already at cell, continuing with door opening");
                 // Don't re-navigate if we're already at the cell and opening the door
             }
+            else if (currentState == IntakeState.ReturningToPost)
+            {
+                if (returnTransitStage == ReturnTransitStage.PrisonToHall)
+                {
+                    returnTransitStage = ReturnTransitStage.HallToBooking;
+                    if (!TryStartReturnDoorTransit(
+                            "BookingDoorTrigger_FromHall",
+                            "booking inner door from hall to booking"))
+                    {
+                        BeginFallbackReturnToPost("hall-to-booking SecurityDoor transition was unavailable");
+                    }
+                }
+                else if (returnTransitStage == ReturnTransitStage.HallToBooking)
+                {
+                    BeginFinalReturnToPost();
+                }
+            }
 
             ModLogger.Info($"IntakeOfficer: Navigation resumed for state: {currentState}");
             delayedNavigationResumeCoroutine = null;
@@ -1466,6 +1598,12 @@ namespace Behind_Bars.Systems.NPCs
             // subsequent destination update and the officer remained at the entry
             // point.  Return ownership before resuming the canonical escort route.
             isSecurityDoorActive = false;
+
+            if (currentState == IntakeState.ReturningToPost)
+            {
+                BeginFallbackReturnToPost($"SecurityDoor operation failed for {doorName}");
+                return;
+            }
 
             // If SecurityDoor fails, try fallback direct door control
             string fallbackDoorType = null;
@@ -1743,6 +1881,7 @@ namespace Behind_Bars.Systems.NPCs
                 case IntakeState.ReturningToPost:
                     // Start continuous rotation when back at post
                     StartContinuousPlayerLooking();
+                    CloseAllIntakeDoors();
                     CompleteIntakeProcess();
                     break;
 
@@ -1903,6 +2042,8 @@ namespace Behind_Bars.Systems.NPCs
 
             // Reset SecurityDoor state
             isSecurityDoorActive = false;
+            requiresSecuredReturnTransit = false;
+            returnTransitStage = ReturnTransitStage.None;
 
             // Determine which holding cell contains this player using JailController's centralized method.
             // A disciplinary repeat intake supplies a named cell so this is never redirected by
@@ -2517,6 +2658,8 @@ namespace Behind_Bars.Systems.NPCs
             currentHoldingCellName = "";
             ClearRequiredHoldingCell();
             requiresBookingInnerDoorBeforeCellEscort = false;
+            requiresSecuredReturnTransit = false;
+            returnTransitStage = ReturnTransitStage.None;
 
             // Reset state tracking flags
             playerExitDetected = false;
@@ -2622,6 +2765,8 @@ namespace Behind_Bars.Systems.NPCs
             ClearRequiredHoldingCell();
             resumingDisciplinaryIntake = false;
             requiresBookingInnerDoorBeforeCellEscort = false;
+            requiresSecuredReturnTransit = false;
+            returnTransitStage = ReturnTransitStage.None;
             playerExitDetected = false;
             doorCloseInitiated = false;
             ResetDoorTracking();

@@ -440,7 +440,14 @@ namespace Behind_Bars.Systems.Dialogue
             {
                 for (int i = 0; i < list.Count; i++)
                 {
-                    try { list[i]?.Invoke(); } catch { }
+                    try
+                    {
+                        list[i]?.Invoke();
+                    }
+                    catch (Exception ex)
+                    {
+                        ModLogger.Error($"NPCDialogueWrapper: Choice callback '{choiceLabel}' failed: {ex.Message}\n{ex.StackTrace}");
+                    }
                 }
             }
         }
@@ -456,7 +463,14 @@ namespace Behind_Bars.Systems.Dialogue
             {
                 for (int i = 0; i < list.Count; i++)
                 {
-                    try { list[i]?.Invoke(); } catch { }
+                    try
+                    {
+                        list[i]?.Invoke();
+                    }
+                    catch (Exception ex)
+                    {
+                        ModLogger.Error($"NPCDialogueWrapper: Node callback '{nodeLabel}' failed: {ex.Message}\n{ex.StackTrace}");
+                    }
                 }
             }
         }

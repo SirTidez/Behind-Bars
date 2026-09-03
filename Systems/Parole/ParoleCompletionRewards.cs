@@ -14,12 +14,6 @@ namespace Behind_Bars.Systems.Parole
     /// Handles rewards granted upon successful parole completion.
     /// Reward tiers based on final compliance score.
     /// </summary>
-    /// <remarks>
-    /// Reward application is not idempotent: each call can add cash, increase the capped
-    /// sentence-reduction modifier, increment completed-parole count, and send another officer
-    /// message. The normal parole completion path should therefore invoke it once per term;
-    /// this helper does not persist a per-term reward-claimed marker.
-    /// </remarks>
     public static class ParoleCompletionRewards
     {
         /// <summary>
@@ -87,17 +81,28 @@ namespace Behind_Bars.Systems.Parole
         /// Grant completion rewards based on final compliance score
         /// </summary>
         /// <param name="player">Player receiving cash, RapSheet changes, and officer text.</param>
-        /// <param name="rapSheet">RapSheet containing the current parole record and reward counters.</param>
+        /// <param name="rapSheet">RapSheet containing the persisted reward counters.</param>
+        /// <param name="paroleRecord">The completing term whose persisted claim marker owns idempotency.</param>
+        /// <returns>True when this call claimed and processed the term; false when it was invalid or already claimed.</returns>
         /// <remarks>
         /// Cash is applied only when the runtime money service is available; RapSheet reduction
-        /// and completed-count mutations continue independently. The reduction is capped at
-        /// 50 percent, but completed count/cash/message effects are otherwise repeatable.
+        /// and completed-count mutations continue independently. The term is claimed before
+        /// side effects begin so re-entrant completion cannot duplicate cash or counters.
         /// </remarks>
-        public static void GrantCompletionRewards(Player player, RapSheet rapSheet)
+        public static bool GrantCompletionRewards(Player player, RapSheet rapSheet, ParoleRecord paroleRecord)
         {
-            if (rapSheet?.CurrentParoleRecord == null) return;
+            if (player == null || rapSheet == null || paroleRecord == null)
+            {
+                return false;
+            }
 
-            float complianceScore = rapSheet.CurrentParoleRecord.GetComplianceScore();
+            if (!paroleRecord.TryClaimCompletionRewards())
+            {
+                ModLogger.Warn($"[REWARDS] Completion rewards already granted for {player.name}; duplicate claim skipped");
+                return false;
+            }
+
+            float complianceScore = paroleRecord.GetComplianceScore();
             ComplianceTier tier = GetComplianceTier(complianceScore);
 
             // Cash reward
@@ -147,6 +152,7 @@ namespace Behind_Bars.Systems.Parole
             Core.ResolveParoleManager()?.SendSupervisingOfficerText(player, message);
 
             ModLogger.Info($"[REWARDS] Parole completion rewards granted for {player.name}: Tier={tier}, Cash=${cashReward:F0}, SentenceReduction={sentenceReduction:P0}");
+            return true;
         }
     }
 }

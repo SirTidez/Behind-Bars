@@ -1129,10 +1129,10 @@ namespace Behind_Bars.Systems.Jail
             // first so the handoff occurs as the player clears the doorway.
             Transform doorway = holdingCell?.cellDoor?.doorHolder ?? holdingCell?.cellDoor?.doorPoint;
 
-            // HoldingCellBounds is intentionally generous in the authored prefab.  Using it
+            // HoldingCellBounds is intentionally generous in the authored prefab. Using it
             // alone means the prisoner has to walk down the corridor before we recognize the
-            // exit.  Treat a short crossing beyond the actual door plane as the primary exit
-            // signal, while keeping the bounds check as a safe fallback for incomplete assets.
+            // exit. Treat full-body clearance beyond the actual door plane as the primary exit
+            // signal, while keeping the bounds check only for incomplete assets.
             if (boundsCollider != null && doorway != null)
             {
                 Vector3 cellCenter = boundsCollider.transform.TransformPoint(boundsCollider.center);
@@ -1145,14 +1145,11 @@ namespace Behind_Bars.Systems.Jail
                     Vector3 playerFromDoor = player.transform.position - doorway.position;
                     playerFromDoor.y = 0f;
 
-                    // A small positive clearance prevents a player standing in the door
-                    // jamb from advancing the escort, without making them walk down the
-                    // corridor to the old guard-operation point.
-                    const float doorClearance = 0.05f;
-                    if (Vector3.Dot(playerFromDoor, outward) >= doorClearance)
-                    {
-                        return true;
-                    }
+                    // Require enough space for the player's body to clear the closing door.
+                    // Previously this was 0.05m and then fell through to the bounds test,
+                    // allowing the transition to fire as soon as a foot crossed the plane.
+                    const float doorClearance = 0.9f;
+                    return Vector3.Dot(playerFromDoor, outward) >= doorClearance;
                 }
             }
 

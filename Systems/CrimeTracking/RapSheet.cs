@@ -197,6 +197,23 @@ namespace Behind_Bars.Systems.CrimeTracking
         [SaveableField("completedParoleCount")]
         private int _completedParoleCount = 0;
 
+        // Drug-use evidence belongs to the overall player record rather than one
+        // parole term so an active detection window survives term archival.
+        [SaveableField("drugUseRecords")]
+        private List<DrugUseRecord> _drugUseRecords;
+
+        // Institutional discipline is persisted independently from scene-owned jail
+        // officers and cell objects. The Nth inmate assault adds N complete future
+        // recreation cycles, so repeat misconduct escalates without serializing runtime refs.
+        [SaveableField("inmateAssaultOffenseCount")]
+        private int _inmateAssaultOffenseCount;
+
+        [SaveableField("segregationCyclesRemaining")]
+        private int _segregationCyclesRemaining;
+
+        [SaveableField("segregationCycleActive")]
+        private bool _segregationCycleActive;
+
         // Properties for safe access. Setters mark the Saveable dirty so callers that
         // mutate persisted state do not have to know the save framework details.
         /// <summary>
@@ -358,6 +375,118 @@ namespace Behind_Bars.Systems.CrimeTracking
             }
         }
 
+        /// <summary>Gets a read-only snapshot view of persisted drug-use evidence.</summary>
+        public IReadOnlyList<DrugUseRecord> DrugUseRecords =>
+            (_drugUseRecords ??= new List<DrugUseRecord>()).AsReadOnly();
+
+        /// <summary>Total persisted inmate-assault infractions used to escalate discipline.</summary>
+        public int InmateAssaultOffenseCount => Math.Max(0, _inmateAssaultOffenseCount);
+
+        /// <summary>Complete assigned-tier recreation cycles still owed in segregation.</summary>
+        public int SegregationCyclesRemaining => Math.Max(0, _segregationCyclesRemaining);
+
+        /// <summary>Whether the current assigned-tier recreation block is counting as a full segregation cycle.</summary>
+        public bool IsSegregationCycleActive => _segregationCycleActive && _segregationCyclesRemaining > 0;
+
+        /// <summary>Whether this player must remain cell-confined during recreation.</summary>
+        public bool HasActiveSegregation => _segregationCyclesRemaining > 0;
+
+        /// <summary>
+        /// Records one inmate assault and adds an escalating number of complete recreation
+        /// cycles: one for the first offense, two for the second, and so on.
+        /// </summary>
+        /// <returns>The number of cycles added for this offense.</returns>
+        public int AddInmateAssaultSegregation()
+        {
+            _inmateAssaultOffenseCount = _inmateAssaultOffenseCount >= int.MaxValue
+                ? int.MaxValue
+                : Math.Max(0, _inmateAssaultOffenseCount) + 1;
+            int cyclesAdded = _inmateAssaultOffenseCount;
+            _segregationCyclesRemaining = _segregationCyclesRemaining > int.MaxValue - cyclesAdded
+                ? int.MaxValue
+                : Math.Max(0, _segregationCyclesRemaining) + cyclesAdded;
+            MarkChanged();
+            return cyclesAdded;
+        }
+
+        /// <summary>Starts counting the next assigned-tier recreation block as segregation.</summary>
+        public bool TryBeginSegregationCycle()
+        {
+            if (_segregationCyclesRemaining <= 0 || _segregationCycleActive)
+            {
+                return false;
+            }
+
+            _segregationCycleActive = true;
+            MarkChanged();
+            return true;
+        }
+
+        /// <summary>Completes exactly one full assigned-tier recreation block.</summary>
+        public bool TryCompleteSegregationCycle()
+        {
+            if (!_segregationCycleActive || _segregationCyclesRemaining <= 0)
+            {
+                return false;
+            }
+
+            _segregationCyclesRemaining--;
+            _segregationCycleActive = false;
+            MarkChanged();
+            return true;
+        }
+
+        /// <summary>Adds one structurally valid drug-use record and marks the rap sheet dirty.</summary>
+        public bool AddDrugUseRecord(DrugUseRecord record)
+        {
+            if (record == null || !record.IsStructurallyValid())
+            {
+                return false;
+            }
+
+            _drugUseRecords ??= new List<DrugUseRecord>();
+            _drugUseRecords.Add(record);
+            MarkChanged();
+            return true;
+        }
+
+        /// <summary>Returns a detached list of records active at the supplied native calendar minute.</summary>
+        public List<DrugUseRecord> GetActiveDrugUseRecords(long absoluteGameMinute)
+        {
+            var activeRecords = new List<DrugUseRecord>();
+            if (_drugUseRecords == null)
+            {
+                return activeRecords;
+            }
+
+            foreach (DrugUseRecord record in _drugUseRecords)
+            {
+                if (record != null && record.IsActiveAt(absoluteGameMinute))
+                {
+                    activeRecords.Add(record);
+                }
+            }
+
+            return activeRecords;
+        }
+
+        /// <summary>Removes malformed and expired evidence, marking persistence only when data changes.</summary>
+        public int PruneExpiredDrugUseRecords(long absoluteGameMinute)
+        {
+            _drugUseRecords ??= new List<DrugUseRecord>();
+            int removed = _drugUseRecords.RemoveAll(record =>
+                record == null ||
+                !record.IsStructurallyValid() ||
+                absoluteGameMinute >= record.ExpiresAtAbsoluteGameMinute);
+
+            if (removed > 0)
+            {
+                MarkChanged();
+            }
+
+            return removed;
+        }
+
         // Non-Serialized fields
         /// <summary>
         /// Runtime player reference. It is deliberately omitted from saves and restored by SetPlayer/OnLoaded.
@@ -388,6 +517,7 @@ namespace Behind_Bars.Systems.CrimeTracking
             // Initialize collections
             _crimesCommited = new List<CrimeInstance>();
             _pastParoleRecords = new List<ParoleRecord>();
+            _drugUseRecords = new List<DrugUseRecord>();
             
             // Don't initialize SaveManager registration here - will be done by RapSheetManager
             // Don't call OnLoaded here - will be called by the save system after loading
@@ -624,7 +754,8 @@ namespace Behind_Bars.Systems.CrimeTracking
                 pastParoleScore = Math.Min(PastParoleRecords.Count * 10, 20);
             }
             
-            int totalScore = crimeCountScore + severityScore + violationScore + pastParoleScore;
+            int interviewScore = CurrentParoleRecord?.GetInitialInterviewRiskModifier() ?? 0;
+            int totalScore = crimeCountScore + severityScore + violationScore + pastParoleScore + interviewScore;
             int adjustedScore = Math.Max(0, totalScore - _complianceLSIReduction);
             
             LSILevel resultingLevel;
@@ -706,6 +837,12 @@ namespace Behind_Bars.Systems.CrimeTracking
             {
                 ModLogger.Debug($"[LSI]   Factor 4 - Past Parole Failures: No past records = 0 points");
             }
+
+            // Factor 5: one-time initial supervising-officer interview (-5 to +10).
+            // This is term-owned and disappears when the record is archived.
+            int interviewScore = CurrentParoleRecord?.GetInitialInterviewRiskModifier() ?? 0;
+            score += interviewScore;
+            ModLogger.Debug($"[LSI]   Factor 5 - Initial Interview: {interviewScore:+#;-#;0} points");
 
             // Apply compliance-based LSI reduction (good behavior step-down)
             int rawScore = score;
@@ -1039,6 +1176,24 @@ namespace Behind_Bars.Systems.CrimeTracking
             if (_pastParoleRecords == null)
                 _pastParoleRecords = new List<ParoleRecord>();
 
+            if (_drugUseRecords == null)
+                _drugUseRecords = new List<DrugUseRecord>();
+
+            _inmateAssaultOffenseCount = Math.Max(0, _inmateAssaultOffenseCount);
+            _segregationCyclesRemaining = Math.Max(0, _segregationCyclesRemaining);
+            if (_segregationCyclesRemaining == 0)
+            {
+                _segregationCycleActive = false;
+            }
+
+            int malformedDrugUseRecords = _drugUseRecords.RemoveAll(record =>
+                record == null || !record.IsStructurallyValid());
+            if (malformedDrugUseRecords > 0)
+            {
+                MarkChanged();
+                ModLogger.Warn($"[SAVEABLE] Removed {malformedDrugUseRecords} malformed drug-use records for {_fullName}");
+            }
+
             // Generate InmateID if missing
             if (string.IsNullOrEmpty(_inmateID))
                 _inmateID = GenerateInmateID();
@@ -1092,7 +1247,10 @@ namespace Behind_Bars.Systems.CrimeTracking
                 }
             }
 
-            ModLogger.Debug($"[SAVEABLE] RapSheet loaded for {_fullName} - Crimes: {_crimesCommited.Count}, LSI: {_lsiLevel}");
+            ModLogger.Debug(
+                $"[SAVEABLE] RapSheet loaded for {_fullName} - Crimes: {_crimesCommited.Count}, " +
+                $"Drug uses: {_drugUseRecords.Count}, LSI: {_lsiLevel}, " +
+                $"Segregation: {_segregationCyclesRemaining} cycle(s), active={_segregationCycleActive}");
         }
 
         /// <summary>

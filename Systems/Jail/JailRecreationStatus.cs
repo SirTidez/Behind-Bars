@@ -31,6 +31,15 @@ namespace Behind_Bars.Systems.Jail
         /// <summary>True when the player's assigned tier is the active recreation tier.</summary>
         public bool IsAssignedTierActive { get; set; }
 
+        /// <summary>True while persisted institutional discipline keeps the player cell-confined.</summary>
+        public bool IsInSegregation { get; set; }
+
+        /// <summary>True when the current assigned-tier block is counting toward the punishment.</summary>
+        public bool IsSegregationCycleActive { get; set; }
+
+        /// <summary>Complete recreation cycles remaining, including an active counted cycle.</summary>
+        public int SegregationCyclesRemaining { get; set; }
+
         /// <summary>
         /// Wall-clock seconds until the player's assigned tier changes phase. This is
         /// deliberately not a game-minute value so the UI can show a real-time countdown.

@@ -1550,94 +1550,10 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             ModLogger.Info($"Supervising Officer {badgeNumber} handling violation '{violationType}' for {parolee.name}");
-
-            // Start violation dialogue
-            MelonLoader.MelonCoroutines.Start(ProcessViolation(parolee, violationType));
-        }
-
-        /// <summary>
-        /// Process violation with dialogue
-        /// </summary>
-#if !MONO
-        [HideFromIl2Cpp]
-#endif
-        private IEnumerator ProcessViolation(Player parolee, string violationType)
-        {
-            // Update dialogue to violation detected
-            if (dialogueController != null)
+            LookAt(parolee.transform.position);
+            if (GetCheckInSystem()?.BeginViolationDialogue(parolee, violationType) != true)
             {
-                dialogueController.UpdateGreetingForState("ViolationDetected");
-                dialogueController.SendContextualMessage("greeting");
-            }
-
-            // Face the parolee
-            if (parolee != null)
-            {
-                LookAt(parolee.transform.position);
-            }
-
-            yield return new WaitForSeconds(2f);
-
-            // Explain violation
-            if (dialogueController != null)
-            {
-                dialogueController.UpdateGreetingForState("ViolationExplaining");
-                dialogueController.SendContextualMessage("interaction");
-            }
-
-            yield return new WaitForSeconds(2f);
-
-            // Get parole record
-            var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(parolee);
-            if (rapSheet?.CurrentParoleRecord != null)
-            {
-                var paroleRecord = rapSheet.CurrentParoleRecord;
-                int violationCount = paroleRecord.GetViolationCount();
-                float complianceScore = paroleRecord.GetComplianceScore();
-
-                // Determine severity and response
-                string responseState;
-                if (violationCount >= 3 || complianceScore < 30f)
-                {
-                    responseState = "ViolationEscalating";
-                }
-                else
-                {
-                    responseState = "ViolationWarning";
-                }
-
-                // Update dialogue
-                if (dialogueController != null)
-                {
-                    dialogueController.UpdateGreetingForState(responseState);
-                    dialogueController.SendContextualMessage("interaction");
-                }
-
-                // Adjust compliance score (violation already added to record by ParoleSystem)
-                paroleRecord.AdjustComplianceScore(-10f); // Deduct 10 points for violation
-                Core.ResolveRapSheetManager().MarkRapSheetChanged(parolee);
-
-                yield return new WaitForSeconds(2f);
-
-                // Complete violation processing
-                if (dialogueController != null)
-                {
-                    dialogueController.UpdateGreetingForState("ViolationComplete");
-                }
-
-                yield return new WaitForSeconds(2f);
-            }
-
-            // Return to idle
-            if (dialogueController != null)
-            {
-                dialogueController.UpdateGreetingForState("Idle");
-            }
-
-            // Return to entrance position if stationary
-            if (stationaryBehavior != null)
-            {
-                stationaryBehavior.ReturnToPosition();
+                ModLogger.Warn($"Supervising Officer {badgeNumber}: Could not start violation dialogue for {parolee.name}");
             }
         }
 
@@ -1659,71 +1575,10 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             ModLogger.Info($"Supervising Officer {badgeNumber} reviewing conditions with {parolee.name}");
-
-            // Start conditions review dialogue
-            MelonLoader.MelonCoroutines.Start(ProcessConditionsReview(parolee));
-        }
-
-        /// <summary>
-        /// Process conditions review with dialogue
-        /// </summary>
-#if !MONO
-        [HideFromIl2Cpp]
-#endif
-        private IEnumerator ProcessConditionsReview(Player parolee)
-        {
-            // Update dialogue to conditions request
-            if (dialogueController != null)
+            LookAt(parolee.transform.position);
+            if (GetCheckInSystem()?.BeginConditionsReviewDialogue(parolee) != true)
             {
-                dialogueController.UpdateGreetingForState("ConditionsRequest");
-                dialogueController.SendContextualMessage("greeting");
-            }
-
-            // Face the parolee
-            if (parolee != null)
-            {
-                LookAt(parolee.transform.position);
-            }
-
-            yield return new WaitForSeconds(2f);
-
-            // Explain conditions
-            if (dialogueController != null)
-            {
-                dialogueController.UpdateGreetingForState("ConditionsExplaining");
-                dialogueController.SendContextualMessage("interaction");
-            }
-
-            // Get conditions summary
-            var rapSheet = Core.ResolveRapSheetManager().GetRapSheet(parolee);
-            if (rapSheet?.CurrentParoleRecord != null)
-            {
-                string conditionsSummary = rapSheet.CurrentParoleRecord.GetConditionsSummary();
-                ModLogger.Info($"Conditions for {parolee.name}: {conditionsSummary}");
-
-                // Could display conditions in UI here if needed
-            }
-
-            yield return new WaitForSeconds(3f);
-
-            // Complete conditions review
-            if (dialogueController != null)
-            {
-                dialogueController.UpdateGreetingForState("ConditionsComplete");
-            }
-
-            yield return new WaitForSeconds(2f);
-
-            // Return to idle
-            if (dialogueController != null)
-            {
-                dialogueController.UpdateGreetingForState("Idle");
-            }
-
-            // Return to entrance position if stationary
-            if (stationaryBehavior != null)
-            {
-                stationaryBehavior.ReturnToPosition();
+                ModLogger.Warn($"Supervising Officer {badgeNumber}: Could not start conditions dialogue for {parolee.name}");
             }
         }
 
@@ -1855,6 +1710,22 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             SetOnDuty(false);
+        }
+
+        /// <summary>
+        /// Keeps the canonical officer active while walking to the courthouse entrance.
+        /// The roster manager hands ownership to the native building action only after arrival.
+        /// </summary>
+        public bool BeginCourthouseReturn(Vector3 exteriorApproach)
+        {
+            if (IsProcessingIntake())
+            {
+                return false;
+            }
+
+            isOnDuty = true;
+            ChangeParoleActivity(ParoleOfficerActivity.RespondingToIncident);
+            return MoveTo(exteriorApproach, 1.25f);
         }
 
         public void AssignToRole(ParoleOfficerRole newRole)

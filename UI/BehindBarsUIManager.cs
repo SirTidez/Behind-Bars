@@ -1108,6 +1108,24 @@ namespace Behind_Bars.UI
             bool recallActive = status.IsAssignedTierActive && remainingRealSeconds <= 30f;
             string assignedTier = FormatTierName(status.AssignedTier);
 
+            if (status.IsInSegregation)
+            {
+                return new TierStatusData
+                {
+                    HeaderText = "SEGREGATION",
+                    TimerLabel = status.IsSegregationCycleActive ? "CYCLE ENDS IN" : "NEXT CYCLE IN",
+                    TimerText = TierStatusFormatting.FormatRealCountdown(remainingRealSeconds),
+                    ActiveTierText = status.ActiveTier == JailRecreationTier.None
+                        ? "ALL TIERS LOCKED"
+                        : $"{FormatTierName(status.ActiveTier)} TIER OUT",
+                    AssignedTierText = $"{status.SegregationCyclesRemaining} CYCLE{(status.SegregationCyclesRemaining == 1 ? string.Empty : "S")} REMAIN",
+                    CellText = status.AssignedCellNumber.ToString("D2"),
+                    RemainingRealSeconds = remainingRealSeconds,
+                    PhaseProgress = status.PhaseProgress,
+                    IsAssignedTierActive = false
+                };
+            }
+
             return new TierStatusData
             {
                 HeaderText = recallActive ? "RETURN TO CELL" : "TIER STATUS",
@@ -1460,8 +1478,7 @@ namespace Behind_Bars.UI
                 int streakDays = paroleRecord.GetConsecutiveHighComplianceDays();
 
                 // Get outstanding fees
-                float feesOwed = paroleRecord.GetTotalFeesOwed() - paroleRecord.GetTotalFeesPaid();
-                if (feesOwed < 0f) feesOwed = 0f;
+                float feesOwed = Mathf.Max(0f, paroleRecord.GetTotalFeesOwed());
 
                 return new ParoleStatusData
                 {

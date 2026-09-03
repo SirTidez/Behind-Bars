@@ -10,11 +10,15 @@ using Behind_Bars.Systems.Jail;
 using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
+using Il2CppFishNet.Object;
+using Il2CppScheduleOne.Combat;
 using Il2CppScheduleOne.PlayerScripts;
 using Il2CppScheduleOne.NPCs;
 using Il2CppScheduleOne.AvatarFramework;
 using Il2CppInterop.Runtime.Attributes;
 #else
+using FishNet.Object;
+using ScheduleOne.Combat;
 using ScheduleOne.PlayerScripts;
 using ScheduleOne.NPCs;
 using ScheduleOne.AvatarFramework;
@@ -176,12 +180,29 @@ namespace Behind_Bars.Systems.NPCs
         private bool dayRoomPatrolBatonEquipped;
         /// <summary>Prevents repeated native-movement ownership diagnostics.</summary>
         private bool dayRoomNativeMovementLogged;
+        /// <summary>Prevents repeated emergency-pursuit ownership diagnostics.</summary>
+        private bool emergencyPursuitLogged;
+        /// <summary>Last position at which emergency response progress was observed.</summary>
+        private Vector3 emergencyPursuitProgressPosition;
+        /// <summary>Unity-time timestamp of the last emergency response displacement.</summary>
+        private float emergencyPursuitProgressTime;
+        /// <summary>Prevents repeated diagnostics when the native agent accepts a path but remains stationary.</summary>
+        private bool emergencyPursuitStallLogged;
+        /// <summary>Prevents repeated logging while native combat owns the close-range firing window.</summary>
+        private bool emergencyCombatRangeLogged;
 
         // Deliberately below the game's ordinary walking pace so the day-room guard
         // reads as an observant patrol rather than a response/escort movement.
         private const float DayRoomPatrolSpeed = 0.25f;
         private const int DayRoomPatrolSpeedPriority = 100;
         private const string DayRoomPatrolSpeedControlId = "BehindBars.DayRoomPatrol";
+        private const float EmergencyResponseSpeed = 1f;
+        private const int EmergencyResponseSpeedPriority = 200;
+        private const string EmergencyResponseSpeedControlId = "BehindBars.EmergencyResponse";
+        private const float EmergencyCombatHandoffDistance = 6f;
+        private const float EmergencyTierDifference = 1.75f;
+        private const float EmergencyProgressDistance = 0.1f;
+        private const float EmergencyStallDiagnosticDelay = 2f;
         private const float DayRoomPatrolWaitTime = 2.5f;
         private const float DayRoomLookTurnSpeed = 360f;
         private const float PatrolRetryDelay = 2f;
@@ -903,32 +924,271 @@ namespace Behind_Bars.Systems.NPCs
             }
         }
 
-        /// <summary>
-        /// Applies the native equippable state used during a jail emergency. The game's NPC
-        /// avatar exposes one active equippable slot, so the responding guard draws the Taser
-        /// while the remaining guards retain their visible police batons.
-        /// </summary>
 #if !MONO
         [HideFromIl2Cpp]
 #endif
         /// <summary>Enters emergency response activity and equips the native Taser or baton assignment.</summary>
-        /// <param name="isPrimaryResponder">Whether this guard is the primary Taser responder.</param>
-        public void EnterEmergencyLockdown(bool isPrimaryResponder)
+        /// <param name="useTaser">Whether this guard should display the native Taser rather than a baton.</param>
+        public void EnterEmergencyLockdown(bool useTaser)
         {
             StopMovement();
+            RemoveDayRoomPatrolSpeedControl();
+            ApplyEmergencyResponseMovement();
+            emergencyPursuitLogged = false;
+            emergencyPursuitStallLogged = false;
+            emergencyCombatRangeLogged = false;
+            emergencyPursuitProgressPosition = transform.position;
+            emergencyPursuitProgressTime = Time.time;
             currentActivity = GuardActivity.RespondingToIncident;
 
             try
             {
-                npcComponent?.SetEquippable_Return(isPrimaryResponder
+                npcComponent?.SetEquippable_Return(useTaser
                     ? "Avatar/Equippables/Taser"
                     : "Avatar/Equippables/Baton");
-                ModLogger.Debug($"Guard {badgeNumber} entered lockdown with {(isPrimaryResponder ? "Taser" : "baton")} active");
+                ModLogger.Debug($"Guard {badgeNumber} entered lockdown with {(useTaser ? "Taser" : "baton")} active");
             }
             catch (Exception ex)
             {
                 ModLogger.Warn($"Guard {badgeNumber} could not set lockdown equipment: {ex.Message}");
             }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        /// <summary>
+        /// Hands an emergency target to the native Schedule I combat owner. The primary
+        /// responder uses a Taser against players; inmate targets and supporting responders
+        /// use the baton so subdual is produced by the game's actual weapon/health systems.
+        /// </summary>
+        /// <param name="target">Native player or inmate root carrying a FishNet NetworkObject.</param>
+        /// <param name="useTaser">Whether this responder should use the native Taser.</param>
+        /// <returns>True when the native combat graph accepted the target.</returns>
+        public bool TryEngageEmergencyTarget(GameObject target, bool useTaser)
+        {
+            if (target == null || npcComponent?.Behaviour?.CombatBehaviour == null)
+            {
+                ModLogger.Error($"[LOCKDOWN] Guard {badgeNumber} has no native CombatBehaviour for emergency response");
+                return false;
+            }
+
+            NetworkObject targetNetworkObject = target.GetComponent<NetworkObject>();
+            if (targetNetworkObject == null)
+            {
+                ModLogger.Error($"[LOCKDOWN] Guard {badgeNumber} could not resolve a NetworkObject on target '{target.name}'");
+                return false;
+            }
+
+            EnterEmergencyLockdown(useTaser);
+            try
+            {
+                CombatBehaviour combat = npcComponent.Behaviour.CombatBehaviour;
+                combat.GiveUpRange = 250f;
+                combat.DefaultSearchTime = 600f;
+                combat.SetTargetAndEnable_Server(targetNetworkObject);
+
+                string weaponPath = useTaser
+                    ? "Avatar/Equippables/Taser"
+                    : "Avatar/Equippables/Baton";
+#if MONO
+                var setWeapon = typeof(CombatBehaviour).GetMethod(
+                    "SetWeapon",
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+                if (setWeapon == null)
+                {
+                    ModLogger.Error($"[LOCKDOWN] Guard {badgeNumber} could not resolve native CombatBehaviour.SetWeapon");
+                    combat.Disable_Networked(null);
+                    return false;
+                }
+                setWeapon.Invoke(combat, new object[] { weaponPath });
+#else
+                combat.SetWeapon(weaponPath);
+#endif
+                UpdateEmergencyPursuit(target);
+                ModLogger.Info($"[LOCKDOWN] Guard {badgeNumber} engaged '{target.name}' through native combat with {(useTaser ? "Taser" : "baton")}");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"[LOCKDOWN] Guard {badgeNumber} could not start native emergency combat: {ex}");
+                return false;
+            }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        /// <summary>
+        /// Refreshes the offender destination through the native NPC movement owner while
+        /// CombatBehaviour continues to own aiming, firing, and the actual tase result.
+        /// </summary>
+        public bool UpdateEmergencyPursuit(GameObject target)
+        {
+            if (target == null || currentActivity != GuardActivity.RespondingToIncident)
+            {
+                return false;
+            }
+
+            ApplyEmergencyResponseMovement();
+            if (npcComponent?.Movement != null && npcComponent.Movement.CanMove())
+            {
+                float targetDistance = Vector3.Distance(transform.position, target.transform.position);
+                float tierDifference = Mathf.Abs(transform.position.y - target.transform.position.y);
+                if (tierDifference < EmergencyTierDifference && targetDistance <= EmergencyCombatHandoffDistance)
+                {
+                    // CombatBehaviour's ranged routine needs to own a stationary window to raise
+                    // and fire weapons that cannot shoot while moving. Stop refreshing the chase
+                    // destination until the offender opens the distance again.
+                    npcComponent.Movement.Stop();
+                    currentDestination = transform.position;
+                    hasReachedDestination = true;
+                    ChangeState(NPCState.Idle);
+                    emergencyPursuitProgressPosition = transform.position;
+                    emergencyPursuitProgressTime = Time.time;
+                    emergencyPursuitStallLogged = false;
+                    if (!emergencyCombatRangeLogged)
+                    {
+                        emergencyCombatRangeLogged = true;
+                        ModLogger.Info(
+                            $"[LOCKDOWN] Guard {badgeNumber} handed movement to native combat at " +
+                            $"{targetDistance:F1}m for taser engagement");
+                    }
+                    return true;
+                }
+
+                emergencyCombatRangeLogged = false;
+                currentDestination = ResolveEmergencyPursuitDestination(target.transform.position);
+                hasReachedDestination = false;
+                lastDestinationTime = Time.time;
+                npcComponent.Movement.SetDestination(currentDestination);
+                npcComponent.Movement.ResumeMovement();
+                ChangeState(NPCState.Moving);
+
+                float distanceMoved = Vector3.Distance(transform.position, emergencyPursuitProgressPosition);
+                if (distanceMoved >= EmergencyProgressDistance)
+                {
+                    emergencyPursuitProgressPosition = transform.position;
+                    emergencyPursuitProgressTime = Time.time;
+                    emergencyPursuitStallLogged = false;
+                }
+                else if (!emergencyPursuitStallLogged &&
+                         Time.time - emergencyPursuitProgressTime >= EmergencyStallDiagnosticDelay)
+                {
+                    emergencyPursuitStallLogged = true;
+                    var combat = npcComponent.Behaviour?.CombatBehaviour;
+                    var activeBehaviour = npcComponent.Behaviour?.activeBehaviour;
+                    ModLogger.Warn(
+                        $"[LOCKDOWN] Guard {badgeNumber} has not advanced for {EmergencyStallDiagnosticDelay:F1}s: " +
+                        $"movementPaused={npcComponent.Movement.IsPaused}, agentStopped={navAgent?.isStopped}, " +
+                        $"hasPath={navAgent?.hasPath}, pathPending={navAgent?.pathPending}, " +
+                        $"pathStatus={navAgent?.pathStatus}, remaining={navAgent?.remainingDistance:F1}, " +
+                        $"combatActive={combat?.Active}, activeBehaviour={activeBehaviour?.Name ?? "none"}, " +
+                        $"destination={currentDestination}, target={target.transform.position}");
+                }
+
+                if (!emergencyPursuitLogged)
+                {
+                    emergencyPursuitLogged = true;
+                    ModLogger.Info(
+                        $"[LOCKDOWN] Guard {badgeNumber} pursuing '{target.name}' through native NPC movement " +
+                        $"at {EmergencyResponseSpeed:F2} speed toward {currentDestination}");
+                }
+                return true;
+            }
+
+            bool accepted = base.MoveTo(target.transform.position, 1.5f);
+            if (accepted && !emergencyPursuitLogged)
+            {
+                emergencyPursuitLogged = true;
+                ModLogger.Info($"[LOCKDOWN] Guard {badgeNumber} pursuing '{target.name}' through NavMesh fallback movement");
+            }
+            return accepted;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        /// <summary>
+        /// Restores native movement after stationary/patrol ownership and applies the same normalized
+        /// chase pace used by the game's police pursuit behavior.
+        /// </summary>
+        private void ApplyEmergencyResponseMovement()
+        {
+            RemoveDayRoomPatrolSpeedControl();
+            if (npcComponent?.Movement == null)
+            {
+                return;
+            }
+
+            try
+            {
+                // CombatBehaviour.StartCombat switches ordinary police to the "Ignore Costs"
+                // NavMesh agent type. The authored jail NavMesh is baked for Humanoid, so that
+                // switch leaves these guards active and aiming but with PathInvalid/Infinity.
+                // Restore the jail-compatible type after combat has activated and before issuing
+                // the response destination.
+                npcComponent.Movement.SetAgentType(NPCMovement.EAgentType.Humanoid);
+                npcComponent.Movement.ResumeMovement();
+                var speedController = npcComponent.Movement.SpeedController;
+                if (speedController != null)
+                {
+                    speedController.RemoveSpeedControl(EmergencyResponseSpeedControlId);
+                    speedController.AddSpeedControl(new NPCSpeedController.SpeedControl(
+                        EmergencyResponseSpeedControlId,
+                        EmergencyResponseSpeedPriority,
+                        EmergencyResponseSpeed));
+                }
+
+                if (navAgent != null && navAgent.enabled && navAgent.isOnNavMesh)
+                {
+                    navAgent.isStopped = false;
+                }
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"Guard {badgeNumber} could not restore emergency response movement: {ex.Message}");
+            }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        /// <summary>
+        /// Uses an authored waypoint on the offender's tier while the responder is vertically separated.
+        /// This avoids the native closest-point resolver accepting a partial endpoint on the responder's
+        /// current tier when the offender is visible through the cell-block opening.
+        /// </summary>
+        private Vector3 ResolveEmergencyPursuitDestination(Vector3 targetPosition)
+        {
+            if (Mathf.Abs(transform.position.y - targetPosition.y) < EmergencyTierDifference)
+            {
+                return targetPosition;
+            }
+
+            int pointCount = GetPatrolPointCount();
+            Vector3 bestPoint = targetPosition;
+            float bestScore = float.MaxValue;
+            for (int i = 0; i < pointCount; i++)
+            {
+                Vector3 point = GetPatrolPointPosition(i);
+                float tierDifference = Mathf.Abs(point.y - targetPosition.y);
+                if (tierDifference >= EmergencyTierDifference ||
+                    npcComponent?.Movement == null ||
+                    !npcComponent.Movement.CanGetTo(point, 1.5f))
+                {
+                    continue;
+                }
+
+                float score = tierDifference * 10f + Vector3.Distance(point, targetPosition);
+                if (score < bestScore)
+                {
+                    bestScore = score;
+                    bestPoint = point;
+                }
+            }
+
+            return bestPoint;
         }
 
         /// <summary>
@@ -955,10 +1215,20 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         public void ExitEmergencyLockdown()
         {
+            try
+            {
+                npcComponent?.Behaviour?.CombatBehaviour?.Disable_Networked(null);
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"Guard {badgeNumber} could not disable native emergency combat: {ex.Message}");
+            }
+
             // Each guard has a single native equippable slot. Clear the response
             // Taser/baton before restoring its ordinary assignment so the emergency
             // weapon never leaks into normal jail behavior.
             ClearEmergencyEquippable();
+            RemoveEmergencyResponseSpeedControl();
 
             if (assignment == GuardAssignment.DayRoomPatrol)
             {
@@ -992,6 +1262,42 @@ namespace Behind_Bars.Systems.NPCs
             catch (Exception ex)
             {
                 ModLogger.Warn($"Guard {badgeNumber} could not clear emergency equipment: {ex.Message}");
+            }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        /// <summary>Releases emergency chase speed ownership before normal assignment behavior resumes.</summary>
+        private void RemoveEmergencyResponseSpeedControl()
+        {
+            try
+            {
+                npcComponent?.Movement?.SpeedController?.RemoveSpeedControl(EmergencyResponseSpeedControlId);
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"Guard {badgeNumber} could not remove emergency response speed: {ex.Message}");
+            }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void RemoveDayRoomPatrolSpeedControl()
+        {
+            if (assignment != GuardAssignment.DayRoomPatrol || npcComponent?.Movement?.SpeedController == null)
+            {
+                return;
+            }
+
+            try
+            {
+                npcComponent.Movement.SpeedController.RemoveSpeedControl(DayRoomPatrolSpeedControlId);
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Warn($"Day-room guard {badgeNumber} could not clear patrol speed for emergency response: {ex.Message}");
             }
         }
 

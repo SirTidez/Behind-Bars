@@ -1,8 +1,8 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Linq;
 using Behind_Bars.Helpers;
+using Behind_Bars.Systems.CrimeTracking;
 using Behind_Bars.Systems.NPCs;
 using Behind_Bars.Utils;
 using MelonLoader;
@@ -37,8 +37,12 @@ namespace Behind_Bars.Systems.Jail
         // them enough of the two-hour block to complete a real NavMesh return
         // before their doors are secured.
         private const int WarningMinutesBeforeClose = 30;
+        // Navigation remains the normal return path, but autonomous pathing is not
+        // allowed to hold the institution past a tier boundary. Any inmate still out
+        // five game minutes before close is recovered by their canonical behavior.
+        private const int NpcRecoveryMinutesBeforeClose = 5;
         private const float LocalAudioMaxDistance = 55f;
-        private const float InmateReturnGraceSeconds = 10f;
+        private const float StragglerRepathSeconds = 5f;
 
         // Schedule state is scene-local and rebuilt from the native clock. The status
         // clock fields below deliberately preserve fractional real-time progress while
@@ -52,9 +56,12 @@ namespace Behind_Bars.Systems.Jail
         private float statusClockMinuteProgress;
         private float statusClockLastRealtime;
         private float statusSecondsPerGameMinute = 1f;
-        private bool playerReturnInProgress;
-        private Coroutine returnGraceCoroutine;
-        private Coroutine playerReturnCoroutine;
+        private bool scheduleHoldActive;
+        private int heldScheduleMinute = -1;
+        private float holdStartedNativeMinute;
+        private float accumulatedScheduleDelayMinutes;
+        private Coroutine lowerTierReturnCoroutine;
+        private Coroutine upperTierReturnCoroutine;
         private Coroutine initialScheduleCoroutine;
 
         private AudioSource signalAudioSource;
@@ -80,16 +87,8 @@ namespace Behind_Bars.Systems.Jail
 
         private void OnDestroy()
         {
-            if (returnGraceCoroutine != null)
-            {
-                MelonCoroutines.Stop(returnGraceCoroutine);
-                returnGraceCoroutine = null;
-            }
-            if (playerReturnCoroutine != null)
-            {
-                MelonCoroutines.Stop(playerReturnCoroutine);
-                playerReturnCoroutine = null;
-            }
+            StopTierReturnMonitor(JailRecreationTier.Lower);
+            StopTierReturnMonitor(JailRecreationTier.Upper);
             if (initialScheduleCoroutine != null)
             {
                 MelonCoroutines.Stop(initialScheduleCoroutine);
@@ -118,6 +117,11 @@ namespace Behind_Bars.Systems.Jail
                 return;
             }
 
+            if (scheduleHoldActive)
+            {
+                return;
+            }
+
             if (!force && currentMinute == lastObservedNativeMinute)
             {
                 return;
@@ -137,8 +141,13 @@ namespace Behind_Bars.Systems.Jail
             }
 
             int endScheduleMinute = JailRecreationSchedule.GetActiveBlockEndMinute(currentMinute);
-            if (endScheduleMinute - currentMinute != WarningMinutesBeforeClose ||
-                lastWarningScheduleMinute == currentMinute)
+            int minutesRemaining = endScheduleMinute - currentMinute;
+            if (minutesRemaining <= NpcRecoveryMinutesBeforeClose)
+            {
+                RecoverTierStragglers(activeTier, GetActiveInmateBehaviors(), "final pre-close deadline");
+            }
+
+            if (minutesRemaining != WarningMinutesBeforeClose || lastWarningScheduleMinute == currentMinute)
             {
                 return;
             }
@@ -175,42 +184,107 @@ namespace Behind_Bars.Systems.Jail
                 return;
             }
 
+            List<InmateBehavior> inmates = GetActiveInmateBehaviors();
             JailRecreationTier previousTier = activeTier;
-            activeTier = desiredTier;
-            lastWarningScheduleMinute = -1;
-
-            if (returnGraceCoroutine != null)
+            if (TryBeginTransitionLockdown(currentMinute, previousTier, desiredTier, inmates))
             {
-                MelonCoroutines.Stop(returnGraceCoroutine);
-                returnGraceCoroutine = null;
+                return;
             }
 
-            List<InmateBehavior> inmates = GetActiveInmateBehaviors();
+            UpdatePlayerSegregationForTransition(previousTier, desiredTier);
+            activeTier = desiredTier;
+            lastWarningScheduleMinute = -1;
             if (previousTier == JailRecreationTier.Lower || previousTier == JailRecreationTier.Upper)
             {
                 // Reissue at the transition as a recovery guard for an inmate
                 // that spawned after the warning or briefly lost its route.
                 CommandTierReturn(previousTier, inmates);
-                returnGraceCoroutine = MelonCoroutines.Start(SecureTierAfterReturn(previousTier)) as Coroutine;
+                StartTierReturnMonitor(previousTier);
             }
 
             if (desiredTier == JailRecreationTier.None)
             {
                 CommandAllInmatesHome(inmates);
-                if (returnGraceCoroutine == null)
-                {
-                    returnGraceCoroutine = MelonCoroutines.Start(SecureAllAfterReturn()) as Coroutine;
-                }
+                StartTierReturnMonitor(JailRecreationTier.Lower);
+                StartTierReturnMonitor(JailRecreationTier.Upper);
                 ModLogger.Info("[JAIL LIFECYCLE] Bedtime count started; all recreation is closed until 07:00");
             }
             else
             {
+                StopTierReturnMonitor(desiredTier);
                 OpenTierForRecreation(desiredTier);
                 CommandScheduledRecreation(desiredTier, inmates);
-                ModLogger.Info($"[JAIL LIFECYCLE] {desiredTier} tier recreation opened");
+                ModLogger.Info($"[JAIL LIFECYCLE] {desiredTier} tier recreation opened on schedule; outgoing cells secure individually as inmates arrive");
             }
 
-            EnforcePlayerAtTransition(desiredTier);
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        /// <summary>
+        /// At a real tier boundary, autonomous NPC pathing is recovered immediately so it
+        /// cannot block intake or shorten the incoming tier. A late local player remains a
+        /// custody incident and holds the schedule until responding officers secure them.
+        /// </summary>
+        private bool TryBeginTransitionLockdown(
+            int currentMinute,
+            JailRecreationTier previousTier,
+            JailRecreationTier desiredTier,
+            List<InmateBehavior> inmates)
+        {
+            if ((previousTier != JailRecreationTier.Lower && previousTier != JailRecreationTier.Upper) ||
+                desiredTier == previousTier || GuardAssaultLockdownManager.IsLockdownActive)
+            {
+                return false;
+            }
+
+            var lateInmates = new List<InmateBehavior>();
+            foreach (InmateBehavior inmate in inmates)
+            {
+                if (inmate != null && GetTierForCell(inmate.GetAssignedCellNumber()) == previousTier &&
+                    !inmate.IsConfinedToAssignedCell())
+                {
+                    lateInmates.Add(inmate);
+                }
+            }
+
+            Player latePlayer = null;
+            Player player = GetLocalPlayer();
+            JailTimeTracker tracker = Core.ResolveJailTimeTracker();
+            CellAssignmentManager assignments = Core.ResolveCellAssignmentManager();
+            if (player != null && tracker != null && assignments != null && tracker.IsTracking(player))
+            {
+                int cellIndex = assignments.GetPlayerCellNumber(player);
+                if (cellIndex >= 0 && GetTierForCell(cellIndex) == previousTier &&
+                    Core.JailController?.IsPlayerInJailCellBounds(player, cellIndex) != true)
+                {
+                    latePlayer = player;
+                }
+            }
+
+            if (lateInmates.Count > 0)
+            {
+                RecoverTierStragglers(previousTier, lateInmates, "tier-boundary safety net");
+            }
+
+            if (latePlayer == null)
+            {
+                return false;
+            }
+
+            BeginEmergencyScheduleHold(currentMinute);
+            if (GuardAssaultLockdownManager.TryBeginScheduleViolation(latePlayer))
+            {
+                ModLogger.Warn(
+                    $"[JAIL LIFECYCLE] Held {previousTier}-to-{desiredTier} boundary at " +
+                    $"{currentMinute / 60:00}:{currentMinute % 60:00} for the late local player");
+                return true;
+            }
+
+            CancelEmergencyScheduleHold();
+            ModLogger.Error("[JAIL LIFECYCLE] Could not start officer response for the late player; schedule hold was canceled without transferring the player");
+            return false;
         }
 
         /// <summary>
@@ -222,6 +296,26 @@ namespace Behind_Bars.Systems.Jail
         [HideFromIl2Cpp]
 #endif
         private bool TryGetCurrentScheduleMinute(out int minuteOfDay)
+        {
+            if (scheduleHoldActive)
+            {
+                minuteOfDay = heldScheduleMinute;
+                return minuteOfDay >= 0;
+            }
+
+            if (!TryGetNativeScheduleMinute(out int nativeMinute))
+            {
+                minuteOfDay = 0;
+                return false;
+            }
+
+            minuteOfDay = NormalizeScheduleMinute(
+                Mathf.FloorToInt(GetPreciseNativeScheduleMinute() - accumulatedScheduleDelayMinutes));
+            return true;
+        }
+
+        /// <summary>Reads the unmodified Schedule I time-of-day minute.</summary>
+        private bool TryGetNativeScheduleMinute(out int minuteOfDay)
         {
             try
             {
@@ -250,6 +344,109 @@ namespace Behind_Bars.Systems.Jail
             minuteOfDay = (Mathf.Clamp(fallback.GetCurrentGameHour(), 0, 23) * 60) +
                           Mathf.Clamp(fallback.GetCurrentGameMinute(), 0, 59);
             return true;
+        }
+
+        /// <summary>Begins an idempotent jail-local clock hold at the current effective schedule minute.</summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        public void BeginEmergencyScheduleHold()
+        {
+            if (TryGetCurrentScheduleMinute(out int currentMinute))
+            {
+                BeginEmergencyScheduleHold(currentMinute);
+            }
+        }
+
+        /// <summary>Begins a jail-local clock hold without modifying the global Schedule I clock.</summary>
+        private void BeginEmergencyScheduleHold(int currentMinute)
+        {
+            if (scheduleHoldActive)
+            {
+                return;
+            }
+
+            heldScheduleMinute = NormalizeScheduleMinute(currentMinute);
+            holdStartedNativeMinute = GetPreciseNativeScheduleMinute();
+            scheduleHoldActive = true;
+            statusClockLastRealtime = Time.realtimeSinceStartup;
+            BeginLockdownAudio();
+            ModLogger.Warn($"[JAIL LIFECYCLE] Jail recreation clock held at {heldScheduleMinute / 60:00}:{heldScheduleMinute % 60:00}");
+        }
+
+        /// <summary>
+        /// Releases the jail-local clock hold, shifts future recreation boundaries by the
+        /// elapsed native game minutes, and reapplies the held boundary as a fresh transition.
+        /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        public void EndEmergencyScheduleHold()
+        {
+            if (!scheduleHoldActive)
+            {
+                return;
+            }
+
+            float elapsedMinutes = ForwardMinuteDelta(
+                holdStartedNativeMinute,
+                GetPreciseNativeScheduleMinute());
+            accumulatedScheduleDelayMinutes = Mathf.Repeat(
+                accumulatedScheduleDelayMinutes + elapsedMinutes,
+                1440f);
+            scheduleHoldActive = false;
+            heldScheduleMinute = -1;
+            lastObservedNativeMinute = -1;
+            statusClockMinute = -1;
+            EndLockdownAudio();
+            ModLogger.Info($"[JAIL LIFECYCLE] Jail recreation clock resumed after {elapsedMinutes:F1} held game minute(s)");
+            RefreshScheduleFromNativeTime(force: true);
+        }
+
+        /// <summary>Releases a hold that failed before an emergency response took ownership.</summary>
+        private void CancelEmergencyScheduleHold()
+        {
+            scheduleHoldActive = false;
+            heldScheduleMinute = -1;
+            EndLockdownAudio();
+        }
+
+        private static int NormalizeScheduleMinute(int minute)
+        {
+            int normalized = minute % 1440;
+            return normalized < 0 ? normalized + 1440 : normalized;
+        }
+
+        private static float ForwardMinuteDelta(float startMinute, float endMinute)
+        {
+            float delta = endMinute - startMinute;
+            return delta < 0f ? delta + 1440f : delta;
+        }
+
+        /// <summary>Reads fractional native time-of-day for exact hold-duration accounting.</summary>
+        private static float GetPreciseNativeScheduleMinute()
+        {
+            try
+            {
+                TimeManager manager = TimeManager.Instance;
+                if (manager != null)
+                {
+                    int rawTime = manager.CurrentTime;
+                    int wholeMinute = (Mathf.Clamp(rawTime / 100, 0, 23) * 60) +
+                                      Mathf.Clamp(rawTime % 100, 0, 59);
+                    float normalizedMinute = manager.NormalizedTimeOfDay * 1440f;
+                    float fraction = Mathf.Clamp(normalizedMinute - manager.DailyMinSum, 0f, 0.999f);
+                    return wholeMinute + fraction;
+                }
+            }
+            catch
+            {
+                // Integer fallback remains sufficient to keep the schedule monotonic.
+            }
+
+            GameTimeManager fallback = GameTimeManager.Instance;
+            return (Mathf.Clamp(fallback.GetCurrentGameHour(), 0, 23) * 60) +
+                   Mathf.Clamp(fallback.GetCurrentGameMinute(), 0, 59);
         }
 
 #if !MONO
@@ -291,7 +488,7 @@ namespace Behind_Bars.Systems.Jail
         // door/audio transition effects; the canonical manager also calls this directly.
         private void ApplyCurrentTierToInmates()
         {
-            if (activeTier == JailRecreationTier.Unknown)
+            if (activeTier == JailRecreationTier.Unknown || scheduleHoldActive)
             {
                 return;
             }
@@ -315,9 +512,75 @@ namespace Behind_Bars.Systems.Jail
         {
             foreach (int cellIndex in GetCellIndicesForTier(tier))
             {
+                if (IsCellRestrictedBySegregation(cellIndex))
+                {
+                    Core.JailController?.doorController?.SecureJailCellDoor(cellIndex);
+                    ModLogger.Info($"[SEGREGATION] Kept assigned cell {cellIndex} secured while {tier} tier recreation opened");
+                    continue;
+                }
+
                 Core.JailController?.doorController?.OpenJailCellDoor(cellIndex);
             }
             PlayOneShot(doorBuzzerClip, $"{tier} recreation door buzzer");
+        }
+
+        /// <summary>
+        /// Starts and completes persisted segregation only at real assigned-tier boundaries.
+        /// A punishment imposed during a partial recreation block therefore cannot consume
+        /// that block; its first counted cycle starts at the player's next tier opening.
+        /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void UpdatePlayerSegregationForTransition(
+            JailRecreationTier previousTier,
+            JailRecreationTier desiredTier)
+        {
+            if (previousTier == JailRecreationTier.Unknown || previousTier == desiredTier)
+            {
+                return;
+            }
+
+            Player player = GetLocalPlayer();
+            CellAssignmentManager assignments = Core.ResolveCellAssignmentManager();
+            RapSheet rapSheet = Core.GetRapSheet(player);
+            if (player == null || assignments == null || rapSheet == null || !rapSheet.HasActiveSegregation)
+            {
+                return;
+            }
+
+            int cellIndex = assignments.GetPlayerCellNumber(player);
+            JailRecreationTier assignedTier = GetTierForCell(cellIndex);
+            if (previousTier == assignedTier && rapSheet.IsSegregationCycleActive &&
+                rapSheet.TryCompleteSegregationCycle())
+            {
+                Core.MarkRapSheetChanged(player);
+                ModLogger.Info(
+                    $"[SEGREGATION] {player.name} completed one full recreation cycle; " +
+                    $"{rapSheet.SegregationCyclesRemaining} cycle(s) remain");
+            }
+
+            if (desiredTier == assignedTier && rapSheet.HasActiveSegregation &&
+                !rapSheet.IsSegregationCycleActive && rapSheet.TryBeginSegregationCycle())
+            {
+                Core.MarkRapSheetChanged(player);
+                ModLogger.Warn(
+                    $"[SEGREGATION] {player.name} began a full {assignedTier} tier segregation cycle; " +
+                    $"{rapSheet.SegregationCyclesRemaining} cycle(s) remain including this block");
+            }
+        }
+
+        /// <summary>Whether an assigned player cell must stay locked during its tier's recreation.</summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private bool IsCellRestrictedBySegregation(int cellIndex)
+        {
+            Player player = GetLocalPlayer();
+            CellAssignmentManager assignments = Core.ResolveCellAssignmentManager();
+            return player != null && assignments != null &&
+                   assignments.GetPlayerCellNumber(player) == cellIndex &&
+                   Core.GetRapSheet(player)?.HasActiveSegregation == true;
         }
 
 #if !MONO
@@ -374,12 +637,90 @@ namespace Behind_Bars.Systems.Jail
 #if !MONO
         [HideFromIl2Cpp]
 #endif
-        // The grace period is real time so NPC return/door security still completes when
-        // the game clock is paused or running at a different speed.
-        private IEnumerator SecureTierAfterReturn(JailRecreationTier tier)
+        private void StartTierReturnMonitor(JailRecreationTier tier)
         {
-            float deadline = Time.realtimeSinceStartup + InmateReturnGraceSeconds;
-            while (Time.realtimeSinceStartup < deadline)
+            if (tier == JailRecreationTier.Lower)
+            {
+                if (lowerTierReturnCoroutine == null)
+                {
+                    lowerTierReturnCoroutine = MelonCoroutines.Start(SecureTierAsInmatesArrive(tier)) as Coroutine;
+                }
+            }
+            else if (tier == JailRecreationTier.Upper && upperTierReturnCoroutine == null)
+            {
+                upperTierReturnCoroutine = MelonCoroutines.Start(SecureTierAsInmatesArrive(tier)) as Coroutine;
+            }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void RecoverTierStragglers(
+            JailRecreationTier tier,
+            List<InmateBehavior> inmates,
+            string reason)
+        {
+            int recovered = 0;
+            int failed = 0;
+            foreach (InmateBehavior inmate in inmates)
+            {
+                if (inmate == null || GetTierForCell(inmate.GetAssignedCellNumber()) != tier ||
+                    inmate.IsConfinedToAssignedCell())
+                {
+                    continue;
+                }
+
+                if (inmate.SecureInAssignedCellForScheduleRecovery(reason))
+                {
+                    recovered++;
+                }
+                else
+                {
+                    failed++;
+                }
+            }
+
+            if (recovered > 0 || failed > 0)
+            {
+                ModLogger.Warn(
+                    $"[JAIL LIFECYCLE] {tier} tier NPC schedule recovery ({reason}): " +
+                    $"recovered={recovered}, failed={failed}. NPC pathing will not hold the jail clock.");
+            }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void StopTierReturnMonitor(JailRecreationTier tier)
+        {
+            Coroutine monitor = tier == JailRecreationTier.Lower
+                ? lowerTierReturnCoroutine
+                : upperTierReturnCoroutine;
+            if (monitor != null)
+            {
+                MelonCoroutines.Stop(monitor);
+            }
+
+            if (tier == JailRecreationTier.Lower)
+            {
+                lowerTierReturnCoroutine = null;
+            }
+            else if (tier == JailRecreationTier.Upper)
+            {
+                upperTierReturnCoroutine = null;
+            }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        // Each inmate owns their canonical NavMesh return. Cells lock independently as
+        // their occupants arrive, so a straggler cannot shorten the other tier's block.
+        private IEnumerator SecureTierAsInmatesArrive(JailRecreationTier tier)
+        {
+            var individuallySecuredCells = new HashSet<int>();
+            float nextRepathTime = Time.realtimeSinceStartup + StragglerRepathSeconds;
+            while (true)
             {
                 bool pending = false;
                 foreach (InmateBehavior inmate in GetActiveInmateBehaviors())
@@ -391,36 +732,45 @@ namespace Behind_Bars.Systems.Jail
 
                     if (inmate.IsConfinedToAssignedCell())
                     {
-                        Core.JailController?.doorController?.SecureJailCellDoor(inmate.GetAssignedCellNumber());
+                        int cellIndex = inmate.GetAssignedCellNumber();
+                        if (individuallySecuredCells.Add(cellIndex))
+                        {
+                            Core.JailController?.doorController?.SecureJailCellDoor(cellIndex);
+                        }
                     }
                     else
                     {
                         pending = true;
+                        if (Time.realtimeSinceStartup >= nextRepathTime)
+                        {
+                            // Idempotent while a valid route is active; otherwise this
+                            // recovers a route lost to a door/NavMesh state change.
+                            inmate.ReturnToAssignedCell();
+                        }
                     }
                 }
 
                 if (!pending)
                 {
                     SecureTierDoors(tier);
-                    returnGraceCoroutine = null;
+                    if (tier == JailRecreationTier.Lower)
+                    {
+                        lowerTierReturnCoroutine = null;
+                    }
+                    else
+                    {
+                        upperTierReturnCoroutine = null;
+                    }
+                    ModLogger.Info($"[JAIL LIFECYCLE] {tier} tier return complete; all cells secured");
                     yield break;
                 }
 
+                if (Time.realtimeSinceStartup >= nextRepathTime)
+                {
+                    nextRepathTime = Time.realtimeSinceStartup + StragglerRepathSeconds;
+                }
                 yield return new WaitForSecondsRealtime(0.25f);
             }
-
-            SecureTierDoors(tier);
-            returnGraceCoroutine = null;
-        }
-
-#if !MONO
-        [HideFromIl2Cpp]
-#endif
-        private IEnumerator SecureAllAfterReturn()
-        {
-            yield return SecureTierAfterReturn(JailRecreationTier.Lower);
-            yield return SecureTierAfterReturn(JailRecreationTier.Upper);
-            returnGraceCoroutine = null;
         }
 
 #if !MONO
@@ -592,51 +942,6 @@ namespace Behind_Bars.Systems.Jail
             return behaviors;
         }
 
-#if !MONO
-        [HideFromIl2Cpp]
-#endif
-        // A transition only returns a tracked player whose assigned tier is not active;
-        // an already-confined player is left alone to avoid a disruptive false lockdown.
-        private void EnforcePlayerAtTransition(JailRecreationTier tier)
-        {
-            if (playerReturnInProgress)
-            {
-                return;
-            }
-
-            Player player = GetLocalPlayer();
-            JailTimeTracker tracker = Core.ResolveJailTimeTracker();
-            CellAssignmentManager assignments = Core.ResolveCellAssignmentManager();
-            if (player == null || tracker == null || assignments == null || !tracker.IsTracking(player))
-            {
-                return;
-            }
-
-            int cellIndex = assignments.GetPlayerCellNumber(player);
-            if (cellIndex < 0)
-            {
-                return;
-            }
-
-            // A tier transition is not itself an escape. The player may have
-            // obeyed the recall and already be inside their own cell; in that
-            // case the normal tier-door securing path is sufficient and a
-            // blackout/teleport would be both disruptive and misleading.
-            if (Core.JailController?.IsPlayerInJailCellBounds(player, cellIndex) == true)
-            {
-                ModLogger.Debug($"[JAIL LIFECYCLE] Player is already confined in cell {cellIndex}; no schedule-return teleport required");
-                return;
-            }
-
-            JailRecreationTier playerTier = GetTierForCell(cellIndex);
-            if (tier == playerTier)
-            {
-                return;
-            }
-
-            playerReturnCoroutine = MelonCoroutines.Start(ForcePlayerToAssignedCell(player, cellIndex)) as Coroutine;
-        }
-
         /// <summary>
         /// Returns whether the supplied cell belongs to the tier that is
         /// currently in recreation. Used by the booking flow so a newly
@@ -647,9 +952,29 @@ namespace Behind_Bars.Systems.Jail
 #endif
         public bool IsCellInActiveRecreation(int cellIndex)
         {
-            return activeTier == JailRecreationTier.Lower || activeTier == JailRecreationTier.Upper
-                ? GetTierForCell(cellIndex) == activeTier
+            return !scheduleHoldActive && (activeTier == JailRecreationTier.Lower || activeTier == JailRecreationTier.Upper)
+                ? GetTierForCell(cellIndex) == activeTier && !IsCellRestrictedBySegregation(cellIndex)
                 : false;
+        }
+
+        /// <summary>
+        /// Returns true when the local jailed player's assigned tier is presently scheduled
+        /// for recreation. Segregated escapees still qualify so additional assaults escalate.
+        /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        public bool IsPlayerOnActiveRecreation(Player player)
+        {
+            if (player == null || player != GetLocalPlayer() || scheduleHoldActive ||
+                !Core.ResolveJailTimeTracker().IsInJail(player))
+            {
+                return false;
+            }
+
+            CellAssignmentManager assignments = Core.ResolveCellAssignmentManager();
+            int cellIndex = assignments?.GetPlayerCellNumber(player) ?? -1;
+            return cellIndex >= 0 && GetTierForCell(cellIndex) == activeTier;
         }
 
         /// <summary>
@@ -697,8 +1022,15 @@ namespace Behind_Bars.Systems.Jail
             }
 
             JailRecreationTier scheduledTier = JailRecreationSchedule.GetScheduledTier(currentMinute);
-            bool assignedTierActive = scheduledTier == assignedTier;
-            int targetMinute = assignedTierActive
+            RapSheet rapSheet = Core.GetRapSheet(player);
+            bool isSegregated = rapSheet?.HasActiveSegregation == true;
+            bool segregationCycleActive = rapSheet?.IsSegregationCycleActive == true;
+            int segregationCyclesRemaining = rapSheet?.SegregationCyclesRemaining ?? 0;
+            bool assignedTierScheduled = scheduledTier == assignedTier;
+            bool assignedTierActive = assignedTierScheduled && !isSegregated;
+            int targetMinute = segregationCycleActive
+                ? JailRecreationSchedule.GetActiveBlockEndMinute(currentMinute)
+                : assignedTierActive
                 ? JailRecreationSchedule.GetActiveBlockEndMinute(currentMinute)
                 : JailRecreationSchedule.GetNextTierStartMinute(currentMinute, assignedTier);
             int phaseStartMinute = JailRecreationSchedule.GetActiveBlockStartMinute(currentMinute);
@@ -708,8 +1040,11 @@ namespace Behind_Bars.Systems.Jail
             {
                 AssignedCellNumber = assignedCell,
                 AssignedTier = assignedTier,
-                ActiveTier = scheduledTier,
-                IsAssignedTierActive = assignedTierActive,
+                ActiveTier = scheduleHoldActive ? JailRecreationTier.None : scheduledTier,
+                IsAssignedTierActive = !scheduleHoldActive && assignedTierActive,
+                IsInSegregation = isSegregated,
+                IsSegregationCycleActive = segregationCycleActive,
+                SegregationCyclesRemaining = segregationCyclesRemaining,
                 RemainingRealSeconds = JailRecreationSchedule.GetRemainingRealSeconds(
                     currentMinute,
                     statusClockMinuteProgress,
@@ -732,12 +1067,17 @@ namespace Behind_Bars.Systems.Jail
         private void UpdateStatusClock(TimeManager nativeTimeManager, int currentMinute)
         {
             float realtimeNow = Time.realtimeSinceStartup;
+            if (scheduleHoldActive)
+            {
+                statusClockLastRealtime = realtimeNow;
+                return;
+            }
             float secondsPerGameMinute = ResolveSecondsPerGameMinute(nativeTimeManager, currentMinute);
 
             if (statusClockMinute != currentMinute)
             {
                 statusClockMinute = currentMinute;
-                statusClockMinuteProgress = ResolveNativeMinuteProgress(nativeTimeManager);
+                statusClockMinuteProgress = ResolveEffectiveMinuteProgress(currentMinute);
                 statusClockLastRealtime = realtimeNow;
                 return;
             }
@@ -792,74 +1132,13 @@ namespace Behind_Bars.Systems.Jail
             return nativeTimeManager == null || nativeTimeManager.TimeSpeedMultiplier > 0f;
         }
 
-#if !MONO
-        [HideFromIl2Cpp]
-#endif
-        // NormalizedTimeOfDay supplies fractional day progress; DailyMinSum anchors it
-        // to the current native minute without exposing native time types to the UI.
-        private static float ResolveNativeMinuteProgress(TimeManager nativeTimeManager)
+        /// <summary>Resolves fractional progress after applying any accumulated jail-local delay.</summary>
+        private float ResolveEffectiveMinuteProgress(int currentMinute)
         {
-            if (nativeTimeManager == null)
-            {
-                return 0f;
-            }
-
-            float preciseMinute = nativeTimeManager.NormalizedTimeOfDay * 1440f;
-            return Mathf.Clamp(preciseMinute - nativeTimeManager.DailyMinSum, 0f, 0.999f);
-        }
-
-#if !MONO
-        [HideFromIl2Cpp]
-#endif
-        // Schedule recall uses a brief real-time blackout, then the same authored spawn
-        // destination/orientation as custody transfer, and finally restores normal audio
-        // and lighting. Failure is logged rather than treated as a successful return.
-        private IEnumerator ForcePlayerToAssignedCell(Player player, int cellIndex)
-        {
-            playerReturnInProgress = true;
-            try
-            {
-                Singleton<BlackOverlay>.Instance.Open(0.15f);
-            }
-            catch (Exception exception)
-            {
-                ModLogger.Warn($"[JAIL LIFECYCLE] Could not open schedule-lockdown blackout: {exception.Message}");
-            }
-
-            BeginLockdownAudio();
-            Core.JailController?.SetJailLighting(JailLightingController.LightingState.Emergency);
-            yield return new WaitForSecondsRealtime(0.2f);
-
-            var assignments = Core.ResolveCellAssignmentManager();
-            CellDetail cell = Core.JailController?.GetCellByIndex(cellIndex);
-            Transform destination = assignments?.GetCellSpawnPoints(cellIndex).FirstOrDefault(point => point != null)
-                ?? cell?.cellBounds
-                ?? cell?.cellTransform;
-            if (destination != null && player != null)
-            {
-                player.transform.SetPositionAndRotation(destination.position, Quaternion.LookRotation(Vector3.left, Vector3.up));
-                Core.JailController?.doorController?.SecureJailCellDoor(cellIndex);
-                ModLogger.Info($"[JAIL LIFECYCLE] Returned prisoner to assigned cell {cellIndex} for schedule lockdown");
-            }
-            else
-            {
-                ModLogger.Error($"[JAIL LIFECYCLE] Could not return prisoner to assigned cell {cellIndex}: no usable spawn destination");
-            }
-
-            yield return new WaitForSecondsRealtime(0.25f);
-            Core.JailController?.SetJailLighting(JailLightingController.LightingState.Normal);
-            EndLockdownAudio();
-            try
-            {
-                Singleton<BlackOverlay>.Instance.Close(0.25f);
-            }
-            catch (Exception exception)
-            {
-                ModLogger.Warn($"[JAIL LIFECYCLE] Could not close schedule-lockdown blackout: {exception.Message}");
-            }
-
-            playerReturnInProgress = false;
-            playerReturnCoroutine = null;
+            float effectiveMinute = Mathf.Repeat(
+                GetPreciseNativeScheduleMinute() - accumulatedScheduleDelayMinutes,
+                1440f);
+            return Mathf.Clamp(effectiveMinute - currentMinute, 0f, 0.999f);
         }
 
         private static Player GetLocalPlayer()

@@ -12,12 +12,14 @@ using static Behind_Bars.Systems.NPCs.ParoleOfficerBehavior;
 using BBHelpers = Behind_Bars.Helpers.Helpers;
 
 #if !MONO
+using Il2CppScheduleOne.Doors;
 using Il2CppScheduleOne.Map;
 using Il2CppScheduleOne.NPCs;
 using Il2CppScheduleOne.NPCs.Schedules;
 using Il2CppScheduleOne.PlayerScripts;
 using Il2CppInterop.Runtime.Attributes;
 #else
+using ScheduleOne.Doors;
 using ScheduleOne.Map;
 using ScheduleOne.NPCs;
 using ScheduleOne.NPCs.Schedules;
@@ -85,6 +87,9 @@ namespace Behind_Bars.Systems.NPCs
         /// </summary>
         private HashSet<ParoleOfficerAssignment> officersAtCourthouse;
 
+        /// <summary>Officers physically approaching the courthouse before native building ownership begins.</summary>
+        private HashSet<ParoleOfficerAssignment> officersReturningToCourthouse;
+
         /// <summary>
         /// Prevents repeated duplicate-supervisor scans once the tracked native supervisor has
         /// been validated for the current manager lifetime. Despawning the supervisor resets it.
@@ -93,6 +98,9 @@ namespace Behind_Bars.Systems.NPCs
 
         /// <summary>Cached native courthouse building used by the supervisor's home action.</summary>
         private NPCEnterableBuilding courthouseHomeBuilding;
+
+        /// <summary>Cached usable courthouse door shared by the physical and native transition phases.</summary>
+        private StaticDoor courthouseHomeDoor;
 
         /// <summary>Suppresses repeated logs while the native courthouse building is unavailable.</summary>
         private bool loggedCourthouseHomeLookupFailure;
@@ -235,6 +243,7 @@ namespace Behind_Bars.Systems.NPCs
                 activeOfficers = new Dictionary<ParoleOfficerAssignment, ParoleOfficerBehavior>();
                 spawnedAssignments = new HashSet<ParoleOfficerAssignment>();
                 officersAtCourthouse = new HashSet<ParoleOfficerAssignment>();
+                officersReturningToCourthouse = new HashSet<ParoleOfficerAssignment>();
                 supervisingOfficerRosterValidated = false;
                 lastUpdateTime = Time.time;
 
@@ -1182,7 +1191,45 @@ namespace Behind_Bars.Systems.NPCs
                 return;
             }
 
+            if (officersReturningToCourthouse.Contains(assignment))
+            {
+                if (!officer.HasReachedDestination())
+                {
+                    return;
+                }
+
+                officersReturningToCourthouse.Remove(assignment);
+                EnterCourthouseHomeAction(assignment, officer);
+                return;
+            }
+
+            if (!TryResolveCourthouseHomeDoor(officer.transform.position, out var courthouseDoor))
+            {
+                return;
+            }
+
+            Vector3 exteriorApproach = courthouseDoor.AccessPoint.position;
+            if (!officer.BeginCourthouseReturn(exteriorApproach))
+            {
+                ModLogger.Warn($"DynamicParoleOfficerManager: {assignment} could not begin the physical return to the courthouse entrance");
+                return;
+            }
+
+            officersReturningToCourthouse.Add(assignment);
+            ModLogger.Info($"DynamicParoleOfficerManager: {assignment} is walking back to the courthouse entrance");
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private void EnterCourthouseHomeAction(ParoleOfficerAssignment assignment, ParoleOfficerBehavior officer)
+        {
             if (!TryResolveCourthouseHomeAction(officer, out var scheduleManager, out var homeAction))
+            {
+                return;
+            }
+
+            if (!TryResolveCourthouseHomeDoor(officer.transform.position, out var courthouseDoor))
             {
                 return;
             }
@@ -1193,7 +1240,7 @@ namespace Behind_Bars.Systems.NPCs
                 homeAction.Duration = 1439;
                 ReflectionUtils.TrySetFieldOrProperty(homeAction, "EndTime", 2359);
                 ReflectionUtils.TrySetFieldOrProperty(homeAction, "Building", courthouseHomeBuilding);
-                ReflectionUtils.TrySetFieldOrProperty(homeAction, "Door", null);
+                ReflectionUtils.TrySetFieldOrProperty(homeAction, "Door", courthouseDoor);
                 homeAction.gameObject.SetActive(true);
                 homeAction.enabled = true;
                 scheduleManager.InitializeActions();
@@ -1203,7 +1250,7 @@ namespace Behind_Bars.Systems.NPCs
                 scheduleManager.EnforceState(true);
                 officer.BeginCourthouseHomeStay();
                 officersAtCourthouse.Add(assignment);
-                ModLogger.Info($"DynamicParoleOfficerManager: {assignment} is returning inside the courthouse home base");
+                ModLogger.Info($"DynamicParoleOfficerManager: {assignment} reached the entrance and is entering the courthouse home base");
             }
             catch (Exception ex)
             {
@@ -1227,6 +1274,7 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             bool wasAtCourthouse = officersAtCourthouse.Contains(assignment);
+            bool wasReturning = officersReturningToCourthouse.Remove(assignment);
 
             if (wasAtCourthouse &&
                 TryResolveCourthouseHomeAction(officer, out var scheduleManager, out var homeAction))
@@ -1250,7 +1298,7 @@ namespace Behind_Bars.Systems.NPCs
             officer.SetOnDuty(true);
             // Avoid continuously resetting a supervisor that is already outside: a
             // check-in dialogue or release handoff owns its current movement target.
-            if (returnToAssignedPost && wasAtCourthouse && !officer.IsProcessingIntake())
+            if (returnToAssignedPost && (wasAtCourthouse || wasReturning) && !officer.IsProcessingIntake())
             {
                 officer.ReturnToAssignedPost(PresetParoleOfficerRoutes.GetSupervisingOfficerStation());
             }
@@ -1364,6 +1412,48 @@ namespace Behind_Bars.Systems.NPCs
         [HideFromIl2Cpp]
 #endif
         /// <summary>
+        /// Resolves the usable native courthouse door and its authored access point. Both
+        /// movement phases use this same door so the schedule handoff cannot select a second
+        /// entrance and send an officer back across the apron.
+        /// </summary>
+        private bool TryResolveCourthouseHomeDoor(Vector3 fromPosition, out StaticDoor door)
+        {
+            door = courthouseHomeDoor;
+            if (door != null && door.gameObject != null && door.AccessPoint != null)
+            {
+                return true;
+            }
+
+            if (!TryResolveCourthouseHomeBuilding(out var building))
+            {
+                return false;
+            }
+
+            try
+            {
+                building.GetDoors();
+                door = building.GetClosestDoor(fromPosition, true);
+                if (door == null || door.gameObject == null || door.AccessPoint == null)
+                {
+                    ModLogger.Error("DynamicParoleOfficerManager: Courthouse has no usable native door/access point; officer will remain outside");
+                    return false;
+                }
+
+                courthouseHomeDoor = door;
+                ModLogger.Info($"DynamicParoleOfficerManager: Resolved courthouse door '{door.gameObject.name}' at {door.AccessPoint.position}");
+                return true;
+            }
+            catch (Exception ex)
+            {
+                ModLogger.Error($"DynamicParoleOfficerManager: Failed to resolve courthouse door: {ex.Message}");
+                return false;
+            }
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        /// <summary>
         /// Checks the parole manager's daily check-in status without applying consequences.
         /// This predicate is used only to decide whether roster recall may be needed.
         /// </summary>
@@ -1446,6 +1536,10 @@ namespace Behind_Bars.Systems.NPCs
                         DeduplicateSupervisingOfficers(behavior);
                         supervisingOfficerRosterValidated = true;
                     }
+                    else if (ParoleOfficerRosterSchedule.IsPatrolActive(assignment))
+                    {
+                        behavior.ResumeScheduledPatrol();
+                    }
                     ModLogger.Info($"DynamicParoleOfficerManager: Spawned {assignment} officer {badge} at {spawnPosition}");
                 }
                 else
@@ -1490,6 +1584,7 @@ namespace Behind_Bars.Systems.NPCs
                 activeOfficers.Remove(assignment);
                 spawnedAssignments.Remove(assignment);
                 officersAtCourthouse?.Remove(assignment);
+                officersReturningToCourthouse?.Remove(assignment);
                 if (assignment == ParoleOfficerAssignment.PoliceStationSupervisor)
                 {
                     supervisingOfficerRosterValidated = false;
@@ -1646,20 +1741,10 @@ namespace Behind_Bars.Systems.NPCs
                 return PresetParoleOfficerRoutes.GetSupervisingOfficerStation();
             }
 
-            // For patrol officers: Use their route's first waypoint
-            string routeName = RouteRegionMapper.GetRouteName(assignment);
-            if (!string.IsNullOrEmpty(routeName))
-            {
-                var route = PresetParoleOfficerRoutes.GetRoute(routeName);
-                if (route != null && route.points != null && route.points.Length > 0)
-                {
-                    return route.points[0];
-                }
-            }
-
-            // Fallback
-            ModLogger.Warn($"DynamicParoleOfficerManager: Using fallback spawn position for {assignment}");
-            return new Vector3(27.0941f, 1.065f, 45.0492f);
+            // Patrol officers begin at the courthouse entrance and physically depart for
+            // their first route point. This preserves a visible shift change instead of
+            // materializing an officer directly on a patrol waypoint.
+            return PresetParoleOfficerRoutes.GetCourthouseExteriorApproach();
         }
 
         /// <summary>
@@ -1709,6 +1794,7 @@ namespace Behind_Bars.Systems.NPCs
             CancelPreparedSupervisingOfficerForRelease(preparedReleaseParolee);
             DespawnAllOfficers();
             officersAtCourthouse?.Clear();
+            officersReturningToCourthouse?.Clear();
             isInitialized = false;
             isInitializing = false;
 

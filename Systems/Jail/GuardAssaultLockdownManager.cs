@@ -115,6 +115,86 @@ namespace Behind_Bars.Systems.Jail
             return true;
         }
 
+        /// <summary>Whether a jail-owned emergency response currently has custody of the schedule.</summary>
+        public static bool IsLockdownActive => _instance != null && _instance.lockdownActive;
+
+        /// <summary>
+        /// Starts the schedule-violation response for a late local player.
+        /// The caller must begin the jail schedule hold before invoking this method.
+        /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        public static bool TryBeginScheduleViolation(Player player)
+        {
+            var manager = GetOrCreate();
+            if (manager == null || manager.lockdownActive || player == null)
+            {
+                return false;
+            }
+
+            manager.BeginScheduleViolationLockdown(player);
+            return true;
+        }
+
+        /// <summary>
+        /// Starts an institutional-discipline response when the local jailed player assaults
+        /// an inmate during their assigned recreation block. Duplicate damage callbacks from
+        /// the same active incident are consumed without adding another offense.
+        /// </summary>
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        public static bool TryBeginInmateAssault(Player player, InmateBehavior victim)
+        {
+            if (player == null || victim == null || player != Player.Local || Core.JailController == null ||
+                !Core.ResolveJailTimeTracker().IsInJail(player))
+            {
+                return false;
+            }
+
+            JailLifecycleManager lifecycle = BBHelpers.GetComponentSafe<JailLifecycleManager>(Core.JailController.gameObject);
+            if (lifecycle == null || !lifecycle.IsPlayerOnActiveRecreation(player))
+            {
+                return false;
+            }
+
+            var manager = GetOrCreate();
+            if (manager == null)
+            {
+                ModLogger.Error("[SEGREGATION] Could not resolve the jail lockdown manager for an inmate assault");
+                return false;
+            }
+
+            if (manager.lockdownActive)
+            {
+                ModLogger.Debug("[SEGREGATION] Lockdown already owns this inmate-assault damage sequence; duplicate offense ignored");
+                return true;
+            }
+
+            var rapSheet = Core.GetRapSheet(player);
+            if (rapSheet == null)
+            {
+                ModLogger.Error("[SEGREGATION] Could not resolve the player's RapSheet; institutional punishment was not started");
+                return false;
+            }
+
+            int cyclesAdded = rapSheet.AddInmateAssaultSegregation();
+            Core.MarkRapSheetChanged(player);
+            lifecycle.BeginEmergencyScheduleHold();
+            manager.BeginScheduleViolationLockdown(player);
+
+            Core.ResolveUIManager()?.ShowNotification(
+                $"Inmate assault: {cyclesAdded} segregation cycle{(cyclesAdded == 1 ? string.Empty : "s")} added. " +
+                $"{rapSheet.SegregationCyclesRemaining} total remaining.",
+                NotificationType.Warning);
+            ModLogger.Warn(
+                $"[SEGREGATION] {player.name} assaulted inmate {victim.gameObject.name} during recreation. " +
+                $"Offense {rapSheet.InmateAssaultOffenseCount} added {cyclesAdded} cycle(s); " +
+                $"{rapSheet.SegregationCyclesRemaining} cycle(s) remain after officer subdual");
+            return true;
+        }
+
         /// <summary>
         /// Resolves the jail-owned response component, adding it to the jail controller
         /// only when the current scene has not created one yet.
@@ -154,6 +234,11 @@ namespace Behind_Bars.Systems.Jail
 
             resumeInterruptedBooking = SuspendInterruptedIntake(player);
 
+            JailLifecycleManager lifecycle = Core.JailController == null
+                ? null
+                : BBHelpers.GetComponentSafe<JailLifecycleManager>(Core.JailController.gameObject);
+            lifecycle?.BeginEmergencyScheduleHold();
+
             Core.JailController.EmergencyLockdown();
             foreach (var registeredGuard in Core.Instance?.NpcManager?.GetRegisteredGuards() ?? Enumerable.Empty<GuardBehavior>())
             {
@@ -165,6 +250,131 @@ namespace Behind_Bars.Systems.Jail
 
             ModLogger.Warn($"[LOCKDOWN] {player.name} assaulted jail staff. Emergency response engaged; wanted level intentionally unchanged.");
             incidentCoroutine = MelonCoroutines.Start(ResolveIncident()) as Coroutine;
+        }
+
+        /// <summary>Activates broad custody security and starts native combat against schedule violators.</summary>
+        private void BeginScheduleViolationLockdown(Player player)
+        {
+            lockdownActive = true;
+            incidentPlayer = player;
+            initiatingGuard = null;
+            resumeInterruptedBooking = false;
+
+            Core.JailController?.EmergencyLockdown();
+            ModLogger.Warn(
+                "[LOCKDOWN] Player schedule violation response engaged. Jail recreation clock is held until the player is subdued and secured.");
+            incidentCoroutine = MelonCoroutines.Start(ResolveScheduleViolations()) as Coroutine;
+        }
+
+#if !MONO
+        [HideFromIl2Cpp]
+#endif
+        private IEnumerator ResolveScheduleViolations()
+        {
+            Player playerOffender = incidentPlayer;
+            if (playerOffender != null)
+            {
+                if (!DispatchNativeResponders(playerOffender.gameObject, useTaser: true))
+                {
+                    FailScheduleViolationResponse("No jail officer could engage the late player through native combat");
+                    yield break;
+                }
+
+                while (lockdownActive && playerOffender != null && !playerOffender.IsTased)
+                {
+                    RefreshResponderPursuit(playerOffender.gameObject);
+                    yield return new WaitForSecondsRealtime(PursuitUpdateSeconds);
+                }
+                if (!lockdownActive || playerOffender == null)
+                {
+                    yield break;
+                }
+
+                StopAllResponderCombat();
+                SetSubdualControls(true);
+                TryOpenBlackOverlay();
+                yield return new WaitForSecondsRealtime(0.2f);
+                if (!lockdownActive || playerOffender == null)
+                {
+                    SetSubdualControls(false);
+                    TryCloseBlackOverlay();
+                    yield break;
+                }
+
+                if (!SecureInAssignedCell(playerOffender, applyTrackedPenalty: false))
+                {
+                    FailScheduleViolationResponse("Late player was tased but could not be transferred to the assigned cell");
+                    yield break;
+                }
+                yield return new WaitForSecondsRealtime(0.25f);
+                if (!lockdownActive)
+                {
+                    yield break;
+                }
+
+                TryCloseBlackOverlay();
+                SetSubdualControls(false);
+                if (incidentPlayer == playerOffender)
+                {
+                    incidentPlayer = null;
+                }
+
+            }
+
+            RestoreJailAfterSecure();
+            ModLogger.Info("[LOCKDOWN] The player was subdued and secured; the paused jail recreation clock has resumed");
+        }
+
+        /// <summary>
+        /// Ends transient combat/UI ownership without pretending custody succeeded. Doors,
+        /// lighting, and the recreation-clock hold deliberately remain in emergency state.
+        /// </summary>
+        private void FailScheduleViolationResponse(string reason)
+        {
+            StopAllResponderCombat();
+            foreach (GuardBehavior guard in Core.Instance?.NpcManager?.GetRegisteredGuards() ?? Enumerable.Empty<GuardBehavior>())
+            {
+                guard?.EnterEmergencyLockdown(useTaser: false);
+            }
+            SetSubdualControls(false);
+            TryCloseBlackOverlay();
+            incidentCoroutine = null;
+            ModLogger.Error($"[LOCKDOWN] {reason}; lockdown and schedule hold remain active for safety");
+        }
+
+        /// <summary>Assigns every available jail guard to a native combat target.</summary>
+        private bool DispatchNativeResponders(GameObject target, bool useTaser)
+        {
+            bool engaged = false;
+            foreach (GuardBehavior guard in Core.Instance?.NpcManager?.GetRegisteredGuards() ?? Enumerable.Empty<GuardBehavior>())
+            {
+                if (guard != null && guard.TryEngageEmergencyTarget(target, useTaser))
+                {
+                    engaged = true;
+                }
+            }
+            return engaged;
+        }
+
+        /// <summary>
+        /// Keeps native responder movement pointed at a moving offender. CombatBehaviour
+        /// remains authoritative for targeting, weapon use, and the actual tase.
+        /// </summary>
+        private static void RefreshResponderPursuit(GameObject target)
+        {
+            foreach (GuardBehavior guard in Core.Instance?.NpcManager?.GetRegisteredGuards() ?? Enumerable.Empty<GuardBehavior>())
+            {
+                guard?.UpdateEmergencyPursuit(target);
+            }
+        }
+
+        /// <summary>Ends native combat before a subdued target is moved or the next offender is assigned.</summary>
+        private static void StopAllResponderCombat()
+        {
+            foreach (GuardBehavior guard in Core.Instance?.NpcManager?.GetRegisteredGuards() ?? Enumerable.Empty<GuardBehavior>())
+            {
+                guard?.ExitEmergencyLockdown();
+            }
         }
 
         /// <summary>
@@ -417,7 +627,8 @@ namespace Behind_Bars.Systems.Jail
         private void RestoreJailAfterSecure()
         {
             RestoreNormalCustodyState();
-            ModLogger.Info("[LOCKDOWN] Fully cleared after the player was secured; guards, shared routes, and lighting restored to normal custody state.");
+            ResumeHeldJailSchedule();
+            ModLogger.Info("[LOCKDOWN] Fully cleared after all offenders were secured; guards, shared routes, and lighting restored to normal custody state.");
         }
 
         // This path is used only when the pursuit cannot continue. It restores the jail
@@ -425,7 +636,17 @@ namespace Behind_Bars.Systems.Jail
         private void EndLockdownWithoutTransfer(string reason)
         {
             RestoreNormalCustodyState();
+            ResumeHeldJailSchedule();
             ModLogger.Error($"[LOCKDOWN] Emergency response ended without securing the player; guards, shared routes, and lighting were restored: {reason}");
+        }
+
+        /// <summary>Returns jail-local schedule ownership after emergency state is fully restored.</summary>
+        private static void ResumeHeldJailSchedule()
+        {
+            JailLifecycleManager lifecycle = Core.JailController == null
+                ? null
+                : BBHelpers.GetComponentSafe<JailLifecycleManager>(Core.JailController.gameObject);
+            lifecycle?.EndEmergencyScheduleHold();
         }
 
         /// <summary>

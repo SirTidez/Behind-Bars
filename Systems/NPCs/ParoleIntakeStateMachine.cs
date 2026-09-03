@@ -39,6 +39,7 @@ namespace Behind_Bars.Systems.NPCs
             Idle,                    // Waiting at police station entrance
             DetectingParolee,        // Monitoring for new parolee arrival
             AwaitingReleaseSummary,  // Supervisor has reached the player while the release UI is visible
+            AwaitingIntroductionDialogue, // Handler-owned initial supervision interview
             EscortingToCheckIn,      // Showing the player the check-in location
             ExplainingCheckInLocation,
             ExplainingCheckInSchedule,
@@ -91,6 +92,9 @@ namespace Behind_Bars.Systems.NPCs
 
         // Dialogue system
         private JailNPCDialogueController dialogueController;
+        private ParoleCheckInSystem checkInSystem;
+        private bool initialDialogueStarted;
+        private bool locationDialogueStarted;
 
         #endregion
 
@@ -119,6 +123,7 @@ namespace Behind_Bars.Systems.NPCs
             base.Awake();
             paroleOfficer = BBHelpers.GetComponentSafe<ParoleOfficerBehavior>(gameObject);
             stationaryBehavior = BBHelpers.GetComponentSafe<StationaryBehavior>(gameObject);
+            checkInSystem = BBHelpers.GetComponentSafe<ParoleCheckInSystem>(gameObject);
         }
 
         /// <summary>
@@ -246,6 +251,7 @@ namespace Behind_Bars.Systems.NPCs
                 ParoleIntakeState.Idle => "Idle",
                 ParoleIntakeState.DetectingParolee => "DetectingParolee",
                 ParoleIntakeState.AwaitingReleaseSummary => "Idle",
+                ParoleIntakeState.AwaitingIntroductionDialogue => "Idle",
                 ParoleIntakeState.EscortingToCheckIn => "Escorting",
                 ParoleIntakeState.ExplainingCheckInLocation => "ReviewingConditions",
                 ParoleIntakeState.ExplainingCheckInSchedule => "ReviewingConditions",
@@ -289,6 +295,14 @@ namespace Behind_Bars.Systems.NPCs
                     StopMovement();
                     break;
 
+                case ParoleIntakeState.AwaitingIntroductionDialogue:
+                    StopMovement();
+                    MaintainFacingParolee();
+                    // Start on the next NPC tick so the release-summary dismissal
+                    // finishes relinquishing UI/camera ownership first.
+                    initialDialogueStarted = false;
+                    break;
+
                 case ParoleIntakeState.EscortingToCheckIn:
                     if (currentParolee != null)
                     {
@@ -304,26 +318,19 @@ namespace Behind_Bars.Systems.NPCs
                     if (currentParolee != null)
                     {
                         StopMovement();
-                        FreezePlayerForExplanation();
                         MaintainFacingParolee();
-                        TrySendNPCMessage("This is your parole check-in location. Return here whenever you are instructed to report.", 5f);
+                        locationDialogueStarted = checkInSystem?.BeginInitialLocationConversation(currentParolee) == true;
+                        if (!locationDialogueStarted)
+                        {
+                            ModLogger.Warn("ParoleIntakeStateMachine: Location dialogue handler was not ready; intake will retry");
+                        }
                     }
                     break;
 
                 case ParoleIntakeState.ExplainingCheckInSchedule:
-                    if (currentParolee != null)
-                    {
-                        MaintainFacingParolee();
-                        TrySendNPCMessage(BuildCheckInScheduleMessage(currentParolee), 6f);
-                    }
                     break;
 
                 case ParoleIntakeState.FinalizingIntake:
-                    if (currentParolee != null)
-                    {
-                        MaintainFacingParolee();
-                        TrySendNPCMessage("Your initial parole intake is complete. Return to this location for your scheduled check-ins.", 5f);
-                    }
                     break;
 
                 case ParoleIntakeState.ReturningToPost:
@@ -468,6 +475,7 @@ namespace Behind_Bars.Systems.NPCs
         {
             RestorePlayerAfterExplanation();
             paroleOfficer?.CompleteIntakeEscort();
+            checkInSystem?.EndInitialIntakeDialogue(currentParolee);
             base.OnDisable();
         }
 
@@ -503,6 +511,10 @@ namespace Behind_Bars.Systems.NPCs
 
                 case ParoleIntakeState.AwaitingReleaseSummary:
                     HandleAwaitingReleaseSummaryState();
+                    break;
+
+                case ParoleIntakeState.AwaitingIntroductionDialogue:
+                    HandleAwaitingIntroductionDialogueState();
                     break;
 
                 case ParoleIntakeState.EscortingToCheckIn:
@@ -564,7 +576,7 @@ namespace Behind_Bars.Systems.NPCs
                     ? $"ParoleIntakeStateMachine: Supervisor reached the police-station release point for {currentParolee.name} ({distance:F2}m)"
                     : $"ParoleIntakeStateMachine: Supervisor reached {currentParolee.name} for post-release intake ({distance:F2}m)");
                 ChangeIntakeState(releaseSummaryAcknowledged
-                    ? ParoleIntakeState.EscortingToCheckIn
+                    ? ParoleIntakeState.AwaitingIntroductionDialogue
                     : ParoleIntakeState.AwaitingReleaseSummary);
                 return;
             }
@@ -596,6 +608,29 @@ namespace Behind_Bars.Systems.NPCs
             }
 
             if (releaseSummaryAcknowledged)
+            {
+                ChangeIntakeState(ParoleIntakeState.AwaitingIntroductionDialogue);
+            }
+        }
+
+        /// <summary>Waits for the handler-owned initial interview before beginning the escort.</summary>
+        private void HandleAwaitingIntroductionDialogueState()
+        {
+            if (currentParolee == null)
+            {
+                ChangeIntakeState(ParoleIntakeState.Idle);
+                return;
+            }
+
+            MaintainFacingParolee();
+            checkInSystem ??= BBHelpers.GetComponentSafe<ParoleCheckInSystem>(gameObject);
+            if (!initialDialogueStarted)
+            {
+                initialDialogueStarted = checkInSystem?.BeginInitialIntroduction(currentParolee) == true;
+                return;
+            }
+
+            if (checkInSystem?.HasCompletedInitialIntroduction(currentParolee) == true)
             {
                 ChangeIntakeState(ParoleIntakeState.EscortingToCheckIn);
             }
@@ -659,9 +694,16 @@ namespace Behind_Bars.Systems.NPCs
 
             MaintainFacingParolee();
 
-            if (Time.time - stateStartTime >= processingDelay * 2f)
+            checkInSystem ??= BBHelpers.GetComponentSafe<ParoleCheckInSystem>(gameObject);
+            if (!locationDialogueStarted)
             {
-                ChangeIntakeState(ParoleIntakeState.ExplainingCheckInSchedule);
+                locationDialogueStarted = checkInSystem?.BeginInitialLocationConversation(currentParolee) == true;
+                return;
+            }
+
+            if (checkInSystem?.HasCompletedInitialLocationConversation(currentParolee) == true)
+            {
+                CompleteIntake();
             }
         }
 
@@ -782,6 +824,8 @@ namespace Behind_Bars.Systems.NPCs
             currentParolee = parolee;
             hasPreparedReleaseMeeting = false;
             releaseSummaryAcknowledged = false;
+            initialDialogueStarted = false;
+            locationDialogueStarted = false;
 #if MONO
             OnIntakeStarted?.Invoke(parolee);
 #endif
@@ -814,6 +858,8 @@ namespace Behind_Bars.Systems.NPCs
             preparedReleaseMeetingPoint = meetingPoint;
             hasPreparedReleaseMeeting = true;
             releaseSummaryAcknowledged = false;
+            initialDialogueStarted = false;
+            locationDialogueStarted = false;
             ChangeIntakeState(ParoleIntakeState.DetectingParolee);
             ModLogger.Info($"ParoleIntakeStateMachine: Preparing to meet {parolee.name} at police-station release point {meetingPoint}");
         }
@@ -842,7 +888,7 @@ namespace Behind_Bars.Systems.NPCs
             hasPreparedReleaseMeeting = false;
             if (currentState == ParoleIntakeState.AwaitingReleaseSummary)
             {
-                ChangeIntakeState(ParoleIntakeState.EscortingToCheckIn);
+                ChangeIntakeState(ParoleIntakeState.AwaitingIntroductionDialogue);
             }
 
             return true;
@@ -858,6 +904,8 @@ namespace Behind_Bars.Systems.NPCs
         public void ForceStartIntake(Player parolee)
         {
             currentParolee = parolee;
+            initialDialogueStarted = false;
+            locationDialogueStarted = false;
             ChangeIntakeState(ParoleIntakeState.DetectingParolee);
             ModLogger.Info($"ParoleIntakeStateMachine: Force started intake for {parolee.name}");
         }
@@ -893,6 +941,7 @@ namespace Behind_Bars.Systems.NPCs
             hasPreparedReleaseMeeting = false;
             RestorePlayerAfterExplanation();
             paroleOfficer?.CompleteIntakeEscort();
+            checkInSystem?.EndInitialIntakeDialogue(completedParolee);
 
             // The supervising officer's normal post is the courthouse interior, not the
             // exterior report point.  Finish this state machine before handing the native
@@ -932,11 +981,13 @@ namespace Behind_Bars.Systems.NPCs
             if (IsProcessingIntake())
             {
                 ModLogger.Info($"ParoleIntakeStateMachine: Stopping intake process");
+                Player cancelledParolee = currentParolee;
                 currentParolee = null;
                 releaseSummaryAcknowledged = false;
                 hasPreparedReleaseMeeting = false;
                 RestorePlayerAfterExplanation();
                 paroleOfficer?.CompleteIntakeEscort();
+                checkInSystem?.EndInitialIntakeDialogue(cancelledParolee);
                 ChangeIntakeState(ParoleIntakeState.ReturningToPost);
             }
         }
