@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="A player-first guide and project reference for Behind Bars, a Schedule I mod." />
+    <meta name="theme-color" content="#090c10" />
+    <link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+    <title>Behind Bars — Knowledge base</title>
+    <link rel="stylesheet" href="assets/css/site.css" />
+    <script src="assets/js/site.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="brand" href="./" aria-label="Behind Bars knowledge base home">BEHIND BARS <small>MOD KNOWLEDGE BASE</small></a>
+        <button class="menu-button" type="button" data-menu-button aria-controls="site-navigation" aria-expanded="false">Menu</button>
+        <nav class="site-nav" id="site-navigation" data-site-nav data-open="false" aria-label="Main navigation">
+          <a class="nav-link" href="./" aria-current="page">Overview</a>
+          <a class="nav-link" href="player-guide/">Player guide</a>
+          <a class="nav-link" href="developer-guide/">Developer guide</a>
+          <a class="nav-link" href="status/">Current status</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="page-shell" id="main-content">
+      <section class="hero" aria-labelledby="page-title">
+        <div class="hero-copy">
+          <p class="eyebrow">Schedule I mod</p>
+          <h1 id="page-title">Jail, release, and parole for Schedule I.</h1>
+          <p class="lede">Behind Bars expands the after-arrest experience in Schedule I. Start with the player guide for installation, gameplay basics, and help with common problems.</p>
+        </div>
+
+        <aside class="status-panel" aria-labelledby="snapshot-heading">
+          <div class="status-panel-heading">
+            <span class="tag">In development</span>
+            <h2 id="snapshot-heading">Behind Bars at a glance</h2>
+          </div>
+          <dl class="facts">
+            <div>
+              <dt>Development version</dt>
+              <dd><code>1.3.0-beta.1</code></dd>
+            </div>
+            <div>
+              <dt>Game support</dt>
+              <dd>Schedule I <code>v0.4.6f13</code></dd>
+            </div>
+            <div>
+              <dt>Core systems</dt>
+              <dd>Jail · release · parole</dd>
+            </div>
+            <div>
+              <dt>Project updates</dt>
+              <dd><a href="status/">Current status</a></dd>
+            </div>
+          </dl>
+          <p class="hero-note">Always follow the notes packaged with the release you install.</p>
+        </aside>
+      </section>
+
+      <section class="section" aria-labelledby="guides-title">
+        <div class="section-heading">
+          <p class="section-index">Get started</p>
+          <div>
+            <h2 id="guides-title">Pick a guide.</h2>
+            <p>New to Behind Bars? Start with the player guide for setup, what to expect in-game, and support. The developer guide is for contributors working on the mod.</p>
+          </div>
+        </div>
+
+        <div class="guide-split">
+          <section class="guide-lane player" aria-labelledby="player-guide-title">
+            <header class="guide-lane-header">
+              <h2 id="player-guide-title">For players</h2>
+              <p class="guide-kicker">Install and play</p>
+            </header>
+            <ul class="guide-list">
+              <li><a href="player-guide/#installation"><span class="guide-icon" aria-hidden="true">↓</span><span><strong>Install the mod</strong><small>Set up Behind Bars and check that it loads.</small></span><span class="arrow" aria-hidden="true">›</span></a></li>
+              <li><a href="player-guide/#justice-flow"><span class="guide-icon" aria-hidden="true">↳</span><span><strong>After an arrest</strong><small>Jail, release, and parole at a glance.</small></span><span class="arrow" aria-hidden="true">›</span></a></li>
+              <li><a href="player-guide/#feature-status"><span class="guide-icon" aria-hidden="true">✓</span><span><strong>What is available</strong><small>See current features and what is still planned.</small></span><span class="arrow" aria-hidden="true">›</span></a></li>
+              <li><a href="player-guide/#support"><span class="guide-icon" aria-hidden="true">?</span><span><strong>Get help</strong><small>Find the details that make a report useful.</small></span><span class="arrow" aria-hidden="true">›</span></a></li>
+            </ul>
+          </section>
+
+          <section class="guide-lane developer" aria-labelledby="developer-guide-title">
+            <header class="guide-lane-header">
+              <h2 id="developer-guide-title">For contributors</h2>
+              <p class="guide-kicker">Build and test</p>
+            </header>
+            <ul class="guide-list">
+              <li><a href="developer-guide/#find-system"><span class="guide-icon" aria-hidden="true">⌘</span><span><strong>Project layout</strong><small>Find the jail, NPC, UI, and utility systems.</small></span><span class="arrow" aria-hidden="true">›</span></a></li>
+              <li><a href="developer-guide/#il2cpp"><span class="guide-icon" aria-hidden="true">I</span><span><strong>IL2CPP and Mono</strong><small>Keep both runtime paths healthy.</small></span><span class="arrow" aria-hidden="true">›</span></a></li>
+              <li><a href="developer-guide/#build-and-test"><span class="guide-icon" aria-hidden="true">&gt;_</span><span><strong>Build and test</strong><small>Compile both targets, then test in game.</small></span><span class="arrow" aria-hidden="true">›</span></a></li>
+              <li><a href="developer-guide/#finish-change"><span class="guide-icon" aria-hidden="true">≡</span><span><strong>Finish a change</strong><small>Check the build, game flow, and loader log.</small></span><span class="arrow" aria-hidden="true">›</span></a></li>
+            </ul>
+          </section>
+        </div>
+      </section>
+
+    </main>
+
+    <footer class="site-footer">
+      <div class="site-footer-inner">
+        <div>
+          <p class="footer-title">Behind Bars</p>
+          <p>Documentation for a Schedule I mod that expands the after-arrest experience with jail, bail, release, crime, and parole systems.</p>
+        </div>
+        <div>
+          <p class="footer-title">Player resources</p>
+          <ul class="footer-links">
+            <li><a href="player-guide/">Player guide</a></li>
+            <li><a href="player-guide/#installation">Installation</a></li>
+            <li><a href="player-guide/#support">Support and safety</a></li>
+          </ul>
+        </div>
+        <div>
+          <p class="footer-title">Project resources</p>
+          <ul class="footer-links">
+            <li><a href="developer-guide/">Developer guide</a></li>
+            <li><a href="status/">Current status</a></li>
+            <li><a href="https://github.com/SirTidez/Behind-Bars" rel="noopener noreferrer">GitHub repository</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="site-footer-inner">
+        <p class="site-meta"><span>Player guide</span><span>Contributor reference</span><span>Static knowledge base</span></p>
+      </div>
+    </footer>
+  </body>
+</html>

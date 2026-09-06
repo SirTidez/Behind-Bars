@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Player-facing installation, feature, and support guidance for the Behind Bars Schedule I mod." />
+    <meta name="theme-color" content="#090c10" />
+    <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml" />
+    <title>Behind Bars — Player guide</title>
+    <link rel="stylesheet" href="../assets/css/site.css" />
+    <script src="../assets/js/site.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="brand" href="../" aria-label="Behind Bars knowledge base home">BEHIND BARS <small>MOD KNOWLEDGE BASE</small></a>
+        <button class="menu-button" type="button" data-menu-button aria-controls="site-navigation" aria-expanded="false">Menu</button>
+        <nav class="site-nav" id="site-navigation" data-site-nav data-open="false" aria-label="Main navigation">
+          <a class="nav-link" href="../">Overview</a>
+          <a class="nav-link" href="./" aria-current="page">Player guide</a>
+          <a class="nav-link" href="../developer-guide/">Developer guide</a>
+          <a class="nav-link" href="../status/">Current status</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="page-shell" id="main-content">
+      <p class="breadcrumbs"><a href="../">Knowledge base</a> / Player guide</p>
+      <section class="hero" aria-labelledby="page-title">
+        <div class="hero-copy">
+          <p class="eyebrow">Player guide</p>
+          <h1 id="page-title">Know what happens after an arrest.</h1>
+          <p class="lede">Behind Bars expands the justice journey around an arrest. This guide covers safe setup, what happens in game, the available features, configuration, and help with common problems.</p>
+        </div>
+        <aside class="status-panel" aria-labelledby="guide-status-title">
+          <div class="status-panel-heading"><span class="tag">Read first</span><h2 id="guide-status-title">Before you install</h2></div>
+          <dl class="facts">
+            <div><dt>Supported game</dt><dd>Schedule I v0.4.6f13</dd></div>
+            <div><dt>Required loader</dt><dd>MelonLoader 0.7.0</dd></div>
+            <div><dt>Safety step</dt><dd>Back up your save</dd></div>
+            <div><dt>Not yet released</dt><dd>Court and multiplayer</dd></div>
+          </dl>
+          <p class="hero-note">Use the instructions packaged with your release if they differ from this general guide.</p>
+        </aside>
+      </section>
+
+      <section class="section article-layout" aria-label="Player guide content">
+        <aside class="article-aside" aria-label="On this page">
+          <h2>On this page</h2>
+          <ol>
+            <li><a href="#installation">Install safely</a></li>
+            <li><a href="#justice-flow">Justice flow</a></li>
+            <li><a href="#feature-status">Feature status</a></li>
+            <li><a href="#configuration">Configuration</a></li>
+            <li><a href="#support">Support and safety</a></li>
+          </ol>
+        </aside>
+
+        <article class="article-body">
+          <h2 id="installation">Install safely</h2>
+          <p>The repository guidance identifies Schedule I, a current MelonLoader installation, and .NET Framework 4.7.2 or later as prerequisites. Use the specific release’s installation notes if they differ from this general overview.</p>
+          <ol>
+            <li>Back up the save you care about before changing your mod set.</li>
+            <li>Download the intended Behind Bars release from the project’s <a href="https://github.com/SirTidez/Behind-Bars/releases">GitHub Releases</a> page.</li>
+            <li>Extract the release into the Schedule I mods folder described by that release.</li>
+            <li>Launch the game and confirm MelonLoader reports the mod without a loader error before relying on a long-running save.</li>
+          </ol>
+          <p class="callout danger"><strong>Do not mix runtime-specific files blindly.</strong> An IL2CPP build is compiled against its target game assemblies. A DLL built for a different Schedule I installation can load incorrectly even when its filename and version look right.</p>
+
+          <h2 id="justice-flow">The justice flow</h2>
+          <p>Behind Bars is designed to make the period after an arrest more consequential. The exact path depends on the release and the game state, but it generally follows this sequence:</p>
+          <ol>
+            <li><strong>Arrest and assessment.</strong> The mod records the event and assesses the applicable severity and fine context.</li>
+            <li><strong>Jail or fine decision.</strong> A player can face payment or custody paths, with jail infrastructure and sentence tracking handling the custody side.</li>
+            <li><strong>Release.</strong> The release flow returns control through the jail and officer systems rather than a silent direct completion.</li>
+            <li><strong>Parole.</strong> The parole lifecycle can apply supervision, conditions, check-ins, violations, and completion handling after release.</li>
+          </ol>
+          <p class="callout info"><strong>Important:</strong> the exact jail, release, and parole route can vary with the release and your game state. Check the release notes for any version-specific changes.</p>
+
+          <h2 id="feature-status">Feature status for players</h2>
+          <h3>Available in the current mod</h3>
+          <ul>
+            <li>Jail, booking, sentence tracking, release, guards, inmates, and associated jail infrastructure.</li>
+            <li>Bail calculation and negotiation foundations.</li>
+            <li>Crime and rap-sheet tracking, including parole-related records and violation handling.</li>
+            <li>Parole supervision foundations: conditions, check-ins, curfew/employment foundations, completion handling, and officer-driven interactions.</li>
+          </ul>
+          <h3>Not included yet</h3>
+          <ul>
+            <li><strong>Court:</strong> the full courtroom experience, judge, evidence flow, and court session framework remain planned.</li>
+            <li><strong>Multiplayer:</strong> multiplayer and friend-bail work are still experimental and are not part of the released mod.</li>
+            <li><strong>Parole refinements:</strong> the roadmap still calls out native concealment-search UI, clearer check-in and fee communication, announced home-visit windows, more complete drug-use recording, counseling, and early-discharge work.</li>
+          </ul>
+
+          <h2 id="configuration">Configuration</h2>
+          <p>Behind Bars writes its settings to <code>UserData/MelonPreferences.cfg</code> inside your Schedule I installation. Close the game before editing it, then restart after saving. Look for the <code>[Behind_Bars]</code> section.</p>
+          <h3>A normal starting point</h3>
+          <p>This is a small selection of the live default options. It is a good place to start if you want the standard experience and a reference for the names and formatting.</p>
+          <pre><code>[Behind_Bars]
+BailoutKey = "B"
+EnableUpdateChecking = true
+EnableDebugLogging = false
+
+Global_SentenceMultiplier = 1.0
+Enable_RepeatOffenderPenalties = true
+Enable_WitnessMultipliers = true
+Enable_SeverityMultipliers = true
+
+Sentence_Trespassing = 15.0
+Sentence_Assault = 180.0</code></pre>
+          <ul>
+            <li><code>BailoutKey</code> is the key used to pay bail and leave jail early.</li>
+            <li><code>Global_SentenceMultiplier</code> adjusts every sentence: <code>1.0</code> keeps the default, <code>0.75</code> makes sentences 25% shorter, and <code>1.25</code> makes them 25% longer.</li>
+            <li><code>Sentence_Trespassing</code> and <code>Sentence_Assault</code> are individual sentence lengths in <strong>game minutes</strong>. Change only the individual offence you mean to tune.</li>
+            <li>The three multiplier switches control repeat-offender, witness, and severity adjustments. Leave them enabled to retain the default crime consequences.</li>
+          </ul>
+          <p class="callout info"><strong>Leave <code>EnableDebugLogging</code> off for normal play.</strong> It adds detailed log output and is only useful while troubleshooting. Keep <code>EnableDeveloperShortcuts</code> disabled; those shortcuts can change jail and door state.</p>
+
+          <h2 id="support">Support and safety</h2>
+          <p>For reproducible issues, include the game runtime, the exact Behind Bars version, other installed mods, and the relevant MelonLoader log excerpt. Do not upload a full save or personal data publicly unless the maintainers ask for it through an appropriate channel.</p>
+          <ul>
+            <li>Start with the project’s <a href="https://github.com/SirTidez/Behind-Bars/issues">GitHub issues</a> to avoid duplicate reports.</li>
+            <li>For a runtime failure, state whether the game is Mono or IL2CPP and whether the issue occurs on a fresh launch.</li>
+            <li>For a feature request, distinguish a new idea from a broken documented flow.</li>
+          </ul>
+        </article>
+      </section>
+    </main>
+
+    <footer class="site-footer"><div class="site-footer-inner"><div><p class="footer-title">Behind Bars</p><p>Player-facing information for the Behind Bars mod.</p></div><div><p class="footer-title">Continue</p><ul class="footer-links"><li><a href="../status/">Current status</a></li><li><a href="../developer-guide/">Developer guide</a></li></ul></div><div><p class="footer-title">Project</p><ul class="footer-links"><li><a href="https://github.com/SirTidez/Behind-Bars">GitHub repository</a></li><li><a href="https://github.com/SirTidez/Behind-Bars/releases">Releases</a></li></ul></div></div><div class="site-footer-inner"><p class="site-meta"><span>Player guide</span><span>Check release-specific notes</span></p></div></footer>
+  </body>
+</html>

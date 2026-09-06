@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Developer guidance for building and maintaining Behind Bars across IL2CPP and Mono Schedule I runtimes." />
+    <meta name="theme-color" content="#090c10" />
+    <link rel="icon" href="../assets/favicon.svg" type="image/svg+xml" />
+    <title>Behind Bars — Developer guide</title>
+    <link rel="stylesheet" href="../assets/css/site.css" />
+    <script src="../assets/js/site.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+    <header class="site-header">
+      <div class="site-header-inner">
+        <a class="brand" href="../" aria-label="Behind Bars knowledge base home">BEHIND BARS <small>MOD KNOWLEDGE BASE</small></a>
+        <button class="menu-button" type="button" data-menu-button aria-controls="site-navigation" aria-expanded="false">Menu</button>
+        <nav class="site-nav" id="site-navigation" data-site-nav data-open="false" aria-label="Main navigation">
+          <a class="nav-link" href="../">Overview</a>
+          <a class="nav-link" href="../player-guide/">Player guide</a>
+          <a class="nav-link" href="./" aria-current="page">Developer guide</a>
+          <a class="nav-link" href="../status/">Current status</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="page-shell" id="main-content">
+      <p class="breadcrumbs"><a href="../">Knowledge base</a> / Developer guide</p>
+      <section class="hero" aria-labelledby="page-title">
+        <div class="hero-copy">
+          <p class="eyebrow">Contributor reference</p>
+          <h1 id="page-title">Build, change, and test Behind Bars.</h1>
+          <p class="lede">Use this guide when changing an existing Behind Bars system. It points to the owning code, the IL2CPP rules that matter, and the checks that should happen before a change is considered ready.</p>
+        </div>
+        <aside class="status-panel" aria-labelledby="developer-baseline-title">
+          <div class="status-panel-heading"><span class="tag">Start here</span><h2 id="developer-baseline-title">Before your first change</h2></div>
+          <dl class="facts">
+            <div><dt>Primary target</dt><dd>IL2CPP</dd></div>
+            <div><dt>Compatibility build</dt><dd>Debug Mono</dd></div>
+            <div><dt>Runtime split</dt><dd><code>#if MONO</code></dd></div>
+            <div><dt>Live check</dt><dd>Changed player flow</dd></div>
+          </dl>
+          <p class="hero-note">Keep the canonical behavior path intact. A successful build is only the first check.</p>
+        </aside>
+      </section>
+
+      <section class="section article-layout" aria-label="Developer guide content">
+        <aside class="article-aside" aria-label="On this page">
+          <h2>On this page</h2>
+          <ol>
+            <li><a href="#find-system">Find the system</a></li>
+            <li><a href="#il2cpp">Make IL2CPP-safe changes</a></li>
+            <li><a href="#npc-flows">Keep NPC flows canonical</a></li>
+            <li><a href="#build-and-test">Build and verify</a></li>
+            <li><a href="#finish-change">Finish a change</a></li>
+          </ol>
+        </aside>
+
+        <article class="article-body">
+          <h2 id="find-system">Find the owning system first</h2>
+          <p>Start in the system that owns the behavior you are changing. This keeps a small fix from becoming a patch in the wrong place or a workaround that another system cannot maintain.</p>
+          <ul>
+            <li><code>Systems/Jail/</code> owns booking, custody, sentences, release, doors, and jail-state behavior.</li>
+            <li><code>Systems/Parole/</code> and <code>Systems/ParoleManager.cs</code> own conditions, check-ins, violations, and completion.</li>
+            <li><code>Systems/NPCs/</code> owns the officer, guard, and inmate behavior classes that drive the player-facing flows.</li>
+            <li><code>Systems/CrimeTracking/</code> owns crime history, witness handling, rap sheets, and parole records.</li>
+            <li><code>UI/</code> owns player-facing UI; <code>Harmony/</code> is for the game patches that need to feed those systems.</li>
+            <li><code>Utils/</code> holds shared helpers and logging, while <code>Tests/</code> contains manual and in-game test scaffolding.</li>
+          </ul>
+          <p>Use the real manager and state-machine path. A direct teleport, a manager-only completion, or a static NPC can help isolate a crash, but is not the final implementation for a player-facing flow.</p>
+
+          <h2 id="il2cpp">Make IL2CPP-safe changes</h2>
+          <p>IL2CPP is the primary target for this worktree. Keep Mono-only code behind <code>#if MONO</code>, keep the IL2CPP path in the matching <code>#else</code> branch, and use the helper that already exists before introducing reflection or a new interop wrapper.</p>
+          <ul>
+            <li>Register injected behaviors and their dependencies during startup, before a spawn or lookup can reach them.</li>
+            <li>For injected component types, use the existing helpers in <code>Utils/Helpers.cs</code>. Do not call generic <code>AddComponent&lt;T&gt;</code>, <code>GetComponent&lt;T&gt;</code>, <code>FindObjectOfType&lt;T&gt;</code>, or generic <code>ScriptableObject.CreateInstance&lt;T&gt;</code> directly on IL2CPP.</li>
+            <li>Keep delegate-heavy Mono-only APIs out of injected type surfaces. Gate them with <code>#if MONO</code>, and use <code>[HideFromIl2Cpp]</code> for helpers that are not part of the exposed type.</li>
+            <li>Use explicit Il2Cpp namespaces and types when the direct API calls for them.</li>
+          </ul>
+          <p class="callout danger"><strong>Treat an IL2CPP class-pointer or <code>MethodInfoStoreGeneric</code> error as a blocking defect.</strong> Fix the registration or type surface instead of replacing the affected behavior.</p>
+
+          <h2 id="npc-flows">Keep NPC flows canonical</h2>
+          <p>Intake officers, release officers, parole officers, guards, and inmates must run their actual behavior classes in the final IL2CPP path. The player should see the same state-machine journey that the system was designed to run.</p>
+          <ul>
+            <li>Register the behavior before the first spawn or lookup.</li>
+            <li>Follow the canonical escort, booking, release, and parole state machines rather than completing a step from a manager.</li>
+            <li>Keep listener references stable; pair every subscription with a lifecycle-safe unsubscribe through <code>Utils/EventHelper</code> where applicable.</li>
+            <li>Check for an existing runtime component before adding one, and validate Unity-object lifetime before a callback uses it.</li>
+            <li>Confirm a normal run has no fallback or static-guard logging.</li>
+          </ul>
+
+          <h2 id="build-and-test">Build and verify the changed flow</h2>
+          <p>Open <code>Behind Bars.sln</code> in Visual Studio 2022 or later, or run both debug builds from the solution root.</p>
+          <pre><code>dotnet build "Behind Bars.sln" -c "Debug IL2CPP"
+dotnet build "Behind Bars.sln" -c "Debug Mono"</code></pre>
+          <p>Build each target against its matching Schedule I installation. Different IL2CPP game assemblies can produce different Behind Bars DLLs from the same source, so do not reuse an IL2CPP DLL across mismatched installs.</p>
+          <h3>Manual IL2CPP checks</h3>
+          <ol>
+            <li>The intake officer responds and completes the full booking flow.</li>
+            <li>The release officer spawns and completes the full escort and release flow.</li>
+            <li>Parole officer systems follow the canonical flow.</li>
+            <li>Inmates follow the canonical behavior flow.</li>
+            <li>Normal flow contains no fallback/static-guard logging.</li>
+            <li>The loader log has no canonical behavior class-pointer or generic-method-store failures.</li>
+          </ol>
+          <p class="callout info"><strong>Test the path you changed.</strong> A jail-door fix needs a booking-to-release run; a parole change needs its check-in or violation flow. A successful build does not show that the player journey worked.</p>
+
+          <h2 id="finish-change">Finish a change cleanly</h2>
+          <ol>
+            <li>Keep the diff inside the owning system unless a dependency genuinely needs to move with it.</li>
+            <li>Build <code>Debug IL2CPP</code> and <code>Debug Mono</code>.</li>
+            <li>Install the matching runtime-specific DLL and run the player flow that changed.</li>
+            <li>Check the fresh loader log for canonical behavior registration and runtime errors.</li>
+          </ol>
+        </article>
+      </section>
+    </main>
+
+    <footer class="site-footer"><div class="site-footer-inner"><div><p class="footer-title">Behind Bars</p><p>Technical reference for contributors working on the mod.</p></div><div><p class="footer-title">Continue</p><ul class="footer-links"><li><a href="../status/">Current status</a></li><li><a href="../player-guide/">Player guide</a></li></ul></div><div><p class="footer-title">Project</p><ul class="footer-links"><li><a href="https://github.com/SirTidez/Behind-Bars">GitHub repository</a></li></ul></div></div><div class="site-footer-inner"><p class="site-meta"><span>IL2CPP primary</span><span>Mono compatible</span><span>Test the changed flow</span></p></div></footer>
+  </body>
+</html>
